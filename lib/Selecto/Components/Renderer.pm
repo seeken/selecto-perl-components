@@ -3,6 +3,8 @@ package Selecto::Components::Renderer;
 use Mojo::Base -base, -signatures;
 use Mojo::Util qw(xml_escape);
 
+my $ASSET_REVISION = '20260815-1';
+
 sub page ($class, $model) {
     my $config = $model->{config};
     my $title = _h($config->title) . ' · Selecto Components Perl';
@@ -11,10 +13,10 @@ sub page ($class, $model) {
     return '<!doctype html><html lang="en"><head><meta charset="utf-8">' .
         '<meta name="viewport" content="width=device-width,initial-scale=1">' .
         '<title>' . $title . '</title>' .
-        '<link rel="stylesheet" href="/selecto-components/selecto-components.css">' .
+        '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' . $ASSET_REVISION . '">' .
         '<script defer src="/selecto-components/htmx.min.js"></script>' .
         '<script defer src="/selecto-components/hx-ws.min.js"></script>' .
-        '<script defer src="/selecto-components/selecto-components.js"></script>' .
+        '<script defer src="/selecto-components/selecto-components.js?v=' . $ASSET_REVISION . '"></script>' .
         '</head><body><main class="sc-page"><div class="sc-shell">' .
         '<header class="sc-masthead"><div><a class="sc-brand" href="' . _h($config->path) . '">SELECTO</a>' .
         '<span class="sc-product">Components · Perl</span></div>' .

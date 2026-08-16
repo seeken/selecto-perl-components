@@ -69,6 +69,7 @@ a { color: inherit; }
 .sc-picker-filter { margin: 0 0 7px !important; min-height: 34px !important; }
 .sc-picker-list { display: grid; gap: 5px; max-height: 265px; min-height: 180px; overflow-y: auto; }
 .sc-picker-choice { align-items: center; background: var(--sc-panel); border: 1px solid var(--sc-border); border-radius: 8px; color: var(--sc-ink); cursor: pointer; display: flex; gap: 8px; justify-content: space-between; min-width: 0; padding: 7px 8px; text-align: left; }
+.sc-picker-choice[hidden] { display: none; }
 .sc-picker-choice:hover { border-color: #65777a; background: #213034; }
 .sc-picker-choice:disabled { cursor: wait; opacity: .5; }
 .sc-picker-choice span:first-child, .sc-picker-set-label { min-width: 0; }

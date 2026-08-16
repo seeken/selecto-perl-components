@@ -46,7 +46,9 @@ $t->get_ok('/explore/products')
     ->content_like(qr{hx-ws:connect="/explore/products/ws"})
     ->content_like(qr{hx-ws:send})
     ->content_like(qr{/selecto-components/htmx\.min\.js})
-    ->content_like(qr{/selecto-components/hx-ws\.min\.js});
+    ->content_like(qr{/selecto-components/hx-ws\.min\.js})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260815-1})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260815-1});
 
 $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/htmx:after:ws:message/)
@@ -66,6 +68,7 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
 $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-workspace/)
     ->content_like(qr/\.sc-list-picker/)
+    ->content_like(qr/\.sc-picker-choice\[hidden\]\s*\{\s*display:\s*none/)
     ->content_like(qr/\.sc-filter-values/);
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
