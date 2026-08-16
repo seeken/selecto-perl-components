@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+if [ "${SELECTO_ECOSYSTEM_USE_LOCAL:-1}" = "0" ] && [ -z "${SELECTO_LIVE_SELECTO_PERL:-}" ]; then
+  exec "$@"
+fi
+
+selecto_dir=${SELECTO_LIVE_SELECTO_PERL:-"$repo_dir/../selecto-perl"}
+if [ ! -f "$selecto_dir/lib/Selecto.pm" ]; then
+  echo "selecto-perl was not found at $selecto_dir" >&2
+  exit 1
+fi
+
+selecto_local_lib="$selecto_dir/local/lib/perl5"
+perl_paths="$repo_dir/lib:$selecto_local_lib:$selecto_dir/lib"
+
+northwind_dir=${SELECTO_LIVE_SELECTO_PERL_NORTHWIND:-"$repo_dir/../selecto-perl-northwind"}
+if [ -f "$northwind_dir/lib/Selecto/Perl/Northwind.pm" ]; then
+  perl_paths="$perl_paths:$northwind_dir/lib"
+fi
+
+if [ -n "${PERL5LIB:-}" ]; then
+  export PERL5LIB="$perl_paths:$PERL5LIB"
+else
+  export PERL5LIB="$perl_paths"
+fi
+
+exec "$@"

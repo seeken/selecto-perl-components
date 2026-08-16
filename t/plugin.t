@@ -1,0 +1,147 @@
+use 5.034;
+use strict;
+use warnings;
+use Test::More;
+use Test::Mojo;
+use Mojo::JSON qw(decode_json encode_json);
+use lib 't/lib';
+use TestSelectoComponents;
+
+my $t = Test::Mojo->new(TestSelectoComponents::app());
+
+$t->get_ok('/explore/products')
+    ->status_is(200)
+    ->content_type_like(qr{text/html})
+    ->element_exists('section#selecto-channel-products')
+    ->element_exists('form#selecto-query-products')
+    ->element_exists('[data-sc-picker-root]')
+    ->element_exists('[data-sc-picker-available] button[data-field="category_id"]')
+    ->element_exists('[data-sc-picker-set-item][data-field="category.category_name"] input[name="field"]')
+    ->element_exists('[data-sc-picker-set-item][draggable="true"]')
+    ->element_exists('button[data-sc-picker-action="up"]')
+    ->element_exists('button[data-sc-picker-action="down"]')
+    ->element_exists('[data-sc-filter-root]')
+    ->element_exists('input[data-sc-filter-search][aria-label="Filter available filters"]')
+    ->element_exists('[data-sc-filter-available] button[data-field="unit_price"]')
+    ->element_exists('[data-sc-filter-set][aria-label="Set filters"]')
+    ->element_exists('input[type="hidden"][name="group"][value="category.category_name"]')
+    ->text_is('.sc-picker-heading span' => 'Available')
+    ->text_is('h1' => 'Product Explorer')
+    ->content_like(qr{hx-ws:connect="/explore/products/ws"})
+    ->content_like(qr{hx-ws:send})
+    ->content_like(qr{/selecto-components/htmx\.min\.js})
+    ->content_like(qr{/selecto-components/hx-ws\.min\.js});
+
+$t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
+    ->content_like(qr/htmx:after:ws:message/)
+    ->content_like(qr/data-sc-picker-set-item/)
+    ->content_like(qr/data-sc-filter-available-item/)
+    ->content_like(qr/data-sc-filter-set-item/)
+    ->content_like(qr/requestSubmit/);
+$t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
+    ->content_like(qr/\.sc-workspace/)
+    ->content_like(qr/\.sc-list-picker/);
+
+$t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
+    ->status_is(200)
+    ->content_like(qr/SELECT governed_test_query/)
+    ->content_like(qr/12\.50/)
+    ->element_exists('table tbody tr');
+is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->limit_value, 10, 'GET runs the normalized query';
+
+$t->get_ok('/explore/products?q=1&view=detail&field=drop_table&order=drop_table&limit=25&page=1')
+    ->status_is(422)
+    ->content_like(qr/A selected detail field is not available|Choose at least one detail field/)
+    ->content_unlike(qr/<script>alert/);
+
+$t->get_ok('/explore/products?q=1&view=detail&field=product_name&group=category.category_name&measure=count&order=product_name&direction=asc&limit=10&page=1&format=csv')
+    ->status_is(200)
+    ->content_type_like(qr{text/csv})
+    ->header_like('Content-Disposition' => qr/products-page-1\.csv/)
+    ->content_like(qr/"Product Name"\r?\n/)
+    ->content_like(qr/"'=2\+2"/);
+
+$t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({
+    headers => {'HX-Request-ID' => 'request-123'},
+    body => {
+        q => 1,
+        view => 'graph',
+        field => ['product_name', 'unit_price'],
+        group => ['category.category_name'],
+        measure => 'total_price',
+        order => 'product_name',
+        direction => 'asc',
+        limit => 25,
+        page => 1,
+    },
+})})->message_ok;
+my $message = decode_json($t->message->[1]);
+is $message->{'HX-Request-ID'}, 'request-123', 'WebSocket response correlates with htmx sender';
+is $message->{target}, '#selecto-surface-products', 'WebSocket response targets the explorer surface';
+is $message->{swap}, 'outerHTML', 'WebSocket response replaces the surface without replacing the connection';
+like $message->{content}, qr/Graph results/, 'WebSocket returns server-rendered graph content';
+like $message->{selecto}{url}, qr{\A/explore/products\?}, 'WebSocket response supplies the canonical URL';
+like $message->{selecto}{url}, qr/(?:\?|&)view=graph(?:&|\z)/, 'canonical URL records the graph view';
+$t->finish_ok;
+
+$t->get_ok($message->{selecto}{url})
+    ->status_is(200)
+    ->content_like(qr/Graph results/);
+
+$t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({
+    headers => {'HX-Request-ID' => 'reorder-456'},
+    body => {
+        q => 1,
+        view => 'detail',
+        field => ['unit_price', 'product_name', 'category.category_name'],
+        group => ['category.category_name'],
+        measure => 'count',
+        order => 'product_name',
+        direction => 'asc',
+        limit => 25,
+        page => 1,
+    },
+})})->message_ok;
+my $reordered = decode_json($t->message->[1]);
+is $reordered->{'HX-Request-ID'}, 'reorder-456', 'column reorder response correlates with htmx sender';
+like $reordered->{content}, qr{<th scope="col">Unit Price</th><th scope="col">Product Name</th>}s,
+    'server-rendered table follows the submitted Set order';
+cmp_ok index($reordered->{selecto}{url}, 'field=unit_price'), '<',
+    index($reordered->{selecto}{url}, 'field=product_name'),
+    'canonical URL preserves selected column order';
+$t->finish_ok;
+
+$t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({
+    headers => {'HX-Request-ID' => 'filters-789'},
+    body => {
+        q => 1,
+        view => 'detail',
+        field => ['product_name', 'unit_price'],
+        filter_field => ['unit_price', 'category.category_name'],
+        filter_op => ['gte', 'eq'],
+        filter_value => ['', 'Camp Pantry'],
+        group => ['category.category_name'],
+        measure => 'count',
+        order => 'product_name',
+        direction => 'asc',
+        limit => 25,
+        page => 1,
+    },
+})})->message_ok;
+my $filtered = decode_json($t->message->[1]);
+is $filtered->{'HX-Request-ID'}, 'filters-789', 'filter response correlates with htmx sender';
+like $filtered->{content}, qr/data-sc-filter-set-item data-field="unit_price"/,
+    'draft filter remains visible in Set';
+like $filtered->{content}, qr/data-sc-filter-set-item data-field="category\.category_name"/,
+    'second filter remains visible in Set';
+like $filtered->{content}, qr/Enter a value to apply this filter/,
+    'draft filter explains when it becomes active';
+cmp_ok index($filtered->{selecto}{url}, 'filter_field=unit_price'), '<',
+    index($filtered->{selecto}{url}, 'filter_field=category.category_name'),
+    'canonical URL preserves aligned multiple-filter order';
+is_deeply TestSelectoComponents::Adapter::_predicate_values(
+    $TestSelectoComponents::Adapter::LAST_QUERY->predicate,
+), ['Camp Pantry'], 'WebSocket query skips the draft and binds the complete filter';
+$t->finish_ok;
+
+done_testing;

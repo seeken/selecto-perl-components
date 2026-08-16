@@ -1,0 +1,17 @@
+[tools]
+perl = "5.40.2"
+
+[env]
+PORT = "4128"
+
+[tasks.test]
+description = "Run the Selecto Components Perl test suite"
+run = "script/with-local-sibling prove -lr t"
+
+[tasks.server]
+description = "Run the Northwind Components example"
+run = "script/with-local-sibling perl -Ilib examples/northwind.pl"
+
+[tasks.verify]
+description = "Run syntax, unit, WebSocket, and distribution checks"
+run = "script/with-local-sibling sh -c 'perl -Ilib -c examples/northwind.pl && prove -lr t && perl Makefile.PL && make test'"
