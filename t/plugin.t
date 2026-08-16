@@ -27,6 +27,7 @@ $t->get_ok('/explore/products')
     ->element_exists('[data-sc-picker-root]')
     ->element_exists('[data-sc-picker-root][data-sc-picker-kind="field"]')
     ->element_exists('[data-sc-picker-root][data-sc-picker-kind="group"]')
+    ->element_exists('[data-sc-picker-root][data-sc-picker-kind="measure"]')
     ->element_exists('[data-sc-picker-root][data-sc-picker-kind="order"]')
     ->element_exists('[data-sc-picker-available] button[data-field="category_id"]')
     ->element_exists('[data-sc-picker-set-item][data-field="category.category_name"] input[name="field"]')
@@ -47,8 +48,8 @@ $t->get_ok('/explore/products')
     ->content_like(qr{hx-ws:send})
     ->content_like(qr{/selecto-components/htmx\.min\.js})
     ->content_like(qr{/selecto-components/hx-ws\.min\.js})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260815-1})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260815-1});
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260815-2})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260815-2});
 
 $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/htmx:after:ws:message/)
@@ -121,6 +122,20 @@ $t->get_ok('/explore/products?q=1&view=aggregate&field=created_on&field_alias=&f
     ->element_exists('[data-sc-picker-kind="group"] [data-field="created_on"] input[name="group_alias"][value="Month"]')
     ->element_exists('[data-sc-picker-kind="group"] [data-field="created_on"] select[name="group_format"] option[value="month"][selected]')
     ->content_like(qr/Aggregate results/);
+
+$t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&field_alias=&field_format=&group=unit_price&group_alias=Price+band&group_format=buckets&group_bucket_ranges=0-10%2C+11%2B&group_prefix_length=2&group_exclude_articles=1&measure=count&measure_alias=Products&measure_function=count&measure_bucket_ranges=&measure_ignore_nulls=0&measure=total_price&measure_alias=Price+counts&measure_function=buckets&measure_bucket_ranges=0-10%2C+11%2B&measure_ignore_nulls=0&order=product_name&direction=asc&limit=25&page=1')
+    ->status_is(200)
+    ->element_exists('[data-sc-picker-kind="measure"] [data-field="count"] input[name="measure_alias"][value="Products"]')
+    ->element_exists('[data-sc-picker-kind="measure"] [data-field="total_price"] select[name="measure_function"] option[value="buckets"][selected]')
+    ->element_exists('[data-sc-picker-kind="measure"] [data-field="total_price"] input[name="measure_bucket_ranges"][value="0-10, 11+"]')
+    ->element_exists('[data-sc-picker-kind="group"] [data-field="unit_price"] input[name="group_bucket_ranges"][value="0-10, 11+"]')
+    ->content_like(qr/Price counts: 0-10/);
+
+$t->get_ok('/explore/products?q=1&view=graph&field=product_name&group=category.category_name&measure=count&measure_function=count&measure=total_price&measure_function=sum&order=product_name&direction=asc&limit=25&page=1')
+    ->status_is(200)
+    ->element_exists('.sc-chart[aria-label="Selected measures by selected groups"]')
+    ->content_like(qr/Product count/)
+    ->content_like(qr/Total price/);
 
 $t->get_ok('/explore/products?q=1&view=detail&field=drop_table&order=drop_table&limit=25&page=1')
     ->status_is(422)

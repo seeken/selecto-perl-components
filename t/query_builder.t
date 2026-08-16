@@ -60,6 +60,38 @@ like $aggregate_statement->sql, qr/SUM\("s0"\."unit_price"\) AS "total_price"/, 
 like $aggregate_statement->sql, qr/GROUP BY "j_category"\."category_name"/, 'configured group compiles';
 ok $aggregate->{graph}, 'graph uses aggregate query with graph rendering metadata';
 
+my $multi_measure_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'aggregate',
+    field => 'product_name',
+    group => 'unit_price',
+    group_alias => 'Price band',
+    group_format => 'buckets',
+    group_bucket_ranges => '0-10, 11+',
+    measure => ['count', 'total_price'],
+    measure_alias => ['Products', 'Price counts'],
+    measure_function => ['count', 'buckets'],
+    measure_bucket_ranges => ['', '0-10, 11+'],
+    measure_ignore_nulls => [0, 0],
+    order => 'product_name',
+    limit => 25,
+    page => 1,
+});
+my $multi_measure = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $multi_measure_state
+);
+my $multi_measure_statement = $postgresql->compile($domain, $multi_measure->{query});
+like $multi_measure_statement->sql, qr/COUNT\(\*\) AS "count"/,
+    'the first selected measure compiles independently';
+like $multi_measure_statement->sql,
+    qr/COUNT\(CASE WHEN "s0"\."unit_price" >= \$7 AND "s0"\."unit_price" <= \$8 THEN 1 END\) AS "total_price__bucket_1"/,
+    'a numeric measure bucket expands to a governed conditional count column';
+like $multi_measure_statement->sql, qr/GROUP BY CASE WHEN "s0"\."unit_price" >=/,
+    'numeric group buckets compile as governed grouping expressions';
+is_deeply [map { $_->{label} } @{$multi_measure->{columns}}],
+    ['Price band', 'Products', 'Price counts: 0-10', '11+'],
+    'multiple measures and expanded bucket columns preserve configured display order';
+
 my $formatted_detail_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'detail',

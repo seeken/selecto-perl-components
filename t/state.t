@@ -44,6 +44,43 @@ is_deeply $configured->filters, [
     { field => 'category.category_name', op => 'in', value => 'Tools, Produce', value_end => '' },
 ], 'filters retain governed field, operator, and bound value intent';
 
+my $multiple_measures = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'aggregate',
+    field => 'product_name',
+    group => 'unit_price',
+    group_format => 'buckets',
+    group_bucket_ranges => '0-10, 11+',
+    measure => ['count', 'total_price'],
+    measure_alias => ['', 'Average price'],
+    measure_function => ['count', 'avg'],
+    measure_bucket_ranges => ['', ''],
+    measure_ignore_nulls => [0, 0],
+    order => 'product_name',
+});
+ok $multiple_measures->valid, 'multiple configured measures and a numeric group bucket are valid';
+is_deeply $multiple_measures->measures, ['count', 'total_price'],
+    'measure order is retained';
+is_deeply $multiple_measures->measure_configs->{total_price}, {
+    alias => 'Average price', function => 'avg', bucket_ranges => '', ignore_nulls => 0,
+}, 'each selected measure retains independent configuration';
+is $multiple_measures->group_configs->{unit_price}{bucket_ranges}, '0-10, 11+',
+    'group bucket ranges remain aligned with the selected group';
+
+my $bad_bucket = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'aggregate',
+    field => 'product_name',
+    group => 'unit_price',
+    group_format => 'buckets',
+    group_bucket_ranges => q{0-10); DROP TABLE products; --},
+    measure => 'count',
+    order => 'product_name',
+});
+ok !$bad_bucket->valid, 'arbitrary bucket input fails closed';
+like join(' ', @{$bad_bucket->errors}), qr/group bucket range is not available/,
+    'rejected group bucket has an actionable error';
+
 my $pairs = $configured->query_pairs;
 my @field_values;
 for (my $index = 0; $index < @$pairs; $index += 2) {
@@ -71,7 +108,10 @@ is_deeply $configured_columns->field_configs->{created_on},
     { alias => 'Created month', format => 'month' },
     'detail column retains its governed format and presentation label';
 is_deeply $configured_columns->group_configs->{created_on},
-    { alias => 'Month', format => 'month' },
+    {
+        alias => 'Month', format => 'month', bucket_ranges => '',
+        prefix_length => 2, exclude_articles => 1,
+    },
     'aggregate group column retains independent configuration';
 is_deeply $configured_columns->orders, [
     { field => 'created_on', direction => 'desc' },

@@ -1,14 +1,17 @@
 package Selecto::Components::State;
 
 use Mojo::Base -base, -signatures;
+use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
 
-has [qw(view fields field_configs filters groups group_configs measure orders order direction limit page errors)];
+has [qw(view fields field_configs filters groups group_configs measures measure_configs measure orders order direction limit page errors)];
 
 sub parameter_names ($class) {
     return [qw(
         q view field field_alias field_format filter_field filter_op filter_value filter_value_end
-        group group_alias group_format measure order direction limit page
+        group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
+        measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls
+        order direction limit page
     )];
 }
 
@@ -63,6 +66,9 @@ sub from_input ($class, $config, $domain, $input) {
     my $group_values = _values($input, 'group');
     my $group_aliases = _values($input, 'group_alias');
     my $group_formats = _values($input, 'group_format');
+    my $group_bucket_ranges = _values($input, 'group_bucket_ranges');
+    my $group_prefix_lengths = _values($input, 'group_prefix_length');
+    my $group_exclude_articles = _values($input, 'group_exclude_articles');
     $group_values = [@{$config->resolved_default_group($domain)}]
         if !$configured && !grep { length(_scalar($_)) } @$group_values;
     my @valid_groups;
@@ -82,26 +88,108 @@ sub from_input ($class, $config, $domain, $input) {
                 $alias = '';
             }
             my $format = _scalar($group_formats->[$index]);
-            if (!$config->allows_date_format($format)
-                || (length($format) && !$config->temporal_type($field_map->{$group}{type}))) {
+            my $field_type = $field_map->{$group}{type};
+            if (!$config->allows_group_format($field_type, $format)) {
                 push @errors, 'A group column format is not available.';
                 $format = '';
             }
+            my $bucket_ranges = _trim($group_bucket_ranges->[$index]);
+            my $bucket_kind = $format eq 'buckets' ? 'numeric_ranges'
+                : $format eq 'age_buckets' ? 'elapsed_days_ranges'
+                : $format eq 'custom_buckets' ? 'date_relative_ranges'
+                : $format eq 'year_buckets' ? 'year_ranges' : '';
+            if (length($bucket_kind)
+                && !Selecto::Components::BucketParser->valid($bucket_ranges, $bucket_kind)) {
+                push @errors, 'A group bucket range is not available.';
+                $format = '';
+                $bucket_ranges = '';
+            }
+            my $prefix_length = _scalar($group_prefix_lengths->[$index]);
+            $prefix_length = 2 unless $prefix_length =~ /\A(?:[1-9]|10)\z/;
+            my $exclude_articles = _truthy($group_exclude_articles->[$index], 1);
             push @valid_groups, $group;
-            $group_configs{$group} = { alias => $alias, format => $format };
+            $group_configs{$group} = {
+                alias => $alias,
+                format => $format,
+                bucket_ranges => $bucket_ranges,
+                prefix_length => 0 + $prefix_length,
+                exclude_articles => $exclude_articles,
+            };
         }
     }
     if (($view eq 'aggregate' || $view eq 'graph') && !@valid_groups) {
         push @errors, 'Choose at least one group field.';
         @valid_groups = @{$config->resolved_default_group($domain)};
-        %group_configs = map { $_ => { alias => '', format => '' } } @valid_groups;
+        %group_configs = map { $_ => {
+            alias => '', format => '', bucket_ranges => '', prefix_length => 2,
+            exclude_articles => 1,
+        } } @valid_groups;
     }
 
-    my $measure = _first($input, 'measure') // $config->measures->[0]{id};
-    unless ($config->measure($measure)) {
-        push @errors, 'Choose an available measure.';
-        $measure = $config->measures->[0]{id};
+    my $measure_values = _values($input, 'measure');
+    my $measure_aliases = _values($input, 'measure_alias');
+    my $measure_functions = _values($input, 'measure_function');
+    my $measure_bucket_ranges = _values($input, 'measure_bucket_ranges');
+    my $measure_ignore_nulls = _values($input, 'measure_ignore_nulls');
+    $measure_values = [$config->measures->[0]{id}]
+        unless grep { length(_scalar($_)) } @$measure_values;
+    my @valid_measures;
+    my %measure_configs;
+    my %seen_measure;
+    for my $index (0 .. $#$measure_values) {
+        my $measure_id = _scalar($measure_values->[$index]);
+        next unless length($measure_id);
+        if (@valid_measures >= $config->max_measures) {
+            push @errors, 'Too many measures were submitted.';
+            last;
+        }
+        my $measure = $config->measure($measure_id);
+        unless ($measure) {
+            push @errors, 'Choose an available measure.';
+            next;
+        }
+        if ($seen_measure{$measure_id}++) {
+            push @errors, 'A measure can be set only once.';
+            next;
+        }
+        my $alias = _trim($measure_aliases->[$index]);
+        if (length($alias) > 80 || $alias =~ /[\x00-\x1f\x7f]/) {
+            push @errors, 'A measure alias is not available.';
+            $alias = '';
+        }
+        my $field = $measure->{field};
+        my $type = defined($field) ? $field_map->{$field}{type} : 'rows';
+        my $function = lc(_scalar($measure_functions->[$index]) || $measure->{aggregate});
+        unless ($config->allows_measure_function($type, $function, !defined($field))) {
+            push @errors, 'A measure function is not available.';
+            $function = $measure->{aggregate};
+        }
+        my $bucket_ranges = _trim($measure_bucket_ranges->[$index]);
+        my $bucket_kind = $function eq 'buckets' ? 'numeric_ranges'
+            : $function eq 'age_buckets' ? 'elapsed_days_ranges' : '';
+        if (length($bucket_kind)
+            && !Selecto::Components::BucketParser->valid($bucket_ranges, $bucket_kind)) {
+            push @errors, 'A measure bucket range is not available.';
+            $function = $measure->{aggregate};
+            $bucket_ranges = '';
+        }
+        push @valid_measures, $measure_id;
+        $measure_configs{$measure_id} = {
+            alias => $alias,
+            function => $function,
+            bucket_ranges => $bucket_ranges,
+            ignore_nulls => $function eq 'sum'
+                ? _truthy($measure_ignore_nulls->[$index], 0) : 0,
+        };
     }
+    unless (@valid_measures) {
+        my $fallback = $config->measures->[0];
+        @valid_measures = ($fallback->{id});
+        $measure_configs{$fallback->{id}} = {
+            alias => '', function => $fallback->{aggregate}, bucket_ranges => '', ignore_nulls => 0,
+        };
+    }
+    my $measure = $valid_measures[0];
 
     my $order_fields = _values($input, 'order');
     my $order_directions = _values($input, 'direction');
@@ -228,6 +316,8 @@ sub from_input ($class, $config, $domain, $input) {
         filters => \@filters,
         groups => \@valid_groups,
         group_configs => \%group_configs,
+        measures => \@valid_measures,
+        measure_configs => \%measure_configs,
         measure => $measure,
         orders => \@orders,
         order => $order,
@@ -261,9 +351,20 @@ sub query_pairs ($self) {
         push @pairs,
             group => $group,
             group_alias => $column->{alias} // '',
-            group_format => $column->{format} // '';
+            group_format => $column->{format} // '',
+            group_bucket_ranges => $column->{bucket_ranges} // '',
+            group_prefix_length => $column->{prefix_length} // 2,
+            group_exclude_articles => $column->{exclude_articles} ? 1 : 0;
     }
-    push @pairs, measure => $self->measure;
+    for my $measure (@{$self->measures}) {
+        my $measure_config = $self->measure_configs->{$measure} // {};
+        push @pairs,
+            measure => $measure,
+            measure_alias => $measure_config->{alias} // '',
+            measure_function => $measure_config->{function} // 'count',
+            measure_bucket_ranges => $measure_config->{bucket_ranges} // '',
+            measure_ignore_nulls => $measure_config->{ignore_nulls} ? 1 : 0;
+    }
     for my $order (@{$self->orders}) {
         push @pairs, order => $order->{field}, direction => $order->{direction};
     }
@@ -281,6 +382,8 @@ sub as_hash ($self) {
         filters => [map { { %$_ } } @{$self->filters}],
         groups => [@{$self->groups}],
         group_configs => { map { $_ => { %{$self->group_configs->{$_}} } } keys %{$self->group_configs} },
+        measures => [@{$self->measures}],
+        measure_configs => { map { $_ => { %{$self->measure_configs->{$_}} } } keys %{$self->measure_configs} },
         measure => $self->measure,
         orders => [map { { %$_ } } @{$self->orders}],
         order => $self->order,
@@ -323,6 +426,11 @@ sub _trim ($value) {
     $value = _scalar($value);
     $value =~ s/\A\s+|\s+\z//g;
     return $value;
+}
+
+sub _truthy ($value, $default = 0) {
+    return $default unless defined($value) && !ref($value) && length("$value");
+    return "$value" =~ /\A(?:1|true|on|yes)\z/i ? 1 : 0;
 }
 
 sub _valid_temporal_value ($value) {

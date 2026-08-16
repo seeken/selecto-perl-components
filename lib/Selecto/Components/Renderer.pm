@@ -3,7 +3,7 @@ package Selecto::Components::Renderer;
 use Mojo::Base -base, -signatures;
 use Mojo::Util qw(xml_escape);
 
-my $ASSET_REVISION = '20260815-1';
+my $ASSET_REVISION = '20260815-2';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -78,16 +78,14 @@ sub _form ($class, $model, $catalog) {
         '<label class="sc-view-tab"><input type="radio" name="view" value="' . _h($_) . '"' .
         ($_ eq $state->view ? ' checked' : '') . '><span>' . _h(_humanize($_)) . '</span></label>'
     } @{$config->views};
-    my $measures = join '', map {
-        '<option value="' . _h($_->{id}) . '"' . ($_->{id} eq $state->measure ? ' selected' : '') . '>' .
-        _h($_->{label}) . '</option>'
-    } @{$config->measures};
+    my $measure_catalog = $config->measure_catalog($model->{domain});
     my $filter_picker = $class->_filter_picker($state, $catalog, $config);
     my $detail_controls = $class->_field_picker($state, $catalog, $config) .
         $class->_order_picker($state, $catalog, $config->max_orders) .
-        _hidden('measure', $state->measure) . _selection_hidden('group', $state->groups, $state->group_configs);
+        _measure_selection_hidden($state) .
+        _selection_hidden('group', $state->groups, $state->group_configs);
     my $summary_controls = $class->_group_picker($state, $catalog, $config) .
-        '<label>Measure<select name="measure">' . $measures . '</select></label>' .
+        $class->_measure_picker($state, $measure_catalog, $config) .
         _selection_hidden('field', $state->fields, $state->field_configs) .
         join('', map {
             _hidden('order', $_->{field}) . _hidden('direction', $_->{direction})
@@ -151,9 +149,26 @@ sub _group_picker ($class, $state, $catalog, $config) {
         configs => $state->group_configs,
         maximum => 3,
         search_label => 'Filter available group fields',
-        hint => 'Choose up to three groups. Date formats define aggregate buckets.',
+        hint => 'Choose up to three groups. Configure numeric, date, year, age, or text-prefix buckets.',
         set_label => 'Set group columns',
         date_formats => $config->date_formats,
+        config => $config,
+    );
+}
+
+sub _measure_picker ($class, $state, $catalog, $config) {
+    return $class->_selection_picker(
+        $state,
+        $catalog,
+        kind => 'measure',
+        legend => 'Measures',
+        selected => $state->measures,
+        configs => $state->measure_configs,
+        maximum => $config->max_measures,
+        search_label => 'Filter available measures',
+        hint => 'Add multiple measures, reorder them, and configure functions, aliases, and buckets.',
+        set_label => 'Set measures',
+        config => $config,
     );
 }
 
@@ -187,7 +202,9 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         ($at_limit ? ' disabled' : '') . ' ' .
         'data-sc-picker-available-item data-field="' . _h($_->{path}) . '" data-label="' .
         _h($_->{label}) . '" data-type="' . _h($_->{type}) . '" data-search="' .
-        _h(lc($_->{label} . ' ' . $_->{type})) . '"><span><strong>' . _h($_->{label}) .
+        _h(lc($_->{label} . ' ' . $_->{type})) . '" data-default-function="' .
+        _h($_->{default_function} // '') . '" data-measure-field="' .
+        _h($_->{field} // '') . '"><span><strong>' . _h($_->{label}) .
         '</strong><small>' . _h($_->{type}) . '</small></span><span aria-hidden="true">+</span></button>'
     } @available;
     $available_items ||= '<p class="sc-picker-empty">Every available field is set.</p>';
@@ -209,27 +226,14 @@ sub _selection_picker ($class, $state, $catalog, %options) {
                 ($direction eq 'asc' ? ' selected' : '') . '>Ascending</option><option value="desc"' .
                 ($direction eq 'desc' ? ' selected' : '') . '>Descending</option></select></label>';
         } else {
-            my $alias = $item_config->{alias} // '';
-            my $format = $item_config->{format} // '';
-            my $format_control = _hidden($kind . '_format', '');
-            if ($state && $field->{type} =~ /(?:date|time)/i) {
-                my $options_html = '<option value=""' . ($format eq '' ? ' selected' : '') . '>Default</option>' .
-                    join('', map {
-                        '<option value="' . _h($_->{id}) . '"' .
-                        ($_->{id} eq $format ? ' selected' : '') . '>' . _h($_->{label}) . '</option>'
-                    } @{$options{date_formats}});
-                $format_control = '<label>Date format<select name="' . _h($kind . '_format') .
-                    '" aria-label="Date format for ' . _h($field->{label}) . '">' .
-                    $options_html . '</select></label>';
-            }
-            $config_controls = '<details class="sc-column-config"><summary>Configure</summary>' .
-                '<div class="sc-column-config-grid"><label>Column label<input name="' .
-                _h($kind . '_alias') . '" value="' . _h($alias) . '" maxlength="80" ' .
-                'aria-label="Column label for ' . _h($field->{label}) . '"></label>' .
-                $format_control . '</div></details>';
+            $config_controls = _picker_config_controls(
+                $options{config}, $kind, $field, $item_config, $options{date_formats}
+            );
         }
         '<article class="sc-picker-set-item" draggable="true" data-sc-picker-set-item data-field="' .
         _h($path) . '" data-label="' . _h($field->{label}) . '" data-type="' . _h($field->{type}) .
+        '" data-default-function="' . _h($field->{default_function} // '') .
+        '" data-measure-field="' . _h($field->{field} // '') .
         '"><input type="hidden" name="' . _h($kind) . '" value="' . _h($path) . '">' .
         '<button class="sc-picker-grip" type="button" title="Drag to reorder" aria-label="Drag ' .
         _h($field->{label}) . ' to reorder">⠿</button><span class="sc-picker-set-label"><strong>' .
@@ -260,6 +264,78 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         '<div class="sc-picker-list sc-picker-set" data-sc-picker-set aria-label="' .
         _h($options{set_label}) . '">' .
         $set_items . '</div></section></div></fieldset>';
+}
+
+sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats) {
+    my $alias = $item_config->{alias} // '';
+    my $label_text = $kind eq 'measure' ? 'Measure label' : 'Column label';
+    my $controls = '<label>' . $label_text . '<input name="' . _h($kind . '_alias') .
+        '" value="' . _h($alias) . '" maxlength="80" aria-label="' . $label_text .
+        ' for ' . _h($field->{label}) . '"></label>';
+
+    if ($kind eq 'field') {
+        my $format = $item_config->{format} // '';
+        if ($field->{type} =~ /(?:date|time)/i) {
+            my $options = '<option value=""' . ($format eq '' ? ' selected' : '') . '>Default</option>' .
+                join('', map {
+                    '<option value="' . _h($_->{id}) . '"' .
+                    ($_->{id} eq $format ? ' selected' : '') . '>' . _h($_->{label}) . '</option>'
+                } @{$date_formats // []});
+            $controls .= '<label>Date format<select name="field_format" aria-label="Date format for ' .
+                _h($field->{label}) . '">' . $options . '</select></label>';
+        } else {
+            $controls .= _hidden('field_format', '');
+        }
+    } elsif ($kind eq 'group') {
+        my $format = $item_config->{format} // '';
+        my $format_options = join '', map {
+            my ($value, $text) = @$_;
+            $value = '' if $value eq 'default';
+            '<option value="' . _h($value) . '"' . ($value eq $format ? ' selected' : '') . '>' .
+                _h($text) . '</option>'
+        } @{$config->group_formats($field->{type})};
+        my $bucket_visible = $format =~ /\A(?:buckets|age_buckets|custom_buckets|year_buckets)\z/;
+        my $prefix_visible = $format eq 'text_prefix';
+        $controls .= '<label>Format<select name="group_format" data-sc-group-format aria-label="Group format for ' .
+            _h($field->{label}) . '">' . $format_options . '</select></label>' .
+            '<label data-sc-group-buckets' . ($bucket_visible ? '' : ' hidden') . '>Bucket ranges' .
+            '<input name="group_bucket_ranges" value="' . _h($item_config->{bucket_ranges} // '') .
+            '" placeholder="1, 2-5, 6-14, 15+ or */10" aria-label="Bucket ranges for ' .
+            _h($field->{label}) . '"></label>' .
+            '<label data-sc-group-prefix' . ($prefix_visible ? '' : ' hidden') . '>Prefix length' .
+            '<input type="number" min="1" max="10" name="group_prefix_length" value="' .
+            _h($item_config->{prefix_length} // 2) . '" aria-label="Prefix length for ' .
+            _h($field->{label}) . '"></label>' .
+            '<label data-sc-group-prefix' . ($prefix_visible ? '' : ' hidden') . '>Leading articles' .
+            '<select name="group_exclude_articles" aria-label="Leading articles for ' .
+            _h($field->{label}) . '"><option value="1"' .
+            ($item_config->{exclude_articles} ? ' selected' : '') . '>Exclude a, an, the</option>' .
+            '<option value="0"' . ($item_config->{exclude_articles} ? '' : ' selected') .
+            '>Keep articles</option></select></label>';
+    } elsif ($kind eq 'measure') {
+        my $function = $item_config->{function} // $field->{default_function} // 'count';
+        my $functions = join '', map {
+            '<option value="' . _h($_->[0]) . '"' .
+            ($_->[0] eq $function ? ' selected' : '') . '>' . _h($_->[1]) . '</option>'
+        } @{$config->measure_functions($field->{type}, $field->{type} eq 'rows')};
+        my $bucket_visible = $function eq 'buckets' || $function eq 'age_buckets';
+        my $sum_visible = $function eq 'sum';
+        $controls .= '<label>Function<select name="measure_function" data-sc-measure-function ' .
+            'aria-label="Measure function for ' . _h($field->{label}) . '">' . $functions .
+            '</select></label><label data-sc-measure-buckets' . ($bucket_visible ? '' : ' hidden') .
+            '>Bucket ranges<input name="measure_bucket_ranges" value="' .
+            _h($item_config->{bucket_ranges} // '') .
+            '" placeholder="0-10, 11-50, 51+" aria-label="Measure bucket ranges for ' .
+            _h($field->{label}) . '"></label><label data-sc-measure-sum' .
+            ($sum_visible ? '' : ' hidden') . '>NULL handling<select name="measure_ignore_nulls" ' .
+            'aria-label="NULL handling for ' . _h($field->{label}) . '"><option value="0"' .
+            ($item_config->{ignore_nulls} ? '' : ' selected') . '>Keep SQL SUM behavior</option>' .
+            '<option value="1"' . ($item_config->{ignore_nulls} ? ' selected' : '') .
+            '>Treat NULL as 0</option></select></label>';
+    }
+
+    return '<details class="sc-column-config"><summary>Configure</summary>' .
+        '<div class="sc-column-config-grid">' . $controls . '</div></details>';
 }
 
 sub _filter_picker ($class, $state, $catalog, $config) {
@@ -405,25 +481,33 @@ sub _table ($class, $result) {
 }
 
 sub _graph ($class, $result) {
-    my $measure = $result->{columns}[-1];
-    my @values = map { _number($_->{$measure->{key}}) } @{$result->{records}};
+    my @measures = grep { $_->{measure} } @{$result->{columns}};
+    my @dimensions = grep { !$_->{measure} } @{$result->{columns}};
+    my @values = map {
+        my $record = $_;
+        map { _number($record->{$_->{key}}) } @measures
+    } @{$result->{records}};
     my $max = 0;
     for my $value (@values) {
         $max = $value if $value > $max;
     }
     $max = 1 unless $max > 0;
-    my @dimensions = @{$result->{columns}}[0 .. $#{$result->{columns}} - 1];
     my $bars = join '', map {
-        my $index = $_;
-        my $record = $result->{records}[$index];
-        my $label = join(' · ', map { _display($record->{$_->{key}}) } @dimensions);
-        '<li><span class="sc-graph-label">' . _h($label) . '</span><meter min="0" max="' .
-        _h($max) . '" value="' . _h($values[$index]) . '"></meter><strong>' .
-        _h(_display($record->{$measure->{key}})) . '</strong></li>'
-    } 0 .. $#{$result->{records}};
+        my $record = $_;
+        my $group_label = join(' · ', map { _display($record->{$_->{key}}) } @dimensions);
+        join '', map {
+            my $measure = $_;
+            my $value = _number($record->{$measure->{key}});
+            my $label = length($group_label)
+                ? $group_label . ' · ' . $measure->{label} : $measure->{label};
+            '<li><span class="sc-graph-label">' . _h($label) . '</span><meter min="0" max="' .
+            _h($max) . '" value="' . _h($value) . '"></meter><strong>' .
+            _h(_display($record->{$measure->{key}})) . '</strong></li>'
+        } @measures
+    } @{$result->{records}};
     $bars ||= '<li class="sc-empty-cell">No rows matched this query.</li>';
-    return '<div class="sc-chart" role="img" aria-label="' . _h($measure->{label}) .
-        ' by selected groups"><ul>' . $bars . '</ul></div>' . $class->_table($result);
+    return '<div class="sc-chart" role="img" aria-label="Selected measures by selected groups"><ul>' .
+        $bars . '</ul></div>' . $class->_table($result);
 }
 
 sub _pagination ($class, $model) {
@@ -471,8 +555,25 @@ sub _selection_hidden ($kind, $values, $configs) {
         my $config = $configs->{$field} // {};
         _hidden($kind, $field) .
             _hidden($kind . '_alias', $config->{alias} // '') .
-            _hidden($kind . '_format', $config->{format} // '')
+            _hidden($kind . '_format', $config->{format} // '') .
+            ($kind eq 'group'
+                ? _hidden('group_bucket_ranges', $config->{bucket_ranges} // '') .
+                  _hidden('group_prefix_length', $config->{prefix_length} // 2) .
+                  _hidden('group_exclude_articles', $config->{exclude_articles} ? 1 : 0)
+                : '')
     } @$values;
+}
+
+sub _measure_selection_hidden ($state) {
+    return join '', map {
+        my $measure = $_;
+        my $config = $state->measure_configs->{$measure} // {};
+        _hidden('measure', $measure) .
+            _hidden('measure_alias', $config->{alias} // '') .
+            _hidden('measure_function', $config->{function} // 'count') .
+            _hidden('measure_bucket_ranges', $config->{bucket_ranges} // '') .
+            _hidden('measure_ignore_nulls', $config->{ignore_nulls} ? 1 : 0)
+    } @{$state->measures};
 }
 
 sub _number ($value) {

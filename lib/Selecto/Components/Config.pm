@@ -14,6 +14,7 @@ has default_limit  => 25;
 has max_limit      => 100;
 has max_filters    => 20;
 has max_orders     => 10;
+has max_measures   => 10;
 has show_sql       => 0;
 
 my @DATE_FORMATS = (
@@ -46,6 +47,8 @@ sub new ($class, @args) {
         unless $self->max_filters =~ /\A\d+\z/ && $self->max_filters >= 1 && $self->max_filters <= 20;
     die "max_orders must be between 1 and 20\n"
         unless $self->max_orders =~ /\A\d+\z/ && $self->max_orders >= 1 && $self->max_orders <= 20;
+    die "max_measures must be between 1 and 20\n"
+        unless $self->max_measures =~ /\A\d+\z/ && $self->max_measures >= 1 && $self->max_measures <= 20;
 
     my %known_view = map { $_ => 1 } qw(detail aggregate graph);
     my %seen_view;
@@ -63,16 +66,17 @@ sub new ($class, @args) {
         my $aggregate = defined($measure->{aggregate}) ? lc("$measure->{aggregate}") : '';
         die "measure id must be an identifier\n" unless $id =~ /\A[A-Za-z][A-Za-z0-9_]*\z/;
         die "duplicate measure id $id\n" if $seen_measure{$id}++;
-        die "unsupported aggregate $aggregate\n"
-            unless $aggregate eq 'count' || $aggregate eq 'sum'
-                || $aggregate eq 'min' || $aggregate eq 'max';
+        die "unsupported aggregate $aggregate\n" unless grep { $_ eq $aggregate } qw(
+            count count_distinct avg sum min max true_count false_count buckets age_buckets
+        );
         die "$aggregate measure $id requires a field\n"
             if $aggregate ne 'count' && (!defined($measure->{field}) || ref($measure->{field}));
         push @measures, {
             id => $id,
             label => defined($measure->{label}) ? "$measure->{label}" : _humanize($id),
             aggregate => $aggregate,
-            ($aggregate eq 'count' ? () : (field => "$measure->{field}")),
+            (defined($measure->{field}) && !ref($measure->{field})
+                ? (field => "$measure->{field}") : ()),
         };
     }
     die "explorer must configure at least one measure\n" unless @measures;
@@ -139,6 +143,64 @@ sub measure ($self, $id) {
         return { %$measure } if $measure->{id} eq $id;
     }
     return undef;
+}
+
+sub measure_catalog ($self, $domain) {
+    my $fields = $self->field_map($domain);
+    return [map {
+        my $measure = $_;
+        my $field = defined($measure->{field}) ? $fields->{$measure->{field}} : undef;
+        {
+            path => $measure->{id},
+            label => $measure->{label},
+            type => $field ? $field->{type} : 'rows',
+            field => $measure->{field},
+            default_function => $measure->{aggregate},
+        }
+    } @{$self->measures}];
+}
+
+sub measure_functions ($self, $type, $row_count = 0) {
+    return [[count => 'Count']] if $row_count;
+    return [
+        [count => 'Count'], [count_distinct => 'Count distinct'],
+        [avg => 'Average'], [sum => 'Sum'], [min => 'Minimum'], [max => 'Maximum'],
+        [buckets => 'Buckets'],
+    ] if $self->numeric_type($type);
+    return [
+        [count => 'Count'], [count_distinct => 'Count distinct'],
+        [min => 'Minimum'], [max => 'Maximum'], [age_buckets => 'Age buckets'],
+    ] if $self->temporal_type($type);
+    return [
+        [count => 'Count'], [true_count => 'True count'], [false_count => 'False count'],
+    ] if $self->boolean_type($type);
+    return [
+        [count => 'Count'], [count_distinct => 'Count distinct'],
+        [min => 'Minimum'], [max => 'Maximum'],
+    ];
+}
+
+sub allows_measure_function ($self, $type, $function, $row_count = 0) {
+    return scalar grep { $_->[0] eq $function } @{$self->measure_functions($type, $row_count)};
+}
+
+sub group_formats ($self, $type) {
+    return [
+        [default => 'Default'],
+        (map { [$_->{id}, $_->{label}] } @DATE_FORMATS),
+        [age_buckets => 'Age buckets'],
+        [custom_buckets => 'Relative date buckets'],
+        [year_buckets => 'Year buckets'],
+    ] if $self->temporal_type($type);
+    return [[default => 'Default'], [buckets => 'Buckets']] if $self->numeric_type($type);
+    return [[default => 'Default'], [text_prefix => 'Text prefix']]
+        if defined($type) && !ref($type) && "$type" =~ /(?:string|text|char|citext)/i;
+    return [[default => 'Default']];
+}
+
+sub allows_group_format ($self, $type, $format) {
+    $format = 'default' unless defined($format) && length("$format");
+    return scalar grep { $_->[0] eq "$format" } @{$self->group_formats($type)};
 }
 
 sub date_formats ($self) { return [map { { %$_ } } @DATE_FORMATS]; }
@@ -213,9 +275,13 @@ sub validate_domain ($self, $domain) {
         die "configured explorer field $field is outside the domain\n" unless $map->{$field};
     }
     for my $measure (@{$self->measures}) {
-        next if $measure->{aggregate} eq 'count';
+        next unless defined $measure->{field};
         die "configured measure field $measure->{field} is outside the domain\n"
             unless $map->{$measure->{field}};
+        die "configured measure function $measure->{aggregate} is unavailable for $measure->{field}\n"
+            unless $self->allows_measure_function(
+                $map->{$measure->{field}}{type}, $measure->{aggregate}, 0
+            );
     }
     return $self;
 }
