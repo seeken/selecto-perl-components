@@ -1,6 +1,7 @@
 package Selecto::Components::QueryBuilder;
 
 use Mojo::Base -base, -signatures;
+use Selecto::Components::DateShortcut ();
 use Selecto::Expression ();
 
 sub build ($class, $config, $domain, $state) {
@@ -84,12 +85,20 @@ sub _column_expression ($column) {
 sub _with_filters ($query, $state) {
     my @expressions;
     for my $filter (@{$state->filters}) {
-        my ($field, $op, $value) = @{$filter}{qw(field op value)};
+        my ($field, $op, $value, $value_end) = @{$filter}{qw(field op value value_end)};
         next if $filter->{draft};
         my $expression;
         if ($op eq 'in') {
             my @values = grep { length } map { _trim($_) } split /,/, $value;
             $expression = Selecto::Expression->in($field, \@values);
+        } elsif ($op eq 'between') {
+            $expression = Selecto::Expression->between($field, $value, $value_end);
+        } elsif ($op eq 'date_shortcut') {
+            my ($start, $end) = Selecto::Components::DateShortcut->bounds($value);
+            $expression = Selecto::Expression->all([
+                Selecto::Expression->gte($field, $start),
+                Selecto::Expression->lt($field, $end),
+            ]);
         } elsif ($op eq 'is_null' || $op eq 'not_null') {
             $expression = Selecto::Expression->can($op)->('Selecto::Expression', $field);
         } else {

@@ -80,7 +80,7 @@ sub _form ($class, $model, $catalog) {
         '<option value="' . _h($_->{id}) . '"' . ($_->{id} eq $state->measure ? ' selected' : '') . '>' .
         _h($_->{label}) . '</option>'
     } @{$config->measures};
-    my $filter_picker = $class->_filter_picker($state, $catalog, $config->max_filters);
+    my $filter_picker = $class->_filter_picker($state, $catalog, $config);
     my $detail_controls = $class->_field_picker($state, $catalog, $config) .
         $class->_order_picker($state, $catalog, $config->max_orders) .
         _hidden('measure', $state->measure) . _selection_hidden('group', $state->groups, $state->group_configs);
@@ -110,7 +110,7 @@ sub _form ($class, $model, $catalog) {
         '<div class="sc-view-tabs" role="radiogroup" aria-label="Result view">' . $views . '</div>' .
         $view_controls . '</section>';
     my $filter_panel = '<section class="sc-builder-panel" role="tabpanel" id="' . $filter_panel_id .
-        '" aria-labelledby="' . $filter_tab_id . '" data-sc-builder-panel="filters">' .
+        '" aria-labelledby="' . $filter_tab_id . '" data-sc-builder-panel="filters" hidden>' .
         $filter_picker . '</section>';
     return '<aside class="sc-builder"><form id="selecto-query-' . _h($config->id) . '" action="' .
         _h($config->path) . '" method="' . $method . '" hx-ws:send hx-trigger="submit" data-sc-builder="' .
@@ -260,7 +260,8 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         $set_items . '</div></section></div></fieldset>';
 }
 
-sub _filter_picker ($class, $state, $catalog, $max_filters) {
+sub _filter_picker ($class, $state, $catalog, $config) {
+    my $max_filters = $config->max_filters;
     my %by_path = map { $_->{path} => $_ } @$catalog;
     my %selected = map { $_->{field} => 1 } @{$state->filters};
     my @available = grep { !$selected{$_->{path}} } @$catalog;
@@ -276,18 +277,13 @@ sub _filter_picker ($class, $state, $catalog, $max_filters) {
         ($at_limit ? 'Maximum of ' . _h($max_filters) . ' filters set.' : 'Every available filter is set.') .
         '</p>';
 
-    my @operators = (
-        [eq => 'equals'], [gte => 'at least'], [gt => 'greater than'],
-        [in => 'one of (comma-separated)'], [is_null => 'is empty'], [not_null => 'is not empty'],
-    );
     my $set_items = join '', map {
         my $filter = $_;
         my $field = $by_path{$filter->{field}};
         my $ops = join '', map {
             '<option value="' . $_->[0] . '"' . ($_->[0] eq $filter->{op} ? ' selected' : '') . '>' .
             _h($_->[1]) . '</option>'
-        } @operators;
-        my $null_op = $filter->{op} =~ /_null\z/;
+        } @{$config->filter_operators($field->{type})};
         '<article class="sc-filter-set-item' . ($filter->{draft} ? ' is-draft' : '') .
         '" data-sc-filter-set-item data-field="' . _h($filter->{field}) . '" data-label="' .
         _h($field->{label}) . '" data-type="' . _h($field->{type}) . '">' .
@@ -296,10 +292,11 @@ sub _filter_picker ($class, $state, $catalog, $max_filters) {
         _h($field->{type}) . '</small></span><button type="button" data-sc-filter-action="remove" ' .
         'aria-label="Remove ' . _h($field->{label}) . ' filter" title="Remove filter">×</button></div>' .
         '<div class="sc-filter-editor"><label>Operator<select name="filter_op" aria-label="Operator for ' .
-        _h($field->{label}) . '">' . $ops . '</select></label><label>Value<input name="filter_value" ' .
-        'aria-label="Value for ' . _h($field->{label}) . '" value="' . _h($filter->{value}) . '" ' .
-        ($null_op ? 'readonly placeholder="Value not used"' : 'placeholder="Enter a value"') . '></label></div>' .
-        ($filter->{draft} ? '<p class="sc-filter-draft-note">Enter a value to apply this filter.</p>' : '') .
+        _h($field->{label}) . '">' . $ops . '</select></label>' .
+        $class->_filter_value_controls($config, $field, $filter) . '</div>' .
+        ($filter->{draft} ? '<p class="sc-filter-draft-note">' .
+            _h($filter->{op} eq 'between' ? 'Enter both values to apply this filter.'
+                : 'Enter a value to apply this filter.') . '</p>' : '') .
         '</article>'
     } @{$state->filters};
     $set_items ||= '<p class="sc-picker-empty">Choose fields from Available to build filters.</p>';
@@ -316,6 +313,63 @@ sub _filter_picker ($class, $state, $catalog, $max_filters) {
         '<p class="sc-picker-hint">Set filters are combined with AND.</p>' .
         '<div class="sc-picker-list sc-filter-set" data-sc-filter-set aria-label="Set filters">' .
         $set_items . '</div></section></div></fieldset>';
+}
+
+sub _filter_value_controls ($class, $config, $field, $filter) {
+    my $operator = $filter->{op};
+    my $value = $filter->{value} // '';
+    my $value_end = $filter->{value_end} // '';
+    my $label = $field->{label};
+    my $type = $field->{type};
+    my $input_type = $config->filter_input_type($type);
+    my $step = $input_type eq 'number' ? ' step="any"' : '';
+    my $controls = '<div class="sc-filter-values" data-sc-filter-values>';
+
+    if ($operator =~ /_null\z/) {
+        return $controls . _hidden('filter_value', '') . _hidden('filter_value_end', '') .
+            '<p class="sc-filter-value-note">No value needed.</p></div>';
+    }
+    if ($operator eq 'date_shortcut') {
+        my $options = '';
+        my $group = '';
+        for my $shortcut (@{$config->date_shortcuts}) {
+            if ($shortcut->{group} ne $group) {
+                $options .= '</optgroup>' if length($group);
+                $group = $shortcut->{group};
+                $options .= '<optgroup label="' . _h($group) . '">';
+            }
+            $options .= '<option value="' . _h($shortcut->{id}) . '"' .
+                ($shortcut->{id} eq $value ? ' selected' : '') . '>' .
+                _h($shortcut->{label}) . '</option>';
+        }
+        $options .= '</optgroup>' if length($group);
+        return $controls . '<label class="sc-filter-value-wide">Period<select name="filter_value" ' .
+            'aria-label="Period for ' . _h($label) . '">' . $options . '</select></label>' .
+            _hidden('filter_value_end', '') . '</div>';
+    }
+    if ($operator eq 'between') {
+        return $controls . '<label>Start<input type="' . $input_type . '" name="filter_value" ' .
+            'aria-label="Start value for ' . _h($label) . '" value="' . _h($value) . '"' . $step .
+            '></label><label>End<input type="' . $input_type . '" name="filter_value_end" ' .
+            'aria-label="End value for ' . _h($label) . '" value="' . _h($value_end) . '"' . $step .
+            '></label></div>';
+    }
+    if ($config->boolean_type($type)) {
+        return $controls . '<label class="sc-filter-value-wide">Value<select name="filter_value" ' .
+            'aria-label="Value for ' . _h($label) . '"><option value=""' .
+            (!length($value) ? ' selected' : '') . '>Choose true or false</option><option value="true"' .
+            (lc($value) eq 'true' || $value eq '1' ? ' selected' : '') . '>True</option>' .
+            '<option value="false"' . (lc($value) eq 'false' || $value eq '0' ? ' selected' : '') .
+            '>False</option></select></label>' . _hidden('filter_value_end', '') . '</div>';
+    }
+    my $placeholder = $operator eq 'in' ? 'Comma-separated values'
+        : $config->temporal_type($type) ? 'Choose a date' : 'Enter a value';
+    my $effective_type = $operator eq 'in' ? 'text' : $input_type;
+    my $effective_step = $effective_type eq 'number' ? ' step="any"' : '';
+    return $controls . '<label class="sc-filter-value-wide">Value<input type="' . $effective_type .
+        '" name="filter_value" aria-label="Value for ' . _h($label) . '" value="' . _h($value) .
+        '" placeholder="' . _h($placeholder) . '"' . $effective_step . '></label>' .
+        _hidden('filter_value_end', '') . '</div>';
 }
 
 sub _results ($class, $model) {

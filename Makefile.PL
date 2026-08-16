@@ -13,6 +13,7 @@ WriteMakefile(
     PM => {
         'lib/Selecto/Components.pm' => '$(INST_LIB)/Selecto/Components.pm',
         'lib/Selecto/Components/Config.pm' => '$(INST_LIB)/Selecto/Components/Config.pm',
+        'lib/Selecto/Components/DateShortcut.pm' => '$(INST_LIB)/Selecto/Components/DateShortcut.pm',
         'lib/Selecto/Components/Explorer.pm' => '$(INST_LIB)/Selecto/Components/Explorer.pm',
         'lib/Selecto/Components/QueryBuilder.pm' => '$(INST_LIB)/Selecto/Components/QueryBuilder.pm',
         'lib/Selecto/Components/Renderer.pm' => '$(INST_LIB)/Selecto/Components/Renderer.pm',

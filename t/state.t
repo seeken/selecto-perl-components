@@ -40,8 +40,8 @@ ok $configured->valid, 'configured graph state is valid';
 is $configured->measure, 'total_price', 'configured measure is retained';
 is $configured->page, 3, 'page is retained';
 is_deeply $configured->filters, [
-    { field => 'unit_price', op => 'gte', value => '12.50' },
-    { field => 'category.category_name', op => 'in', value => 'Tools, Produce' },
+    { field => 'unit_price', op => 'gte', value => '12.50', value_end => '' },
+    { field => 'category.category_name', op => 'in', value => 'Tools, Produce', value_end => '' },
 ], 'filters retain governed field, operator, and bound value intent';
 
 my $pairs = $configured->query_pairs;
@@ -108,8 +108,8 @@ my $draft = Selecto::Components::State->from_input($config, $domain, {
 });
 ok $draft->valid, 'an empty newly added filter is a valid draft';
 is_deeply $draft->filters, [
-    { field => 'unit_price', op => 'eq', value => '', draft => 1 },
-    { field => 'category.category_name', op => 'eq', value => 'Camp Pantry' },
+    { field => 'unit_price', op => 'eq', value => '', value_end => '', draft => 1 },
+    { field => 'category.category_name', op => 'eq', value => 'Camp Pantry', value_end => '' },
 ], 'draft and complete filters retain their aligned URL state';
 my $draft_query = Selecto::Components::QueryBuilder->build($config, $domain, $draft);
 my $draft_statement = Selecto::PostgreSQL->new(
@@ -120,6 +120,68 @@ unlike $draft_statement->sql, qr/"s0"\."unit_price"\s*=/,
 like $draft_statement->sql, qr/"j_category"\."category_name" = \$1/,
     'complete filter still compiles alongside a draft';
 is_deeply $draft_statement->params, ['Camp Pantry'], 'only complete filter values are bound';
+
+my $date_between = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'created_on',
+    filter_field => 'created_on',
+    filter_op => 'between',
+    filter_value => '2026-01-01',
+    filter_value_end => '2026-03-31',
+    order => 'created_on',
+});
+ok $date_between->valid, 'date BETWEEN accepts two ISO date values';
+is_deeply $date_between->filters->[0], {
+    field => 'created_on', op => 'between', value => '2026-01-01', value_end => '2026-03-31',
+}, 'date range retains independently aligned start and end values';
+
+my $date_shortcut = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'created_on',
+    filter_field => 'created_on',
+    filter_op => 'date_shortcut',
+    filter_value => 'this_year',
+    order => 'created_on',
+});
+ok $date_shortcut->valid, 'whitelisted date shortcut is accepted';
+
+my $bad_date_shortcut = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'created_on',
+    filter_field => 'created_on',
+    filter_op => 'date_shortcut',
+    filter_value => q{this_year'); DROP TABLE products; --},
+    order => 'created_on',
+});
+ok !$bad_date_shortcut->valid, 'arbitrary date shortcut fails closed';
+like join(' ', @{$bad_date_shortcut->errors}), qr/date shortcut is not available/,
+    'rejected shortcut has an actionable error';
+
+my $bad_date = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'created_on',
+    filter_field => 'created_on',
+    filter_op => 'eq',
+    filter_value => '2026-02-31',
+    order => 'created_on',
+});
+ok !$bad_date->valid, 'invalid calendar date fails closed';
+
+my $bad_string_range = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    filter_field => 'product_name',
+    filter_op => 'between',
+    filter_value => 'A',
+    filter_value_end => 'Z',
+    order => 'product_name',
+});
+ok !$bad_string_range->valid, 'field type controls which filter operators are available';
 
 my $duplicate_filter = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

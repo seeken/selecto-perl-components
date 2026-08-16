@@ -24,9 +24,12 @@ This is alpha software. Its browser transport is pinned to htmx
   direction for each selected field;
 - domain-derived Available/Set filter picker with search, multiple AND filters,
   and removable filter editors;
+- type-aware filter controls: native date and date-time inputs, numeric inputs,
+  boolean choices, two-value ranges, and allowlisted calendar shortcuts such
+  as Today, This Month, This Quarter, and This Year;
 - Detail, Aggregate, and Graph result views;
-- `eq`, `gt`, `gte`, `in`, `is_null`, and `not_null` filters supported by the
-  current native Perl query contract;
+- `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `in`, `is_null`, and
+  `not_null` filters supported by the current native Perl query contract;
 - configured `count`, `sum`, `min`, and `max` measures;
 - relationship fields, sorting, bounded limits, and offset pagination;
 - htmx 4 `hx-ws` updates using server-rendered HTML fragments;
@@ -90,9 +93,12 @@ In the default shareable mode, canonical parameters are:
 - repeated `field` and `group` values; `field` order is the selected result-column order;
 - aligned `field_alias`/`field_format` and `group_alias`/`group_format` values,
   so each selected column carries its own presentation configuration;
-- aligned, repeated `filter_field`, `filter_op`, and `filter_value` values;
+- aligned, repeated `filter_field`, `filter_op`, `filter_value`, and
+  `filter_value_end` values;
   newly added filters remain URL-visible drafts and do not constrain the query
-  until they have a value (or a null operator);
+  until they have the required value or values (or a null operator). Date
+  shortcuts are stored as allowlisted identifiers and resolved to bound,
+  half-open date ranges on submission;
 - `measure`, aligned repeated `order`/`direction` values, `limit`, and `page`; and
 - `q=1`, which distinguishes an authored empty selection from the initial
   default state.

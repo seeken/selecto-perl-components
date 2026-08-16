@@ -6,6 +6,7 @@ use Test::Mojo;
 use Mojo::JSON qw(decode_json encode_json);
 use lib 't/lib';
 use TestSelectoComponents;
+use Selecto::Components::DateShortcut ();
 
 my $t = Test::Mojo->new(TestSelectoComponents::app());
 
@@ -18,7 +19,7 @@ $t->get_ok('/explore/products')
     ->element_exists('[role="tab"][data-sc-builder-tab="view"][aria-selected="true"]')
     ->element_exists('[role="tab"][data-sc-builder-tab="filters"][aria-selected="false"]')
     ->element_exists('[role="tabpanel"][data-sc-builder-panel="view"] .sc-view-tabs')
-    ->element_exists('[role="tabpanel"][data-sc-builder-panel="filters"] [data-sc-filter-root]')
+    ->element_exists('[role="tabpanel"][data-sc-builder-panel="filters"][hidden] [data-sc-filter-root]')
     ->element_exists('form[hx-trigger="submit"]')
     ->element_exists('[data-sc-result-view-panel="detail"]:not([disabled])')
     ->element_exists('[data-sc-result-view-panel="summary"][hidden][disabled]')
@@ -54,14 +55,18 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/data-sc-filter-set-item/)
     ->content_like(qr/activeBuilderTabs/)
     ->content_like(qr/data-sc-builder-panel/)
+    ->content_like(qr/htmx:after:swap/)
     ->content_like(qr/markBuilderDirty/)
     ->content_like(qr/stageResultView/)
     ->content_like(qr/dateFormats/)
+    ->content_like(qr/dateShortcuts/)
+    ->content_like(qr/rebuildFilterValues/)
     ->content_like(qr/scPickerKind/)
     ->content_unlike(qr/requestSubmit/);
 $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-workspace/)
-    ->content_like(qr/\.sc-list-picker/);
+    ->content_like(qr/\.sc-list-picker/)
+    ->content_like(qr/\.sc-filter-values/);
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
     ->status_is(200)
@@ -81,6 +86,31 @@ is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->orders->[0][1], 'desc',
     'first configured sort direction reaches query intent';
 is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->orders->[1][1], 'asc',
     'second configured sort direction reaches query intent';
+
+$t->get_ok('/explore/products?q=1&view=detail&field=created_on&filter_field=created_on&filter_op=eq&filter_value=2026-08-15&filter_value_end=&order=created_on')
+    ->status_is(200)
+    ->element_exists('[data-field="created_on"] select[name="filter_op"] option[value="eq"][selected]')
+    ->element_exists('[data-field="created_on"] input[type="date"][name="filter_value"][value="2026-08-15"]')
+    ->element_exists('[data-field="created_on"] input[type="hidden"][name="filter_value_end"]');
+
+$t->get_ok('/explore/products?q=1&view=detail&field=created_on&filter_field=created_on&filter_op=between&filter_value=2026-01-01&filter_value_end=2026-03-31&order=created_on')
+    ->status_is(200)
+    ->element_exists('[data-field="created_on"] select[name="filter_op"] option[value="between"][selected]')
+    ->element_exists('[data-field="created_on"] input[type="date"][name="filter_value"][value="2026-01-01"]')
+    ->element_exists('[data-field="created_on"] input[type="date"][name="filter_value_end"][value="2026-03-31"]');
+is_deeply TestSelectoComponents::Adapter::_predicate_values(
+    $TestSelectoComponents::Adapter::LAST_QUERY->predicate,
+), ['2026-01-01', '2026-03-31'], 'date BETWEEN submits and binds both controls';
+
+$t->get_ok('/explore/products?q=1&view=detail&field=created_on&filter_field=created_on&filter_op=date_shortcut&filter_value=this_year&filter_value_end=&order=created_on')
+    ->status_is(200)
+    ->element_exists('[data-field="created_on"] select[name="filter_op"] option[value="date_shortcut"][selected]')
+    ->element_exists('[data-field="created_on"] select[name="filter_value"] option[value="this_year"][selected]')
+    ->text_is('[data-field="created_on"] select[name="filter_value"] option[value="this_year"]' => 'This Year');
+my @this_year = Selecto::Components::DateShortcut->bounds('this_year');
+is_deeply TestSelectoComponents::Adapter::_predicate_values(
+    $TestSelectoComponents::Adapter::LAST_QUERY->predicate,
+), \@this_year, 'This Year shortcut binds its half-open date range';
 
 $t->get_ok('/explore/products?q=1&view=aggregate&field=created_on&field_alias=&field_format=&group=created_on&group_alias=Month&group_format=month&measure=count&order=created_on&direction=asc&limit=25&page=1')
     ->status_is(200)

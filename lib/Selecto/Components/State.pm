@@ -1,12 +1,13 @@
 package Selecto::Components::State;
 
 use Mojo::Base -base, -signatures;
+use Selecto::Components::DateShortcut ();
 
 has [qw(view fields field_configs filters groups group_configs measure orders order direction limit page errors)];
 
 sub parameter_names ($class) {
     return [qw(
-        q view field field_alias field_format filter_field filter_op filter_value
+        q view field field_alias field_format filter_field filter_op filter_value filter_value_end
         group group_alias group_format measure order direction limit page
     )];
 }
@@ -153,16 +154,19 @@ sub from_input ($class, $config, $domain, $input) {
     my $filter_fields = _values($input, 'filter_field');
     my $filter_ops = _values($input, 'filter_op');
     my $filter_values = _values($input, 'filter_value');
+    my $filter_end_values = _values($input, 'filter_value_end');
     my $filter_count = @$filter_fields;
     $filter_count = @$filter_ops if @$filter_ops > $filter_count;
     $filter_count = @$filter_values if @$filter_values > $filter_count;
+    $filter_count = @$filter_end_values if @$filter_end_values > $filter_count;
     my @filters;
     my %seen_filter_field;
     for my $index (0 .. $filter_count - 1) {
         my $field = _scalar($filter_fields->[$index]);
         my $op = lc(_scalar($filter_ops->[$index]) || 'eq');
         my $value = _scalar($filter_values->[$index]);
-        next unless length($field) || length($value);
+        my $value_end = _scalar($filter_end_values->[$index]);
+        next unless length($field) || length($value) || length($value_end);
         if (@filters >= $config->max_filters) {
             push @errors, 'Too many filters were submitted.';
             last;
@@ -175,22 +179,45 @@ sub from_input ($class, $config, $domain, $input) {
             push @errors, 'A filter field can be set only once.';
             next;
         }
-        unless ($op =~ /\A(?:eq|gt|gte|in|is_null|not_null)\z/) {
+        my $field_type = $field_map->{$field}{type};
+        unless ($config->allows_filter_operator($field_type, $op)) {
             push @errors, 'A filter operator is not available.';
             next;
         }
-        $value = '' if $op =~ /_null\z/;
+        ($value, $value_end) = ('', '') if $op =~ /_null\z/;
         if ($op eq 'in' && length($value)
             && !grep { length } map { _trim($_) } split /,/, $value, -1) {
             push @errors, 'Membership filters require at least one value.';
+            next;
+        }
+        if ($op eq 'date_shortcut' && length($value)
+            && !Selecto::Components::DateShortcut->valid($value)) {
+            push @errors, 'A date shortcut is not available.';
+            next;
+        }
+        if ($config->temporal_type($field_type) && $op ne 'date_shortcut' && $op !~ /_null\z/) {
+            if (length($value) && !_valid_temporal_value($value)) {
+                push @errors, 'A date filter value is not available.';
+                next;
+            }
+            if ($op eq 'between' && length($value_end) && !_valid_temporal_value($value_end)) {
+                push @errors, 'A date filter end value is not available.';
+                next;
+            }
+        }
+        if ($config->boolean_type($field_type) && $op eq 'eq'
+            && length($value) && $value !~ /\A(?:true|false|0|1)\z/i) {
+            push @errors, 'A boolean filter value is not available.';
             next;
         }
         my $filter = {
             field => $field,
             op => $op,
             value => $value,
+            value_end => $value_end,
         };
-        $filter->{draft} = 1 if $op !~ /_null\z/ && !length($value);
+        $filter->{draft} = 1 if $op !~ /_null\z/
+            && (!length($value) || ($op eq 'between' && !length($value_end)));
         push @filters, $filter;
     }
 
@@ -226,7 +253,8 @@ sub query_pairs ($self) {
         push @pairs,
             filter_field => $filter->{field},
             filter_op => $filter->{op},
-            filter_value => $filter->{value};
+            filter_value => $filter->{value},
+            filter_value_end => $filter->{value_end} // '';
     }
     for my $group (@{$self->groups}) {
         my $column = $self->group_configs->{$group} // {};
@@ -295,6 +323,12 @@ sub _trim ($value) {
     $value = _scalar($value);
     $value =~ s/\A\s+|\s+\z//g;
     return $value;
+}
+
+sub _valid_temporal_value ($value) {
+    return 0 unless defined($value) && !ref($value)
+        && "$value" =~ /\A(\d{4}-\d{2}-\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?\z/;
+    return Selecto::Components::DateShortcut->valid_date($1);
 }
 
 1;

@@ -105,6 +105,9 @@ a { color: inherit; }
 .sc-filter-editor label { min-width: 0; }
 .sc-filter-editor input, .sc-filter-editor select { margin-top: 4px !important; min-width: 0; }
 .sc-filter-editor input[readonly] { color: var(--sc-muted); cursor: not-allowed; }
+.sc-filter-values { display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-width: 0; }
+.sc-filter-value-wide { grid-column: 1 / -1; }
+.sc-filter-value-note { align-self: center; color: var(--sc-muted); font-size: .7rem; grid-column: 1 / -1; margin: 22px 0 0; }
 .sc-filter-draft-note { color: var(--sc-accent); font-size: .67rem; margin: 0; }
 .sc-button { align-items: center; border: 1px solid transparent; border-radius: 9px; cursor: pointer; display: inline-flex; font-weight: 800; justify-content: center; min-height: 38px; padding: 8px 13px; text-decoration: none; }
 .sc-primary { background: var(--sc-accent); color: #181309; }

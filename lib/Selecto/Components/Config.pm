@@ -2,6 +2,7 @@ package Selecto::Components::Config;
 
 use Mojo::Base -base, -signatures;
 use Scalar::Util qw(blessed);
+use Selecto::Components::DateShortcut ();
 
 has [qw(id title path engine_factory)];
 has views         => sub { return [qw(detail aggregate graph)] };
@@ -150,6 +151,54 @@ sub allows_date_format ($self, $format) {
 sub temporal_type ($self, $type) {
     return defined($type) && !ref($type) && "$type" =~ /(?:date|time)/i ? 1 : 0;
 }
+
+sub numeric_type ($self, $type) {
+    return defined($type) && !ref($type)
+        && "$type" =~ /\A(?:integer|decimal|number|numeric|float|double|real)\z/i ? 1 : 0;
+}
+
+sub boolean_type ($self, $type) {
+    return defined($type) && !ref($type) && "$type" =~ /\A(?:bool|boolean)\z/i ? 1 : 0;
+}
+
+sub filter_operators ($self, $type) {
+    return [
+        [eq => 'is'],
+        [is_null => 'is empty'],
+        [not_null => 'is not empty'],
+    ] if $self->boolean_type($type);
+    return [
+        [eq => 'on'], [ne => 'not on'],
+        [gt => 'after'], [gte => 'on or after'],
+        [lt => 'before'], [lte => 'on or before'],
+        [between => 'between'], [date_shortcut => 'quick select'],
+        [is_null => 'is empty'], [not_null => 'is not empty'],
+    ] if $self->temporal_type($type);
+    return [
+        [eq => 'equals'], [ne => 'does not equal'],
+        [gte => 'at least'], [gt => 'greater than'],
+        [lte => 'at most'], [lt => 'less than'],
+        [between => 'between'], [in => 'one of'],
+        [is_null => 'is empty'], [not_null => 'is not empty'],
+    ] if $self->numeric_type($type);
+    return [
+        [eq => 'equals'], [ne => 'does not equal'], [in => 'one of'],
+        [is_null => 'is empty'], [not_null => 'is not empty'],
+    ];
+}
+
+sub allows_filter_operator ($self, $type, $operator) {
+    return scalar grep { $_->[0] eq $operator } @{$self->filter_operators($type)};
+}
+
+sub filter_input_type ($self, $type) {
+    return 'date' if defined($type) && !ref($type) && lc("$type") eq 'date';
+    return 'datetime-local' if $self->temporal_type($type);
+    return 'number' if $self->numeric_type($type);
+    return 'text';
+}
+
+sub date_shortcuts ($self) { return Selecto::Components::DateShortcut->choices; }
 
 sub query_params_enabled ($self, $domain) {
     return 1 unless blessed($domain) && $domain->can('components');

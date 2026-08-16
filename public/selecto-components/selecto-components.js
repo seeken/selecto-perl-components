@@ -91,6 +91,11 @@
     });
   });
 
+  document.addEventListener("htmx:after:swap", function () {
+    restoreBuilderTabs();
+    restoreResultViews();
+  });
+
   document.addEventListener("click", function (event) {
     var tab = event.target.closest("[data-sc-builder-tab]");
     if (!tab) return;
@@ -282,6 +287,171 @@
     });
   }
 
+  var dateShortcuts = [
+    ["Days", "today", "Today"],
+    ["Days", "yesterday", "Yesterday"],
+    ["Days", "tomorrow", "Tomorrow"],
+    ["Weeks", "this_week", "This Week"],
+    ["Weeks", "last_week", "Last Week"],
+    ["Weeks", "next_week", "Next Week"],
+    ["Months", "this_month", "This Month"],
+    ["Months", "last_month", "Last Month"],
+    ["Months", "next_month", "Next Month"],
+    ["Months", "mtd", "Month to Date"],
+    ["Quarters", "this_quarter", "This Quarter"],
+    ["Quarters", "last_quarter", "Last Quarter"],
+    ["Quarters", "next_quarter", "Next Quarter"],
+    ["Quarters", "qtd", "Quarter to Date"],
+    ["Years", "this_year", "This Year"],
+    ["Years", "last_year", "Last Year"],
+    ["Years", "next_year", "Next Year"],
+    ["Years", "ytd", "Year to Date"],
+    ["Relative periods", "last_7_days", "Last 7 Days"],
+    ["Relative periods", "last_30_days", "Last 30 Days"],
+    ["Relative periods", "last_90_days", "Last 90 Days"],
+    ["Relative periods", "next_7_days", "Next 7 Days"],
+    ["Relative periods", "next_30_days", "Next 30 Days"]
+  ];
+
+  function temporalFilterType(type) {
+    return /(?:date|time)/i.test(type || "");
+  }
+
+  function numericFilterType(type) {
+    return /^(?:integer|decimal|number|numeric|float|double|real)$/i.test(type || "");
+  }
+
+  function booleanFilterType(type) {
+    return /^(?:bool|boolean)$/i.test(type || "");
+  }
+
+  function filterOperatorsForType(type) {
+    if (booleanFilterType(type)) {
+      return [["eq", "is"], ["is_null", "is empty"], ["not_null", "is not empty"]];
+    }
+    if (temporalFilterType(type)) {
+      return [
+        ["eq", "on"], ["ne", "not on"], ["gt", "after"],
+        ["gte", "on or after"], ["lt", "before"], ["lte", "on or before"],
+        ["between", "between"], ["date_shortcut", "quick select"],
+        ["is_null", "is empty"], ["not_null", "is not empty"]
+      ];
+    }
+    if (numericFilterType(type)) {
+      return [
+        ["eq", "equals"], ["ne", "does not equal"], ["gte", "at least"],
+        ["gt", "greater than"], ["lte", "at most"], ["lt", "less than"],
+        ["between", "between"], ["in", "one of"],
+        ["is_null", "is empty"], ["not_null", "is not empty"]
+      ];
+    }
+    return [
+      ["eq", "equals"], ["ne", "does not equal"], ["in", "one of"],
+      ["is_null", "is empty"], ["not_null", "is not empty"]
+    ];
+  }
+
+  function hiddenFilterValue(name, value) {
+    var input = document.createElement("input");
+    input.type = "hidden";
+    input.name = name;
+    input.value = value || "";
+    return input;
+  }
+
+  function labeledFilterControl(text, control, wide) {
+    var label = document.createElement("label");
+    if (wide) label.className = "sc-filter-value-wide";
+    label.appendChild(document.createTextNode(text));
+    label.appendChild(control);
+    return label;
+  }
+
+  function filterInput(type, name, value, label, placeholder) {
+    var input = document.createElement("input");
+    input.type = type;
+    input.name = name;
+    input.value = value || "";
+    input.setAttribute("aria-label", label);
+    if (placeholder) input.placeholder = placeholder;
+    if (type === "number") input.step = "any";
+    return input;
+  }
+
+  function rebuildFilterValues(item, previousValue, previousEnd) {
+    var existing = item.querySelector("[data-sc-filter-values]");
+    if (existing) existing.remove();
+    var editor = item.querySelector(".sc-filter-editor");
+    var operator = item.querySelector('[name="filter_op"]').value;
+    var type = item.dataset.type || "string";
+    var label = item.dataset.label;
+    var values = document.createElement("div");
+    values.className = "sc-filter-values";
+    values.setAttribute("data-sc-filter-values", "");
+
+    if (/_null$/.test(operator)) {
+      values.appendChild(hiddenFilterValue("filter_value", ""));
+      values.appendChild(hiddenFilterValue("filter_value_end", ""));
+      var noValue = document.createElement("p");
+      noValue.className = "sc-filter-value-note";
+      noValue.textContent = "No value needed.";
+      values.appendChild(noValue);
+    } else if (operator === "date_shortcut") {
+      var shortcut = document.createElement("select");
+      shortcut.name = "filter_value";
+      shortcut.setAttribute("aria-label", "Period for " + label);
+      var selectedShortcut = dateShortcuts.some(function (entry) {
+        return entry[1] === previousValue;
+      }) ? previousValue : "today";
+      var groups = {};
+      dateShortcuts.forEach(function (entry) {
+        if (!groups[entry[0]]) {
+          groups[entry[0]] = document.createElement("optgroup");
+          groups[entry[0]].label = entry[0];
+          shortcut.appendChild(groups[entry[0]]);
+        }
+        var option = document.createElement("option");
+        option.value = entry[1];
+        option.textContent = entry[2];
+        option.selected = entry[1] === selectedShortcut;
+        groups[entry[0]].appendChild(option);
+      });
+      values.appendChild(labeledFilterControl("Period", shortcut, true));
+      values.appendChild(hiddenFilterValue("filter_value_end", ""));
+    } else if (operator === "between") {
+      var rangeType = temporalFilterType(type) ?
+        (String(type).toLowerCase() === "date" ? "date" : "datetime-local") :
+        (numericFilterType(type) ? "number" : "text");
+      values.appendChild(labeledFilterControl("Start",
+        filterInput(rangeType, "filter_value", previousValue, "Start value for " + label, "Start")));
+      values.appendChild(labeledFilterControl("End",
+        filterInput(rangeType, "filter_value_end", previousEnd, "End value for " + label, "End")));
+    } else if (booleanFilterType(type)) {
+      var booleanValue = document.createElement("select");
+      booleanValue.name = "filter_value";
+      booleanValue.setAttribute("aria-label", "Value for " + label);
+      [["", "Choose true or false"], ["true", "True"], ["false", "False"]].forEach(function (entry) {
+        var option = document.createElement("option");
+        option.value = entry[0];
+        option.textContent = entry[1];
+        option.selected = entry[0] === String(previousValue).toLowerCase();
+        booleanValue.appendChild(option);
+      });
+      values.appendChild(labeledFilterControl("Value", booleanValue, true));
+      values.appendChild(hiddenFilterValue("filter_value_end", ""));
+    } else {
+      var inputType = operator === "in" ? "text" : temporalFilterType(type) ?
+        (String(type).toLowerCase() === "date" ? "date" : "datetime-local") :
+        numericFilterType(type) ? "number" : "text";
+      var placeholder = operator === "in" ? "Comma-separated values" :
+        temporalFilterType(type) ? "Choose a date" : "Enter a value";
+      values.appendChild(labeledFilterControl("Value",
+        filterInput(inputType, "filter_value", previousValue, "Value for " + label, placeholder), true));
+      values.appendChild(hiddenFilterValue("filter_value_end", ""));
+    }
+    editor.appendChild(values);
+  }
+
   function createFilterSetItem(choice) {
     var field = choice.dataset.field;
     var label = choice.dataset.label;
@@ -315,11 +485,7 @@
     var operator = document.createElement("select");
     operator.name = "filter_op";
     operator.setAttribute("aria-label", "Operator for " + label);
-    [
-      ["eq", "equals"], ["gte", "at least"], ["gt", "greater than"],
-      ["in", "one of (comma-separated)"], ["is_null", "is empty"],
-      ["not_null", "is not empty"]
-    ].forEach(function (entry) {
+    filterOperatorsForType(type).forEach(function (entry) {
       var option = document.createElement("option");
       option.value = entry[0];
       option.textContent = entry[1];
@@ -327,15 +493,8 @@
     });
     operatorLabel.appendChild(operator);
     editor.appendChild(operatorLabel);
-    var valueLabel = document.createElement("label");
-    valueLabel.appendChild(document.createTextNode("Value"));
-    var value = document.createElement("input");
-    value.name = "filter_value";
-    value.setAttribute("aria-label", "Value for " + label);
-    value.placeholder = "Enter a value";
-    valueLabel.appendChild(value);
-    editor.appendChild(valueLabel);
     item.appendChild(editor);
+    rebuildFilterValues(item, "", "");
     var note = document.createElement("p");
     note.className = "sc-filter-draft-note";
     note.textContent = "Enter a value to apply this filter.";
@@ -349,16 +508,16 @@
     var value = item.querySelector('[name="filter_value"]');
     if (!operator || !value) return;
     var nullOperator = /_null$/.test(operator.value);
-    if (nullOperator) value.value = "";
-    value.readOnly = nullOperator;
-    value.placeholder = nullOperator ? "Value not used" : "Enter a value";
-    var draft = !nullOperator && value.value.length === 0;
+    var end = item.querySelector('[name="filter_value_end"]');
+    var draft = !nullOperator && (value.value.length === 0 ||
+      (operator.value === "between" && (!end || end.value.length === 0)));
     item.classList.toggle("is-draft", draft);
     var note = item.querySelector(".sc-filter-draft-note");
     if (draft && !note) {
       note = document.createElement("p");
       note.className = "sc-filter-draft-note";
-      note.textContent = "Enter a value to apply this filter.";
+      note.textContent = operator.value === "between" ?
+        "Enter both values to apply this filter." : "Enter a value to apply this filter.";
       item.appendChild(note);
     } else if (!draft && note) {
       note.remove();
@@ -411,7 +570,7 @@
       });
       return;
     }
-    if (event.target.matches('[name="filter_value"]')) {
+    if (event.target.matches('[name="filter_value"], [name="filter_value_end"]')) {
       updateFilterDraft(event.target.closest("[data-sc-filter-set-item]"));
     }
     markBuilderDirty(event.target);
@@ -423,6 +582,16 @@
     if (event.target.matches('input[name="view"]')) {
       stageResultView(builder, event.target.value);
     } else if (event.target.matches('[name="filter_op"]')) {
+      var filterItem = event.target.closest("[data-sc-filter-set-item]");
+      var currentValue = filterItem.querySelector('[name="filter_value"]');
+      var currentEnd = filterItem.querySelector('[name="filter_value_end"]');
+      rebuildFilterValues(
+        filterItem,
+        currentValue ? currentValue.value : "",
+        currentEnd ? currentEnd.value : ""
+      );
+      updateFilterDraft(filterItem);
+    } else if (event.target.matches('[name="filter_value"], [name="filter_value_end"]')) {
       updateFilterDraft(event.target.closest("[data-sc-filter-set-item]"));
     }
     markBuilderDirty(builder);

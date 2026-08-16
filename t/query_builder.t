@@ -5,6 +5,7 @@ use Test::More;
 use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::Config;
+use Selecto::Components::DateShortcut ();
 use Selecto::Components::QueryBuilder;
 use Selecto::Components::State;
 use Selecto::PostgreSQL;
@@ -111,5 +112,44 @@ like $formatted_aggregate_statement->sql,
     'aggregate date configuration defines the SQL grouping bucket';
 is $formatted_aggregate->{columns}[0]{label}, 'Month',
     'aggregate group label uses its independent configuration';
+
+my $between_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'created_on',
+    filter_field => 'created_on',
+    filter_op => 'between',
+    filter_value => '2026-01-01',
+    filter_value_end => '2026-03-31',
+    order => 'created_on',
+});
+my $between_statement = $postgresql->compile(
+    $domain,
+    Selecto::Components::QueryBuilder->build($config, $domain, $between_state)->{query},
+);
+like $between_statement->sql, qr/"s0"\."created_on" BETWEEN \$1 AND \$2/,
+    'date range compiles to a governed BETWEEN expression';
+is_deeply $between_statement->params, ['2026-01-01', '2026-03-31'],
+    'both date range values remain bound parameters';
+
+my $shortcut_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'created_on',
+    filter_field => 'created_on',
+    filter_op => 'date_shortcut',
+    filter_value => 'this_year',
+    order => 'created_on',
+});
+my $shortcut_statement = $postgresql->compile(
+    $domain,
+    Selecto::Components::QueryBuilder->build($config, $domain, $shortcut_state)->{query},
+);
+my @this_year = Selecto::Components::DateShortcut->bounds('this_year');
+like $shortcut_statement->sql,
+    qr/\("s0"\."created_on" >= \$1\) AND \("s0"\."created_on" < \$2\)/,
+    'date shortcut compiles to a half-open governed range';
+is_deeply $shortcut_statement->params, \@this_year,
+    'date shortcut bounds remain bound parameters';
 
 done_testing;
