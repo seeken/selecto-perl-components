@@ -14,18 +14,33 @@ $t->get_ok('/explore/products')
     ->content_type_like(qr{text/html})
     ->element_exists('section#selecto-channel-products')
     ->element_exists('form#selecto-query-products')
+    ->element_exists('[role="tablist"][aria-label="Query builder sections"]')
+    ->element_exists('[role="tab"][data-sc-builder-tab="view"][aria-selected="true"]')
+    ->element_exists('[role="tab"][data-sc-builder-tab="filters"][aria-selected="false"]')
+    ->element_exists('[role="tabpanel"][data-sc-builder-panel="view"] .sc-view-tabs')
+    ->element_exists('[role="tabpanel"][data-sc-builder-panel="filters"] [data-sc-filter-root]')
+    ->element_exists('form[hx-trigger="submit"]')
+    ->element_exists('[data-sc-result-view-panel="detail"]:not([disabled])')
+    ->element_exists('[data-sc-result-view-panel="summary"][hidden][disabled]')
+    ->element_exists('[data-sc-builder-pending][hidden]')
     ->element_exists('[data-sc-picker-root]')
+    ->element_exists('[data-sc-picker-root][data-sc-picker-kind="field"]')
+    ->element_exists('[data-sc-picker-root][data-sc-picker-kind="group"]')
+    ->element_exists('[data-sc-picker-root][data-sc-picker-kind="order"]')
     ->element_exists('[data-sc-picker-available] button[data-field="category_id"]')
     ->element_exists('[data-sc-picker-set-item][data-field="category.category_name"] input[name="field"]')
     ->element_exists('[data-sc-picker-set-item][draggable="true"]')
     ->element_exists('button[data-sc-picker-action="up"]')
     ->element_exists('button[data-sc-picker-action="down"]')
+    ->element_exists('[data-sc-picker-kind="field"] .sc-column-config')
+    ->element_exists('[data-sc-picker-kind="order"] [name="direction"]')
     ->element_exists('[data-sc-filter-root]')
     ->element_exists('input[data-sc-filter-search][aria-label="Filter available filters"]')
     ->element_exists('[data-sc-filter-available] button[data-field="unit_price"]')
     ->element_exists('[data-sc-filter-set][aria-label="Set filters"]')
     ->element_exists('input[type="hidden"][name="group"][value="category.category_name"]')
     ->text_is('.sc-picker-heading span' => 'Available')
+    ->content_like(qr{<legend>Filters <small>up to 20</small></legend>})
     ->text_is('h1' => 'Product Explorer')
     ->content_like(qr{hx-ws:connect="/explore/products/ws"})
     ->content_like(qr{hx-ws:send})
@@ -37,7 +52,13 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/data-sc-picker-set-item/)
     ->content_like(qr/data-sc-filter-available-item/)
     ->content_like(qr/data-sc-filter-set-item/)
-    ->content_like(qr/requestSubmit/);
+    ->content_like(qr/activeBuilderTabs/)
+    ->content_like(qr/data-sc-builder-panel/)
+    ->content_like(qr/markBuilderDirty/)
+    ->content_like(qr/stageResultView/)
+    ->content_like(qr/dateFormats/)
+    ->content_like(qr/scPickerKind/)
+    ->content_unlike(qr/requestSubmit/);
 $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-workspace/)
     ->content_like(qr/\.sc-list-picker/);
@@ -48,6 +69,25 @@ $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_pric
     ->content_like(qr/12\.50/)
     ->element_exists('table tbody tr');
 is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->limit_value, 10, 'GET runs the normalized query';
+
+$t->get_ok('/explore/products?q=1&view=detail&field=created_on&field_alias=Created+month&field_format=month&field=product_name&field_alias=&field_format=&group=created_on&group_alias=Month&group_format=month&measure=count&order=created_on&direction=desc&order=product_name&direction=asc&limit=25&page=1')
+    ->status_is(200)
+    ->element_exists('[data-sc-picker-kind="field"] [data-field="created_on"] input[name="field_alias"][value="Created month"]')
+    ->element_exists('[data-sc-picker-kind="field"] [data-field="created_on"] select[name="field_format"] option[value="month"][selected]')
+    ->element_exists('[data-sc-picker-kind="order"] [data-field="created_on"] select[name="direction"] option[value="desc"][selected]')
+    ->element_exists('[data-sc-picker-kind="order"] [data-field="product_name"] select[name="direction"] option[value="asc"][selected]')
+    ->element_exists('table thead th');
+is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->orders->[0][1], 'desc',
+    'first configured sort direction reaches query intent';
+is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->orders->[1][1], 'asc',
+    'second configured sort direction reaches query intent';
+
+$t->get_ok('/explore/products?q=1&view=aggregate&field=created_on&field_alias=&field_format=&group=created_on&group_alias=Month&group_format=month&measure=count&order=created_on&direction=asc&limit=25&page=1')
+    ->status_is(200)
+    ->element_exists('[data-sc-result-view-panel="summary"]:not([disabled])')
+    ->element_exists('[data-sc-picker-kind="group"] [data-field="created_on"] input[name="group_alias"][value="Month"]')
+    ->element_exists('[data-sc-picker-kind="group"] [data-field="created_on"] select[name="group_format"] option[value="month"][selected]')
+    ->content_like(qr/Aggregate results/);
 
 $t->get_ok('/explore/products?q=1&view=detail&field=drop_table&order=drop_table&limit=25&page=1')
     ->status_is(422)
@@ -142,6 +182,66 @@ cmp_ok index($filtered->{selecto}{url}, 'filter_field=unit_price'), '<',
 is_deeply TestSelectoComponents::Adapter::_predicate_values(
     $TestSelectoComponents::Adapter::LAST_QUERY->predicate,
 ), ['Camp Pantry'], 'WebSocket query skips the draft and binds the complete filter';
+$t->finish_ok;
+
+$t->get_ok('/explore/private-products?view=detail&filter_value=secret-medical-value')
+    ->status_is(302)
+    ->header_is(Location => '/explore/private-products');
+
+$t->get_ok('/explore/private-products')
+    ->status_is(200)
+    ->header_is('Cache-Control' => 'no-store')
+    ->element_exists('[data-sc-query-params="disabled"]')
+    ->element_exists('form#selecto-query-private_products[method="post"]')
+    ->text_is('.sc-private-mode' => 'Private URL mode')
+    ->element_exists_not('a[href*="format=csv"]')
+    ->content_unlike(qr/>Permalink</);
+
+$t->post_ok('/explore/private-products' => form => {
+    q => 1,
+    view => 'detail',
+    field => ['product_name', 'unit_price'],
+    filter_field => 'product_name',
+    filter_op => 'eq',
+    filter_value => 'secret-medical-value',
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+    direction => 'asc',
+    limit => 25,
+    page => 1,
+})->status_is(200)
+    ->header_is('Cache-Control' => 'no-store')
+    ->element_exists('input[name="filter_value"][value="secret-medical-value"]')
+    ->element_exists('[data-selecto-url="/explore/private-products"]');
+is_deeply TestSelectoComponents::Adapter::_predicate_values(
+    $TestSelectoComponents::Adapter::LAST_QUERY->predicate,
+), ['secret-medical-value'], 'private no-JavaScript POST keeps the filter value in the request body';
+
+$t->websocket_ok('/explore/private-products/ws')->send_ok({text => encode_json({
+    headers => {'HX-Request-ID' => 'private-101'},
+    body => {
+        q => 1,
+        view => 'detail',
+        field => ['product_name', 'unit_price'],
+        filter_field => 'product_name',
+        filter_op => 'eq',
+        filter_value => 'secret-medical-value',
+        group => ['category.category_name'],
+        measure => 'count',
+        order => 'product_name',
+        direction => 'asc',
+        limit => 25,
+        page => 1,
+    },
+})})->message_ok;
+my $private_message = decode_json($t->message->[1]);
+is $private_message->{selecto}{url}, '/explore/private-products',
+    'private WebSocket response supplies only the path';
+unlike $private_message->{selecto}{url}, qr/secret-medical-value|[?&]/,
+    'private canonical URL cannot contain query state or sensitive filter values';
+like $private_message->{content}, qr/value="secret-medical-value"/,
+    'private query state remains editable in the server-rendered surface';
 $t->finish_ok;
 
 done_testing;

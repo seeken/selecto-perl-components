@@ -20,6 +20,7 @@ Selecto::Components - htmx WebSocket exploration UI for Selecto Perl
 This Mojolicious plugin provides server-rendered Detail, Aggregate, and Graph
 exploration surfaces. The normalized URL query string is canonical state;
 htmx 4 WebSockets are an incremental transport for the same governed query.
+Domains may disable query-parameter state for sensitive explorers.
 
 =cut
 
@@ -67,15 +68,20 @@ sub _routes ($app, $explorer, $origin_check) {
     my $routes = $app->routes;
     $routes->get($config->path)->to(cb => sub ($controller) {
         my $model = $explorer->model($controller);
-        if (($controller->param('format') // '') eq 'csv') {
+        if (!$config->query_params_enabled($model->{domain})
+            && length($controller->req->url->query->to_string)) {
+            return $controller->redirect_to($config->path);
+        }
+        if ($config->query_params_enabled($model->{domain})
+            && ($controller->param('format') // '') eq 'csv') {
             return _render_csv($controller, $explorer, $model);
         }
-        my $status = $model->{runtime_error} || !$model->{state} || !$model->{state}->valid ? 422 : 200;
-        return $controller->render(
-            data => encode('UTF-8', Selecto::Components::Renderer->page($model)),
-            format => 'html',
-            status => $status,
-        );
+        return _render_page($controller, $model);
+    });
+
+    $routes->post($config->path)->to(cb => sub ($controller) {
+        my $model = $explorer->model($controller, $explorer->input_from_controller($controller));
+        return _render_page($controller, $model);
     });
 
     $routes->websocket($config->path . '/ws')->to(cb => sub ($controller) {
@@ -99,6 +105,18 @@ sub _routes ($app, $explorer, $origin_check) {
             return $socket->send({text => encode_json($response)});
         });
     });
+}
+
+sub _render_page ($controller, $model) {
+    if ($model->{domain} && !$model->{config}->query_params_enabled($model->{domain})) {
+        $controller->res->headers->cache_control('no-store');
+    }
+    my $status = $model->{runtime_error} || !$model->{state} || !$model->{state}->valid ? 422 : 200;
+    return $controller->render(
+        data => encode('UTF-8', Selecto::Components::Renderer->page($model)),
+        format => 'html',
+        status => $status,
+    );
 }
 
 sub _render_csv ($controller, $explorer, $model) {

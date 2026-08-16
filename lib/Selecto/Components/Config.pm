@@ -11,8 +11,22 @@ has default_group  => sub { return [] };
 has measures       => sub { return [{ id => 'count', label => 'Row count', aggregate => 'count' }] };
 has default_limit  => 25;
 has max_limit      => 100;
-has max_filters    => 5;
+has max_filters    => 20;
+has max_orders     => 10;
 has show_sql       => 0;
+
+my @DATE_FORMATS = (
+    { id => 'day', label => 'Day' },
+    { id => 'day_hour', label => 'Day + Hour' },
+    { id => 'week', label => 'Week' },
+    { id => 'month', label => 'Month' },
+    { id => 'quarter', label => 'Quarter' },
+    { id => 'year', label => 'Year' },
+    { id => 'month_of_year', label => 'Month of Year' },
+    { id => 'day_of_month', label => 'Day of Month' },
+    { id => 'day_of_week', label => 'Day of Week' },
+    { id => 'hour', label => 'Hour of Day' },
+);
 
 sub new ($class, @args) {
     my $self = $class->SUPER::new(@args);
@@ -29,6 +43,8 @@ sub new ($class, @args) {
         unless $self->max_limit =~ /\A\d+\z/ && $self->max_limit >= $self->default_limit;
     die "max_filters must be between 1 and 20\n"
         unless $self->max_filters =~ /\A\d+\z/ && $self->max_filters >= 1 && $self->max_filters <= 20;
+    die "max_orders must be between 1 and 20\n"
+        unless $self->max_orders =~ /\A\d+\z/ && $self->max_orders >= 1 && $self->max_orders <= 20;
 
     my %known_view = map { $_ => 1 } qw(detail aggregate graph);
     my %seen_view;
@@ -122,6 +138,24 @@ sub measure ($self, $id) {
         return { %$measure } if $measure->{id} eq $id;
     }
     return undef;
+}
+
+sub date_formats ($self) { return [map { { %$_ } } @DATE_FORMATS]; }
+
+sub allows_date_format ($self, $format) {
+    return 1 unless defined($format) && length("$format");
+    return scalar grep { $_->{id} eq "$format" } @DATE_FORMATS;
+}
+
+sub temporal_type ($self, $type) {
+    return defined($type) && !ref($type) && "$type" =~ /(?:date|time)/i ? 1 : 0;
+}
+
+sub query_params_enabled ($self, $domain) {
+    return 1 unless blessed($domain) && $domain->can('components');
+    my $components = $domain->components;
+    return 1 unless ref($components) eq 'HASH' && exists $components->{query_params};
+    return $components->{query_params} ? 1 : 0;
 }
 
 sub validate_domain ($self, $domain) {

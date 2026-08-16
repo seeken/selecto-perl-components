@@ -2,10 +2,13 @@ package Selecto::Components::State;
 
 use Mojo::Base -base, -signatures;
 
-has [qw(view fields filters groups measure order direction limit page errors)];
+has [qw(view fields field_configs filters groups group_configs measure orders order direction limit page errors)];
 
 sub parameter_names ($class) {
-    return [qw(q view field filter_field filter_op filter_value group measure order direction limit page)];
+    return [qw(
+        q view field field_alias field_format filter_field filter_op filter_value
+        group group_alias group_format measure order direction limit page
+    )];
 }
 
 sub from_input ($class, $config, $domain, $input) {
@@ -21,34 +24,76 @@ sub from_input ($class, $config, $domain, $input) {
         $view = $config->default_view;
     }
 
-    my @fields = _unique(grep { length } map { _scalar($_) } @{_values($input, 'field')});
-    @fields = @{$config->resolved_default_fields($domain)} if !$configured && !@fields;
+    my $field_values = _values($input, 'field');
+    my $field_aliases = _values($input, 'field_alias');
+    my $field_formats = _values($input, 'field_format');
+    $field_values = [@{$config->resolved_default_fields($domain)}]
+        if !$configured && !grep { length(_scalar($_)) } @$field_values;
     my @valid_fields;
-    for my $field (@fields) {
-        if ($field_map->{$field}) {
-            push @valid_fields, $field;
-        } else {
+    my %field_configs;
+    my %seen_field;
+    for my $index (0 .. $#$field_values) {
+        my $field = _scalar($field_values->[$index]);
+        next unless length($field) && !$seen_field{$field}++;
+        unless ($field_map->{$field}) {
             push @errors, 'A selected detail field is not available.';
+            next;
         }
+        my $alias = _trim($field_aliases->[$index]);
+        if (length($alias) > 80 || $alias =~ /[\x00-\x1f\x7f]/) {
+            push @errors, 'A selected column alias is not available.';
+            $alias = '';
+        }
+        my $format = _scalar($field_formats->[$index]);
+        if (!$config->allows_date_format($format)
+            || (length($format) && !$config->temporal_type($field_map->{$field}{type}))) {
+            push @errors, 'A selected column format is not available.';
+            $format = '';
+        }
+        push @valid_fields, $field;
+        $field_configs{$field} = { alias => $alias, format => $format };
     }
     push @errors, 'Choose at least one detail field.' unless @valid_fields;
-    @valid_fields = @{$config->resolved_default_fields($domain)} unless @valid_fields;
+    unless (@valid_fields) {
+        @valid_fields = @{$config->resolved_default_fields($domain)};
+        %field_configs = map { $_ => { alias => '', format => '' } } @valid_fields;
+    }
 
-    my @groups = _unique(grep { length } map { _scalar($_) } @{_values($input, 'group')});
-    @groups = @{$config->resolved_default_group($domain)} if !$configured && !@groups;
+    my $group_values = _values($input, 'group');
+    my $group_aliases = _values($input, 'group_alias');
+    my $group_formats = _values($input, 'group_format');
+    $group_values = [@{$config->resolved_default_group($domain)}]
+        if !$configured && !grep { length(_scalar($_)) } @$group_values;
     my @valid_groups;
-    for my $group (@groups) {
+    my %group_configs;
+    my %seen_group;
+    for my $index (0 .. $#$group_values) {
+        my $group = _scalar($group_values->[$index]);
+        next unless length($group) && !$seen_group{$group}++;
         if (!$field_map->{$group}) {
             push @errors, 'A selected group field is not available.';
         } elsif (@valid_groups >= 3) {
             push @errors, 'Choose no more than three group fields.';
         } else {
+            my $alias = _trim($group_aliases->[$index]);
+            if (length($alias) > 80 || $alias =~ /[\x00-\x1f\x7f]/) {
+                push @errors, 'A group column alias is not available.';
+                $alias = '';
+            }
+            my $format = _scalar($group_formats->[$index]);
+            if (!$config->allows_date_format($format)
+                || (length($format) && !$config->temporal_type($field_map->{$group}{type}))) {
+                push @errors, 'A group column format is not available.';
+                $format = '';
+            }
             push @valid_groups, $group;
+            $group_configs{$group} = { alias => $alias, format => $format };
         }
     }
     if (($view eq 'aggregate' || $view eq 'graph') && !@valid_groups) {
         push @errors, 'Choose at least one group field.';
         @valid_groups = @{$config->resolved_default_group($domain)};
+        %group_configs = map { $_ => { alias => '', format => '' } } @valid_groups;
     }
 
     my $measure = _first($input, 'measure') // $config->measures->[0]{id};
@@ -57,16 +102,36 @@ sub from_input ($class, $config, $domain, $input) {
         $measure = $config->measures->[0]{id};
     }
 
-    my $order = _first($input, 'order') // $valid_fields[0];
-    unless (defined($order) && $field_map->{$order}) {
-        push @errors, 'Choose an available sort field.';
-        $order = $valid_fields[0];
+    my $order_fields = _values($input, 'order');
+    my $order_directions = _values($input, 'direction');
+    $order_fields = [$valid_fields[0]] unless grep { length(_scalar($_)) } @$order_fields;
+    my @orders;
+    my %seen_order;
+    for my $index (0 .. $#$order_fields) {
+        my $field = _scalar($order_fields->[$index]);
+        next unless length($field);
+        if (@orders >= $config->max_orders) {
+            push @errors, 'Too many sort fields were submitted.';
+            last;
+        }
+        unless ($field_map->{$field}) {
+            push @errors, 'Choose an available sort field.';
+            next;
+        }
+        if ($seen_order{$field}++) {
+            push @errors, 'A sort field can be set only once.';
+            next;
+        }
+        my $dir = lc(_scalar($order_directions->[$index]) || 'asc');
+        unless ($dir eq 'asc' || $dir eq 'desc') {
+            push @errors, 'Sort direction must be ascending or descending.';
+            $dir = 'asc';
+        }
+        push @orders, { field => $field, direction => $dir };
     }
-    my $direction = lc(_first($input, 'direction') // 'asc');
-    unless ($direction eq 'asc' || $direction eq 'desc') {
-        push @errors, 'Sort direction must be ascending or descending.';
-        $direction = 'asc';
-    }
+    @orders = ({ field => $valid_fields[0], direction => 'asc' }) unless @orders;
+    my $order = $orders[0]{field};
+    my $direction = $orders[0]{direction};
 
     my $limit_input = _first($input, 'limit');
     push @errors, 'Row limit must be a positive integer.'
@@ -132,9 +197,12 @@ sub from_input ($class, $config, $domain, $input) {
     return $class->new(
         view => $view,
         fields => \@valid_fields,
+        field_configs => \%field_configs,
         filters => \@filters,
         groups => \@valid_groups,
+        group_configs => \%group_configs,
         measure => $measure,
+        orders => \@orders,
         order => $order,
         direction => $direction,
         limit => $limit,
@@ -147,18 +215,31 @@ sub valid ($self) { return @{$self->errors} ? 0 : 1; }
 
 sub query_pairs ($self) {
     my @pairs = (q => 1, view => $self->view);
-    push @pairs, map { (field => $_) } @{$self->fields};
+    for my $field (@{$self->fields}) {
+        my $column = $self->field_configs->{$field} // {};
+        push @pairs,
+            field => $field,
+            field_alias => $column->{alias} // '',
+            field_format => $column->{format} // '';
+    }
     for my $filter (@{$self->filters}) {
         push @pairs,
             filter_field => $filter->{field},
             filter_op => $filter->{op},
             filter_value => $filter->{value};
     }
-    push @pairs, map { (group => $_) } @{$self->groups};
+    for my $group (@{$self->groups}) {
+        my $column = $self->group_configs->{$group} // {};
+        push @pairs,
+            group => $group,
+            group_alias => $column->{alias} // '',
+            group_format => $column->{format} // '';
+    }
+    push @pairs, measure => $self->measure;
+    for my $order (@{$self->orders}) {
+        push @pairs, order => $order->{field}, direction => $order->{direction};
+    }
     push @pairs,
-        measure => $self->measure,
-        order => $self->order,
-        direction => $self->direction,
         limit => $self->limit,
         page => $self->page;
     return \@pairs;
@@ -168,9 +249,12 @@ sub as_hash ($self) {
     return {
         view => $self->view,
         fields => [@{$self->fields}],
+        field_configs => { map { $_ => { %{$self->field_configs->{$_}} } } keys %{$self->field_configs} },
         filters => [map { { %$_ } } @{$self->filters}],
         groups => [@{$self->groups}],
+        group_configs => { map { $_ => { %{$self->group_configs->{$_}} } } keys %{$self->group_configs} },
         measure => $self->measure,
+        orders => [map { { %$_ } } @{$self->orders}],
         order => $self->order,
         direction => $self->direction,
         limit => $self->limit,

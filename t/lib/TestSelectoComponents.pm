@@ -12,6 +12,15 @@ use Selecto::Engine ();
 use Selecto::Statement ();
 
 sub domain {
+    return _domain();
+}
+
+sub private_domain {
+    return _domain({ query_params => 0 });
+}
+
+sub _domain {
+    my ($components) = @_;
     return Selecto::Domain->parse({
         schema_version => 1,
         domain_version => '1.0.0',
@@ -19,13 +28,14 @@ sub domain {
         source => {
             source_table => 'products',
             primary_key => 'id',
-            fields => [qw(id product_name category_id unit_price units_in_stock)],
+            fields => [qw(id product_name category_id unit_price units_in_stock created_on)],
             columns => {
                 id => { type => 'integer' },
                 product_name => { type => 'string' },
                 category_id => { type => 'integer' },
                 unit_price => { type => 'decimal' },
                 units_in_stock => { type => 'integer' },
+                created_on => { type => 'date' },
             },
             associations => {
                 category => {
@@ -48,6 +58,7 @@ sub domain {
             },
         },
         joins => { category => { type => 'inner' } },
+        (defined($components) ? (components => $components) : ()),
     }, strict => 1);
 }
 
@@ -74,7 +85,20 @@ sub config {
 sub app {
     my $app = Mojolicious->new;
     $app->secrets(['test-only-secret']);
-    $app->plugin('Selecto::Components' => { explorers => { products => config() } });
+    my $private = config();
+    $private->{path} = '/explore/private-products';
+    $private->{title} = 'Private Product Explorer';
+    $private->{engine_factory} = sub {
+        return Selecto::Engine->new(
+            domain => private_domain(),
+            adapter => TestSelectoComponents::Adapter->new(
+                dbh => bless({}, 'TestSelectoComponents::DBH')
+            ),
+        );
+    };
+    $app->plugin('Selecto::Components' => {
+        explorers => { products => config(), private_products => $private },
+    });
     return $app;
 }
 

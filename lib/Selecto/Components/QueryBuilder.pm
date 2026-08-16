@@ -14,20 +14,23 @@ sub _detail ($class, $config, $domain, $state) {
     my $field_map = $config->field_map($domain);
     my @columns = map {
         my $field = $_;
+        my $column_config = $state->field_configs->{$field} // {};
         {
             key => _field_alias($field),
             field => $field,
-            label => $field_map->{$field}{label},
-            type => $field_map->{$field}{type},
+            label => $column_config->{alias} || $field_map->{$field}{label},
+            type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
+            format => $column_config->{format} // '',
         }
     } @{$state->fields};
     my $query = Selecto::Query->new->select(map {
-        Selecto::Expression->field($_->{field})->as($_->{key})
+        _column_expression($_)->as($_->{key})
     } @columns);
     $query = _with_filters($query, $state);
-    $query = $query
-        ->order_by($state->order, $state->direction)
-        ->limit($state->limit)
+    for my $order (@{$state->orders}) {
+        $query = $query->order_by($order->{field}, $order->{direction});
+    }
+    $query = $query->limit($state->limit)
         ->offset(($state->page - 1) * $state->limit);
     return { query => $query, columns => \@columns, graph => 0 };
 }
@@ -36,11 +39,13 @@ sub _aggregate ($class, $config, $domain, $state) {
     my $field_map = $config->field_map($domain);
     my @columns = map {
         my $field = $_;
+        my $column_config = $state->group_configs->{$field} // {};
         {
             key => _field_alias($field),
             field => $field,
-            label => $field_map->{$field}{label},
-            type => $field_map->{$field}{type},
+            label => $column_config->{alias} || $field_map->{$field}{label},
+            type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
+            format => $column_config->{format} // '',
         }
     } @{$state->groups};
     my $measure = $config->measure($state->measure);
@@ -55,18 +60,25 @@ sub _aggregate ($class, $config, $domain, $state) {
         measure => 1,
     };
     my @selections = (
-        (map { Selecto::Expression->field($_->{field})->as($_->{key}) } @columns[0 .. $#columns - 1]),
+        (map { _column_expression($_)->as($_->{key}) } @columns[0 .. $#columns - 1]),
         $expression->as($measure->{id}),
     );
+    my @groups = map { _column_expression($_) } @columns[0 .. $#columns - 1];
     my $query = Selecto::Query->new
         ->select(@selections)
-        ->group_by($state->groups);
+        ->group_by(\@groups);
     $query = _with_filters($query, $state);
     $query = $query
-        ->order_by($state->groups->[0], 'asc')
+        ->order_by($groups[0], 'asc')
         ->limit($state->limit)
         ->offset(($state->page - 1) * $state->limit);
     return { query => $query, columns => \@columns, graph => $state->view eq 'graph' ? 1 : 0 };
+}
+
+sub _column_expression ($column) {
+    return $column->{format}
+        ? Selecto::Expression->datetime_format($column->{field}, $column->{format})
+        : Selecto::Expression->field($column->{field});
 }
 
 sub _with_filters ($query, $state) {

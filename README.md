@@ -12,8 +12,16 @@ This is alpha software. Its browser transport is pinned to htmx
 ## Current surface
 
 - a reusable `Selecto::Components` Mojolicious plugin;
+- separate View and Filters builder tabs, with active-tab continuity across
+  WebSocket fragment replacements;
+- locally staged builder edits with an explicit Run boundary, so unfinished
+  view, column, filter, sort, and pagination changes do not execute queries;
 - domain-derived Available/Set field picker with filtering, add/remove controls,
   drag ordering, and accessible move-up/move-down controls;
+- per-column presentation aliases and governed date/time formats for Detail
+  columns and Aggregate grouping buckets;
+- an ordered Available/Set sort picker with independent ascending/descending
+  direction for each selected field;
 - domain-derived Available/Set filter picker with search, multiple AND filters,
   and removable filter editors;
 - Detail, Aggregate, and Graph result views;
@@ -23,6 +31,8 @@ This is alpha software. Its browser transport is pinned to htmx
 - relationship fields, sorting, bounded limits, and offset pagination;
 - htmx 4 `hx-ws` updates using server-rendered HTML fragments;
 - ordinary HTTP GET fallback, permalinks, and browser-refresh recovery;
+- a domain-selected private URL mode with WebSocket/POST body state and no
+  query-state history, permalink, or query-string export link;
 - CSV export with spreadsheet-formula neutralization;
 - optional compiled SQL display for development; and
 - a real PostgreSQL-backed Northwind example using the existing independently
@@ -34,8 +44,8 @@ Mojolicious-native transport and lifecycle boundaries.
 
 ## State and transport contract
 
-The URL query string is canonical. A WebSocket is only a faster transport for
-the same state:
+The URL query string is canonical by default. A WebSocket is only a faster
+transport for the same state:
 
 1. A direct `GET /explore/products?...` normalizes and validates query params.
 2. The form sends the same named fields over htmx 4 as `{headers, body}` JSON.
@@ -49,14 +59,41 @@ Refresh, copy/paste, bookmarks, and ordinary form submission therefore resolve
 to the same governed query as a WebSocket interaction. The server keeps no
 hidden query-builder state.
 
-Canonical parameters are:
+For a domain whose filters may contain sensitive values, set
+`components.query_params` to false in the domain contract:
+
+```perl
+my $domain = Selecto::Domain->new(
+    name => 'Patients',
+    table => 'patients',
+    fields => { id => 'integer', diagnosis => 'string' },
+    components => { query_params => 0 },
+);
+```
+
+Private URL mode keeps generated URLs at the explorer path, ignores and
+redirects away inbound query state, removes permalink and query-string CSV
+controls, marks responses `Cache-Control: no-store`, and changes the ordinary
+fallback form to POST. Interactive state remains in the rendered form and
+WebSocket/POST body. Refresh starts again from domain defaults unless the host
+provides an explicit saved-view store; the package does not move sensitive
+state into a cookie or opaque client token.
+
+While editing, the browser stages controls locally and leaves the URL and
+result set at their last applied state. Only **Run governed query** submits the
+complete form over the WebSocket (or as an ordinary GET/POST, according to the
+domain policy, without JavaScript).
+
+In the default shareable mode, canonical parameters are:
 
 - `view`: `detail`, `aggregate`, or `graph`;
 - repeated `field` and `group` values; `field` order is the selected result-column order;
+- aligned `field_alias`/`field_format` and `group_alias`/`group_format` values,
+  so each selected column carries its own presentation configuration;
 - aligned, repeated `filter_field`, `filter_op`, and `filter_value` values;
   newly added filters remain URL-visible drafts and do not constrain the query
   until they have a value (or a null operator);
-- `measure`, `order`, `direction`, `limit`, and `page`; and
+- `measure`, aligned repeated `order`/`direction` values, `limit`, and `page`; and
 - `q=1`, which distinguishes an authored empty selection from the initial
   default state.
 
@@ -94,7 +131,8 @@ plugin 'Selecto::Components' => {
             ],
             default_limit => 25,
             max_limit => 100,
-            max_filters => 5,
+            max_filters => 20,
+            max_orders => 10,
             show_sql => 0,
         },
     },
@@ -104,12 +142,22 @@ plugin 'Selecto::Components' => {
 This registers:
 
 - `GET /explore/products` for a full page and no-JavaScript fallback;
+- `POST /explore/products` for the no-JavaScript private-state fallback;
 - `GET /explore/products?format=csv` for the current result page; and
 - `WS /explore/products/ws` for htmx 4 incremental updates.
 
 The plugin adds its packaged `public/` directory to Mojolicious static paths.
 The htmx runtime and WebSocket extension are served locally; the browser does
 not depend on a CDN.
+
+`max_filters` defaults to 20 and may be configured from 1 through 20. Because
+the Available/Set model permits each governed field once, the domain's field
+catalog can impose a lower practical maximum.
+
+`max_orders` defaults to 10 and may be configured from 1 through 20. Date/time
+formats are selected from a closed catalog; Aggregate formatting is part of the
+group expression itself, so choosing Month produces month buckets rather than
+merely changing the display label.
 
 ## htmx 4 boundary
 
@@ -139,6 +187,9 @@ message and tests.
   `origin_check` callback to the plugin.
 - WebSocket frames are capped at 128 KiB and invalid envelopes close with a
   policy/data error.
+- Private URL mode reduces disclosure through history, logs, referrers, and
+  copied links; hosts must still use TLS and avoid request-body logging when
+  filter values are sensitive.
 - Raw database exceptions are not rendered. Known `Selecto::Error` messages
   remain visible; unexpected failures become a generic error.
 - Raw SQL is hidden unless the host explicitly enables `show_sql`.
@@ -195,8 +246,10 @@ Set `PORT` or `PHX_DEV_HOSTNAME` to change the development endpoint.
 capabilities, canonical repeated query params, real PostgreSQL SQL compilation,
 bound filter values, relationship joins, grouping and aggregates, ordered
 Available/Set field selection, multiple Available/Set filters and draft-filter
-semantics, direct GET rendering, static assets, CSV export, and real
-Mojolicious WebSocket message round trips.
+semantics, configured date/time detail columns and aggregate buckets,
+multi-column ordering, shareable GET and private POST rendering, private URL
+redirection, static assets, CSV export, and real Mojolicious WebSocket message
+round trips.
 
 That is bounded evidence for the included domains, states, transport envelopes,
 and test adapter results. It is not proof of arbitrary schemas, adapters,

@@ -59,4 +59,57 @@ like $aggregate_statement->sql, qr/SUM\("s0"\."unit_price"\) AS "total_price"/, 
 like $aggregate_statement->sql, qr/GROUP BY "j_category"\."category_name"/, 'configured group compiles';
 ok $aggregate->{graph}, 'graph uses aggregate query with graph rendering metadata';
 
+my $formatted_detail_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => ['created_on', 'product_name'],
+    field_alias => ['Created month', ''],
+    field_format => ['month', ''],
+    group => 'created_on',
+    group_alias => '',
+    group_format => 'month',
+    measure => 'count',
+    order => ['created_on', 'product_name'],
+    direction => ['desc', 'asc'],
+    limit => 25,
+    page => 1,
+});
+my $formatted_detail = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $formatted_detail_state
+);
+my $formatted_detail_statement = $postgresql->compile($domain, $formatted_detail->{query});
+like $formatted_detail_statement->sql,
+    qr/TO_CHAR\("s0"\."created_on", 'YYYY-MM'\) AS "created_on"/,
+    'detail date format compiles through governed expression intent';
+like $formatted_detail_statement->sql,
+    qr/ORDER BY "s0"\."created_on" DESC, "s0"\."product_name" ASC/,
+    'detail query compiles multiple ordered sort fields';
+is $formatted_detail->{columns}[0]{label}, 'Created month',
+    'configured detail label is presentation metadata';
+
+my $formatted_aggregate_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'aggregate',
+    field => ['created_on', 'product_name'],
+    field_alias => ['', ''],
+    field_format => ['', ''],
+    group => 'created_on',
+    group_alias => 'Month',
+    group_format => 'month',
+    measure => 'count',
+    order => 'created_on',
+    direction => 'asc',
+    limit => 25,
+    page => 1,
+});
+my $formatted_aggregate = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $formatted_aggregate_state
+);
+my $formatted_aggregate_statement = $postgresql->compile($domain, $formatted_aggregate->{query});
+like $formatted_aggregate_statement->sql,
+    qr/GROUP BY TO_CHAR\("s0"\."created_on", 'YYYY-MM'\)/,
+    'aggregate date configuration defines the SQL grouping bucket';
+is $formatted_aggregate->{columns}[0]{label}, 'Month',
+    'aggregate group label uses its independent configuration';
+
 done_testing;

@@ -51,6 +51,47 @@ for (my $index = 0; $index < @$pairs; $index += 2) {
 }
 is_deeply \@field_values, ['product_name', 'unit_price'], 'canonical query pairs preserve repeated fields';
 
+my $configured_columns = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => ['created_on', 'product_name'],
+    field_alias => ['Created month', 'Product'],
+    field_format => ['month', ''],
+    group => ['created_on'],
+    group_alias => ['Month'],
+    group_format => ['month'],
+    measure => 'count',
+    order => ['created_on', 'product_name'],
+    direction => ['desc', 'asc'],
+    limit => 25,
+    page => 1,
+});
+ok $configured_columns->valid, 'column configuration and multiple sort fields are valid';
+is_deeply $configured_columns->field_configs->{created_on},
+    { alias => 'Created month', format => 'month' },
+    'detail column retains its governed format and presentation label';
+is_deeply $configured_columns->group_configs->{created_on},
+    { alias => 'Month', format => 'month' },
+    'aggregate group column retains independent configuration';
+is_deeply $configured_columns->orders, [
+    { field => 'created_on', direction => 'desc' },
+    { field => 'product_name', direction => 'asc' },
+], 'ordered sort fields retain priority and direction';
+
+my $bad_column_format = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    field_format => q{month'); DROP TABLE products; --},
+    order => 'product_name',
+    direction => 'asc',
+    limit => 25,
+    page => 1,
+});
+ok !$bad_column_format->valid, 'arbitrary and non-temporal column formats fail closed';
+like join(' ', @{$bad_column_format->errors}), qr/column format is not available/,
+    'rejected column format has an actionable error';
+
 my $draft = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'detail',
@@ -95,6 +136,28 @@ my $duplicate_filter = Selecto::Components::State->from_input($config, $domain, 
 ok !$duplicate_filter->valid, 'the same field cannot be added as two filters';
 like join(' ', @{$duplicate_filter->errors}), qr/can be set only once/,
     'duplicate filter has an actionable error';
+
+my $six_filters = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    filter_field => [
+        'id',
+        'product_name',
+        'category_id',
+        'unit_price',
+        'units_in_stock',
+        'category.category_name',
+    ],
+    filter_op => [qw(eq eq eq gte gt eq)],
+    filter_value => [1, 'Widget', 2, 10, 0, 'Tools'],
+    order => 'product_name',
+    direction => 'asc',
+    limit => 25,
+    page => 1,
+});
+ok $six_filters->valid, 'the default capacity accepts more than five filters';
+is scalar(@{$six_filters->filters}), 6, 'all six distinct filters are retained';
 
 my $invalid = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

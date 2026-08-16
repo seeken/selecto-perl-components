@@ -4,10 +4,12 @@
   `selecto-perl`. Keep database domain, query, compilation, and execution logic
   in `selecto-perl`; this package owns request-state validation, WebSocket
   transport, server-rendered HTML fragments, and browser assets.
-- URL query parameters are the canonical query-builder state. WebSocket updates
-  must produce the same normalized state and query as a direct HTTP GET.
+- URL query parameters are the default canonical query-builder state. A domain
+  may set `components.query_params` false for private URL state; in that mode,
+  WebSocket and POST bodies carry state and generated URLs remain path-only.
 - Use htmx 4's `hx-ws` extension for incremental UI updates. Keep an ordinary
-  GET form and permalink path working as the no-WebSocket fallback.
+  GET fallback and permalink in shareable mode, and a POST fallback without
+  permalink/export links in private URL mode.
 - Never accept raw SQL, identifiers outside the configured domain, arbitrary
   aggregate functions, or client-selected adapters.
 - Keep this as an independent sibling repository. Resolve `selecto-perl` from

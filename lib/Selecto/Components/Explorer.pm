@@ -20,24 +20,28 @@ sub input_from_controller ($self, $controller) {
 }
 
 sub model ($self, $controller, $input = undef) {
-    $input //= $self->input_from_controller($controller);
+    my $input_supplied = defined $input;
     my $engine;
     my $state;
     my $model = {
         config => $self->config,
-        input => $input,
+        input => undef,
         result => undef,
         runtime_error => undef,
     };
     my $ok = eval {
         $engine = $self->config->engine($controller);
+        $input = $input_supplied || $self->config->query_params_enabled($engine->domain)
+            ? ($input // $self->input_from_controller($controller))
+            : {};
+        $model->{input} = $input;
         $state = Selecto::Components::State->from_input(
             $self->config, $engine->domain, $input
         );
         $model->{engine} = $engine;
         $model->{domain} = $engine->domain;
         $model->{state} = $state;
-        $model->{canonical_url} = $self->canonical_url($state);
+        $model->{canonical_url} = $self->canonical_url($state, $engine->domain);
         return 1 unless $state->valid;
 
         my $built = Selecto::Components::QueryBuilder->build(
@@ -79,13 +83,15 @@ sub model ($self, $controller, $input = undef) {
             );
             $model->{state} = $state;
             $model->{domain} = $engine->domain;
-            $model->{canonical_url} = $self->canonical_url($state);
+            $model->{canonical_url} = $self->canonical_url($state, $engine->domain);
         }
     }
     return $model;
 }
 
-sub canonical_url ($self, $state) {
+sub canonical_url ($self, $state, $domain = undef) {
+    return $self->config->path
+        if $domain && !$self->config->query_params_enabled($domain);
     my $url = Mojo::URL->new($self->config->path);
     $url->query($state->query_pairs);
     return $url->to_string;

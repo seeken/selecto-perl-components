@@ -35,12 +35,21 @@ sub surface ($class, $model) {
     my $alert = length($errors)
         ? '<div class="sc-alert" role="alert"><strong>Query stopped</strong><ul>' . $errors . '</ul></div>'
         : '';
+    my $query_params = $config->query_params_enabled($model->{domain});
+    my $hero_actions = $query_params
+        ? '<div class="sc-hero-actions"><a class="sc-button sc-secondary" href="' .
+          _h($model->{canonical_url}) . '">Permalink</a><a class="sc-button sc-secondary" href="' .
+          _h($model->{canonical_url} . '&format=csv') . '">Export CSV</a></div>'
+        : '<div class="sc-hero-actions"><span class="sc-private-mode">Private URL mode</span></div>';
+    my $state_description = $query_params
+        ? 'Build the query in the URL. htmx WebSockets replace server-rendered fragments.'
+        : 'Build the query without exposing its state in the URL. htmx WebSockets replace server-rendered fragments.';
     return '<section id="selecto-surface-' . _h($config->id) . '" class="sc-surface" data-selecto-url="' .
-        _h($model->{canonical_url}) . '">' .
+        _h($model->{canonical_url}) . '" data-sc-query-params="' .
+        ($query_params ? 'enabled' : 'disabled') . '">' .
         '<header class="sc-hero"><div><p class="sc-eyebrow">Governed data explorer</p><h1>' .
-        _h($config->title) . '</h1><p>Build the query in the URL. htmx WebSockets replace server-rendered fragments.</p></div>' .
-        '<div class="sc-hero-actions"><a class="sc-button sc-secondary" href="' . _h($model->{canonical_url}) . '">Permalink</a>' .
-        '<a class="sc-button sc-secondary" href="' . _h($model->{canonical_url} . '&format=csv') . '">Export CSV</a></div></header>' .
+        _h($config->title) . '</h1><p>' . $state_description . '</p></div>' .
+        $hero_actions . '</header>' .
         $alert . '<div class="sc-workspace">' .
         $class->_form($model, $field_catalog) .
         '<section class="sc-results" aria-live="polite">' . $class->_results($model) . '</section>' .
@@ -61,67 +70,165 @@ sub websocket_message ($class, $model, $request_id = undef) {
 sub _form ($class, $model, $catalog) {
     my $config = $model->{config};
     my $state = $model->{state};
-    my %selected_group = map { $_ => 1 } @{$state->groups};
+    my $method = $config->query_params_enabled($model->{domain}) ? 'get' : 'post';
+    my $detail_active = $state->view eq 'detail';
     my $views = join '', map {
         '<label class="sc-view-tab"><input type="radio" name="view" value="' . _h($_) . '"' .
         ($_ eq $state->view ? ' checked' : '') . '><span>' . _h(_humanize($_)) . '</span></label>'
     } @{$config->views};
-    my $groups = join '', map {
-        '<label class="sc-check"><input type="checkbox" name="group" value="' . _h($_->{path}) . '"' .
-        ($selected_group{$_->{path}} ? ' checked' : '') . '><span>' . _h($_->{label}) .
-        '<small>' . _h($_->{type}) . '</small></span></label>'
-    } @$catalog;
     my $measures = join '', map {
         '<option value="' . _h($_->{id}) . '"' . ($_->{id} eq $state->measure ? ' selected' : '') . '>' .
         _h($_->{label}) . '</option>'
     } @{$config->measures};
-    my $orders = join '', map {
-        '<option value="' . _h($_->{path}) . '"' . ($_->{path} eq $state->order ? ' selected' : '') . '>' .
-        _h($_->{label}) . '</option>'
-    } @$catalog;
     my $filter_picker = $class->_filter_picker($state, $catalog, $config->max_filters);
-    my $view_controls = $state->view eq 'detail'
-        ? $class->_field_picker($state, $catalog) .
-          '<div class="sc-control-row"><label>Order by<select name="order">' . $orders . '</select></label>' .
-          '<label>Direction<select name="direction"><option value="asc"' . ($state->direction eq 'asc' ? ' selected' : '') .
-          '>Ascending</option><option value="desc"' . ($state->direction eq 'desc' ? ' selected' : '') . '>Descending</option></select></label></div>' .
-          _hidden('measure', $state->measure) . join('', map { _hidden('group', $_) } @{$state->groups})
-        : '<fieldset><legend>Group by <small>up to three</small></legend><div class="sc-check-grid">' . $groups . '</div></fieldset>' .
-          '<label>Measure<select name="measure">' . $measures . '</select></label>' .
-          _hidden('order', $state->order) . _hidden('direction', $state->direction) .
-          join('', map { _hidden('field', $_) } @{$state->fields});
+    my $detail_controls = $class->_field_picker($state, $catalog, $config) .
+        $class->_order_picker($state, $catalog, $config->max_orders) .
+        _hidden('measure', $state->measure) . _selection_hidden('group', $state->groups, $state->group_configs);
+    my $summary_controls = $class->_group_picker($state, $catalog, $config) .
+        '<label>Measure<select name="measure">' . $measures . '</select></label>' .
+        _selection_hidden('field', $state->fields, $state->field_configs) .
+        join('', map {
+            _hidden('order', $_->{field}) . _hidden('direction', $_->{direction})
+        } @{$state->orders});
+    my $view_controls = '<fieldset class="sc-result-view-controls" data-sc-result-view-panel="detail"' .
+        ($detail_active ? '' : ' hidden disabled') . '>' . $detail_controls . '</fieldset>' .
+        '<fieldset class="sc-result-view-controls" data-sc-result-view-panel="summary"' .
+        ($detail_active ? ' hidden disabled' : '') . '>' . $summary_controls . '</fieldset>';
+    my $builder_id = _h($config->id);
+    my $view_tab_id = 'selecto-builder-view-tab-' . $builder_id;
+    my $filter_tab_id = 'selecto-builder-filters-tab-' . $builder_id;
+    my $view_panel_id = 'selecto-builder-view-panel-' . $builder_id;
+    my $filter_panel_id = 'selecto-builder-filters-panel-' . $builder_id;
+    my $builder_tabs = '<div class="sc-builder-tabs" role="tablist" aria-label="Query builder sections">' .
+        '<button class="sc-builder-tab" type="button" role="tab" id="' . $view_tab_id .
+        '" aria-controls="' . $view_panel_id . '" aria-selected="true" data-sc-builder-tab="view">View</button>' .
+        '<button class="sc-builder-tab" type="button" role="tab" id="' . $filter_tab_id .
+        '" aria-controls="' . $filter_panel_id . '" aria-selected="false" data-sc-builder-tab="filters">' .
+        'Filters <span>' . scalar(@{$state->filters}) . '</span></button></div>';
+    my $view_panel = '<section class="sc-builder-panel" role="tabpanel" id="' . $view_panel_id .
+        '" aria-labelledby="' . $view_tab_id . '" data-sc-builder-panel="view">' .
+        '<div class="sc-view-tabs" role="radiogroup" aria-label="Result view">' . $views . '</div>' .
+        $view_controls . '</section>';
+    my $filter_panel = '<section class="sc-builder-panel" role="tabpanel" id="' . $filter_panel_id .
+        '" aria-labelledby="' . $filter_tab_id . '" data-sc-builder-panel="filters">' .
+        $filter_picker . '</section>';
     return '<aside class="sc-builder"><form id="selecto-query-' . _h($config->id) . '" action="' .
-        _h($config->path) . '" method="get" hx-ws:send hx-trigger="change delay:180ms, submit">' .
-        _hidden('q', 1) . '<div class="sc-view-tabs" role="radiogroup" aria-label="Result view">' . $views . '</div>' .
-        $view_controls . $filter_picker .
+        _h($config->path) . '" method="' . $method . '" hx-ws:send hx-trigger="submit" data-sc-builder="' .
+        $builder_id . '">' . _hidden('q', 1) . $builder_tabs . $view_panel . $filter_panel .
+        '<div class="sc-builder-apply-note"><span>Changes apply only when you run the query.</span>' .
+        '<strong data-sc-builder-pending hidden>Pending changes</strong></div>' .
         '<div class="sc-control-row"><label>Rows<select name="limit">' . _limit_options($state, $config) . '</select></label>' .
         '<label>Page<input name="page" inputmode="numeric" value="' . _h($state->page) . '"></label></div>' .
         '<button class="sc-button sc-primary" type="submit">Run governed query</button>' .
         '<noscript><p class="sc-note">JavaScript is off; this form still runs as a normal GET.</p></noscript></form></aside>';
 }
 
-sub _field_picker ($class, $state, $catalog) {
+sub _field_picker ($class, $state, $catalog, $config) {
+    return $class->_selection_picker(
+        $state,
+        $catalog,
+        kind => 'field',
+        legend => 'Columns',
+        selected => $state->fields,
+        configs => $state->field_configs,
+        maximum => scalar(@$catalog),
+        search_label => 'Filter available fields',
+        hint => 'Drag or use arrows to reorder columns. Configure labels and date formats per column.',
+        set_label => 'Set columns',
+        date_formats => $config->date_formats,
+    );
+}
+
+sub _group_picker ($class, $state, $catalog, $config) {
+    return $class->_selection_picker(
+        $state,
+        $catalog,
+        kind => 'group',
+        legend => 'Group by',
+        selected => $state->groups,
+        configs => $state->group_configs,
+        maximum => 3,
+        search_label => 'Filter available group fields',
+        hint => 'Choose up to three groups. Date formats define aggregate buckets.',
+        set_label => 'Set group columns',
+        date_formats => $config->date_formats,
+    );
+}
+
+sub _order_picker ($class, $state, $catalog, $maximum) {
+    my @selected = map { $_->{field} } @{$state->orders};
+    my %configs = map { $_->{field} => { direction => $_->{direction} } } @{$state->orders};
+    return $class->_selection_picker(
+        $state,
+        $catalog,
+        kind => 'order',
+        legend => 'Order by',
+        selected => \@selected,
+        configs => \%configs,
+        maximum => $maximum,
+        search_label => 'Filter available sort fields',
+        hint => 'Earlier fields have higher sort priority.',
+        set_label => 'Set sort fields',
+    );
+}
+
+sub _selection_picker ($class, $state, $catalog, %options) {
     my %by_path = map { $_->{path} => $_ } @$catalog;
-    my %selected = map { $_ => 1 } @{$state->fields};
+    my $kind = $options{kind};
+    my $selected_values = $options{selected};
+    my $configs = $options{configs};
+    my %selected = map { $_ => 1 } @$selected_values;
     my @available = grep { !$selected{$_->{path}} } @$catalog;
+    my $at_limit = @$selected_values >= $options{maximum};
     my $available_items = join '', map {
-        '<button class="sc-picker-choice" type="button" data-sc-picker-action="add" ' .
-        'data-sc-picker-available-item data-field="' . _h($_->{path}) . '" data-search="' .
+        '<button class="sc-picker-choice" type="button" data-sc-picker-action="add"' .
+        ($at_limit ? ' disabled' : '') . ' ' .
+        'data-sc-picker-available-item data-field="' . _h($_->{path}) . '" data-label="' .
+        _h($_->{label}) . '" data-type="' . _h($_->{type}) . '" data-search="' .
         _h(lc($_->{label} . ' ' . $_->{type})) . '"><span><strong>' . _h($_->{label}) .
         '</strong><small>' . _h($_->{type}) . '</small></span><span aria-hidden="true">+</span></button>'
     } @available;
     $available_items ||= '<p class="sc-picker-empty">Every available field is set.</p>';
 
-    my $selected_count = scalar @{$state->fields};
+    my $selected_count = scalar @$selected_values;
     my $set_items = join '', map {
         my $index = $_;
-        my $path = $state->fields->[$index];
+        my $path = $selected_values->[$index];
         my $field = $by_path{$path};
+        my $item_config = $configs->{$path} // {};
         my $up_disabled = $index == 0 ? ' disabled' : '';
         my $down_disabled = $index == $selected_count - 1 ? ' disabled' : '';
         my $remove_disabled = $selected_count == 1 ? ' disabled' : '';
+        my $config_controls;
+        if ($kind eq 'order') {
+            my $direction = $item_config->{direction} // 'asc';
+            $config_controls = '<label class="sc-order-direction">Direction<select name="direction" ' .
+                'aria-label="Direction for ' . _h($field->{label}) . '"><option value="asc"' .
+                ($direction eq 'asc' ? ' selected' : '') . '>Ascending</option><option value="desc"' .
+                ($direction eq 'desc' ? ' selected' : '') . '>Descending</option></select></label>';
+        } else {
+            my $alias = $item_config->{alias} // '';
+            my $format = $item_config->{format} // '';
+            my $format_control = _hidden($kind . '_format', '');
+            if ($state && $field->{type} =~ /(?:date|time)/i) {
+                my $options_html = '<option value=""' . ($format eq '' ? ' selected' : '') . '>Default</option>' .
+                    join('', map {
+                        '<option value="' . _h($_->{id}) . '"' .
+                        ($_->{id} eq $format ? ' selected' : '') . '>' . _h($_->{label}) . '</option>'
+                    } @{$options{date_formats}});
+                $format_control = '<label>Date format<select name="' . _h($kind . '_format') .
+                    '" aria-label="Date format for ' . _h($field->{label}) . '">' .
+                    $options_html . '</select></label>';
+            }
+            $config_controls = '<details class="sc-column-config"><summary>Configure</summary>' .
+                '<div class="sc-column-config-grid"><label>Column label<input name="' .
+                _h($kind . '_alias') . '" value="' . _h($alias) . '" maxlength="80" ' .
+                'aria-label="Column label for ' . _h($field->{label}) . '"></label>' .
+                $format_control . '</div></details>';
+        }
         '<article class="sc-picker-set-item" draggable="true" data-sc-picker-set-item data-field="' .
-        _h($path) . '"><input type="hidden" name="field" value="' . _h($path) . '">' .
+        _h($path) . '" data-label="' . _h($field->{label}) . '" data-type="' . _h($field->{type}) .
+        '"><input type="hidden" name="' . _h($kind) . '" value="' . _h($path) . '">' .
         '<button class="sc-picker-grip" type="button" title="Drag to reorder" aria-label="Drag ' .
         _h($field->{label}) . ' to reorder">⠿</button><span class="sc-picker-set-label"><strong>' .
         _h($field->{label}) . '</strong><small>' . _h($field->{type}) . '</small></span>' .
@@ -131,19 +238,25 @@ sub _field_picker ($class, $state, $catalog) {
         '<button type="button" data-sc-picker-action="down" aria-label="Move ' . _h($field->{label}) .
         ' down" title="Move down"' . $down_disabled . '>↓</button>' .
         '<button type="button" data-sc-picker-action="remove" aria-label="Remove ' . _h($field->{label}) .
-        '" title="Remove"' . $remove_disabled . '>×</button></span></article>'
+        '" title="Remove"' . $remove_disabled . '>×</button></span>' . $config_controls . '</article>'
     } 0 .. $selected_count - 1;
-    $set_items ||= '<p class="sc-picker-empty">Choose fields from Available to set the result columns.</p>';
+    $set_items ||= '<p class="sc-picker-empty">Choose fields from Available.</p>';
 
-    return '<fieldset class="sc-picker-fieldset"><legend>Columns</legend>' .
-        '<div class="sc-list-picker" data-sc-picker-root>' .
-        '<section class="sc-picker-pane"><div class="sc-picker-heading"><span>Available</span><span>' .
-        scalar(@available) . '</span></div><input class="sc-picker-filter" type="search" ' .
-        'data-sc-picker-filter placeholder="Filter available fields" aria-label="Filter available fields">' .
+    return '<fieldset class="sc-picker-fieldset"><legend>' . _h($options{legend}) .
+        ' <small>up to ' . _h($options{maximum}) . '</small></legend>' .
+        '<div class="sc-list-picker" data-sc-picker-root data-sc-picker-kind="' . _h($kind) .
+        '" data-sc-picker-max="' . _h($options{maximum}) . '">' .
+        '<section class="sc-picker-pane"><div class="sc-picker-heading"><span>Available</span>' .
+        '<span data-sc-picker-available-count>' . scalar(@available) . '</span></div>' .
+        '<input class="sc-picker-filter" type="search" ' .
+        'data-sc-picker-filter placeholder="' . _h($options{search_label}) . '" aria-label="' .
+        _h($options{search_label}) . '">' .
         '<div class="sc-picker-list" data-sc-picker-available>' . $available_items . '</div></section>' .
-        '<section class="sc-picker-pane sc-picker-set-pane"><div class="sc-picker-heading"><span>Set</span><span>' .
-        $selected_count . '</span></div><p class="sc-picker-hint">Drag or use arrows to reorder columns.</p>' .
-        '<div class="sc-picker-list sc-picker-set" data-sc-picker-set aria-label="Set columns">' .
+        '<section class="sc-picker-pane sc-picker-set-pane"><div class="sc-picker-heading"><span>Set</span>' .
+        '<span data-sc-picker-set-count>' . $selected_count . '</span></div>' .
+        '<p class="sc-picker-hint">' . _h($options{hint}) . '</p>' .
+        '<div class="sc-picker-list sc-picker-set" data-sc-picker-set aria-label="' .
+        _h($options{set_label}) . '">' .
         $set_items . '</div></section></div></fieldset>';
 }
 
@@ -154,7 +267,8 @@ sub _filter_picker ($class, $state, $catalog, $max_filters) {
     my $at_limit = @{$state->filters} >= $max_filters;
     my $available_items = $at_limit ? '' : join '', map {
         '<button class="sc-picker-choice" type="button" data-sc-filter-action="add" ' .
-        'data-sc-filter-available-item data-field="' . _h($_->{path}) . '" data-search="' .
+        'data-sc-filter-available-item data-field="' . _h($_->{path}) . '" data-label="' .
+        _h($_->{label}) . '" data-type="' . _h($_->{type}) . '" data-search="' .
         _h(lc($_->{label} . ' ' . $_->{type})) . '"><span><strong>' . _h($_->{label}) .
         '</strong><small>' . _h($_->{type}) . '</small></span><span aria-hidden="true">+</span></button>'
     } @available;
@@ -175,7 +289,8 @@ sub _filter_picker ($class, $state, $catalog, $max_filters) {
         } @operators;
         my $null_op = $filter->{op} =~ /_null\z/;
         '<article class="sc-filter-set-item' . ($filter->{draft} ? ' is-draft' : '') .
-        '" data-sc-filter-set-item data-field="' . _h($filter->{field}) . '">' .
+        '" data-sc-filter-set-item data-field="' . _h($filter->{field}) . '" data-label="' .
+        _h($field->{label}) . '" data-type="' . _h($field->{type}) . '">' .
         '<input type="hidden" name="filter_field" value="' . _h($filter->{field}) . '">' .
         '<div class="sc-filter-set-heading"><span><strong>' . _h($field->{label}) . '</strong><small>' .
         _h($field->{type}) . '</small></span><button type="button" data-sc-filter-action="remove" ' .
@@ -190,13 +305,15 @@ sub _filter_picker ($class, $state, $catalog, $max_filters) {
     $set_items ||= '<p class="sc-picker-empty">Choose fields from Available to build filters.</p>';
 
     return '<fieldset class="sc-picker-fieldset"><legend>Filters <small>up to ' . _h($max_filters) .
-        '</small></legend><div class="sc-list-picker sc-filter-picker" data-sc-filter-root>' .
-        '<section class="sc-picker-pane"><div class="sc-picker-heading"><span>Available</span><span>' .
+        '</small></legend><div class="sc-list-picker sc-filter-picker" data-sc-filter-root data-sc-filter-max="' .
+        _h($max_filters) . '"><section class="sc-picker-pane"><div class="sc-picker-heading">' .
+        '<span>Available</span><span data-sc-filter-available-count>' .
         ($at_limit ? 0 : scalar(@available)) . '</span></div><input class="sc-picker-filter" type="search" ' .
         'data-sc-filter-search placeholder="Filter available filters" aria-label="Filter available filters">' .
         '<div class="sc-picker-list" data-sc-filter-available>' . $available_items . '</div></section>' .
-        '<section class="sc-picker-pane sc-picker-set-pane"><div class="sc-picker-heading"><span>Set</span><span>' .
-        scalar(@{$state->filters}) . '</span></div><p class="sc-picker-hint">Set filters are combined with AND.</p>' .
+        '<section class="sc-picker-pane sc-picker-set-pane"><div class="sc-picker-heading"><span>Set</span>' .
+        '<span data-sc-filter-set-count>' . scalar(@{$state->filters}) . '</span></div>' .
+        '<p class="sc-picker-hint">Set filters are combined with AND.</p>' .
         '<div class="sc-picker-list sc-filter-set" data-sc-filter-set aria-label="Set filters">' .
         $set_items . '</div></section></div></fieldset>';
 }
@@ -270,8 +387,9 @@ sub _pagination ($class, $model) {
         next if $pairs->[$index] eq 'page';
         $hidden .= _hidden($pairs->[$index], $pairs->[$index + 1]);
     }
+    my $method = $model->{config}->query_params_enabled($model->{domain}) ? 'get' : 'post';
     my $controls = @buttons
-        ? '<form action="' . _h($model->{config}->path) . '" method="get" hx-ws:send>' .
+        ? '<form action="' . _h($model->{config}->path) . '" method="' . $method . '" hx-ws:send>' .
           $hidden . join('', @buttons) . '</form>'
         : '<span></span>';
     return '<nav class="sc-pagination" aria-label="Results pages"><span>Page ' . _h($state->page) .
@@ -289,6 +407,16 @@ sub _limit_options ($state, $config) {
 
 sub _hidden ($name, $value) {
     return '<input type="hidden" name="' . _h($name) . '" value="' . _h($value) . '">';
+}
+
+sub _selection_hidden ($kind, $values, $configs) {
+    return join '', map {
+        my $field = $_;
+        my $config = $configs->{$field} // {};
+        _hidden($kind, $field) .
+            _hidden($kind . '_alias', $config->{alias} // '') .
+            _hidden($kind . '_format', $config->{format} // '')
+    } @$values;
 }
 
 sub _number ($value) {
