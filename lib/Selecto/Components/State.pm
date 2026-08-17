@@ -20,6 +20,7 @@ sub from_input ($class, $config, $domain, $input) {
     $input = {} unless ref($input) eq 'HASH';
     $config->validate_domain($domain);
     my $field_map = $config->field_map($domain);
+    my $detail_map = $config->detail_column_map($domain);
     my @errors;
     my $configured = _first($input, 'q') ? 1 : 0;
 
@@ -40,8 +41,13 @@ sub from_input ($class, $config, $domain, $input) {
     for my $index (0 .. $#$field_values) {
         my $field = _scalar($field_values->[$index]);
         next unless length($field) && !$seen_field{$field}++;
-        unless ($field_map->{$field}) {
-            push @errors, 'A selected detail field is not available.';
+        unless ($detail_map->{$field}) {
+            push @errors, 'A selected detail column is not available.';
+            next;
+        }
+        if ($detail_map->{$field}{action_id}) {
+            push @valid_fields, $field;
+            $field_configs{$field} = {alias => '', format => ''};
             next;
         }
         my $alias = _trim($field_aliases->[$index]);
@@ -58,7 +64,7 @@ sub from_input ($class, $config, $domain, $input) {
         push @valid_fields, $field;
         $field_configs{$field} = { alias => $alias, format => $format };
     }
-    push @errors, 'Choose at least one detail field.' unless @valid_fields;
+    push @errors, 'Choose at least one detail column.' unless @valid_fields;
     unless (@valid_fields) {
         @valid_fields = @{$config->resolved_default_fields($domain)};
         %field_configs = map { $_ => { alias => '', format => '' } } @valid_fields;
@@ -195,7 +201,9 @@ sub from_input ($class, $config, $domain, $input) {
 
     my $order_fields = _values($input, 'order');
     my $order_directions = _values($input, 'direction');
-    $order_fields = [$valid_fields[0]] unless grep { length(_scalar($_)) } @$order_fields;
+    my ($default_order) = grep { $field_map->{$_} } @valid_fields;
+    $default_order //= $config->primary_key($domain);
+    $order_fields = [$default_order] unless grep { length(_scalar($_)) } @$order_fields;
     my @orders;
     my %seen_order;
     for my $index (0 .. $#$order_fields) {
@@ -220,7 +228,7 @@ sub from_input ($class, $config, $domain, $input) {
         }
         push @orders, { field => $field, direction => $dir };
     }
-    @orders = ({ field => $valid_fields[0], direction => 'asc' }) unless @orders;
+    @orders = ({ field => $default_order, direction => 'asc' }) unless @orders;
     my $order = $orders[0]{field};
     my $direction = $orders[0]{direction};
 

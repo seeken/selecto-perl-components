@@ -78,6 +78,19 @@ sub _domain {
                 ],
                 execution => {kind => 'host', operation => 'add_product_note'},
             },
+            mark_for_review => {
+                label => 'Mark for Review',
+                description => 'Mark selected products for review.',
+                type => 'bulk_action',
+                scope => 'bulk',
+                inputs => [
+                    {
+                        id => 'reason', label => 'Reason', type => 'textarea',
+                        required => 1, min_length => 1, max_length => 120,
+                    },
+                ],
+                execution => {kind => 'host', operation => 'mark_for_review'},
+            },
         },
         (defined($components) ? (components => $components) : ()),
     }, strict => 1);
@@ -115,6 +128,15 @@ sub config {
                     ok => 1,
                     applied_count => scalar(@{$request->{selected_ids}}),
                     message => 'Product note added.',
+                };
+            },
+            mark_for_review => sub {
+                my ($controller, $request) = @_;
+                push @ACTION_REQUESTS, $request;
+                return {
+                    ok => 1,
+                    applied_count => scalar(@{$request->{selected_ids}}),
+                    message => 'Products marked for review.',
                 };
             },
         },

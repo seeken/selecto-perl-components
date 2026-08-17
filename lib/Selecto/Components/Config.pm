@@ -126,17 +126,55 @@ sub choice_source ($self, $id) {
 }
 
 sub has_bulk_actions ($self, $domain) {
-    my $actions = $domain->actions;
-    return 0 unless ref($actions) eq 'HASH';
-    for my $id (keys %$actions) {
-        next unless $self->action_handler($id) && ref($actions->{$id}) eq 'HASH';
-        my $scope = lc($actions->{$id}{scope} // '');
-        return 1 if $scope eq 'bulk';
-        my $bulk = $actions->{$id}{bulk};
-        return 1 if defined($bulk) && !ref($bulk) && "$bulk" =~ /\A(?:1|true)\z/i;
-        return 1 if ref($bulk) eq 'HASH' && $bulk->{enabled};
+    return @{$self->bulk_action_catalog($domain)} ? 1 : 0;
+}
+
+sub action_column_path ($self, $id) {
+    return 'action:' . $id;
+}
+
+sub action_id_from_column ($self, $path) {
+    return undef unless defined($path) && !ref($path)
+        && "$path" =~ /\Aaction:([a-z][a-z0-9_-]*)\z/;
+    return $1;
+}
+
+sub bulk_action_catalog ($self, $domain, $available = undef) {
+    my @actions;
+    if (defined($available)) {
+        @actions = grep { ref($_) eq 'HASH' && defined($_->{id}) } @{$available // []};
+    } else {
+        my $specs = $domain->actions;
+        return [] unless ref($specs) eq 'HASH';
+        for my $id (sort keys %$specs) {
+            my $spec = $specs->{$id};
+            next unless $self->action_handler($id) && _bulk_action_spec($spec);
+            push @actions, {%$spec, id => $id};
+        }
     }
-    return 0;
+    return [map {
+        my $id = "$_->{id}";
+        my $label = defined($_->{label}) && !ref($_->{label}) ? "$_->{label}"
+            : defined($_->{name}) && !ref($_->{name}) ? "$_->{name}" : _humanize($id);
+        $label = 'Action: ' . $label unless $label =~ /\AAction\s*:/i;
+        {
+            path => $self->action_column_path($id),
+            label => $label,
+            type => 'action',
+            action_id => $id,
+        }
+    } sort { $a->{id} cmp $b->{id} } @actions];
+}
+
+sub detail_column_catalog ($self, $domain, $available = undef) {
+    return [
+        @{$self->bulk_action_catalog($domain, $available)},
+        @{$self->field_catalog($domain)},
+    ];
+}
+
+sub detail_column_map ($self, $domain, $available = undef) {
+    return {map { $_->{path} => {%$_} } @{$self->detail_column_catalog($domain, $available)}};
 }
 
 sub primary_key ($self, $domain) {
@@ -175,7 +213,7 @@ sub field_map ($self, $domain) {
 }
 
 sub resolved_default_fields ($self, $domain) {
-    my $map = $self->field_map($domain);
+    my $map = $self->detail_column_map($domain);
     my @configured = grep { $map->{$_} } @{$self->default_fields // []};
     return \@configured if @configured;
     return [map { $_->{path} } @{$self->field_catalog($domain)}[0 .. _last_index($self->field_catalog($domain), 6)]];
@@ -362,7 +400,11 @@ sub query_params_enabled ($self, $domain) {
 
 sub validate_domain ($self, $domain) {
     my $map = $self->field_map($domain);
-    for my $field (@{$self->default_fields}, @{$self->default_group}) {
+    my $detail_map = $self->detail_column_map($domain);
+    for my $field (@{$self->default_fields}) {
+        die "configured explorer field $field is outside the domain\n" unless $detail_map->{$field};
+    }
+    for my $field (@{$self->default_group}) {
         die "configured explorer field $field is outside the domain\n" unless $map->{$field};
     }
     for my $measure (@{$self->measures}) {
@@ -380,6 +422,14 @@ sub validate_domain ($self, $domain) {
 sub _last_index ($catalog, $maximum) {
     my $last = @$catalog - 1;
     return $last < $maximum - 1 ? $last : $maximum - 1;
+}
+
+sub _bulk_action_spec ($spec) {
+    return 0 unless ref($spec) eq 'HASH';
+    return 1 if lc($spec->{scope} // '') eq 'bulk';
+    my $bulk = $spec->{bulk};
+    return 1 if defined($bulk) && !ref($bulk) && "$bulk" =~ /\A(?:1|true)\z/i;
+    return ref($bulk) eq 'HASH' && $bulk->{enabled} ? 1 : 0;
 }
 
 sub _humanize ($value) {

@@ -28,12 +28,14 @@ This is alpha software. Its browser transport is pinned to htmx
   boolean choices, two-value ranges, and allowlisted calendar shortcuts such
   as Today, This Month, This Quarter, and This Year;
 - Detail, Aggregate, and Graph result views;
-- domain-declared selected-row bulk actions with select-all-page controls,
-  hidden primary-key selection, typed action forms, dynamic host choices,
+- domain-declared selected-row actions exposed as optional Detail columns; each
+  chosen action owns its checkbox set, select-all-page control, button, and
+  typed dialog, with hidden primary-key selection, dynamic host choices,
   preview/execute authorization callbacks, CSRF protection, and server-side
   input revalidation;
-- total matched-row and page counts, with changed query intent resetting to
-  page one while page-only Run and Previous/Next retain explicit pagination;
+- total matched-row and page counts plus full data-and-count query timing, with
+  changed query intent resetting to page one while page-only Run and
+  Previous/Next retain explicit pagination;
 - hierarchical Aggregate rollups with clickable group values, subtotals, and a
   grand total, plus clickable Graph group values; drilldowns retain existing
   filters and apply the selected group path as exact governed Detail predicates,
@@ -171,6 +173,12 @@ and have a registered host handler. Required action fields are normalized and
 validated again on POST; select choices are resolved again for the current
 request so a stale browser cannot submit a choice that the user can no longer
 use.
+
+Authorized actions appear in the Detail column picker as `Action: <label>`.
+Adding one and running the query places its checkbox column in the requested
+column order and displays its action button. Multiple action columns may be
+selected at once; their selected rows, counts, buttons, and dialogs remain
+independent. Removing an action column removes that action UI from the result.
 
 ```perl
 actions => {
@@ -351,7 +359,6 @@ security, or performance.
 ## Explicitly deferred
 
 - persisted saved-view stores and sharing policy;
-- row and bulk action forms;
 - emailed and scheduled exports;
 - dashboards, extension view packages, maps, and custom visual encodings;
 - push broadcasts from external data changes; and

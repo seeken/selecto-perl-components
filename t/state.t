@@ -22,6 +22,35 @@ is_deeply $initial->fields,
     'configured detail fields become initial state';
 is_deeply $initial->groups, ['category.category_name'], 'configured group becomes initial state';
 
+my $detail_catalog = $config->detail_column_catalog($domain);
+my %detail_by_path = map { $_->{path} => $_ } @$detail_catalog;
+is $detail_by_path{'action:add_product_note'}{label}, 'Action: Add Product Note',
+    'bulk actions are available as named detail columns';
+is $detail_by_path{'action:mark_for_review'}{type}, 'action',
+    'each configured bulk action has its own action-column type';
+
+my $action_columns = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => ['action:add_product_note', 'product_name', 'action:mark_for_review'],
+    field_alias => ['', 'Product', ''],
+    field_format => ['', '', ''],
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+});
+ok $action_columns->valid, 'multiple action columns are valid detail selections';
+is_deeply $action_columns->fields,
+    ['action:add_product_note', 'product_name', 'action:mark_for_review'],
+    'action columns retain their order among data columns';
+is_deeply $action_columns->field_configs->{'action:add_product_note'},
+    {alias => '', format => ''}, 'action columns do not accept presentation configuration';
+my $action_only = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'action:add_product_note', measure => 'count',
+});
+ok $action_only->valid, 'an action can be the only selected detail column';
+is $action_only->order, 'id', 'action-only detail results use the domain primary key for stable ordering';
+
 my $configured = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'graph',
@@ -411,7 +440,7 @@ is $invalid->limit, $config->max_limit, 'limit is bounded by host configuration'
 
 my $missing_fields = Selecto::Components::State->from_input($config, $domain, {q => 1});
 ok !$missing_fields->valid, 'configured request cannot silently reset an empty field selection';
-like join(' ', @{$missing_fields->errors}), qr/Choose at least one detail field/, 'empty selection has an actionable error';
+like join(' ', @{$missing_fields->errors}), qr/Choose at least one detail column/, 'empty selection has an actionable error';
 
 my $invalid_page = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

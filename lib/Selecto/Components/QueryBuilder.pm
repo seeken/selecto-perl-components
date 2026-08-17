@@ -14,22 +14,37 @@ sub build ($class, $config, $domain, $state) {
 
 sub _detail ($class, $config, $domain, $state) {
     my $field_map = $config->field_map($domain);
+    my $detail_map = $config->detail_column_map($domain);
     my @columns = map {
         my $field = $_;
-        my $column_config = $state->field_configs->{$field} // {};
-        {
-            key => _field_alias($field),
-            field => $field,
-            label => $column_config->{alias} || $field_map->{$field}{label},
-            type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
-            format => $column_config->{format} // '',
+        my $catalog = $detail_map->{$field};
+        if ($catalog->{action_id}) {
+            +{
+                key => '__selecto_action_column_' . $catalog->{action_id},
+                field => $field,
+                label => $catalog->{label},
+                type => 'action',
+                action_id => $catalog->{action_id},
+            };
+        } else {
+            my $column_config = $state->field_configs->{$field} // {};
+            +{
+                key => _field_alias($field),
+                field => $field,
+                label => $column_config->{alias} || $field_map->{$field}{label},
+                type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
+                format => $column_config->{format} // '',
+            };
         }
     } @{$state->fields};
-    my @query_columns = @columns;
+    my @query_columns = grep { !$_->{action_id} } @columns;
+    my @action_ids = map { $_->{action_id} } grep { $_->{action_id} } @columns;
     my $action_key;
-    if ($config->has_bulk_actions($domain)) {
+    if (@action_ids) {
         my $primary_key = $config->primary_key($domain);
-        my ($selected_primary_key) = grep { $_->{field} eq $primary_key && !$_->{format} } @columns;
+        my ($selected_primary_key) = grep {
+            $_->{field} eq $primary_key && !$_->{format}
+        } @query_columns;
         if ($selected_primary_key) {
             $action_key = $selected_primary_key->{key};
         } else {
@@ -58,6 +73,7 @@ sub _detail ($class, $config, $domain, $state) {
         columns => \@columns,
         query_columns => \@query_columns,
         action_key => $action_key,
+        action_ids => \@action_ids,
         graph => 0,
     };
 }

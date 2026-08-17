@@ -121,17 +121,26 @@ sub _decorate_model ($controller, $model) {
     $model->{csrf_token} = _csrf_token($controller);
     $model->{action_notice} = $controller->flash('selecto_action_notice');
     $model->{action_error} = $controller->flash('selecto_action_error');
+    $model->{available_actions} = [];
     $model->{bulk_actions} = [];
     if ($model->{domain} && $model->{state} && $model->{state}->valid
         && $model->{state}->view eq 'detail') {
         my $ok = eval {
-            $model->{bulk_actions} = Selecto::Components::Actions->available(
+            $model->{available_actions} = Selecto::Components::Actions->available(
                 $model->{config}, $model->{domain}, $controller,
             );
+            my %selected = map {
+                my $id = $model->{config}->action_id_from_column($_);
+                defined($id) ? ($id => 1) : ()
+            } @{$model->{state}->fields};
+            $model->{bulk_actions} = [grep {
+                $selected{$_->{id}}
+            } @{$model->{available_actions}}];
             1;
         };
         unless ($ok) {
             $controller->app->log->error("Selecto action discovery failed: $@");
+            $model->{available_actions} = [];
             $model->{bulk_actions} = [];
         }
     }
