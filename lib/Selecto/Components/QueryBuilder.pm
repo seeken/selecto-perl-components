@@ -25,16 +25,41 @@ sub _detail ($class, $config, $domain, $state) {
             format => $column_config->{format} // '',
         }
     } @{$state->fields};
+    my @query_columns = @columns;
+    my $action_key;
+    if ($config->has_bulk_actions($domain)) {
+        my $primary_key = $config->primary_key($domain);
+        my ($selected_primary_key) = grep { $_->{field} eq $primary_key && !$_->{format} } @columns;
+        if ($selected_primary_key) {
+            $action_key = $selected_primary_key->{key};
+        } else {
+            $action_key = '__selecto_action_target';
+            push @query_columns, {
+                key => $action_key,
+                field => $primary_key,
+                label => $primary_key,
+                type => $field_map->{$primary_key}{type},
+                format => '',
+                hidden => 1,
+            };
+        }
+    }
     my $query = Selecto::Query->new->select(map {
         _column_expression($_)->as($_->{key})
-    } @columns);
+    } @query_columns);
     $query = _with_filters($query, $state);
     for my $order (@{$state->orders}) {
         $query = $query->order_by($order->{field}, $order->{direction});
     }
     $query = $query->limit($state->limit)
         ->offset(($state->page - 1) * $state->limit);
-    return { query => $query, columns => \@columns, graph => 0 };
+    return {
+        query => $query,
+        columns => \@columns,
+        query_columns => \@query_columns,
+        action_key => $action_key,
+        graph => 0,
+    };
 }
 
 sub _aggregate ($class, $config, $domain, $state) {
@@ -94,15 +119,23 @@ sub _aggregate ($class, $config, $domain, $state) {
         push @selections, $expression->as($measure_key);
     }
     my @columns = (@group_columns, @measure_columns);
-    my $query = Selecto::Query->new
-        ->select(@selections)
-        ->group_by(\@groups);
+    my $rollup = $state->view eq 'aggregate' && @groups ? 1 : 0;
+    my $rollup_key = '__selecto_rollup_grouping';
+    push @selections, Selecto::Expression->grouping(\@groups)->as($rollup_key) if $rollup;
+    my $query = Selecto::Query->new->select(@selections);
+    $query = $rollup ? $query->group_by_rollup(\@groups) : $query->group_by(\@groups);
     $query = _with_filters($query, $state);
-    $query = $query
-        ->order_by($groups[0], 'asc')
-        ->limit($state->limit)
+    $query = $query->order_by($_, 'asc') for @groups;
+    $query = $query->limit($state->limit)
         ->offset(($state->page - 1) * $state->limit);
-    return { query => $query, columns => \@columns, graph => $state->view eq 'graph' ? 1 : 0 };
+    return {
+        query => $query,
+        columns => \@columns,
+        graph => $state->view eq 'graph' ? 1 : 0,
+        rollup => $rollup,
+        rollup_key => $rollup ? $rollup_key : undef,
+        group_count => scalar(@groups),
+    };
 }
 
 sub _measure_expression ($measure, $config) {
@@ -174,6 +207,9 @@ sub _with_filters ($query, $state) {
     for my $filter (@{$state->filters}) {
         my ($field, $op, $value, $value_end) = @{$filter}{qw(field op value value_end)};
         next if $filter->{draft};
+        my $operand = $filter->{grouped}
+            ? _group_expression({field => $field}, $state->group_configs->{$field} // {})
+            : $field;
         my $expression;
         if ($op eq 'in') {
             my @values = grep { length } map { _trim($_) } split /,/, $value;
@@ -187,9 +223,9 @@ sub _with_filters ($query, $state) {
                 Selecto::Expression->lt($field, $end),
             ]);
         } elsif ($op eq 'is_null' || $op eq 'not_null') {
-            $expression = Selecto::Expression->can($op)->('Selecto::Expression', $field);
+            $expression = Selecto::Expression->can($op)->('Selecto::Expression', $operand);
         } else {
-            $expression = Selecto::Expression->can($op)->('Selecto::Expression', $field, $value);
+            $expression = Selecto::Expression->can($op)->('Selecto::Expression', $operand, $value);
         }
         push @expressions, $expression;
     }

@@ -40,8 +40,13 @@ like $detail_statement->sql, qr/ORDER BY "s0"\."unit_price" DESC/, 'sort field a
 like $detail_statement->sql, qr/LIMIT 25 OFFSET 25\z/, 'page compiles to bounded limit and offset';
 is_deeply $detail_statement->params, ['12.50', 'Tools', 'Produce'], 'values remain out of SQL';
 is_deeply $detail_statement->columns,
+    [qw(product_name category__category_name unit_price __selecto_action_target)],
+    'detail aliases are stable and include the hidden selected-row action target';
+is_deeply [map { $_->{key} } @{$detail->{columns}}],
     [qw(product_name category__category_name unit_price)],
-    'detail aliases are stable and relationship-safe';
+    'the action target does not become a visible result column';
+is $detail->{action_key}, '__selecto_action_target',
+    'the detail result identifies its hidden action target';
 
 my $aggregate_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
@@ -49,6 +54,9 @@ my $aggregate_state = Selecto::Components::State->from_input($config, $domain, {
     field => ['product_name'],
     group => ['category.category_name'],
     measure => 'total_price',
+    filter_field => 'unit_price',
+    filter_op => 'gte',
+    filter_value => '12.50',
     order => 'product_name',
     direction => 'asc',
     limit => 10,
@@ -58,6 +66,10 @@ my $aggregate = Selecto::Components::QueryBuilder->build($config, $domain, $aggr
 my $aggregate_statement = $postgresql->compile($domain, $aggregate->{query});
 like $aggregate_statement->sql, qr/SUM\("s0"\."unit_price"\) AS "total_price"/, 'configured aggregate compiles';
 like $aggregate_statement->sql, qr/GROUP BY "j_category"\."category_name"/, 'configured group compiles';
+like $aggregate_statement->sql, qr/WHERE "s0"\."unit_price" >= \$1/,
+    'aggregate queries apply the configured filters before grouping';
+is_deeply $aggregate_statement->params, ['12.50'],
+    'aggregate filter values remain bound parameters';
 ok $aggregate->{graph}, 'graph uses aggregate query with graph rendering metadata';
 
 my $multi_measure_state = Selecto::Components::State->from_input($config, $domain, {
@@ -86,8 +98,17 @@ like $multi_measure_statement->sql, qr/COUNT\(\*\) AS "count"/,
 like $multi_measure_statement->sql,
     qr/COUNT\(CASE WHEN "s0"\."unit_price" >= \$7 AND "s0"\."unit_price" <= \$8 THEN 1 END\) AS "total_price__bucket_1"/,
     'a numeric measure bucket expands to a governed conditional count column';
-like $multi_measure_statement->sql, qr/GROUP BY CASE WHEN "s0"\."unit_price" >=/,
-    'numeric group buckets compile as governed grouping expressions';
+like $multi_measure_statement->sql, qr/GROUP BY ROLLUP \(CASE WHEN "s0"\."unit_price" >=/,
+    'numeric group buckets compile as governed rollup expressions';
+like $multi_measure_statement->sql, qr/GROUPING\(CASE WHEN .*?\) AS "__selecto_rollup_grouping"/,
+    'aggregate rollup carries governed grouping metadata for hierarchy rendering';
+like $multi_measure_statement->sql,
+    qr/\ASELECT \* FROM \(SELECT .*\) AS rollupfix ORDER BY 1 ASC NULLS FIRST LIMIT 25 OFFSET 0\z/s,
+    'ordered bucket rollups use the PostgreSQL positional outer-sort workaround';
+unlike $multi_measure_statement->sql, qr/ORDER BY CASE/,
+    'the rollup outer sort does not rebuild the parameterized bucket expression';
+is scalar(@{$multi_measure_statement->params}), 9,
+    'ordered bucket rollups do not duplicate their bound bucket parameters';
 is_deeply [map { $_->{label} } @{$multi_measure->{columns}}],
     ['Price band', 'Products', 'Price counts: 0-10', '11+'],
     'multiple measures and expanded bucket columns preserve configured display order';
@@ -175,10 +196,37 @@ my $formatted_aggregate = Selecto::Components::QueryBuilder->build(
 );
 my $formatted_aggregate_statement = $postgresql->compile($domain, $formatted_aggregate->{query});
 like $formatted_aggregate_statement->sql,
-    qr/GROUP BY TO_CHAR\("s0"\."created_on", 'YYYY-MM'\)/,
-    'aggregate date configuration defines the SQL grouping bucket';
+    qr/GROUP BY ROLLUP \(TO_CHAR\("s0"\."created_on", 'YYYY-MM'\)\)/,
+    'aggregate date configuration defines the SQL rollup bucket';
 is $formatted_aggregate->{columns}[0]{label}, 'Month',
     'aggregate group label uses its independent configuration';
+
+my $drilldown_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => ['created_on', 'product_name'],
+    group => 'created_on',
+    group_format => 'month',
+    measure => 'count',
+    filter_field => ['unit_price', 'created_on'],
+    filter_op => ['gte', 'eq'],
+    filter_value => ['10', '2026-08'],
+    filter_group => [0, 1],
+    order => 'created_on',
+    limit => 25,
+    page => 1,
+});
+my $drilldown_statement = $postgresql->compile(
+    $domain,
+    Selecto::Components::QueryBuilder->build($config, $domain, $drilldown_state)->{query},
+);
+like $drilldown_statement->sql, qr/"s0"\."unit_price" >= \$1/,
+    'aggregate drilldown retains the original detail filter';
+like $drilldown_statement->sql,
+    qr/TO_CHAR\("s0"\."created_on", 'YYYY-MM'\) = \$2/,
+    'aggregate drilldown filters by the exact governed grouping expression';
+is_deeply $drilldown_statement->params, ['10', '2026-08'],
+    'original and grouped drilldown values remain aligned bound parameters';
 
 my $between_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

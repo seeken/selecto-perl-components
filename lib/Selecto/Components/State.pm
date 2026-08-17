@@ -1,6 +1,7 @@
 package Selecto::Components::State;
 
 use Mojo::Base -base, -signatures;
+use Digest::SHA qw(sha256_hex);
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
 
@@ -8,7 +9,7 @@ has [qw(view fields field_configs filters groups group_configs measures measure_
 
 sub parameter_names ($class) {
     return [qw(
-        q view field field_alias field_format filter_field filter_op filter_value filter_value_end
+        q query_signature view field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls
         order direction limit page
@@ -244,19 +245,24 @@ sub from_input ($class, $config, $domain, $input) {
     my $filter_ops = _values($input, 'filter_op');
     my $filter_values = _values($input, 'filter_value');
     my $filter_end_values = _values($input, 'filter_value_end');
+    my $filter_groups = _values($input, 'filter_group');
     my $filter_count = @$filter_fields;
     $filter_count = @$filter_ops if @$filter_ops > $filter_count;
     $filter_count = @$filter_values if @$filter_values > $filter_count;
     $filter_count = @$filter_end_values if @$filter_end_values > $filter_count;
+    $filter_count = @$filter_groups if @$filter_groups > $filter_count;
     my @filters;
     my %seen_filter_field;
+    my %valid_group_field = map { $_ => 1 } @valid_groups;
+    my $regular_filter_count = 0;
     for my $index (0 .. $filter_count - 1) {
         my $field = _scalar($filter_fields->[$index]);
         my $op = lc(_scalar($filter_ops->[$index]) || 'eq');
         my $value = _scalar($filter_values->[$index]);
         my $value_end = _scalar($filter_end_values->[$index]);
+        my $group_filter = _truthy($filter_groups->[$index], 0);
         next unless length($field) || length($value) || length($value_end);
-        if (@filters >= $config->max_filters) {
+        if (!$group_filter && $regular_filter_count >= $config->max_filters) {
             push @errors, 'Too many filters were submitted.';
             last;
         }
@@ -273,6 +279,11 @@ sub from_input ($class, $config, $domain, $input) {
             push @errors, 'A filter operator is not available.';
             next;
         }
+        if ($group_filter && (!$valid_group_field{$field} || ($op ne 'eq' && $op ne 'is_null'))) {
+            push @errors, 'An aggregate drilldown filter is not available.';
+            next;
+        }
+        $regular_filter_count++ unless $group_filter;
         ($value, $value_end) = ('', '') if $op =~ /_null\z/;
         if ($op eq 'in' && length($value)
             && !grep { length } map { _trim($_) } split /,/, $value, -1) {
@@ -284,7 +295,8 @@ sub from_input ($class, $config, $domain, $input) {
             push @errors, 'A date shortcut is not available.';
             next;
         }
-        if ($config->temporal_type($field_type) && $op ne 'date_shortcut' && $op !~ /_null\z/) {
+        if (!$group_filter && $config->temporal_type($field_type)
+            && $op ne 'date_shortcut' && $op !~ /_null\z/) {
             if (length($value) && !_valid_temporal_value($value)) {
                 push @errors, 'A date filter value is not available.';
                 next;
@@ -294,7 +306,7 @@ sub from_input ($class, $config, $domain, $input) {
                 next;
             }
         }
-        if ($config->boolean_type($field_type) && $op eq 'eq'
+        if (!$group_filter && $config->boolean_type($field_type) && $op eq 'eq'
             && length($value) && $value !~ /\A(?:true|false|0|1)\z/i) {
             push @errors, 'A boolean filter value is not available.';
             next;
@@ -305,12 +317,13 @@ sub from_input ($class, $config, $domain, $input) {
             value => $value,
             value_end => $value_end,
         };
-        $filter->{draft} = 1 if $op !~ /_null\z/
+        $filter->{grouped} = 1 if $group_filter;
+        $filter->{draft} = 1 if !$group_filter && $op !~ /_null\z/
             && (!length($value) || ($op eq 'between' && !length($value_end)));
         push @filters, $filter;
     }
 
-    return $class->new(
+    my $state = $class->new(
         view => $view,
         fields => \@valid_fields,
         field_configs => \%field_configs,
@@ -327,6 +340,11 @@ sub from_input ($class, $config, $domain, $input) {
         page => $page,
         errors => \@errors,
     );
+    my $query_signature = _first($input, 'query_signature');
+    $state->page(1) if defined($query_signature) && !ref($query_signature)
+        && "$query_signature" =~ /\A[0-9a-f]{64}\z/
+        && "$query_signature" ne $state->query_signature;
+    return $state;
 }
 
 sub valid ($self) { return @{$self->errors} ? 0 : 1; }
@@ -345,7 +363,8 @@ sub query_pairs ($self) {
             filter_field => $filter->{field},
             filter_op => $filter->{op},
             filter_value => $filter->{value},
-            filter_value_end => $filter->{value_end} // '';
+            filter_value_end => $filter->{value_end} // '',
+            filter_group => $filter->{grouped} ? 1 : 0;
     }
     for my $group (@{$self->groups}) {
         my $column = $self->group_configs->{$group} // {};
@@ -373,6 +392,18 @@ sub query_pairs ($self) {
         limit => $self->limit,
         page => $self->page;
     return \@pairs;
+}
+
+sub query_signature ($self) {
+    my $pairs = $self->query_pairs;
+    my @parts;
+    for (my $index = 0; $index < @$pairs; $index += 2) {
+        next if $pairs->[$index] eq 'page';
+        my $key = defined($pairs->[$index]) ? "$pairs->[$index]" : '';
+        my $value = defined($pairs->[$index + 1]) ? "$pairs->[$index + 1]" : '';
+        push @parts, length($key) . ":$key", length($value) . ":$value";
+    }
+    return sha256_hex(join('|', @parts));
 }
 
 sub as_hash ($self) {

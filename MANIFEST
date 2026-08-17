@@ -7,7 +7,10 @@ THIRD_PARTY_NOTICES.md
 cpanfile
 examples/northwind.pl
 lib/Selecto/Components.pm
+lib/Selecto/Components/Actions.pm
+lib/Selecto/Components/BucketParser.pm
 lib/Selecto/Components/Config.pm
+lib/Selecto/Components/DateShortcut.pm
 lib/Selecto/Components/Explorer.pm
 lib/Selecto/Components/QueryBuilder.pm
 lib/Selecto/Components/Renderer.pm
@@ -19,6 +22,8 @@ public/selecto-components/selecto-components.css
 public/selecto-components/selecto-components.js
 script/with-local-sibling
 t/00-load.t
+t/bucket_parser.t
+t/date_shortcut.t
 t/lib/TestSelectoComponents.pm
 t/plugin.t
 t/query_builder.t

@@ -1,10 +1,13 @@
 package Selecto::Components;
 
+use Digest::SHA qw(sha256_hex);
 use Mojo::Base 'Mojolicious::Plugin', -signatures;
 use Encode qw(encode);
 use Mojo::File qw(path);
 use Mojo::JSON qw(decode_json encode_json);
 use Mojo::URL ();
+use Mojo::Util qw(secure_compare);
+use Selecto::Components::Actions ();
 use Selecto::Components::Config ();
 use Selecto::Components::Explorer ();
 use Selecto::Components::Renderer ();
@@ -67,7 +70,7 @@ sub _routes ($app, $explorer, $origin_check) {
     my $config = $explorer->config;
     my $routes = $app->routes;
     $routes->get($config->path)->to(cb => sub ($controller) {
-        my $model = $explorer->model($controller);
+        my $model = _decorate_model($controller, $explorer->model($controller));
         if (!$config->query_params_enabled($model->{domain})
             && length($controller->req->url->query->to_string)) {
             return $controller->redirect_to($config->path);
@@ -80,8 +83,15 @@ sub _routes ($app, $explorer, $origin_check) {
     });
 
     $routes->post($config->path)->to(cb => sub ($controller) {
-        my $model = $explorer->model($controller, $explorer->input_from_controller($controller));
+        my $model = _decorate_model(
+            $controller,
+            $explorer->model($controller, $explorer->input_from_controller($controller)),
+        );
         return _render_page($controller, $model);
+    });
+
+    $routes->post($config->path . '/actions/:selecto_action_id')->to(cb => sub ($controller) {
+        return _run_action($controller, $explorer);
     });
 
     $routes->websocket($config->path . '/ws')->to(cb => sub ($controller) {
@@ -100,11 +110,140 @@ sub _routes ($app, $explorer, $origin_check) {
             my $request_id = $headers->{'HX-Request-ID'};
             $request_id = undef unless defined($request_id) && !ref($request_id)
                 && "$request_id" =~ /\A[A-Za-z0-9-]{1,100}\z/;
-            my $model = $explorer->model($socket, $envelope->{body});
+            my $model = _decorate_model($socket, $explorer->model($socket, $envelope->{body}));
             my $response = Selecto::Components::Renderer->websocket_message($model, $request_id);
             return $socket->send({text => encode_json($response)});
         });
     });
+}
+
+sub _decorate_model ($controller, $model) {
+    $model->{csrf_token} = _csrf_token($controller);
+    $model->{action_notice} = $controller->flash('selecto_action_notice');
+    $model->{action_error} = $controller->flash('selecto_action_error');
+    $model->{bulk_actions} = [];
+    if ($model->{domain} && $model->{state} && $model->{state}->valid
+        && $model->{state}->view eq 'detail') {
+        my $ok = eval {
+            $model->{bulk_actions} = Selecto::Components::Actions->available(
+                $model->{config}, $model->{domain}, $controller,
+            );
+            1;
+        };
+        unless ($ok) {
+            $controller->app->log->error("Selecto action discovery failed: $@");
+            $model->{bulk_actions} = [];
+        }
+    }
+    return $model;
+}
+
+sub _run_action ($controller, $explorer) {
+    my $config = $explorer->config;
+    my $return_to = _safe_return_to($config, scalar $controller->param('return_to'));
+    my $submitted_token = $controller->param('csrf_token') // '';
+    my $expected_token = $controller->session('selecto_components_csrf') // '';
+    return _action_response($controller, $return_to, {
+        ok => 0, status => 403,
+        message => 'The action form expired. Reload the explorer and try again.',
+    }) unless length($submitted_token) && length($expected_token)
+        && secure_compare("$submitted_token", "$expected_token");
+
+    my $selected_values = $controller->every_param('selected_id');
+    my @selected_ids = ref($selected_values) eq 'ARRAY' ? @$selected_values : ();
+    my $action_id = $controller->stash('selecto_action_id') // '';
+    my ($domain, $resolved);
+    my $discovery_ok = eval {
+        $domain = $config->engine($controller)->domain;
+        $resolved = Selecto::Components::Actions->find(
+            $config, $domain, $controller, $action_id, 'preview', {ids => \@selected_ids},
+        );
+        1;
+    };
+    unless ($discovery_ok) {
+        $controller->app->log->error("Selecto action lookup failed: $@");
+        return _action_response($controller, $return_to, {
+            ok => 0, status => 500, message => 'The action could not be prepared.',
+        });
+    }
+    return _action_response($controller, $return_to, {
+        ok => 0, status => 404, message => 'That action is not available.',
+    }) unless $resolved;
+    return _action_response($controller, $return_to, {
+        ok => 0, status => 403,
+        message => $resolved->{decision}{reason} || 'That action is not permitted.',
+    }) unless $resolved->{decision}{status} eq 'enabled';
+
+    my %raw_inputs = map {
+        $_->{id} => scalar $controller->param('action_input_' . $_->{id})
+    } @{$resolved->{action}{inputs}};
+    my $request = Selecto::Components::Actions->request(
+        $config, $resolved->{action}, \@selected_ids, \%raw_inputs,
+    );
+    return _action_response($controller, $return_to, {
+        ok => 0, status => 422, message => join(' ', @{$request->{errors}}),
+        errors => $request->{errors},
+    }) unless $request->{valid};
+
+    my $execute_decision = Selecto::Components::Actions->authorize(
+        $config, $controller, $resolved->{action}, 'execute', {
+            ids => $request->{selected_ids}, inputs => $request->{inputs},
+        },
+    );
+    return _action_response($controller, $return_to, {
+        ok => 0, status => 403,
+        message => $execute_decision->{reason} || 'That action is not permitted.',
+    }) unless $execute_decision->{status} eq 'enabled';
+
+    my $handler = $config->action_handler($action_id);
+    my $result;
+    my $execute_ok = eval { $result = $handler->($controller, $request); 1 };
+    unless ($execute_ok) {
+        $controller->app->log->error("Selecto action $action_id failed: $@");
+        return _action_response($controller, $return_to, {
+            ok => 0, status => 500, message => 'The action could not be completed.',
+        });
+    }
+    unless (ref($result) eq 'HASH') {
+        $controller->app->log->error("Selecto action $action_id returned an invalid result");
+        return _action_response($controller, $return_to, {
+            ok => 0, status => 500, message => 'The action returned an invalid result.',
+        });
+    }
+    $result->{ok} = 1 unless exists $result->{ok};
+    $result->{status} = $result->{ok} ? 200 : 422 unless defined $result->{status};
+    $result->{message} //= $result->{ok}
+        ? 'The action was completed.' : 'The action was not completed.';
+    return _action_response($controller, $return_to, $result);
+}
+
+sub _action_response ($controller, $return_to, $result) {
+    my $status = $result->{status} // ($result->{ok} ? 200 : 422);
+    if (($controller->req->headers->accept // '') =~ m{application/json}i
+        || ($controller->req->headers->header('X-Requested-With') // '') eq 'XMLHttpRequest') {
+        return $controller->render(json => $result, status => $status);
+    }
+    $controller->flash(
+        $result->{ok} ? 'selecto_action_notice' : 'selecto_action_error',
+        $result->{message},
+    );
+    return $controller->redirect_to($return_to);
+}
+
+sub _csrf_token ($controller) {
+    my $token = $controller->session('selecto_components_csrf');
+    return $token if defined($token) && !ref($token) && "$token" =~ /\A[0-9a-f]{64}\z/;
+    my $secret = $controller->app->secrets->[0] // 'selecto-components';
+    $token = sha256_hex(join(':', $secret, $$, time, rand(), $controller->stash('request_id') // ''));
+    $controller->session(selecto_components_csrf => $token);
+    return $token;
+}
+
+sub _safe_return_to ($config, $value) {
+    return $config->path unless defined($value) && !ref($value) && length($value);
+    my $url = Mojo::URL->new("$value");
+    return $config->path if defined($url->host) || $url->path->to_string ne $config->path;
+    return $url->to_string;
 }
 
 sub _render_page ($controller, $model) {

@@ -28,6 +28,16 @@ This is alpha software. Its browser transport is pinned to htmx
   boolean choices, two-value ranges, and allowlisted calendar shortcuts such
   as Today, This Month, This Quarter, and This Year;
 - Detail, Aggregate, and Graph result views;
+- domain-declared selected-row bulk actions with select-all-page controls,
+  hidden primary-key selection, typed action forms, dynamic host choices,
+  preview/execute authorization callbacks, CSRF protection, and server-side
+  input revalidation;
+- total matched-row and page counts, with changed query intent resetting to
+  page one while page-only Run and Previous/Next retain explicit pagination;
+- hierarchical Aggregate rollups with clickable group values, subtotals, and a
+  grand total, plus clickable Graph group values; drilldowns retain existing
+  filters and apply the selected group path as exact governed Detail predicates,
+  including formatted dates, numeric/date buckets, and text prefixes;
 - `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `in`, `is_null`, and
   `not_null` filters supported by the current native Perl query contract;
 - a domain-derived Available/Set aggregate picker where every governed column
@@ -85,7 +95,7 @@ provides an explicit saved-view store; the package does not move sensitive
 state into a cookie or opaque client token.
 
 While editing, the browser stages controls locally and leaves the URL and
-result set at their last applied state. Only **Run governed query** submits the
+result set at their last applied state. Only **Run query** submits the
 complete form over the WebSocket (or as an ordinary GET/POST, according to the
 domain policy, without JavaScript).
 
@@ -96,7 +106,9 @@ In the default shareable mode, canonical parameters are:
 - aligned `field_alias`/`field_format` and group alias/format/bucket/prefix values,
   so each selected column carries its own presentation configuration;
 - aligned, repeated `filter_field`, `filter_op`, `filter_value`, and
-  `filter_value_end` values;
+  `filter_value_end` values; server-generated aggregate drilldowns also align
+  a `filter_group` marker so the governed grouping expression is reused as the
+  Detail predicate;
   newly added filters remain URL-visible drafts and do not constrain the query
   until they have the required value or values (or a null operator). Date
   shortcuts are stored as allowlisted identifiers and resolved to bound,
@@ -151,6 +163,61 @@ This registers:
 - `GET /explore/products?format=csv` for the current result page; and
 - `WS /explore/products/ws` for htmx 4 incremental updates.
 
+## Selected-row actions
+
+Selected-row actions come from the canonical domain contract. The Components
+host only renders actions that are bulk-scoped (or explicitly bulk-enabled)
+and have a registered host handler. Required action fields are normalized and
+validated again on POST; select choices are resolved again for the current
+request so a stale browser cannot submit a choice that the user can no longer
+use.
+
+```perl
+actions => {
+    add_note => {
+        label => 'Add Note',
+        scope => 'bulk',
+        inputs => [
+            {
+                id => 'note_type', label => 'Note type', type => 'select',
+                choice_source => 'note_types', required => 1,
+            },
+            {
+                id => 'comment', label => 'Comment', type => 'textarea',
+                required => 1, max_length => 255,
+            },
+        ],
+        execution => {kind => 'host', operation => 'add_note'},
+    },
+},
+```
+
+Register dynamic choices, authorization, and the application-owned execution
+boundary on the explorer:
+
+```perl
+choice_sources => {
+    note_types => sub ($controller, $action, $input) {
+        return [{value => 'internal', label => 'Internal'}];
+    },
+},
+action_authorizer => sub ($controller, $request) {
+    return {status => 'enabled'};
+},
+action_handlers => {
+    add_note => sub ($controller, $request) {
+        # $request->{selected_ids} is unique and bounded.
+        # $request->{inputs} contains normalized, validated form values.
+        return {ok => 1, applied_count => scalar @{$request->{selected_ids}}};
+    },
+},
+```
+
+The action route is `POST /explore/products/actions/:action_id`. Browser forms
+carry a session-bound CSRF token. Hosts remain responsible for checking every
+target against the current tenant/user and for transaction, audit, and
+business-rule behavior inside the handler.
+
 The plugin adds its packaged `public/` directory to Mojolicious static paths.
 The htmx runtime and WebSocket extension are served locally; the browser does
 not depend on a CDN.
@@ -202,6 +269,11 @@ message and tests.
   measure sources come from closed allowlists and the governed domain catalog.
 - Values remain separate from SQL and compile as adapter parameters.
 - Browser input cannot select an adapter or submit SQL.
+- Selected-row action IDs must be declared by the domain and registered by the
+  host. Action targets are deduplicated and bounded, action choices are
+  re-resolved, authorization is repeated for execute, and POSTs require the
+  session-bound CSRF token. An action that declares a capability stays hidden
+  unless the explorer registers an `action_authorizer`.
 - WebSocket handshakes with an `Origin` header default to same-host only. A host
   behind unusual proxy or multi-origin routing can provide an explicit
   `origin_check` callback to the plugin.
