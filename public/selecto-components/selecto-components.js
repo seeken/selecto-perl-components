@@ -79,6 +79,21 @@
     });
   });
 
+  window.addEventListener("submit", function (event) {
+    var form = event.target.closest("[data-sc-builder]");
+    if (!form) return;
+    var connection = document.querySelector("[data-selecto-connection]");
+    if (connection && connection.classList.contains("is-live")) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    var button = form.querySelector('button[type="submit"]');
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Running…";
+    }
+    HTMLFormElement.prototype.submit.call(form);
+  }, true);
+
   document.addEventListener("htmx:after:ws:message", function (event) {
     var message = event.detail && event.detail.message && event.detail.message.json;
     var nextUrl = message && message.selecto && message.selecto.url;

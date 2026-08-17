@@ -3,7 +3,7 @@ package Selecto::Components::Renderer;
 use Mojo::Base -base, -signatures;
 use Mojo::Util qw(xml_escape);
 
-my $ASSET_REVISION = '20260815-2';
+my $ASSET_REVISION = '20260816-1';
 
 sub page ($class, $model) {
     my $config = $model->{config};

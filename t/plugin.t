@@ -48,8 +48,8 @@ $t->get_ok('/explore/products')
     ->content_like(qr{hx-ws:send})
     ->content_like(qr{/selecto-components/htmx\.min\.js})
     ->content_like(qr{/selecto-components/hx-ws\.min\.js})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260815-2})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260815-2});
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260816-1})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260816-1});
 
 $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/htmx:after:ws:message/)
@@ -65,6 +65,8 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/dateShortcuts/)
     ->content_like(qr/rebuildFilterValues/)
     ->content_like(qr/scPickerKind/)
+    ->content_like(qr/window\.addEventListener\("submit"/)
+    ->content_like(qr/HTMLFormElement\.prototype\.submit\.call\(form\)/)
     ->content_unlike(qr/requestSubmit/);
 $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-workspace/)
