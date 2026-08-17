@@ -20,7 +20,10 @@ my $postgresql = Selecto::PostgreSQL->new(dbh => $dbh);
 my $detail_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'detail',
-    field => ['product_name', 'category.category_name', 'unit_price'],
+    field => [
+        'action:add_product_note', 'product_name', 'category.category_name',
+        'unit_price', 'action:mark_for_review',
+    ],
     group => ['category.category_name'],
     measure => 'count',
     filter_field => ['unit_price', 'category.category_name'],
@@ -43,10 +46,28 @@ is_deeply $detail_statement->columns,
     [qw(product_name category__category_name unit_price __selecto_action_target)],
     'detail aliases are stable and include the hidden selected-row action target';
 is_deeply [map { $_->{key} } @{$detail->{columns}}],
-    [qw(product_name category__category_name unit_price)],
-    'the action target does not become a visible result column';
+    [qw(
+        __selecto_action_column_add_product_note product_name
+        category__category_name unit_price __selecto_action_column_mark_for_review
+    )],
+    'selected action pseudo-columns retain their requested display order';
 is $detail->{action_key}, '__selecto_action_target',
     'the detail result identifies its hidden action target';
+is_deeply $detail->{action_ids}, [qw(add_product_note mark_for_review)],
+    'the detail result identifies each independent selected action column';
+
+my $action_only_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'action:add_product_note', measure => 'count',
+    limit => 25, page => 1,
+});
+my $action_only = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $action_only_state,
+);
+my $action_only_statement = $postgresql->compile($domain, $action_only->{query});
+is_deeply $action_only_statement->columns, ['__selecto_action_target'],
+    'an action-only detail view queries only its hidden governed target key';
+like $action_only_statement->sql, qr/ORDER BY "s0"\."id" ASC/,
+    'an action-only detail view remains deterministically ordered';
 
 my $aggregate_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

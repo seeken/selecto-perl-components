@@ -51,21 +51,44 @@ $t->get_ok('/explore/products')
     ->content_like(qr{hx-ws:send})
     ->content_like(qr{/selecto-components/htmx\.min\.js})
     ->content_like(qr{/selecto-components/hx-ws\.min\.js})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260817-5})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260817-5})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260817-6})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260817-6})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
-    ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages})
+    ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')
+    ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:add_product_note"][data-type="action"]')
+    ->text_is('[data-sc-picker-kind="field"] button[data-field="action:add_product_note"] strong' => 'Action: Add Product Note')
+    ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:mark_for_review"][data-type="action"]')
+    ->element_exists_not('[data-sc-bulk-actions]')
+    ->element_exists_not('input[data-sc-row-select]')
+    ->element_exists_not('dialog[data-sc-action-dialog]');
+
+my $action_columns_url = '/explore/products?q=1&view=detail' .
+    '&field=action%3Aadd_product_note&field_alias=&field_format=' .
+    '&field=product_name&field_alias=&field_format=' .
+    '&field=action%3Amark_for_review&field_alias=&field_format=' .
+    '&group=category.category_name&measure=count&order=product_name&direction=asc&limit=25&page=1';
+$t->get_ok($action_columns_url)
+    ->status_is(200)
     ->element_exists('[data-sc-bulk-actions]')
-    ->text_is('[data-sc-selection-count]' => '0')
+    ->text_is('[data-sc-bulk-action][data-sc-action-id="add_product_note"] [data-sc-selection-count]' => '0')
+    ->text_is('[data-sc-bulk-action][data-sc-action-id="mark_for_review"] [data-sc-selection-count]' => '0')
     ->element_exists('[data-sc-action-open="selecto-action-products-add_product_note"][disabled]')
-    ->element_exists('input[data-sc-select-page]')
-    ->element_exists('input[data-sc-row-select][value="101"]')
-    ->element_exists('input[data-sc-row-select][value="102"]')
+    ->element_exists('[data-sc-action-open="selecto-action-products-mark_for_review"][disabled]')
+    ->element_exists('th[data-sc-action-column="add_product_note"] input[data-sc-select-page][data-sc-action-id="add_product_note"]')
+    ->element_exists('th[data-sc-action-column="mark_for_review"] input[data-sc-select-page][data-sc-action-id="mark_for_review"]')
+    ->element_exists('input[data-sc-row-select][data-sc-action-id="add_product_note"][value="101"]')
+    ->element_exists('input[data-sc-row-select][data-sc-action-id="add_product_note"][value="102"]')
+    ->element_exists('input[data-sc-row-select][data-sc-action-id="mark_for_review"][value="101"]')
+    ->element_exists('input[data-sc-row-select][data-sc-action-id="mark_for_review"][value="102"]')
     ->element_exists('dialog#selecto-action-products-add_product_note')
+    ->element_exists('dialog#selecto-action-products-mark_for_review')
     ->element_exists('form[action="/explore/products/actions/add_product_note"]')
+    ->element_exists('form[action="/explore/products/actions/mark_for_review"]')
     ->element_exists('select[name="action_input_note_type"] option[value="internal"]')
     ->element_exists('textarea[name="action_input_comment"][maxlength="255"]')
+    ->element_exists('textarea[name="action_input_reason"][maxlength="120"]')
+    ->content_like(qr{Action: Add Product Note.*Product Name.*Action: Mark for Review}s)
     ->content_unlike(qr{<th[^>]*>__selecto_action_target</th>});
 
 my $csrf_token = $t->tx->res->dom
@@ -100,6 +123,18 @@ is_deeply $TestSelectoComponents::ACTION_REQUESTS[-1]{selected_ids}, ['101', '10
 is $TestSelectoComponents::ACTION_REQUESTS[-1]{inputs}{comment}, 'Check packaging',
     'action request trims normalized text inputs';
 
+$t->post_ok('/explore/products/actions/mark_for_review' => {Accept => 'application/json'} => form => {
+    csrf_token => $csrf_token,
+    selected_id => [202],
+    action_input_reason => 'Verify dimensions',
+})->status_is(200)->json_is('/ok' => 1)
+    ->json_is('/applied_count' => 1)
+    ->json_is('/message' => 'Products marked for review.');
+is $TestSelectoComponents::ACTION_REQUESTS[-1]{action}{id}, 'mark_for_review',
+    'each selected action column dispatches to its own action handler';
+is_deeply $TestSelectoComponents::ACTION_REQUESTS[-1]{selected_ids}, ['202'],
+    'the second action receives its own selected rows';
+
 $t->post_ok('/explore/products/actions/add_product_note' => {Accept => 'application/json'} => form => {
     selected_id => 101,
     action_input_note_type => 'internal',
@@ -123,6 +158,7 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/scPickerKind/)
     ->content_like(qr/window\.addEventListener\("submit"/)
     ->content_like(qr/data-sc-row-select/)
+    ->content_like(qr/function actionControls/)
     ->content_like(qr/populateActionTargets/)
     ->content_like(qr/window\.fetch/)
     ->content_like(qr/HTMLFormElement\.prototype\.submit\.call\(form\)/)
@@ -133,13 +169,14 @@ $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-picker-choice\[hidden\]\s*\{\s*display:\s*none/)
     ->content_like(qr/\.sc-filter-values/)
     ->content_like(qr/\.sc-bulk-actions/)
+    ->content_like(qr/\.sc-bulk-action/)
     ->content_like(qr/\.sc-action-dialog/);
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
     ->status_is(200)
     ->content_like(qr/SELECT governed_test_query/)
     ->content_like(qr/12\.50/)
-    ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>5</strong> pages})
+    ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>5</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 5')
     ->element_exists('table tbody tr');
 is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->limit_value, 10, 'GET runs the normalized query';
@@ -237,14 +274,15 @@ $t->get_ok('/explore/products?q=1&view=graph&field=product_name&group=category.c
 
 $t->get_ok('/explore/products?q=1&view=detail&field=drop_table&order=drop_table&limit=25&page=1')
     ->status_is(422)
-    ->content_like(qr/A selected detail field is not available|Choose at least one detail field/)
+    ->content_like(qr/A selected detail column is not available|Choose at least one detail column/)
     ->content_unlike(qr/<script>alert/);
 
-$t->get_ok('/explore/products?q=1&view=detail&field=product_name&group=category.category_name&measure=count&order=product_name&direction=asc&limit=10&page=1&format=csv')
+$t->get_ok('/explore/products?q=1&view=detail&field=action%3Aadd_product_note&field=product_name&group=category.category_name&measure=count&order=product_name&direction=asc&limit=10&page=1&format=csv')
     ->status_is(200)
     ->content_type_like(qr{text/csv})
     ->header_like('Content-Disposition' => qr/products-page-1\.csv/)
     ->content_like(qr/"Product Name"\r?\n/)
+    ->content_unlike(qr/Action: Add Product Note/)
     ->content_like(qr/"'=2\+2"/);
 
 $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({

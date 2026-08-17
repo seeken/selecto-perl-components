@@ -3,7 +3,7 @@ package Selecto::Components::Renderer;
 use Mojo::Base -base, -signatures;
 use Mojo::Util qw(xml_escape);
 
-my $ASSET_REVISION = '20260817-5';
+my $ASSET_REVISION = '20260817-6';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -31,6 +31,9 @@ sub surface ($class, $model) {
         '<div class="sc-alert" role="alert">Explorer configuration is unavailable.</div></section>'
         unless $state && $model->{domain};
     my $field_catalog = $config->field_catalog($model->{domain});
+    my $detail_catalog = $config->detail_column_catalog(
+        $model->{domain}, $model->{available_actions} // [],
+    );
     my $errors = join '', map { '<li>' . _h($_) . '</li>' } @{$state->errors};
     $errors .= '<li>' . _h($model->{runtime_error}) . '</li>' if $model->{runtime_error};
     my $alert = length($errors)
@@ -52,7 +55,7 @@ sub surface ($class, $model) {
         '<header class="sc-hero"><div><h1>' . _h($config->title) . '</h1></div>' .
         $hero_actions . '</header>' .
         $alert . '<div class="sc-workspace">' .
-        $class->_form($model, $field_catalog) .
+        $class->_form($model, $field_catalog, $detail_catalog) .
         '<section class="sc-results" aria-live="polite">' . $class->_results($model) . '</section>' .
         '</div></section>';
 }
@@ -68,7 +71,7 @@ sub websocket_message ($class, $model, $request_id = undef) {
     return $message;
 }
 
-sub _form ($class, $model, $catalog) {
+sub _form ($class, $model, $catalog, $detail_catalog = undef) {
     my $config = $model->{config};
     my $state = $model->{state};
     my $method = $config->query_params_enabled($model->{domain}) ? 'get' : 'post';
@@ -79,7 +82,7 @@ sub _form ($class, $model, $catalog) {
     } @{$config->views};
     my $measure_catalog = $config->measure_catalog($model->{domain});
     my $filter_picker = $class->_filter_picker($state, $catalog, $config);
-    my $detail_controls = $class->_field_picker($state, $catalog, $config) .
+    my $detail_controls = $class->_field_picker($state, $detail_catalog // $catalog, $config) .
         $class->_order_picker($state, $catalog, $config->max_orders) .
         _measure_selection_hidden($state) .
         _selection_hidden('group', $state->groups, $state->group_configs);
@@ -213,7 +216,11 @@ sub _selection_picker ($class, $state, $catalog, %options) {
     my $set_items = join '', map {
         my $index = $_;
         my $path = $selected_values->[$index];
-        my $field = $by_path{$path};
+        my $field = $by_path{$path} // {
+            path => $path,
+            label => 'Unavailable action',
+            type => 'action',
+        };
         my $item_config = $configs->{$path} // {};
         my $up_disabled = $index == 0 ? ' disabled' : '';
         my $down_disabled = $index == $selected_count - 1 ? ' disabled' : '';
@@ -267,6 +274,8 @@ sub _selection_picker ($class, $state, $catalog, %options) {
 }
 
 sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats) {
+    return _hidden('field_alias', '') . _hidden('field_format', '')
+        if $kind eq 'field' && $field->{type} eq 'action';
     my $alias = $item_config->{alias} // '';
     my $label_text = $kind eq 'measure' ? 'Measure label' : 'Column label';
     my $controls = '<label>' . $label_text . '<input name="' . _h($kind . '_alias') .
@@ -468,7 +477,8 @@ sub _results ($class, $model) {
     my $page_label = $result->{total_pages} == 1 ? 'page' : 'pages';
     my $meta = '<div class="sc-result-meta"><div><h2>' . _h($heading) .
         '</h2></div><div><strong>' . _h($result->{total_count}) . '</strong> ' . $row_label .
-        ' · <strong>' . _h($result->{total_pages}) . '</strong> ' . $page_label . '</div></div>';
+        ' · <strong>' . _h($result->{total_pages}) . '</strong> ' . $page_label .
+        ' · <strong>' . _h($result->{elapsed_ms}) . ' ms</strong> query time</div></div>';
     my $actions = $model->{state}->view eq 'detail'
         ? $class->_bulk_actions($model) : '';
     my $body = $result->{graph} ? $class->_graph($result, $model) : $class->_table($result, $model);
@@ -486,20 +496,19 @@ sub _bulk_actions ($class, $model) {
     my $actions = $model->{bulk_actions} // [];
     return '' unless @$actions && $model->{result} && defined($model->{result}{action_key});
     my $config = $model->{config};
-    my $buttons = '';
-    my $dialogs = '';
+    my $panels = '';
     for my $action (@$actions) {
         my $id = $action->{id};
         my $dialog_id = 'selecto-action-' . $config->id . '-' . $id;
         my $enabled = ($action->{status} // 'enabled') eq 'enabled';
-        $buttons .= '<button type="button" class="sc-button sc-secondary" data-sc-action-open="' .
+        my $button = '<button type="button" class="sc-button sc-secondary" data-sc-action-open="' .
             _h($dialog_id) . '" data-sc-action-disabled="' . ($enabled ? '0' : '1') . '" disabled' .
             ($enabled ? '' : ' title="' . _h($action->{status_reason} // 'Action unavailable') . '"') .
             '>' . _h($action->{label}) . '</button>';
         my $inputs = join '', map { _action_input($_) } @{$action->{inputs}};
         my $description = length($action->{description} // '')
             ? '<p class="sc-action-description">' . _h($action->{description}) . '</p>' : '';
-        $dialogs .= '<dialog class="sc-action-dialog" id="' . _h($dialog_id) . '" data-sc-action-dialog>' .
+        my $dialog = '<dialog class="sc-action-dialog" id="' . _h($dialog_id) . '" data-sc-action-dialog>' .
             '<form method="post" action="' . _h($config->path . '/actions/' . $id) .
             '" data-sc-action-form><header><div><p class="sc-eyebrow">Selected-row action</p><h3>' .
             _h($action->{label}) . '</h3></div><button type="button" class="sc-action-close" ' .
@@ -513,10 +522,11 @@ sub _bulk_actions ($class, $model) {
             '<footer><button type="button" class="sc-button sc-secondary" data-sc-action-close>Cancel</button>' .
             '<button type="submit" class="sc-button sc-primary">Apply to selected rows</button></footer>' .
             '</form></dialog>';
+        $panels .= '<section class="sc-bulk-action" data-sc-bulk-action data-sc-action-id="' .
+            _h($id) . '"><div><strong data-sc-selection-count>0</strong> ' .
+            '<span data-sc-selection-label>rows selected</span></div>' . $button . $dialog . '</section>';
     }
-    return '<section class="sc-bulk-actions" data-sc-bulk-actions><div><strong data-sc-selection-count>0</strong> ' .
-        '<span data-sc-selection-label>rows selected</span></div><div class="sc-bulk-action-buttons">' .
-        $buttons . '</div>' . $dialogs . '</section>';
+    return '<div class="sc-bulk-actions" data-sc-bulk-actions>' . $panels . '</div>';
 }
 
 sub _action_input ($input) {
@@ -552,12 +562,20 @@ sub _action_input ($input) {
 }
 
 sub _table ($class, $result, $model) {
-    my $selectable = @{$model->{bulk_actions} // []} && defined($result->{action_key});
-    my $head = $selectable
-        ? '<th scope="col" class="sc-select-column"><input type="checkbox" data-sc-select-page ' .
-          'aria-label="Select every row on this page"></th>' : '';
-    $head .= join '', map { '<th scope="col">' . _h($_->{label}) . '</th>' } @{$result->{columns}};
-    my @group_indexes = grep { !$result->{columns}[$_]{measure} } 0 .. $#{$result->{columns}};
+    my %actions = map { $_->{id} => $_ } @{$model->{bulk_actions} // []};
+    my @columns = grep { !$_->{action_id} || $actions{$_->{action_id}} } @{$result->{columns}};
+    my $head = join '', map {
+        my $column = $_;
+        if ($column->{action_id}) {
+            '<th scope="col" class="sc-select-column" data-sc-action-column="' .
+                _h($column->{action_id}) . '"><label><input type="checkbox" data-sc-select-page ' .
+                'data-sc-action-id="' . _h($column->{action_id}) . '" aria-label="Select every row for ' .
+                _h($column->{label}) . '"><span>' . _h($column->{label}) . '</span></label></th>';
+        } else {
+            '<th scope="col">' . _h($column->{label}) . '</th>';
+        }
+    } @columns;
+    my @group_indexes = grep { !$columns[$_]{measure} && !$columns[$_]{action_id} } 0 .. $#columns;
     my %group_position = map { $group_indexes[$_] => $_ } 0 .. $#group_indexes;
     my $rows = '';
     for my $index (0 .. $#{$result->{records}}) {
@@ -570,14 +588,18 @@ sub _table ($class, $result, $model) {
                 ? ' class="sc-rollup-row sc-rollup-subtotal" data-rollup-level="' . _h($level) . '"'
                 : ' class="sc-rollup-row sc-rollup-detail" data-rollup-level="' . _h($level) . '"';
         my $cells = '';
-        if ($selectable) {
-            my $target = $record->{$result->{action_key}};
-            $cells .= '<td class="sc-select-column"><input type="checkbox" data-sc-row-select value="' .
-                _h(defined($target) ? $target : '') . '" aria-label="Select row ' . _h($index + 1) . '"' .
-                (defined($target) && "$target" ne '' ? '' : ' disabled') . '></td>';
-        }
-        for my $column_index (0 .. $#{$result->{columns}}) {
-            my $column = $result->{columns}[$column_index];
+        for my $column_index (0 .. $#columns) {
+            my $column = $columns[$column_index];
+            if ($column->{action_id}) {
+                my $target = $record->{$result->{action_key}};
+                $cells .= '<td class="sc-select-column" data-sc-action-column="' .
+                    _h($column->{action_id}) . '"><input type="checkbox" data-sc-row-select ' .
+                    'data-sc-action-id="' . _h($column->{action_id}) . '" value="' .
+                    _h(defined($target) ? $target : '') . '" aria-label="Select row ' .
+                    _h($index + 1) . ' for ' . _h($column->{label}) . '"' .
+                    (defined($target) && "$target" ne '' ? '' : ' disabled') . '></td>';
+                next;
+            }
             if ($column->{measure}) {
                 $cells .= '<td>' . _h(_display($record->{$column->{key}})) . '</td>';
                 next;
@@ -597,7 +619,7 @@ sub _table ($class, $result, $model) {
         }
         $rows .= '<tr' . $row_class . '>' . $cells . '</tr>';
     }
-    my $column_count = scalar(@{$result->{columns}}) + ($selectable ? 1 : 0);
+    my $column_count = scalar(@columns);
     $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count . '">No rows matched this query.</td></tr>';
     return '<div class="sc-table-wrap"><table><thead><tr>' . $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>';
 }

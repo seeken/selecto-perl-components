@@ -217,7 +217,14 @@
     controls.appendChild(createColumnControl("down", label, "↓"));
     controls.appendChild(createColumnControl("remove", label, "×"));
     item.appendChild(controls);
-    if (kind === "order") {
+    if (kind === "field" && type === "action") {
+      ["field_alias", "field_format"].forEach(function (name) {
+        var alignment = document.createElement("input");
+        alignment.type = "hidden";
+        alignment.name = name;
+        item.appendChild(alignment);
+      });
+    } else if (kind === "order") {
       var directionLabel = document.createElement("label");
       directionLabel.className = "sc-order-direction";
       directionLabel.appendChild(document.createTextNode("Direction"));
@@ -880,11 +887,28 @@
     return root && root.closest(".sc-results");
   }
 
+  function actionIdFor(root) {
+    return root && root.dataset.scActionId || "";
+  }
+
+  function actionControls(results, selector, actionId) {
+    if (!results || !actionId) return [];
+    return Array.from(results.querySelectorAll(selector)).filter(function (input) {
+      return input.dataset.scActionId === actionId;
+    });
+  }
+
+  function actionRoot(results, actionId) {
+    return Array.from(results.querySelectorAll("[data-sc-bulk-action]")).find(function (root) {
+      return actionIdFor(root) === actionId;
+    });
+  }
+
   function selectedRowIds(root) {
     var results = bulkActionResults(root);
     if (!results) return [];
     var seen = Object.create(null);
-    return Array.from(results.querySelectorAll("[data-sc-row-select]:checked")).reduce(function (ids, input) {
+    return actionControls(results, "[data-sc-row-select]:checked", actionIdFor(root)).reduce(function (ids, input) {
       if (input.value && !seen[input.value]) {
         seen[input.value] = true;
         ids.push(input.value);
@@ -908,8 +932,9 @@
     if (count) count.textContent = ids.length;
   }
 
-  function refreshBulkActions(root) {
+  function refreshBulkAction(root) {
     if (!root) return;
+    var actionId = actionIdFor(root);
     var ids = selectedRowIds(root);
     var count = root.querySelector("[data-sc-selection-count]");
     var label = root.querySelector("[data-sc-selection-label]");
@@ -919,8 +944,8 @@
       button.disabled = ids.length === 0 || button.dataset.scActionDisabled === "1";
     });
     var results = bulkActionResults(root);
-    var pageToggle = results && results.querySelector("[data-sc-select-page]");
-    var rowToggles = results ? Array.from(results.querySelectorAll("[data-sc-row-select]:not(:disabled)")) : [];
+    var pageToggle = actionControls(results, "[data-sc-select-page]", actionId)[0];
+    var rowToggles = actionControls(results, "[data-sc-row-select]:not(:disabled)", actionId);
     var checked = rowToggles.filter(function (input) { return input.checked; }).length;
     if (pageToggle) {
       pageToggle.checked = rowToggles.length > 0 && checked === rowToggles.length;
@@ -929,7 +954,7 @@
   }
 
   function restoreBulkActions() {
-    document.querySelectorAll("[data-sc-bulk-actions]").forEach(refreshBulkActions);
+    document.querySelectorAll("[data-sc-bulk-action]").forEach(refreshBulkAction);
   }
 
   document.addEventListener("DOMContentLoaded", restoreBulkActions);
@@ -941,21 +966,23 @@
   document.addEventListener("change", function (event) {
     if (event.target.matches("[data-sc-select-page]")) {
       var results = event.target.closest(".sc-results");
-      results.querySelectorAll("[data-sc-row-select]:not(:disabled)").forEach(function (input) {
+      var actionId = event.target.dataset.scActionId;
+      actionControls(results, "[data-sc-row-select]:not(:disabled)", actionId).forEach(function (input) {
         input.checked = event.target.checked;
       });
-      refreshBulkActions(results.querySelector("[data-sc-bulk-actions]"));
+      refreshBulkAction(actionRoot(results, actionId));
       return;
     }
     if (event.target.matches("[data-sc-row-select]")) {
-      refreshBulkActions(event.target.closest(".sc-results").querySelector("[data-sc-bulk-actions]"));
+      var rowResults = event.target.closest(".sc-results");
+      refreshBulkAction(actionRoot(rowResults, event.target.dataset.scActionId));
     }
   });
 
   document.addEventListener("click", function (event) {
     var open = event.target.closest("[data-sc-action-open]");
     if (open && !open.disabled) {
-      var root = open.closest("[data-sc-bulk-actions]");
+      var root = open.closest("[data-sc-bulk-action]");
       var dialog = document.getElementById(open.dataset.scActionOpen);
       var form = dialog && dialog.querySelector("[data-sc-action-form]");
       var ids = selectedRowIds(root);
@@ -991,7 +1018,7 @@
     var form = event.target.closest("[data-sc-action-form]");
     if (!form || typeof window.fetch !== "function") return;
     event.preventDefault();
-    var root = form.closest("[data-sc-bulk-actions]");
+    var root = form.closest("[data-sc-bulk-action]");
     var ids = selectedRowIds(root);
     populateActionTargets(form, ids);
     if (!ids.length || !form.reportValidity()) return;
@@ -1026,10 +1053,12 @@
         result.textContent = outcome.payload.message || (succeeded ? "Action completed." : "Action failed.");
       }
       if (succeeded) {
-        bulkActionResults(root).querySelectorAll("[data-sc-row-select]:checked").forEach(function (input) {
+        actionControls(
+          bulkActionResults(root), "[data-sc-row-select]:checked", actionIdFor(root)
+        ).forEach(function (input) {
           input.checked = false;
         });
-        refreshBulkActions(root);
+        refreshBulkAction(root);
         if (submit) submit.textContent = "Applied";
       } else if (submit) {
         submit.disabled = false;

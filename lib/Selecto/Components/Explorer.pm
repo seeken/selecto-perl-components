@@ -52,7 +52,6 @@ sub model ($self, $controller, $input = undef) {
         my $started = time;
         my $statement = $engine->compile($built->{query});
         my $raw = $engine->adapter->execute_query($statement);
-        my $elapsed_ms = int((time - $started) * 1000 + 0.5);
         _validate_result($raw);
         my $count_query = Selecto::Query->new(
             selections => $built->{query}->selections,
@@ -63,6 +62,7 @@ sub model ($self, $controller, $input = undef) {
         my $count_source = $engine->compile($count_query);
         my $count_raw = $engine->adapter->execute_query(_count_statement($count_source));
         _validate_result($count_raw);
+        my $elapsed_ms = int((time - $started) * 1000 + 0.5);
         my $total_count = _total_count($count_raw);
         my $total_pages = int(($total_count + $state->limit - 1) / $state->limit);
         $total_pages = 1 if $total_pages < 1;
@@ -196,9 +196,10 @@ sub csv ($self, $model) {
     die "cannot export an invalid query\n"
         unless $model->{state} && $model->{state}->valid && $model->{result};
     my @lines;
-    push @lines, join(',', map { _csv_cell($_->{label}) } @{$model->{result}{columns}});
+    my @columns = grep { !$_->{action_id} } @{$model->{result}{columns}};
+    push @lines, join(',', map { _csv_cell($_->{label}) } @columns);
     for my $record (@{$model->{result}{records}}) {
-        push @lines, join(',', map { _csv_cell($record->{$_->{key}}) } @{$model->{result}{columns}});
+        push @lines, join(',', map { _csv_cell($record->{$_->{key}}) } @columns);
     }
     return join("\r\n", @lines) . "\r\n";
 }
