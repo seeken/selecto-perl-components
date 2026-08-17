@@ -9,7 +9,7 @@ has views         => sub { return [qw(detail aggregate graph)] };
 has default_view  => 'detail';
 has default_fields => sub { return [] };
 has default_group  => sub { return [] };
-has measures       => sub { return [{ id => 'count', label => 'Row count', aggregate => 'count' }] };
+has measures       => sub { return [] };
 has default_limit  => 25;
 has max_limit      => 100;
 has max_filters    => 20;
@@ -79,7 +79,6 @@ sub new ($class, @args) {
                 ? (field => "$measure->{field}") : ()),
         };
     }
-    die "explorer must configure at least one measure\n" unless @measures;
     $self->measures(\@measures);
     return $self;
 }
@@ -138,26 +137,63 @@ sub resolved_default_group ($self, $domain) {
     return [$first->{path}];
 }
 
-sub measure ($self, $id) {
-    for my $measure (@{$self->measures}) {
+sub measure ($self, $id, $domain = undef) {
+    my $measures = defined($domain) ? $self->measures_for_domain($domain) : $self->measures;
+    for my $measure (@$measures) {
         return { %$measure } if $measure->{id} eq $id;
     }
     return undef;
 }
 
-sub measure_catalog ($self, $domain) {
+sub measures_for_domain ($self, $domain) {
     my $fields = $self->field_map($domain);
+    my @measures = map {
+        my $measure = $_;
+        +{
+            %$measure,
+            type => defined($measure->{field}) ? $fields->{$measure->{field}}{type} : 'rows',
+            curated => 1,
+        }
+    } @{$self->measures};
+    my %seen = map { $_->{id} => 1 } @measures;
+    unless (grep { !defined($_->{field}) && $_->{aggregate} eq 'count' } @measures) {
+        push @measures, {
+            id => '__row_count__', label => 'Row count', aggregate => 'count',
+            type => 'rows', curated => 0, builtin => 1,
+        };
+        $seen{'__row_count__'} = 1;
+    }
+    for my $column (@{$self->field_catalog($domain)}) {
+        my $id = $seen{$column->{path}} ? 'field:' . $column->{path} : $column->{path};
+        push @measures, {
+            id => $id,
+            label => $column->{label},
+            aggregate => _default_measure_function($column->{type}),
+            field => $column->{path},
+            type => $column->{type},
+            curated => 0,
+        };
+        $seen{$id} = 1;
+    }
+    return \@measures;
+}
+
+sub default_measure ($self, $domain) {
+    my $measures = $self->measures_for_domain($domain);
+    return { %{$measures->[0]} };
+}
+
+sub measure_catalog ($self, $domain) {
     return [map {
         my $measure = $_;
-        my $field = defined($measure->{field}) ? $fields->{$measure->{field}} : undef;
         {
             path => $measure->{id},
             label => $measure->{label},
-            type => $field ? $field->{type} : 'rows',
+            type => $measure->{type},
             field => $measure->{field},
             default_function => $measure->{aggregate},
         }
-    } @{$self->measures}];
+    } @{$self->measures_for_domain($domain)}];
 }
 
 sub measure_functions ($self, $type, $row_count = 0) {
@@ -216,7 +252,8 @@ sub temporal_type ($self, $type) {
 
 sub numeric_type ($self, $type) {
     return defined($type) && !ref($type)
-        && "$type" =~ /\A(?:integer|decimal|number|numeric|float|double|real)\z/i ? 1 : 0;
+        && "$type" =~ /\A(?:integer|int|smallint|bigint|id|decimal|number|numeric|float|double|real)\z/i
+        ? 1 : 0;
 }
 
 sub boolean_type ($self, $type) {
@@ -296,6 +333,11 @@ sub _humanize ($value) {
     $text =~ s/_/ /g;
     $text =~ s/\b([a-z])/uc($1)/eg;
     return $text;
+}
+
+sub _default_measure_function ($type) {
+    return 'avg' if defined($type) && !ref($type) && "$type" =~ /\A(?:float|double|real)\z/i;
+    return 'count';
 }
 
 1;

@@ -131,7 +131,8 @@ sub from_input ($class, $config, $domain, $input) {
     my $measure_functions = _values($input, 'measure_function');
     my $measure_bucket_ranges = _values($input, 'measure_bucket_ranges');
     my $measure_ignore_nulls = _values($input, 'measure_ignore_nulls');
-    $measure_values = [$config->measures->[0]{id}]
+    my $default_measure = $config->default_measure($domain);
+    $measure_values = [$default_measure->{id}]
         unless grep { length(_scalar($_)) } @$measure_values;
     my @valid_measures;
     my %measure_configs;
@@ -143,7 +144,7 @@ sub from_input ($class, $config, $domain, $input) {
             push @errors, 'Too many measures were submitted.';
             last;
         }
-        my $measure = $config->measure($measure_id);
+        my $measure = $config->measure($measure_id, $domain);
         unless ($measure) {
             push @errors, 'Choose an available measure.';
             next;
@@ -183,7 +184,7 @@ sub from_input ($class, $config, $domain, $input) {
         };
     }
     unless (@valid_measures) {
-        my $fallback = $config->measures->[0];
+        my $fallback = $default_measure;
         @valid_measures = ($fallback->{id});
         $measure_configs{$fallback->{id}} = {
             alias => '', function => $fallback->{aggregate}, bucket_ranges => '', ignore_nulls => 0,

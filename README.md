@@ -30,8 +30,9 @@ This is alpha software. Its browser transport is pinned to htmx
 - Detail, Aggregate, and Graph result views;
 - `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `in`, `is_null`, and
   `not_null` filters supported by the current native Perl query contract;
-- ordered Available/Set measures with type-aware `count`, distinct-count, average,
-  sum, min/max, boolean-count, and bucket configuration;
+- a domain-derived Available/Set aggregate picker where every governed column
+  can be configured with type-aware `count`, distinct-count, average, sum,
+  min/max, boolean-count, and buckets, alongside optional curated presets;
 - relationship fields, sorting, bounded limits, and offset pagination;
 - htmx 4 `hx-ws` updates using server-rendered HTML fragments;
 - ordinary HTTP GET fallback, permalinks, and browser-refresh recovery;
@@ -100,7 +101,7 @@ In the default shareable mode, canonical parameters are:
   until they have the required value or values (or a null operator). Date
   shortcuts are stored as allowlisted identifiers and resolved to bound,
   half-open date ranges on submission;
-- aligned repeated measure/function/alias/bucket/NULL-handling values, repeated
+- aligned repeated measure-or-column/function/alias/bucket/NULL-handling values, repeated
   `order`/`direction` values, `limit`, and `page`; and
 - `q=1`, which distinguishes an authored empty selection from the initial
   default state.
@@ -133,10 +134,6 @@ plugin 'Selecto::Components' => {
                 'unit_price',
             ],
             default_group => ['category.category_name'],
-            measures => [
-                { id => 'product_count', label => 'Product count', aggregate => 'count' },
-                { id => 'total_price', label => 'Total price', aggregate => 'sum', field => 'unit_price' },
-            ],
             default_limit => 25,
             max_limit => 100,
             max_filters => 20,
@@ -157,6 +154,21 @@ This registers:
 The plugin adds its packaged `public/` directory to Mojolicious static paths.
 The htmx runtime and WebSocket extension are served locally; the browser does
 not depend on a CDN.
+
+Aggregate and Graph Available lists are derived from the domain field catalog,
+including relationship columns. A user selects a column and configures its
+allowlisted aggregate function, alias, NULL handling, or buckets. No `measures`
+configuration is required; a governed row-count choice is included automatically.
+
+An explorer may additionally publish curated presets. Presets appear beside the
+domain columns and remain fully configurable according to their underlying type:
+
+```perl
+measures => [
+    { id => 'product_count', label => 'Product count', aggregate => 'count' },
+    { id => 'total_price', label => 'Total price', aggregate => 'sum', field => 'unit_price' },
+],
+```
 
 `max_filters` defaults to 20 and may be configured from 1 through 20. Because
 the Available/Set model permits each governed field once, the domain's field
@@ -187,7 +199,7 @@ message and tests.
 - Every field and relationship path must resolve through the configured
   `Selecto::Domain`.
 - View names, operators, aggregate functions, sort directions, limits, and
-  measures come from closed allowlists.
+  measure sources come from closed allowlists and the governed domain catalog.
 - Values remain separate from SQL and compile as adapter parameters.
 - Browser input cannot select an adapter or submit SQL.
 - WebSocket handshakes with an `Origin` header default to same-host only. A host

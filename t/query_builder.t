@@ -92,6 +92,41 @@ is_deeply [map { $_->{label} } @{$multi_measure->{columns}}],
     ['Price band', 'Products', 'Price counts: 0-10', '11+'],
     'multiple measures and expanded bucket columns preserve configured display order';
 
+my $column_measure_config = Selecto::Components::Config->new(
+    %{TestSelectoComponents::config()}, id => 'column_products', measures => []
+);
+my $column_measure_state = Selecto::Components::State->from_input(
+    $column_measure_config, $domain, {
+        q => 1,
+        view => 'aggregate',
+        field => 'product_name',
+        group => 'category.category_name',
+        measure => ['unit_price', 'category.category_name'],
+        measure_alias => ['', 'Named categories'],
+        measure_function => ['sum', 'count_distinct'],
+        order => 'product_name',
+        limit => 25,
+        page => 1,
+    }
+);
+my $column_measure_result = Selecto::Components::QueryBuilder->build(
+    $column_measure_config, $domain, $column_measure_state
+);
+my $column_measure_statement = $postgresql->compile(
+    $domain, $column_measure_result->{query}
+);
+like $column_measure_statement->sql, qr/SUM\("s0"\."unit_price"\) AS "unit_price"/,
+    'a numeric domain column compiles with its selected aggregate function';
+like $column_measure_statement->sql,
+    qr/COUNT\(DISTINCT "j_category"\."category_name"\) AS "measure__category__category_name"/,
+    'a relationship column compiles as a governed aggregate with a safe result alias';
+is_deeply [map { $_->{label} } @{$column_measure_result->{columns}}],
+    [
+        $column_measure_config->field_map($domain)->{'category.category_name'}{label},
+        'Unit Price Sum', 'Named categories'
+    ],
+    'column-derived aggregates use function-aware labels and configured aliases';
+
 my $formatted_detail_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'detail',

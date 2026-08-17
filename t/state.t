@@ -67,6 +67,56 @@ is_deeply $multiple_measures->measure_configs->{total_price}, {
 is $multiple_measures->group_configs->{unit_price}{bucket_ranges}, '0-10, 11+',
     'group bucket ranges remain aligned with the selected group';
 
+my $column_measure_config = Selecto::Components::Config->new(
+    %{TestSelectoComponents::config()}, id => 'column_products', measures => []
+);
+my $column_measure_catalog = $column_measure_config->measure_catalog($domain);
+my %column_measure_by_id = map { $_->{path} => $_ } @$column_measure_catalog;
+ok $column_measure_by_id{'__row_count__'}, 'a row-count measure is available without configured presets';
+is_deeply $column_measure_by_id{unit_price}, {
+    path => 'unit_price', label => 'Unit Price', type => 'decimal',
+    field => 'unit_price', default_function => 'count',
+}, 'a numeric domain column is available as a configurable measure';
+is_deeply $column_measure_by_id{'category.category_name'}, {
+    path => 'category.category_name',
+    label => $column_measure_config->field_map($domain)->{'category.category_name'}{label},
+    type => 'string',
+    field => 'category.category_name', default_function => 'count',
+}, 'a relationship column is available as a configurable measure';
+
+my $colliding_preset_config = Selecto::Components::Config->new(
+    %{TestSelectoComponents::config()},
+    id => 'preset_collision',
+    measures => [{ id => 'unit_price', label => 'Curated price', aggregate => 'sum', field => 'unit_price' }],
+);
+my %colliding_measure_by_id = map { $_->{path} => $_ }
+    @{$colliding_preset_config->measure_catalog($domain)};
+ok $colliding_measure_by_id{unit_price} && $colliding_measure_by_id{'field:unit_price'},
+    'a curated preset cannot hide the configurable domain column with the same id';
+
+my $column_measures = Selecto::Components::State->from_input($column_measure_config, $domain, {
+    q => 1,
+    view => 'aggregate',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => ['unit_price', 'category.category_name'],
+    measure_alias => ['', 'Named categories'],
+    measure_function => ['sum', 'count_distinct'],
+    order => 'product_name',
+});
+ok $column_measures->valid, 'domain columns can construct independently configured aggregates';
+is_deeply $column_measures->measures, ['unit_price', 'category.category_name'],
+    'column-derived measure order is retained';
+is_deeply $column_measures->measure_configs->{'category.category_name'}, {
+    alias => 'Named categories', function => 'count_distinct', bucket_ranges => '', ignore_nulls => 0,
+}, 'relationship-column aggregate configuration is retained';
+
+my $unconfigured_measure_state = Selecto::Components::State->from_input(
+    $column_measure_config, $domain, {}
+);
+is $unconfigured_measure_state->measure, '__row_count__',
+    'row count is the default when no curated presets are configured';
+
 my $bad_bucket = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'aggregate',

@@ -165,8 +165,8 @@ sub _measure_picker ($class, $state, $catalog, $config) {
         selected => $state->measures,
         configs => $state->measure_configs,
         maximum => $config->max_measures,
-        search_label => 'Filter available measures',
-        hint => 'Add multiple measures, reorder them, and configure functions, aliases, and buckets.',
+        search_label => 'Filter available aggregate columns',
+        hint => 'Choose domain columns or curated presets, then configure functions, aliases, and buckets.',
         set_label => 'Set measures',
         config => $config,
     );

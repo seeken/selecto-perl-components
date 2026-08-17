@@ -54,17 +54,18 @@ sub _aggregate ($class, $config, $domain, $state) {
     my @selections = map { $groups[$_]->as($group_columns[$_]{key}) } 0 .. $#group_columns;
     my @measure_columns;
     for my $measure_id (@{$state->measures}) {
-        my $measure = $config->measure($measure_id);
+        my $measure = $config->measure($measure_id, $domain);
         my $measure_config = $state->measure_configs->{$measure_id} // {};
         my $function = $measure_config->{function} // $measure->{aggregate};
         my $alias = $measure_config->{alias} // '';
+        my $measure_key = _measure_key($measure_id);
         if ($function eq 'buckets' || $function eq 'age_buckets') {
             my $ranges = Selecto::Components::BucketParser->parse($measure_config->{bucket_ranges});
             my $index = 0;
             for my $range (@$ranges) {
                 next if !defined($range->{minimum}) && !defined($range->{maximum});
                 next if defined($range->{minimum}) && $range->{minimum} !~ /\A\d+\z/;
-                my $key = $measure_id . '__bucket_' . ++$index;
+                my $key = $measure_key . '__bucket_' . ++$index;
                 my $label = _bucket_measure_label($range->{label}, $function, $alias, $index);
                 my $expression = Selecto::Expression->count_bucket(
                     $measure->{field},
@@ -83,14 +84,14 @@ sub _aggregate ($class, $config, $domain, $state) {
         my $expression = _measure_expression($measure, $measure_config);
         my $label = length($alias) ? $alias : _measure_label($measure, $function, $field_map);
         push @measure_columns, {
-            key => $measure_id,
+            key => $measure_key,
             field => $measure->{field},
             label => $label,
             type => $function =~ /\A(?:count|count_distinct|true_count|false_count)\z/
                 ? 'integer' : $field_map->{$measure->{field}}{type},
             measure => 1,
         };
-        push @selections, $expression->as($measure_id);
+        push @selections, $expression->as($measure_key);
     }
     my @columns = (@group_columns, @measure_columns);
     my $query = Selecto::Query->new
@@ -116,7 +117,8 @@ sub _measure_expression ($measure, $config) {
 }
 
 sub _measure_label ($measure, $function, $field_map) {
-    return $measure->{label} if $function eq $measure->{aggregate};
+    return $measure->{label} if $measure->{curated} && $function eq $measure->{aggregate};
+    return $measure->{label} unless defined($measure->{field});
     my $field_label = defined($measure->{field})
         ? $field_map->{$measure->{field}}{label} : 'Rows';
     my %labels = (
@@ -124,6 +126,11 @@ sub _measure_label ($measure, $function, $field_map) {
         min => 'Minimum', max => 'Maximum', true_count => 'True count', false_count => 'False count',
     );
     return $field_label . ' ' . ($labels{$function} // $function);
+}
+
+sub _measure_key ($measure_id) {
+    return $measure_id if $measure_id =~ /\A[A-Za-z][A-Za-z0-9_]*\z/;
+    return 'measure__' . _field_alias($measure_id);
 }
 
 sub _bucket_measure_label ($label, $function, $alias, $index) {
