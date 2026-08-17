@@ -44,6 +44,86 @@ is_deeply $configured->filters, [
     { field => 'category.category_name', op => 'in', value => 'Tools, Produce', value_end => '' },
 ], 'filters retain governed field, operator, and bound value intent';
 
+my $page_baseline = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+    limit => 25,
+    page => 3,
+});
+my $page_only = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    query_signature => $page_baseline->query_signature,
+    view => 'detail',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+    limit => 25,
+    page => 7,
+});
+is $page_only->page, 7, 'changing only Page retains the explicitly requested page';
+my $new_query = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    query_signature => $page_baseline->query_signature,
+    view => 'detail',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    filter_field => 'unit_price',
+    filter_op => 'gte',
+    filter_value => '10',
+    order => 'product_name',
+    limit => 25,
+    page => 7,
+});
+is $new_query->page, 1, 'changing query intent resets an existing query to page one';
+
+my $drilldown = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => ['created_on', 'product_name'],
+    group => 'created_on',
+    group_format => 'month',
+    measure => 'count',
+    filter_field => 'created_on',
+    filter_op => 'eq',
+    filter_value => '2026-08',
+    filter_group => 1,
+    order => 'created_on',
+    limit => 25,
+    page => 1,
+});
+ok $drilldown->valid, 'an aggregate group value is valid detail drilldown state';
+is_deeply $drilldown->filters->[0], {
+    field => 'created_on', op => 'eq', value => '2026-08', value_end => '', grouped => 1,
+}, 'drilldown state marks the filter as a governed grouping expression';
+my $drilldown_pairs = $drilldown->query_pairs;
+my @filter_groups;
+for (my $index = 0; $index < @$drilldown_pairs; $index += 2) {
+    push @filter_groups, $drilldown_pairs->[$index + 1]
+        if $drilldown_pairs->[$index] eq 'filter_group';
+}
+is_deeply \@filter_groups, [1], 'canonical state preserves the aligned drilldown marker';
+
+my $bad_drilldown = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => 'category.category_name',
+    filter_field => 'unit_price',
+    filter_op => 'eq',
+    filter_value => '10',
+    filter_group => 1,
+    order => 'product_name',
+});
+ok !$bad_drilldown->valid, 'a drilldown marker cannot target a field outside the configured groups';
+like join(' ', @{$bad_drilldown->errors}), qr/aggregate drilldown filter is not available/,
+    'invalid drilldown state fails with an actionable error';
+
 my $multiple_measures = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'aggregate',

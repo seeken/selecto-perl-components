@@ -15,7 +15,11 @@ has max_limit      => 100;
 has max_filters    => 20;
 has max_orders     => 10;
 has max_measures   => 10;
+has max_action_rows => 1000;
 has show_sql       => 0;
+has action_handlers => sub { return {} };
+has choice_sources  => sub { return {} };
+has 'action_authorizer';
 
 my @DATE_FORMATS = (
     { id => 'day', label => 'Day' },
@@ -49,6 +53,25 @@ sub new ($class, @args) {
         unless $self->max_orders =~ /\A\d+\z/ && $self->max_orders >= 1 && $self->max_orders <= 20;
     die "max_measures must be between 1 and 20\n"
         unless $self->max_measures =~ /\A\d+\z/ && $self->max_measures >= 1 && $self->max_measures <= 20;
+    die "max_action_rows must be between 1 and 1000\n"
+        unless $self->max_action_rows =~ /\A\d+\z/
+            && $self->max_action_rows >= 1 && $self->max_action_rows <= 1000;
+    die "action_handlers must be an object\n" unless ref($self->action_handlers) eq 'HASH';
+    die "choice_sources must be an object\n" unless ref($self->choice_sources) eq 'HASH';
+    die "action_authorizer must be a coderef\n"
+        if defined($self->action_authorizer) && ref($self->action_authorizer) ne 'CODE';
+    for my $id (keys %{$self->action_handlers}) {
+        die "action handler id must be a lowercase identifier\n"
+            unless $id =~ /\A[a-z][a-z0-9_-]*\z/;
+        die "action handler $id must be a coderef\n"
+            unless ref($self->action_handlers->{$id}) eq 'CODE';
+    }
+    for my $id (keys %{$self->choice_sources}) {
+        die "choice source id must be a lowercase identifier\n"
+            unless $id =~ /\A[a-z][a-z0-9_-]*\z/;
+        die "choice source $id must be a coderef\n"
+            unless ref($self->choice_sources->{$id}) eq 'CODE';
+    }
 
     my %known_view = map { $_ => 1 } qw(detail aggregate graph);
     my %seen_view;
@@ -92,6 +115,37 @@ sub engine ($self, $controller) {
 
 sub allows_view ($self, $view) {
     return scalar grep { $_ eq $view } @{$self->views};
+}
+
+sub action_handler ($self, $id) {
+    return $self->action_handlers->{$id};
+}
+
+sub choice_source ($self, $id) {
+    return $self->choice_sources->{$id};
+}
+
+sub has_bulk_actions ($self, $domain) {
+    my $actions = $domain->actions;
+    return 0 unless ref($actions) eq 'HASH';
+    for my $id (keys %$actions) {
+        next unless $self->action_handler($id) && ref($actions->{$id}) eq 'HASH';
+        my $scope = lc($actions->{$id}{scope} // '');
+        return 1 if $scope eq 'bulk';
+        my $bulk = $actions->{$id}{bulk};
+        return 1 if defined($bulk) && !ref($bulk) && "$bulk" =~ /\A(?:1|true)\z/i;
+        return 1 if ref($bulk) eq 'HASH' && $bulk->{enabled};
+    }
+    return 0;
+}
+
+sub primary_key ($self, $domain) {
+    my $contract = $domain->contract;
+    my $primary_key = ref($contract) eq 'HASH' && ref($contract->{source}) eq 'HASH'
+        ? $contract->{source}{primary_key} : undef;
+    $primary_key = 'id' unless defined($primary_key) && !ref($primary_key)
+        && "$primary_key" =~ /\A[A-Za-z][A-Za-z0-9_]*\z/;
+    return "$primary_key";
 }
 
 sub field_catalog ($self, $domain) {

@@ -12,6 +12,8 @@ WriteMakefile(
     MIN_PERL_VERSION => '5.034',
     PM => {
         'lib/Selecto/Components.pm' => '$(INST_LIB)/Selecto/Components.pm',
+        'lib/Selecto/Components/Actions.pm' => '$(INST_LIB)/Selecto/Components/Actions.pm',
+        'lib/Selecto/Components/BucketParser.pm' => '$(INST_LIB)/Selecto/Components/BucketParser.pm',
         'lib/Selecto/Components/Config.pm' => '$(INST_LIB)/Selecto/Components/Config.pm',
         'lib/Selecto/Components/DateShortcut.pm' => '$(INST_LIB)/Selecto/Components/DateShortcut.pm',
         'lib/Selecto/Components/Explorer.pm' => '$(INST_LIB)/Selecto/Components/Explorer.pm',

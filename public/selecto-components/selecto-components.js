@@ -623,6 +623,7 @@
     fieldInput.name = "filter_field";
     fieldInput.value = field;
     item.appendChild(fieldInput);
+    item.appendChild(hiddenFilterValue("filter_group", "0"));
     var heading = document.createElement("div");
     heading.className = "sc-filter-set-heading";
     appendLabel(heading, label, type);
@@ -873,5 +874,177 @@
   document.addEventListener("dragend", function (event) {
     var item = event.target.closest("[data-sc-picker-set-item]");
     if (item) item.classList.remove("is-dragging");
+  });
+
+  function bulkActionResults(root) {
+    return root && root.closest(".sc-results");
+  }
+
+  function selectedRowIds(root) {
+    var results = bulkActionResults(root);
+    if (!results) return [];
+    var seen = Object.create(null);
+    return Array.from(results.querySelectorAll("[data-sc-row-select]:checked")).reduce(function (ids, input) {
+      if (input.value && !seen[input.value]) {
+        seen[input.value] = true;
+        ids.push(input.value);
+      }
+      return ids;
+    }, []);
+  }
+
+  function populateActionTargets(form, ids) {
+    var target = form.querySelector("[data-sc-action-targets]");
+    if (!target) return;
+    target.replaceChildren();
+    ids.forEach(function (id) {
+      var input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "selected_id";
+      input.value = id;
+      target.appendChild(input);
+    });
+    var count = form.querySelector("[data-sc-action-selection-count]");
+    if (count) count.textContent = ids.length;
+  }
+
+  function refreshBulkActions(root) {
+    if (!root) return;
+    var ids = selectedRowIds(root);
+    var count = root.querySelector("[data-sc-selection-count]");
+    var label = root.querySelector("[data-sc-selection-label]");
+    if (count) count.textContent = ids.length;
+    if (label) label.textContent = ids.length === 1 ? "row selected" : "rows selected";
+    root.querySelectorAll("[data-sc-action-open]").forEach(function (button) {
+      button.disabled = ids.length === 0 || button.dataset.scActionDisabled === "1";
+    });
+    var results = bulkActionResults(root);
+    var pageToggle = results && results.querySelector("[data-sc-select-page]");
+    var rowToggles = results ? Array.from(results.querySelectorAll("[data-sc-row-select]:not(:disabled)")) : [];
+    var checked = rowToggles.filter(function (input) { return input.checked; }).length;
+    if (pageToggle) {
+      pageToggle.checked = rowToggles.length > 0 && checked === rowToggles.length;
+      pageToggle.indeterminate = checked > 0 && checked < rowToggles.length;
+    }
+  }
+
+  function restoreBulkActions() {
+    document.querySelectorAll("[data-sc-bulk-actions]").forEach(refreshBulkActions);
+  }
+
+  document.addEventListener("DOMContentLoaded", restoreBulkActions);
+  document.addEventListener("htmx:after:swap", restoreBulkActions);
+  document.addEventListener("htmx:after:ws:message", function () {
+    window.requestAnimationFrame(restoreBulkActions);
+  });
+
+  document.addEventListener("change", function (event) {
+    if (event.target.matches("[data-sc-select-page]")) {
+      var results = event.target.closest(".sc-results");
+      results.querySelectorAll("[data-sc-row-select]:not(:disabled)").forEach(function (input) {
+        input.checked = event.target.checked;
+      });
+      refreshBulkActions(results.querySelector("[data-sc-bulk-actions]"));
+      return;
+    }
+    if (event.target.matches("[data-sc-row-select]")) {
+      refreshBulkActions(event.target.closest(".sc-results").querySelector("[data-sc-bulk-actions]"));
+    }
+  });
+
+  document.addEventListener("click", function (event) {
+    var open = event.target.closest("[data-sc-action-open]");
+    if (open && !open.disabled) {
+      var root = open.closest("[data-sc-bulk-actions]");
+      var dialog = document.getElementById(open.dataset.scActionOpen);
+      var form = dialog && dialog.querySelector("[data-sc-action-form]");
+      var ids = selectedRowIds(root);
+      if (!form || ids.length === 0) return;
+      form.reset();
+      populateActionTargets(form, ids);
+      var result = form.querySelector("[data-sc-action-result]");
+      if (result) {
+        result.hidden = true;
+        result.textContent = "";
+        result.classList.remove("is-success", "is-error");
+      }
+      var submit = form.querySelector('button[type="submit"]');
+      if (submit) {
+        submit.disabled = false;
+        submit.textContent = "Apply to selected rows";
+      }
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "");
+      return;
+    }
+
+    var close = event.target.closest("[data-sc-action-close]");
+    if (close) {
+      var closeDialog = close.closest("[data-sc-action-dialog]");
+      if (!closeDialog) return;
+      if (typeof closeDialog.close === "function") closeDialog.close();
+      else closeDialog.removeAttribute("open");
+    }
+  });
+
+  document.addEventListener("submit", function (event) {
+    var form = event.target.closest("[data-sc-action-form]");
+    if (!form || typeof window.fetch !== "function") return;
+    event.preventDefault();
+    var root = form.closest("[data-sc-bulk-actions]");
+    var ids = selectedRowIds(root);
+    populateActionTargets(form, ids);
+    if (!ids.length || !form.reportValidity()) return;
+
+    var submit = form.querySelector('button[type="submit"]');
+    var result = form.querySelector("[data-sc-action-result]");
+    if (submit) {
+      submit.disabled = true;
+      submit.textContent = "Applying…";
+    }
+    if (result) {
+      result.hidden = true;
+      result.classList.remove("is-success", "is-error");
+    }
+
+    window.fetch(form.action, {
+      method: "POST",
+      body: new FormData(form),
+      credentials: "same-origin",
+      headers: {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
+    }).then(function (response) {
+      return response.json().catch(function () {
+        return {ok: false, message: "The server returned an unreadable action response."};
+      }).then(function (payload) {
+        return {response: response, payload: payload};
+      });
+    }).then(function (outcome) {
+      var succeeded = outcome.response.ok && outcome.payload.ok;
+      if (result) {
+        result.hidden = false;
+        result.classList.add(succeeded ? "is-success" : "is-error");
+        result.textContent = outcome.payload.message || (succeeded ? "Action completed." : "Action failed.");
+      }
+      if (succeeded) {
+        bulkActionResults(root).querySelectorAll("[data-sc-row-select]:checked").forEach(function (input) {
+          input.checked = false;
+        });
+        refreshBulkActions(root);
+        if (submit) submit.textContent = "Applied";
+      } else if (submit) {
+        submit.disabled = false;
+        submit.textContent = "Apply to selected rows";
+      }
+    }).catch(function () {
+      if (result) {
+        result.hidden = false;
+        result.classList.add("is-error");
+        result.textContent = "The action request could not reach the server.";
+      }
+      if (submit) {
+        submit.disabled = false;
+        submit.textContent = "Apply to selected rows";
+      }
+    });
   });
 })();
