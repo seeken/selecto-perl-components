@@ -14,6 +14,29 @@ use Selecto::Components::Renderer ();
 
 our $VERSION = '0.1.0';
 
+my %EXPORT_FORMATS = (
+    csv => {
+        extension => 'csv',
+        content_type => 'text/csv; charset=UTF-8',
+        utf8 => 1,
+    },
+    tsv => {
+        extension => 'tsv',
+        content_type => 'text/tab-separated-values; charset=UTF-8',
+        utf8 => 1,
+    },
+    json => {
+        extension => 'json',
+        content_type => 'application/json; charset=UTF-8',
+        utf8 => 1,
+    },
+    xlsx => {
+        extension => 'xlsx',
+        content_type => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        utf8 => 0,
+    },
+);
+
 =head1 NAME
 
 Selecto::Components - htmx WebSocket exploration UI for Selecto Perl
@@ -75,9 +98,10 @@ sub _routes ($app, $explorer, $origin_check) {
             && length($controller->req->url->query->to_string)) {
             return $controller->redirect_to($config->path);
         }
-        if ($config->query_params_enabled($model->{domain})
-            && ($controller->param('format') // '') eq 'csv') {
-            return _render_csv($controller, $explorer, $model);
+        my $format = lc($controller->param('format') // '');
+        $format = 'xlsx' if $format eq 'excel';
+        if ($config->query_params_enabled($model->{domain}) && $EXPORT_FORMATS{$format}) {
+            return _render_export($controller, $explorer, $model, $format);
         }
         return _render_page($controller, $model);
     });
@@ -267,7 +291,7 @@ sub _render_page ($controller, $model) {
     );
 }
 
-sub _render_csv ($controller, $explorer, $model) {
+sub _render_export ($controller, $explorer, $model, $format) {
     if ($model->{runtime_error} || !$model->{state} || !$model->{state}->valid || !$model->{result}) {
         return $controller->render(
             data => encode('UTF-8', Selecto::Components::Renderer->page($model)),
@@ -275,11 +299,15 @@ sub _render_csv ($controller, $explorer, $model) {
             status => 422,
         );
     }
-    my $filename = $model->{config}->id . '-page-' . $model->{state}->page . '.csv';
+    my $export = $EXPORT_FORMATS{$format};
+    my $filename = $model->{config}->id . '-page-' . $model->{state}->page .
+        '.' . $export->{extension};
+    $controller->res->headers->cache_control('no-store');
     $controller->res->headers->content_disposition(qq{attachment; filename="$filename"});
-    $controller->res->headers->content_type('text/csv; charset=UTF-8');
+    $controller->res->headers->content_type($export->{content_type});
+    my $data = $explorer->export($model, $format);
     return $controller->render(
-        data => encode('UTF-8', $explorer->csv($model)),
+        data => $export->{utf8} ? encode('UTF-8', $data) : $data,
         status => 200,
     );
 }

@@ -54,6 +54,7 @@ is $action_only->order, 'id', 'action-only detail results use the domain primary
 my $configured = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'graph',
+    chart_type => 'area',
     field => ['product_name', 'unit_price'],
     group => ['category.category_name'],
     measure => 'total_price',
@@ -66,12 +67,41 @@ my $configured = Selecto::Components::State->from_input($config, $domain, {
     page => 3,
 });
 ok $configured->valid, 'configured graph state is valid';
+is $configured->chart_type, 'area', 'configured chart type is retained';
 is $configured->measure, 'total_price', 'configured measure is retained';
 is $configured->page, 3, 'page is retained';
 is_deeply $configured->filters, [
     { field => 'unit_price', op => 'gte', value => '12.50', value_end => '' },
     { field => 'category.category_name', op => 'in', value => 'Tools, Produce', value_end => '' },
 ], 'filters retain governed field, operator, and bound value intent';
+
+for my $chart_type (qw(bar horizontal_bar stacked_bar line area pie doughnut scatter)) {
+    my $chart = Selecto::Components::State->from_input($config, $domain, {
+        q => 1,
+        view => 'graph',
+        chart_type => $chart_type,
+        field => 'product_name',
+        group => 'category.category_name',
+        measure => 'count',
+        order => 'product_name',
+    });
+    ok $chart->valid, "$chart_type is an available dashboard chart type";
+    is $chart->chart_type, $chart_type, "$chart_type survives state normalization";
+}
+
+my $invalid_chart = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'graph',
+    chart_type => 'javascript:alert(1)',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+});
+ok !$invalid_chart->valid, 'an unknown chart type is rejected';
+is $invalid_chart->chart_type, 'bar', 'an invalid chart type falls back safely';
+like join(' ', @{$invalid_chart->errors}), qr/available chart type/,
+    'invalid chart type reports a governed validation error';
 
 my $page_baseline = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
@@ -110,6 +140,31 @@ my $new_query = Selecto::Components::State->from_input($config, $domain, {
     page => 7,
 });
 is $new_query->page, 1, 'changing query intent resets an existing query to page one';
+
+my $graph_baseline = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'graph',
+    chart_type => 'bar',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+    limit => 25,
+    page => 4,
+});
+my $changed_chart = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    query_signature => $graph_baseline->query_signature,
+    view => 'graph',
+    chart_type => 'line',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+    limit => 25,
+    page => 4,
+});
+is $changed_chart->page, 1, 'changing chart type resets the result to page one';
 
 my $drilldown = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

@@ -5,11 +5,11 @@ use Digest::SHA qw(sha256_hex);
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
 
-has [qw(view fields field_configs filters groups group_configs measures measure_configs measure orders order direction limit page errors)];
+has [qw(view chart_type fields field_configs filters groups group_configs measures measure_configs measure orders order direction limit page errors)];
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature view field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group
+        q query_signature view chart_type field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls
         order direction limit page
@@ -28,6 +28,15 @@ sub from_input ($class, $config, $domain, $input) {
     if (!$config->allows_view($view)) {
         push @errors, 'Choose an available view.';
         $view = $config->default_view;
+    }
+
+    my $chart_type = lc(_scalar(_first($input, 'chart_type')) || 'bar');
+    my %chart_types = map { $_ => 1 } qw(
+        bar horizontal_bar stacked_bar line area pie doughnut scatter
+    );
+    unless ($chart_types{$chart_type}) {
+        push @errors, 'Choose an available chart type.';
+        $chart_type = 'bar';
     }
 
     my $field_values = _values($input, 'field');
@@ -333,6 +342,7 @@ sub from_input ($class, $config, $domain, $input) {
 
     my $state = $class->new(
         view => $view,
+        chart_type => $chart_type,
         fields => \@valid_fields,
         field_configs => \%field_configs,
         filters => \@filters,
@@ -359,6 +369,7 @@ sub valid ($self) { return @{$self->errors} ? 0 : 1; }
 
 sub query_pairs ($self) {
     my @pairs = (q => 1, view => $self->view);
+    push @pairs, chart_type => $self->chart_type if $self->view eq 'graph';
     for my $field (@{$self->fields}) {
         my $column = $self->field_configs->{$field} // {};
         push @pairs,
@@ -417,6 +428,7 @@ sub query_signature ($self) {
 sub as_hash ($self) {
     return {
         view => $self->view,
+        chart_type => $self->chart_type,
         fields => [@{$self->fields}],
         field_configs => { map { $_ => { %{$self->field_configs->{$_}} } } keys %{$self->field_configs} },
         filters => [map { { %$_ } } @{$self->filters}],

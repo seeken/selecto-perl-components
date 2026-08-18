@@ -1,9 +1,10 @@
 package Selecto::Components::Renderer;
 
 use Mojo::Base -base, -signatures;
+use Mojo::JSON qw(encode_json);
 use Mojo::Util qw(xml_escape);
 
-my $ASSET_REVISION = '20260817-6';
+my $ASSET_REVISION = '20260817-8';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -16,6 +17,7 @@ sub page ($class, $model) {
         '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' . $ASSET_REVISION . '">' .
         '<script defer src="/selecto-components/htmx.min.js"></script>' .
         '<script defer src="/selecto-components/hx-ws.min.js"></script>' .
+        '<script defer src="/selecto-components/chart.umd.min.js?v=' . $ASSET_REVISION . '"></script>' .
         '<script defer src="/selecto-components/selecto-components.js?v=' . $ASSET_REVISION . '"></script>' .
         '</head><body><main class="sc-page"><div class="sc-shell">' .
         '<header class="sc-masthead">' .
@@ -44,10 +46,16 @@ sub surface ($class, $model) {
     $alert .= '<div class="sc-alert" role="alert">' . _h($model->{action_error}) . '</div>'
         if defined($model->{action_error}) && length($model->{action_error});
     my $query_params = $config->query_params_enabled($model->{domain});
+    my $export_links = join '', map {
+        my ($format, $label) = @$_;
+        '<a class="sc-button sc-secondary" data-sc-export-format="' . _h($format) .
+            '" href="' . _h(_format_url($model->{canonical_url}, $format)) . '">' .
+            _h($label) . '</a>'
+    } ([xlsx => 'Excel'], [csv => 'CSV'], [tsv => 'TSV'], [json => 'JSON']);
     my $hero_actions = $query_params
         ? '<div class="sc-hero-actions"><a class="sc-button sc-secondary" href="' .
-          _h($model->{canonical_url}) . '">Permalink</a><a class="sc-button sc-secondary" href="' .
-          _h($model->{canonical_url} . '&format=csv') . '">Export CSV</a></div>'
+          _h($model->{canonical_url}) . '">Permalink</a><div class="sc-export-options" role="group" ' .
+          'aria-label="Export current page"><span>Export</span>' . $export_links . '</div></div>'
         : '<div class="sc-hero-actions"><span class="sc-private-mode">Private URL mode</span></div>';
     return '<section id="selecto-surface-' . _h($config->id) . '" class="sc-surface" data-selecto-url="' .
         _h($model->{canonical_url}) . '" data-sc-query-params="' .
@@ -58,6 +66,11 @@ sub surface ($class, $model) {
         $class->_form($model, $field_catalog, $detail_catalog) .
         '<section class="sc-results" aria-live="polite">' . $class->_results($model) . '</section>' .
         '</div></section>';
+}
+
+sub _format_url ($canonical_url, $format) {
+    my $separator = $canonical_url =~ /\?/ ? '&' : '?';
+    return $canonical_url . $separator . 'format=' . $format;
 }
 
 sub websocket_message ($class, $model, $request_id = undef) {
@@ -86,7 +99,8 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $class->_order_picker($state, $catalog, $config->max_orders) .
         _measure_selection_hidden($state) .
         _selection_hidden('group', $state->groups, $state->group_configs);
-    my $summary_controls = $class->_group_picker($state, $catalog, $config) .
+    my $summary_controls = $class->_chart_type_picker($state) .
+        $class->_group_picker($state, $catalog, $config) .
         $class->_measure_picker($state, $measure_catalog, $config) .
         _selection_hidden('field', $state->fields, $state->field_configs) .
         join('', map {
@@ -124,6 +138,29 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         '<label>Page<input name="page" inputmode="numeric" value="' . _h($state->page) . '"></label></div>' .
         '<button class="sc-button sc-primary" type="submit">Run query</button>' .
         '<noscript><p class="sc-note">JavaScript is off; this form still runs as a normal GET.</p></noscript></form></aside>';
+}
+
+sub _chart_type_picker ($class, $state) {
+    my @types = (
+        [bar => 'Bar'],
+        [horizontal_bar => 'Horizontal bar'],
+        [stacked_bar => 'Stacked bar'],
+        [line => 'Line'],
+        [area => 'Area'],
+        [pie => 'Pie'],
+        [doughnut => 'Doughnut'],
+        [scatter => 'Scatter'],
+    );
+    my $options = join '', map {
+        '<option value="' . _h($_->[0]) . '"' .
+            ($state->chart_type eq $_->[0] ? ' selected' : '') . '>' .
+            _h($_->[1]) . '</option>'
+    } @types;
+    my $inactive = $state->view eq 'graph' ? '' : ' hidden disabled';
+    return '<fieldset class="sc-chart-type-picker" data-sc-graph-options' . $inactive . '>' .
+        '<legend>Chart</legend><label>Chart type<select name="chart_type" ' .
+        'data-sc-chart-type-picker>' . $options . '</select></label>' .
+        '<p>Choose a dashboard visualization for the selected groups and measures.</p></fieldset>';
 }
 
 sub _field_picker ($class, $state, $catalog, $config) {
@@ -627,10 +664,48 @@ sub _table ($class, $result, $model) {
 sub _graph ($class, $result, $model) {
     my @measures = grep { $_->{measure} } @{$result->{columns}};
     my @dimensions = grep { !$_->{measure} } @{$result->{columns}};
+    my @records = @{$result->{records}};
+    my @labels = map {
+        my $record = $_;
+        join(' · ', map { _display($record->{$_->{key}}) } @dimensions)
+    } @records;
+    my @palette = (
+        '#55d6be', '#5b8ff9', '#f6bd16', '#e8684a', '#9270ca', '#6dc8ec',
+        '#ff9d4d', '#269a99', '#ff99c3', '#5d7092', '#f08bb4', '#78d3f8',
+    );
+    my @datasets;
+    for my $measure_index (0 .. $#measures) {
+        my $measure = $measures[$measure_index];
+        my @values = map { _number($_->{$measure->{key}}) } @records;
+        my $color = $palette[$measure_index % @palette];
+        my $data = \@values;
+        if ($model->{state}->chart_type eq 'scatter') {
+            my @points = map {
+                my $index = $_;
+                my $raw_x = @dimensions
+                    ? $records[$index]{$dimensions[0]{key}} : $index + 1;
+                +{
+                    x => _numeric($raw_x) ? 0 + $raw_x : $index + 1,
+                    y => $values[$index],
+                    label => $labels[$index],
+                }
+            } 0 .. $#records;
+            $data = \@points;
+        }
+        push @datasets, {
+            label => $measure->{label},
+            data => $data,
+            backgroundColor => $model->{state}->chart_type =~ /\A(?:pie|doughnut)\z/
+                ? [map { $palette[$_ % @palette] } 0 .. $#records] : $color,
+            borderColor => $color,
+            borderWidth => 2,
+        };
+    }
+    my $chart_data = encode_json({labels => \@labels, datasets => \@datasets});
     my @values = map {
         my $record = $_;
         map { _number($record->{$_->{key}}) } @measures
-    } @{$result->{records}};
+    } @records;
     my $max = 0;
     for my $value (@values) {
         $max = $value if $value > $max;
@@ -648,10 +723,31 @@ sub _graph ($class, $result, $model) {
             _h($max) . '" value="' . _h($value) . '"></meter><strong>' .
             _h(_display($record->{$measure->{key}})) . '</strong></li>'
         } @measures
-    } @{$result->{records}};
+    } @records;
     $bars ||= '<li class="sc-empty-cell">No rows matched this query.</li>';
-    return '<div class="sc-chart" role="img" aria-label="Selected measures by selected groups"><ul>' .
-        $bars . '</ul></div>' . $class->_table($result, $model);
+    my $drilldown_forms = '';
+    my $method = $model->{config}->query_params_enabled($model->{domain}) ? 'get' : 'post';
+    for my $record_index (0 .. $#records) {
+        my $row_drilldowns = $result->{drilldowns}[$record_index] // [];
+        next unless @$row_drilldowns;
+        my $pairs = $row_drilldowns->[-1];
+        my $hidden = '';
+        for (my $pair_index = 0; $pair_index < @$pairs; $pair_index += 2) {
+            $hidden .= _hidden($pairs->[$pair_index], $pairs->[$pair_index + 1]);
+        }
+        $drilldown_forms .= '<form action="' . _h($model->{config}->path) . '" method="' .
+            $method . '" hx-ws:send data-sc-graph-drilldown="' . _h($record_index) .
+            '">' . $hidden . '</form>';
+    }
+    return '<div class="sc-chart sc-chart-' . _h($model->{state}->chart_type) .
+        '" role="group" aria-label="Selected measures by selected groups" data-sc-chart ' .
+        'data-chart-type="' . _h($model->{state}->chart_type) . '" data-chart-data="' .
+        _h($chart_data) . '"><div class="sc-chart-canvas"><canvas role="img" aria-label="' .
+        _h(_humanize($model->{state}->chart_type) . ' chart of selected measures by selected groups') .
+        '"></canvas></div><div class="sc-chart-fallback"><ul>' . $bars . '</ul></div>' .
+        '<p class="sc-chart-hint">Click a data point to drill down to detail rows.</p>' .
+        '<div class="sc-chart-drilldowns" hidden>' . $drilldown_forms . '</div></div>' .
+        $class->_table($result, $model);
 }
 
 sub _drilldown_control ($class, $model, $pairs, $label, $level) {
@@ -735,6 +831,11 @@ sub _measure_selection_hidden ($state) {
 sub _number ($value) {
     return 0 unless defined($value) && !ref($value) && "$value" =~ /\A-?(?:\d+(?:\.\d*)?|\.\d+)\z/;
     return 0 + $value;
+}
+
+sub _numeric ($value) {
+    return defined($value) && !ref($value) &&
+        "$value" =~ /\A-?(?:\d+(?:\.\d*)?|\.\d+)\z/ ? 1 : 0;
 }
 
 sub _display ($value) { return defined($value) ? "$value" : '—'; }
