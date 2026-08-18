@@ -24,6 +24,7 @@ $t->get_ok('/explore/products')
     ->element_exists('form[hx-trigger="submit"]')
     ->element_exists('[data-sc-result-view-panel="detail"]:not([disabled])')
     ->element_exists('[data-sc-result-view-panel="summary"][hidden][disabled]')
+    ->element_exists('[data-sc-graph-options][hidden][disabled] select[name="chart_type"]')
     ->element_exists('[data-sc-builder-pending][hidden]')
     ->element_exists('[data-sc-picker-root]')
     ->element_exists('[data-sc-picker-root][data-sc-picker-kind="field"]')
@@ -47,12 +48,18 @@ $t->get_ok('/explore/products')
     ->text_is('.sc-picker-heading span' => 'Available')
     ->content_like(qr{<legend>Filters <small>up to 20</small></legend>})
     ->text_is('h1' => 'Product Explorer')
+    ->element_exists('[data-sc-export-format="xlsx"][href*="format=xlsx"]')
+    ->element_exists('[data-sc-export-format="csv"][href*="format=csv"]')
+    ->element_exists('[data-sc-export-format="tsv"][href*="format=tsv"]')
+    ->element_exists('[data-sc-export-format="json"][href*="format=json"]')
+    ->content_like(qr{>Excel</a>.*>CSV</a>.*>TSV</a>.*>JSON</a>}s)
     ->content_like(qr{hx-ws:connect="/explore/products/ws"})
     ->content_like(qr{hx-ws:send})
     ->content_like(qr{/selecto-components/htmx\.min\.js})
     ->content_like(qr{/selecto-components/hx-ws\.min\.js})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260817-6})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260817-6})
+    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260817-8})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260817-8})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260817-8})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')
@@ -159,16 +166,22 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/window\.addEventListener\("submit"/)
     ->content_like(qr/data-sc-row-select/)
     ->content_like(qr/function actionControls/)
+    ->content_like(qr/function initializeChart/)
+    ->content_like(qr/data-sc-graph-drilldown/)
     ->content_like(qr/populateActionTargets/)
     ->content_like(qr/window\.fetch/)
     ->content_like(qr/HTMLFormElement\.prototype\.submit\.call\(form\)/)
-    ->content_unlike(qr/requestSubmit/);
+    ->content_like(qr/requestSubmit/);
+$t->get_ok('/selecto-components/chart.umd.min.js')->status_is(200)
+    ->content_type_like(qr{javascript})
+    ->content_like(qr/Chart\.js v4\.5\.1/);
 $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-workspace/)
     ->content_like(qr/\.sc-list-picker/)
     ->content_like(qr/\.sc-picker-choice\[hidden\]\s*\{\s*display:\s*none/)
     ->content_like(qr/\.sc-filter-values/)
     ->content_like(qr/\.sc-bulk-actions/)
+    ->content_like(qr/\.sc-chart-canvas/)
     ->content_like(qr/\.sc-bulk-action/)
     ->content_like(qr/\.sc-action-dialog/);
 
@@ -266,24 +279,77 @@ $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&field_alias=
     ->element_exists('[data-sc-picker-kind="group"] [data-field="unit_price"] input[name="group_bucket_ranges"][value="0-10, 11+"]')
     ->content_like(qr/Price counts: 0-10/);
 
-$t->get_ok('/explore/products?q=1&view=graph&field=product_name&group=category.category_name&measure=count&measure_function=count&measure=total_price&measure_function=sum&order=product_name&direction=asc&limit=25&page=1')
+$t->get_ok('/explore/products?q=1&view=graph&chart_type=area&field=product_name&group=category.category_name&measure=count&measure_function=count&measure=total_price&measure_function=sum&order=product_name&direction=asc&limit=25&page=1')
     ->status_is(200)
     ->element_exists('.sc-chart[aria-label="Selected measures by selected groups"]')
+    ->element_exists('[data-sc-graph-options]:not([disabled]) select[name="chart_type"] option[value="area"][selected]')
+    ->element_exists('[data-sc-chart][data-chart-type="area"][data-chart-data] canvas[role="img"]')
+    ->element_exists('form[data-sc-graph-drilldown="0"] input[name="view"][value="detail"]')
+    ->element_exists('form[data-sc-graph-drilldown="0"] input[name="page"][value="1"]')
     ->content_like(qr/Product count/)
     ->content_like(qr/Total price/);
+
+my $chart_data = decode_json(
+    $t->tx->res->dom->at('[data-sc-chart]')->attr('data-chart-data')
+);
+is_deeply $chart_data->{labels}, ['Value 1', 'Value 2'],
+    'chart labels come from the selected group values';
+is_deeply [map { $_->{label} } @{$chart_data->{datasets}}],
+    ['Product count', 'Total price'], 'every selected measure becomes a chart dataset';
+is_deeply $chart_data->{datasets}[0]{data}, [2, 4],
+    'chart dataset carries numeric measure values';
+
+for my $chart_type (qw(bar horizontal_bar stacked_bar line pie doughnut scatter)) {
+    $t->get_ok('/explore/products?q=1&view=graph&chart_type=' . $chart_type .
+        '&field=product_name&group=category.category_name&measure=count' .
+        '&order=product_name&direction=asc&limit=25&page=1')
+        ->status_is(200)
+        ->element_exists('[data-sc-chart][data-chart-type="' . $chart_type . '"]')
+        ->element_exists('select[name="chart_type"] option[value="' . $chart_type . '"][selected]');
+}
 
 $t->get_ok('/explore/products?q=1&view=detail&field=drop_table&order=drop_table&limit=25&page=1')
     ->status_is(422)
     ->content_like(qr/A selected detail column is not available|Choose at least one detail column/)
     ->content_unlike(qr/<script>alert/);
 
-$t->get_ok('/explore/products?q=1&view=detail&field=action%3Aadd_product_note&field=product_name&group=category.category_name&measure=count&order=product_name&direction=asc&limit=10&page=1&format=csv')
+my $export_url = '/explore/products?q=1&view=detail&field=action%3Aadd_product_note' .
+    '&field=product_name&field=unit_price&group=category.category_name&measure=count' .
+    '&order=product_name&direction=asc&limit=10&page=1';
+
+$t->get_ok($export_url . '&format=csv')
     ->status_is(200)
     ->content_type_like(qr{text/csv})
     ->header_like('Content-Disposition' => qr/products-page-1\.csv/)
-    ->content_like(qr/"Product Name"\r?\n/)
+    ->content_like(qr/"Product Name","Unit Price"\r?\n/)
     ->content_unlike(qr/Action: Add Product Note/)
     ->content_like(qr/"'=2\+2"/);
+
+$t->get_ok($export_url . '&format=tsv')
+    ->status_is(200)
+    ->content_type_like(qr{text/tab-separated-values})
+    ->header_like('Content-Disposition' => qr/products-page-1\.tsv/)
+    ->content_like(qr/"Product Name"\t"Unit Price"\r?\n/)
+    ->content_unlike(qr/Action: Add Product Note/)
+    ->content_like(qr/"'=2\+2"/);
+
+$t->get_ok($export_url . '&format=json')
+    ->status_is(200)
+    ->content_type_like(qr{application/json})
+    ->header_like('Content-Disposition' => qr/products-page-1\.json/)
+    ->json_is('/page' => 1)
+    ->json_is('/total_pages' => 5)
+    ->json_is('/total_count' => 42)
+    ->json_is('/row_count' => 2)
+    ->json_is('/columns' => ['Product Name', 'Unit Price'])
+    ->json_is('/rows/0/Product Name' => '=2+2')
+    ->json_is('/rows/0/Unit Price' => 10);
+
+$t->get_ok($export_url . '&format=xlsx')
+    ->status_is(200)
+    ->content_type_like(qr{application/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet})
+    ->header_like('Content-Disposition' => qr/products-page-1\.xlsx/)
+    ->content_like(qr{\APK});
 
 $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({
     headers => {'HX-Request-ID' => 'request-123'},
@@ -306,6 +372,8 @@ is $message->{swap}, 'outerHTML', 'WebSocket response replaces the surface witho
 like $message->{content}, qr/Graph results/, 'WebSocket returns server-rendered graph content';
 like $message->{selecto}{url}, qr{\A/explore/products\?}, 'WebSocket response supplies the canonical URL';
 like $message->{selecto}{url}, qr/(?:\?|&)view=graph(?:&|\z)/, 'canonical URL records the graph view';
+like $message->{selecto}{url}, qr/(?:\?|&)chart_type=bar(?:&|\z)/,
+    'canonical URL records the selected chart type';
 $t->finish_ok;
 
 $t->get_ok($message->{selecto}{url})
@@ -378,7 +446,7 @@ $t->get_ok('/explore/private-products')
     ->element_exists('[data-sc-query-params="disabled"]')
     ->element_exists('form#selecto-query-private_products[method="post"]')
     ->text_is('.sc-private-mode' => 'Private URL mode')
-    ->element_exists_not('a[href*="format=csv"]')
+    ->element_exists_not('a[href*="format="]')
     ->content_unlike(qr/>Permalink</);
 
 $t->post_ok('/explore/private-products' => form => {

@@ -1,8 +1,10 @@
 package Selecto::Components::Explorer;
 
 use Mojo::Base -base, -signatures;
+use Mojo::JSON qw(encode_json);
 use Mojo::URL ();
-use Scalar::Util qw(blessed);
+use File::Temp qw(tempfile);
+use Scalar::Util qw(blessed looks_like_number);
 use Time::HiRes qw(time);
 use Selecto::Components::QueryBuilder ();
 use Selecto::Components::State ();
@@ -192,16 +194,140 @@ sub canonical_url ($self, $state, $domain = undef) {
     return $url->to_string;
 }
 
+sub export ($self, $model, $format) {
+    return $self->csv($model) if $format eq 'csv';
+    return $self->tsv($model) if $format eq 'tsv';
+    return $self->json($model) if $format eq 'json';
+    return $self->xlsx($model) if $format eq 'xlsx';
+    die "unsupported export format\n";
+}
+
 sub csv ($self, $model) {
-    die "cannot export an invalid query\n"
-        unless $model->{state} && $model->{state}->valid && $model->{result};
-    my @lines;
-    my @columns = grep { !$_->{action_id} } @{$model->{result}{columns}};
-    push @lines, join(',', map { _csv_cell($_->{label}) } @columns);
+    return $self->_delimited($model, ',');
+}
+
+sub tsv ($self, $model) {
+    return $self->_delimited($model, "\t");
+}
+
+sub json ($self, $model) {
+    _assert_exportable($model);
+    my @columns = _export_columns($model);
+    my @headers = _unique_headers(map { $_->{label} } @columns);
+    my @rows = map {
+        my $record = $_;
+        +{
+            map {
+                my $index = $_;
+                $headers[$index] => _json_value($record->{$columns[$index]{key}})
+            } 0 .. $#columns
+        }
+    } @{$model->{result}{records}};
+    return encode_json({
+        page => $model->{state}->page,
+        total_pages => $model->{result}{total_pages},
+        total_count => $model->{result}{total_count},
+        row_count => scalar(@rows),
+        columns => \@headers,
+        rows => \@rows,
+    }) . "\n";
+}
+
+sub xlsx ($self, $model) {
+    _assert_exportable($model);
+    require Excel::Writer::XLSX;
+    my @columns = _export_columns($model);
+    my ($output_handle) = tempfile(SUFFIX => '.xlsx', UNLINK => 1);
+    binmode $output_handle;
+    my $workbook = Excel::Writer::XLSX->new($output_handle)
+        or die "could not create Excel export\n";
+    my $worksheet = $workbook->add_worksheet('Export');
+    my $header_format = $workbook->add_format(
+        bold => 1,
+        bg_color => '#DCE6F1',
+        bottom => 1,
+    );
+    my @widths;
+    for my $column_index (0 .. $#columns) {
+        my $label = defined($columns[$column_index]{label})
+            ? "$columns[$column_index]{label}" : '';
+        $worksheet->write_string(0, $column_index, $label, $header_format);
+        $widths[$column_index] = length($label);
+    }
+    my $row_index = 1;
     for my $record (@{$model->{result}{records}}) {
-        push @lines, join(',', map { _csv_cell($record->{$_->{key}}) } @columns);
+        for my $column_index (0 .. $#columns) {
+            my $value = $record->{$columns[$column_index]{key}};
+            if (!defined($value)) {
+                $worksheet->write_blank($row_index, $column_index, undef);
+                next;
+            }
+            my $text = "$value";
+            if (!ref($value) && looks_like_number($value) && $text !~ /\A[+-]?0\d/) {
+                $worksheet->write_number($row_index, $column_index, 0 + $value);
+            } else {
+                $worksheet->write_string($row_index, $column_index, $text);
+            }
+            $widths[$column_index] = length($text)
+                if length($text) > ($widths[$column_index] // 0);
+        }
+        $row_index++;
+    }
+    if (@columns) {
+        $worksheet->freeze_panes(1, 0);
+        $worksheet->autofilter(0, 0, $row_index - 1, $#columns);
+        for my $column_index (0 .. $#columns) {
+            my $width = ($widths[$column_index] // 0) + 2;
+            $width = 10 if $width < 10;
+            $width = 60 if $width > 60;
+            $worksheet->set_column($column_index, $column_index, $width);
+        }
+    }
+    $workbook->close or die "could not finish Excel export\n";
+    seek $output_handle, 0, 0 or die "could not rewind Excel export buffer\n";
+    local $/;
+    my $output = <$output_handle>;
+    close $output_handle or die "could not close Excel export buffer\n";
+    return $output;
+}
+
+sub _delimited ($self, $model, $delimiter) {
+    _assert_exportable($model);
+    die "cannot export an invalid query\n"
+        unless $delimiter eq ',' || $delimiter eq "\t";
+    my @lines;
+    my @columns = _export_columns($model);
+    push @lines, join($delimiter, map { _delimited_cell($_->{label}) } @columns);
+    for my $record (@{$model->{result}{records}}) {
+        push @lines, join($delimiter, map {
+            _delimited_cell($record->{$_->{key}})
+        } @columns);
     }
     return join("\r\n", @lines) . "\r\n";
+}
+
+sub _assert_exportable ($model) {
+    die "cannot export an invalid query\n"
+        unless $model->{state} && $model->{state}->valid && $model->{result};
+}
+
+sub _export_columns ($model) {
+    return grep { !$_->{action_id} } @{$model->{result}{columns}};
+}
+
+sub _unique_headers (@labels) {
+    my %counts;
+    return map {
+        my $label = defined($_) ? "$_" : '';
+        my $count = ++$counts{$label};
+        $count == 1 ? $label : "$label ($count)"
+    } @labels;
+}
+
+sub _json_value ($value) {
+    return undef unless defined($value);
+    return "$value" if ref($value);
+    return $value;
 }
 
 sub _validate_result ($result) {
@@ -220,7 +346,7 @@ sub _public_error ($error) {
     return 'The query could not be completed.';
 }
 
-sub _csv_cell ($value) {
+sub _delimited_cell ($value) {
     $value = '' unless defined $value;
     $value = "$value";
     $value = "'$value" if $value =~ /\A[=+\-@]/;

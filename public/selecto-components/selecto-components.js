@@ -2,6 +2,7 @@
   "use strict";
 
   var activeBuilderTabs = Object.create(null);
+  var chartInstances = new WeakMap();
   var dateFormats = [
     ["day", "Day"], ["day_hour", "Day + Hour"], ["week", "Week"],
     ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"],
@@ -50,6 +51,11 @@
       panel.hidden = !active;
       panel.disabled = !active;
     });
+    root.querySelectorAll("[data-sc-graph-options]").forEach(function (panel) {
+      var graphActive = view === "graph";
+      panel.hidden = !graphActive;
+      panel.disabled = !graphActive;
+    });
     root.querySelectorAll("[data-sc-picker-root]").forEach(refreshColumnPicker);
   }
 
@@ -60,9 +66,111 @@
     });
   }
 
+  function chartJsType(type) {
+    if (type === "area") return "line";
+    if (type === "horizontal_bar" || type === "stacked_bar") return "bar";
+    return type;
+  }
+
+  function chartColorWithAlpha(color, alpha) {
+    var match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color || "");
+    if (!match) return color;
+    return "rgba(" + parseInt(match[1], 16) + "," + parseInt(match[2], 16) + "," +
+      parseInt(match[3], 16) + "," + alpha + ")";
+  }
+
+  function chartOptions(root, type) {
+    var options = {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {mode: "nearest", intersect: true},
+      plugins: {
+        legend: {labels: {color: "#dce6e8", usePointStyle: true}},
+        tooltip: {callbacks: {title: function (items) {
+          if (!items.length) return "";
+          var raw = items[0].raw;
+          return raw && raw.label ? raw.label : items[0].label;
+        }}}
+      },
+      onClick: function (_event, elements) {
+        if (!elements.length) return;
+        var form = root.querySelector('[data-sc-graph-drilldown="' + elements[0].index + '"]');
+        if (!form) return;
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else form.submit();
+      }
+    };
+    if (type !== "pie" && type !== "doughnut") {
+      var axis = {
+        ticks: {color: "#9fb0b3"},
+        grid: {color: "rgba(159,176,179,.15)"},
+        border: {color: "rgba(159,176,179,.35)"}
+      };
+      options.scales = {x: Object.assign({}, axis), y: Object.assign({}, axis, {beginAtZero: true})};
+    }
+    if (type === "horizontal_bar") options.indexAxis = "y";
+    if (type === "stacked_bar") {
+      options.scales.x.stacked = true;
+      options.scales.y.stacked = true;
+    }
+    return options;
+  }
+
+  function initializeChart(root) {
+    if (!root || chartInstances.has(root) || !window.Chart) return;
+    var canvas = root.querySelector("canvas");
+    if (!canvas) return;
+    var type = root.dataset.chartType || "bar";
+    var data;
+    try {
+      data = JSON.parse(root.dataset.chartData || "{}");
+    } catch (_error) {
+      return;
+    }
+    (data.datasets || []).forEach(function (dataset) {
+      if (type === "line" || type === "area") dataset.tension = 0.28;
+      if (type === "area") {
+        dataset.fill = "origin";
+        dataset.backgroundColor = chartColorWithAlpha(dataset.borderColor, 0.22);
+      }
+      if (type === "scatter") {
+        dataset.pointRadius = 5;
+        dataset.pointHoverRadius = 7;
+        dataset.showLine = false;
+      }
+    });
+    try {
+      var chart = new window.Chart(canvas, {
+        type: chartJsType(type),
+        data: data,
+        options: chartOptions(root, type)
+      });
+      chartInstances.set(root, chart);
+      root.classList.add("is-ready");
+    } catch (_error) {
+      root.classList.remove("is-ready");
+    }
+  }
+
+  function restoreCharts() {
+    document.querySelectorAll("[data-sc-chart]").forEach(initializeChart);
+  }
+
+  function destroyChartsWithin(node) {
+    if (!node || !node.querySelectorAll) return;
+    var roots = Array.from(node.querySelectorAll("[data-sc-chart]"));
+    if (node.matches && node.matches("[data-sc-chart]")) roots.unshift(node);
+    roots.forEach(function (root) {
+      var chart = chartInstances.get(root);
+      if (chart) chart.destroy();
+      chartInstances.delete(root);
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     restoreBuilderTabs();
     restoreResultViews();
+    restoreCharts();
   });
 
   document.addEventListener("htmx:after:ws:connection", function () {
@@ -103,12 +211,18 @@
     window.requestAnimationFrame(function () {
       restoreBuilderTabs();
       restoreResultViews();
+      restoreCharts();
     });
   });
 
   document.addEventListener("htmx:after:swap", function () {
     restoreBuilderTabs();
     restoreResultViews();
+    restoreCharts();
+  });
+
+  document.addEventListener("htmx:before:swap", function (event) {
+    destroyChartsWithin(event.detail && event.detail.target);
   });
 
   document.addEventListener("click", function (event) {

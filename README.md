@@ -27,7 +27,8 @@ This is alpha software. Its browser transport is pinned to htmx
 - type-aware filter controls: native date and date-time inputs, numeric inputs,
   boolean choices, two-value ranges, and allowlisted calendar shortcuts such
   as Today, This Month, This Quarter, and This Year;
-- Detail, Aggregate, and Graph result views;
+- Detail, Aggregate, and Graph result views, with Bar, Horizontal Bar, Stacked
+  Bar, Line, Area, Pie, Doughnut, and Scatter dashboard charts;
 - domain-declared selected-row actions exposed as optional Detail columns; each
   chosen action owns its checkbox set, select-all-page control, button, and
   typed dialog, with hidden primary-key selection, dynamic host choices,
@@ -50,7 +51,8 @@ This is alpha software. Its browser transport is pinned to htmx
 - ordinary HTTP GET fallback, permalinks, and browser-refresh recovery;
 - a domain-selected private URL mode with WebSocket/POST body state and no
   query-state history, permalink, or query-string export link;
-- CSV export with spreadsheet-formula neutralization;
+- Excel, CSV, TSV, and JSON exports for the current result page, with
+  spreadsheet-formula neutralization for delimited formats;
 - optional compiled SQL display for development; and
 - a real PostgreSQL-backed Northwind example using the existing independently
   authored `selecto-perl-northwind` fixture.
@@ -89,7 +91,7 @@ my $domain = Selecto::Domain->new(
 ```
 
 Private URL mode keeps generated URLs at the explorer path, ignores and
-redirects away inbound query state, removes permalink and query-string CSV
+redirects away inbound query state, removes permalink and query-string export
 controls, marks responses `Cache-Control: no-store`, and changes the ordinary
 fallback form to POST. Interactive state remains in the rendered form and
 WebSocket/POST body. Refresh starts again from domain defaults unless the host
@@ -162,7 +164,7 @@ This registers:
 
 - `GET /explore/products` for a full page and no-JavaScript fallback;
 - `POST /explore/products` for the no-JavaScript private-state fallback;
-- `GET /explore/products?format=csv` for the current result page; and
+- `GET /explore/products?format=xlsx|csv|tsv|json` for the current result page; and
 - `WS /explore/products/ws` for htmx 4 incremental updates.
 
 ## Selected-row actions
@@ -348,7 +350,7 @@ bound filter values, relationship joins, grouping and aggregates, ordered
 Available/Set field selection, multiple Available/Set filters and draft-filter
 semantics, configured date/time detail columns and aggregate buckets,
 multi-column ordering, shareable GET and private POST rendering, private URL
-redirection, static assets, CSV export, and real Mojolicious WebSocket message
+redirection, static assets, all export formats, and real Mojolicious WebSocket message
 round trips.
 
 That is bounded evidence for the included domains, states, transport envelopes,
