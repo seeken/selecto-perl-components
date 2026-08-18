@@ -57,9 +57,9 @@ $t->get_ok('/explore/products')
     ->content_like(qr{hx-ws:send})
     ->content_like(qr{/selecto-components/htmx\.min\.js})
     ->content_like(qr{/selecto-components/hx-ws\.min\.js})
-    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260817-8})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260817-8})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260817-8})
+    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260817-9})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260817-9})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260817-9})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')
@@ -68,7 +68,9 @@ $t->get_ok('/explore/products')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:mark_for_review"][data-type="action"]')
     ->element_exists_not('[data-sc-bulk-actions]')
     ->element_exists_not('input[data-sc-row-select]')
-    ->element_exists_not('dialog[data-sc-action-dialog]');
+    ->element_exists_not('dialog[data-sc-action-dialog]')
+    ->element_exists('a.sc-object-link[href="/products/view?id=101"]')
+    ->text_is('a.sc-object-link[href="/products/view?id=101"]' => '=2+2');
 
 my $action_columns_url = '/explore/products?q=1&view=detail' .
     '&field=action%3Aadd_product_note&field_alias=&field_format=' .
