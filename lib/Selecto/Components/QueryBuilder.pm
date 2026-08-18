@@ -34,6 +34,8 @@ sub _detail ($class, $config, $domain, $state) {
                 label => $column_config->{alias} || $field_map->{$field}{label},
                 type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
                 format => $column_config->{format} // '',
+                (defined($field_map->{$field}{link})
+                    ? (link => {%{$field_map->{$field}{link}}}) : ()),
             };
         }
     } @{$state->fields};
@@ -58,6 +60,31 @@ sub _detail ($class, $config, $domain, $state) {
                 hidden => 1,
             };
         }
+    }
+    my %query_key = map {
+        (!$_->{format} ? ($_->{field} => $_->{key}) : ())
+    } @query_columns;
+    my %used_key = map { $_->{key} => 1 } @query_columns;
+    for my $column (grep { $_->{link} } @columns) {
+        my $id_field = $column->{link}{id_field};
+        my $link_key = $query_key{$id_field};
+        unless (defined($link_key)) {
+            my $base_key = '__selecto_link_' . _field_alias($id_field);
+            $link_key = $base_key;
+            my $suffix = 1;
+            $link_key = $base_key . '_' . ++$suffix while $used_key{$link_key};
+            push @query_columns, {
+                key => $link_key,
+                field => $id_field,
+                label => $id_field,
+                type => $field_map->{$id_field}{type},
+                format => '',
+                hidden => 1,
+            };
+            $query_key{$id_field} = $link_key;
+            $used_key{$link_key} = 1;
+        }
+        $column->{link_key} = $link_key;
     }
     my $query = Selecto::Query->new->select(map {
         _column_expression($_)->as($_->{key})

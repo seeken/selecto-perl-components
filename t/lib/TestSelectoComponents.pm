@@ -33,7 +33,13 @@ sub _domain {
             fields => [qw(id product_name category_id unit_price units_in_stock created_on)],
             columns => {
                 id => { type => 'integer' },
-                product_name => { type => 'string' },
+                product_name => {
+                    type => 'string',
+                    link => {
+                        url_template => '/products/view?id={{id}}',
+                        id_field => 'id',
+                    },
+                },
                 category_id => { type => 'integer' },
                 unit_price => { type => 'decimal' },
                 units_in_stock => { type => 'integer' },
@@ -199,6 +205,7 @@ sub execute_query ($self, $statement) {
         my $row = [map {
                 $_ eq '__selecto_rollup_grouping' ? 0
                 : $_ eq '__selecto_action_target' ? 100 + $row_index
+                : /\A__selecto_link_/ ? 100 + $row_index
                 : $_ eq 'product_name' && $row_index == 1 ? '=2+2'
                 : /(?:count|price)\z/ ? (($_ eq 'count' ? 2 : 10) * $row_index)
                 : "Value $row_index"

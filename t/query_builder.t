@@ -17,6 +17,19 @@ my $domain = TestSelectoComponents::domain();
 my $dbh = bless {}, 'TestSelectoComponents::CompileDBH';
 my $postgresql = Selecto::PostgreSQL->new(dbh => $dbh);
 
+my $unsafe_link_contract = $domain->contract;
+$unsafe_link_contract->{source}{columns}{product_name}{link}{url_template}
+    = 'javascript:alert(1)?id={{id}}';
+my $unsafe_link_domain = Selecto::Domain->parse($unsafe_link_contract, strict => 1);
+eval { $config->field_catalog($unsafe_link_domain) };
+like $@, qr/safe application path/, 'external or executable object-link templates are rejected';
+
+my $unknown_link_id_contract = $domain->contract;
+$unknown_link_id_contract->{source}{columns}{product_name}{link}{id_field} = 'missing_id';
+my $unknown_link_id_domain = Selecto::Domain->parse($unknown_link_id_contract, strict => 1);
+eval { $config->field_catalog($unknown_link_id_domain) };
+like $@, qr/is not queryable/, 'object links cannot select an id outside the governed domain';
+
 my $detail_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'detail',
@@ -45,6 +58,10 @@ is_deeply $detail_statement->params, ['12.50', 'Tools', 'Produce'], 'values rema
 is_deeply $detail_statement->columns,
     [qw(product_name category__category_name unit_price __selecto_action_target)],
     'detail aliases are stable and include the hidden selected-row action target';
+is $detail->{columns}[1]{link_key}, '__selecto_action_target',
+    'a linked display column reuses an already selected hidden object id';
+is $detail->{columns}[1]{link}{url_template}, '/products/view?id={{id}}',
+    'the query result retains the governed object link template';
 is_deeply [map { $_->{key} } @{$detail->{columns}}],
     [qw(
         __selecto_action_column_add_product_note product_name
@@ -68,6 +85,19 @@ is_deeply $action_only_statement->columns, ['__selecto_action_target'],
     'an action-only detail view queries only its hidden governed target key';
 like $action_only_statement->sql, qr/ORDER BY "s0"\."id" ASC/,
     'an action-only detail view remains deterministically ordered';
+
+my $linked_detail_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'product_name', measure => 'count',
+    order => 'product_name', limit => 25, page => 1,
+});
+my $linked_detail = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $linked_detail_state,
+);
+my $linked_detail_statement = $postgresql->compile($domain, $linked_detail->{query});
+is_deeply $linked_detail_statement->columns, [qw(product_name __selecto_link_id)],
+    'a linked name automatically fetches its object id as a hidden query column';
+is $linked_detail->{columns}[0]{link_key}, '__selecto_link_id',
+    'the visible linked name references its hidden object id';
 
 my $aggregate_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

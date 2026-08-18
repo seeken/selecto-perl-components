@@ -2,9 +2,9 @@ package Selecto::Components::Renderer;
 
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(encode_json);
-use Mojo::Util qw(xml_escape);
+use Mojo::Util qw(url_escape xml_escape);
 
-my $ASSET_REVISION = '20260817-8';
+my $ASSET_REVISION = '20260817-9';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -650,7 +650,9 @@ sub _table ($class, $result, $model) {
                 my $pairs = $result->{drilldowns}[$index][$group_index];
                 $content = $pairs
                     ? $class->_drilldown_control($model, $pairs, $label, $group_index + 1)
-                    : _h($label);
+                    : $column->{link}
+                        ? _object_link($column, $record, $label)
+                        : _h($label);
             }
             $cells .= '<td>' . $content . '</td>';
         }
@@ -840,6 +842,14 @@ sub _numeric ($value) {
 
 sub _display ($value) { return defined($value) ? "$value" : '—'; }
 sub _display_group ($value) { return defined($value) ? "$value" : '[NULL]'; }
+sub _object_link ($column, $record, $label) {
+    my $id = $record->{$column->{link_key}};
+    return _h($label) unless defined($id) && !ref($id) && length("$id");
+    my $href = $column->{link}{url_template};
+    my $escaped_id = url_escape("$id");
+    $href =~ s/\{\{id\}\}/$escaped_id/g;
+    return '<a class="sc-object-link" href="' . _h($href) . '">' . _h($label) . '</a>';
+}
 sub _humanize ($value) { my $text = "$value"; $text =~ s/_/ /g; return ucfirst $text; }
 sub _h ($value) { return xml_escape(defined($value) ? "$value" : ''); }
 

@@ -47,6 +47,8 @@ This is alpha software. Its browser transport is pinned to htmx
   can be configured with type-aware `count`, distinct-count, average, sum,
   min/max, boolean-count, and buckets, alongside optional curated presets;
 - relationship fields, sorting, bounded limits, and offset pagination;
+- domain-declared object links for Detail HTML cells, with related IDs selected
+  as hidden governed columns and no extra ID columns in exports;
 - htmx 4 `hx-ws` updates using server-rendered HTML fragments;
 - ordinary HTTP GET fallback, permalinks, and browser-refresh recovery;
 - a domain-selected private URL mode with WebSocket/POST body state and no
@@ -166,6 +168,28 @@ This registers:
 - `POST /explore/products` for the no-JavaScript private-state fallback;
 - `GET /explore/products?format=xlsx|csv|tsv|json` for the current result page; and
 - `WS /explore/products/ws` for htmx 4 incremental updates.
+
+## Detail object links
+
+A canonical domain column may declare an internal object link. `id_field` is
+relative to that column's relation, so a link on `shipper.co_name` with
+`id_field => 'id'` automatically selects `shipper.id`. The ID remains hidden
+and the displayed company name becomes the link in Detail HTML results.
+Aggregate/Graph cells and exported data remain unchanged.
+
+```perl
+co_name => {
+    type => 'string',
+    link => {
+        url_template => '/backoffice/client.mcgi?id={{id}}',
+        id_field => 'id',
+    },
+},
+```
+
+Templates must be same-application paths beginning with one `/` and must
+contain `{{id}}`. Components URL-encodes the selected ID and HTML-escapes the
+completed link before rendering it.
 
 ## Selected-row actions
 

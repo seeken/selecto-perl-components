@@ -130,6 +130,8 @@ a { color: inherit; }
 .sc-table-wrap th, .sc-table-wrap td { border-bottom: 1px solid #29363a; padding: 11px 14px; text-align: left; }
 .sc-table-wrap th { background: #11191b; color: var(--sc-muted); font-size: .72rem; letter-spacing: .05em; position: sticky; text-transform: uppercase; top: 0; }
 .sc-table-wrap tr:hover td { background: #1b272a; }
+.sc-table-wrap .sc-object-link { color: var(--sc-accent); font-weight: 650; text-decoration: none; }
+.sc-table-wrap .sc-object-link:hover { text-decoration: underline; }
 .sc-table-wrap .sc-select-column { min-width: 132px; text-align: center; }
 .sc-table-wrap .sc-select-column input { accent-color: var(--sc-accent); height: 16px; width: 16px; }
 .sc-table-wrap th.sc-select-column label { align-items: center; cursor: pointer; display: inline-flex; gap: 8px; justify-content: center; }
