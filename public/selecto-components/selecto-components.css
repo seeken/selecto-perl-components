@@ -43,7 +43,7 @@ a { color: inherit; }
 .sc-builder legend { margin-bottom: 9px; text-transform: uppercase; letter-spacing: .08em; }
 .sc-builder legend small { color: #778184; font-weight: 500; letter-spacing: normal; text-transform: none; }
 .sc-builder select, .sc-builder input:not([type="checkbox"]):not([type="radio"]) { width: 100%; background: #0e1517; border: 1px solid var(--sc-border); border-radius: 8px; color: var(--sc-ink); margin-top: 6px; min-height: 38px; padding: 7px 9px; }
-.sc-builder-tabs { background: #0e1517; border: 1px solid var(--sc-border); border-radius: 10px; display: grid; grid-template-columns: 1fr 1fr; padding: 3px; }
+.sc-builder-tabs { background: #0e1517; border: 1px solid var(--sc-border); border-radius: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); padding: 3px; }
 .sc-builder-tab { align-items: center; background: transparent; border: 0; border-radius: 7px; color: var(--sc-muted); cursor: pointer; display: flex; font-weight: 800; gap: 7px; justify-content: center; min-height: 40px; padding: 8px; }
 .sc-builder-tab[aria-selected="true"] { background: var(--sc-accent); color: #1a1509; }
 .sc-builder-tab span { background: #263438; border-radius: 999px; color: var(--sc-ink); font-size: .68rem; min-width: 22px; padding: 2px 6px; text-align: center; }
@@ -198,3 +198,18 @@ a { color: inherit; }
 @media (prefers-reduced-motion: no-preference) {
   .sc-results { transition: opacity .12s ease; }
 }
+.sc-query-library { display: grid; gap: 1rem; }
+.sc-query-library > label,
+.sc-query-library-parameters label { display: grid; gap: .35rem; }
+.sc-query-library select,
+.sc-query-library input[type="text"],
+.sc-query-library input[type="number"],
+.sc-query-library input[type="date"],
+.sc-query-library input[type="datetime-local"] { width: 100%; }
+.sc-query-library-summary { border: 1px solid var(--sc-border); border-radius: .65rem; padding: .75rem; }
+.sc-query-library-summary p { margin: .35rem 0; }
+.sc-query-library-summary small,
+.sc-query-library-choice small { display: block; color: var(--sc-muted); }
+.sc-query-library-choices,
+.sc-query-library-parameters { display: grid; gap: .65rem; margin-top: .5rem; }
+.sc-query-library-choice { align-items: flex-start; display: flex; gap: .5rem; }

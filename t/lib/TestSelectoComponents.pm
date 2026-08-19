@@ -66,6 +66,46 @@ sub _domain {
             },
         },
         joins => { category => { type => 'inner' } },
+        query_library => {
+            segments => {
+                low_stock => {
+                    label => 'Low stock',
+                    description => 'Products below the supplied stock threshold.',
+                    filters => [['lt', 'units_in_stock', ['param', 'threshold']]],
+                    parameters => {
+                        threshold => {
+                            type => 'integer', required => 1, label => 'Stock threshold',
+                        },
+                    },
+                },
+                premium => {
+                    label => 'Premium products',
+                    capability => 'products.read',
+                    filters => [['gte', 'unit_price', ['param', 'minimum_price']]],
+                    parameters => {
+                        minimum_price => {type => 'decimal', required => 1},
+                    },
+                },
+            },
+            projections => {
+                product_summary => {
+                    fields => [qw(id product_name unit_price units_in_stock)],
+                    associations => [{name => 'category', fields => ['category_name']}],
+                },
+            },
+            orderings => {
+                price_desc => {order_by => [['unit_price', 'desc'], ['id', 'asc']]},
+            },
+            views => {
+                low_stock_products => {
+                    label => 'Low stock products',
+                    description => 'Reusable inventory review preset.',
+                    segments => ['low_stock'],
+                    projection => 'product_summary',
+                    ordering => 'price_desc',
+                },
+            },
+        },
         actions => {
             add_product_note => {
                 label => 'Add Product Note',

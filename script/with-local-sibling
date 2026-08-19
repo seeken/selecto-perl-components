@@ -14,7 +14,8 @@ if [ ! -f "$selecto_dir/lib/Selecto.pm" ]; then
 fi
 
 selecto_local_lib="$selecto_dir/local/lib/perl5"
-perl_paths="$repo_dir/lib:$selecto_local_lib:$selecto_dir/lib"
+component_local_lib="$repo_dir/local/lib/perl5"
+perl_paths="$repo_dir/lib:$component_local_lib:$selecto_local_lib:$selecto_dir/lib"
 
 northwind_dir=${SELECTO_LIVE_SELECTO_PERL_NORTHWIND:-"$repo_dir/../selecto-perl-northwind"}
 if [ -f "$northwind_dir/lib/Selecto/Perl/Northwind.pm" ]; then
