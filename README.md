@@ -27,18 +27,34 @@ This is alpha software. Its browser transport is pinned to htmx
 - type-aware filter controls: native date and date-time inputs, numeric inputs,
   boolean choices, two-value ranges, and allowlisted calendar shortcuts such
   as Today, This Month, This Quarter, and This Year;
-- Detail, Aggregate, and Graph result views;
+- Detail, Aggregate, and Graph result views, with Bar, Horizontal Bar, Stacked
+  Bar, Line, Area, Pie, Doughnut, and Scatter dashboard charts;
+- domain-declared selected-row actions exposed as optional Detail columns; each
+  chosen action owns its checkbox set, select-all-page control, button, and
+  typed dialog, with hidden primary-key selection, dynamic host choices,
+  preview/execute authorization callbacks, CSRF protection, and server-side
+  input revalidation;
+- total matched-row and page counts plus full data-and-count query timing, with
+  changed query intent resetting to page one while page-only Run and
+  Previous/Next retain explicit pagination;
+- hierarchical Aggregate rollups with clickable group values, subtotals, and a
+  grand total, plus clickable Graph group values; drilldowns retain existing
+  filters and apply the selected group path as exact governed Detail predicates,
+  including formatted dates, numeric/date buckets, and text prefixes;
 - `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `in`, `is_null`, and
   `not_null` filters supported by the current native Perl query contract;
 - a domain-derived Available/Set aggregate picker where every governed column
   can be configured with type-aware `count`, distinct-count, average, sum,
   min/max, boolean-count, and buckets, alongside optional curated presets;
 - relationship fields, sorting, bounded limits, and offset pagination;
+- domain-declared object links for Detail HTML cells, with related IDs selected
+  as hidden governed columns and no extra ID columns in exports;
 - htmx 4 `hx-ws` updates using server-rendered HTML fragments;
 - ordinary HTTP GET fallback, permalinks, and browser-refresh recovery;
 - a domain-selected private URL mode with WebSocket/POST body state and no
   query-state history, permalink, or query-string export link;
-- CSV export with spreadsheet-formula neutralization;
+- Excel, CSV, TSV, and JSON exports for the current result page, with
+  spreadsheet-formula neutralization for delimited formats;
 - optional compiled SQL display for development; and
 - a real PostgreSQL-backed Northwind example using the existing independently
   authored `selecto-perl-northwind` fixture.
@@ -77,7 +93,7 @@ my $domain = Selecto::Domain->new(
 ```
 
 Private URL mode keeps generated URLs at the explorer path, ignores and
-redirects away inbound query state, removes permalink and query-string CSV
+redirects away inbound query state, removes permalink and query-string export
 controls, marks responses `Cache-Control: no-store`, and changes the ordinary
 fallback form to POST. Interactive state remains in the rendered form and
 WebSocket/POST body. Refresh starts again from domain defaults unless the host
@@ -85,7 +101,7 @@ provides an explicit saved-view store; the package does not move sensitive
 state into a cookie or opaque client token.
 
 While editing, the browser stages controls locally and leaves the URL and
-result set at their last applied state. Only **Run governed query** submits the
+result set at their last applied state. Only **Run query** submits the
 complete form over the WebSocket (or as an ordinary GET/POST, according to the
 domain policy, without JavaScript).
 
@@ -96,7 +112,9 @@ In the default shareable mode, canonical parameters are:
 - aligned `field_alias`/`field_format` and group alias/format/bucket/prefix values,
   so each selected column carries its own presentation configuration;
 - aligned, repeated `filter_field`, `filter_op`, `filter_value`, and
-  `filter_value_end` values;
+  `filter_value_end` values; server-generated aggregate drilldowns also align
+  a `filter_group` marker so the governed grouping expression is reused as the
+  Detail predicate;
   newly added filters remain URL-visible drafts and do not constrain the query
   until they have the required value or values (or a null operator). Date
   shortcuts are stored as allowlisted identifiers and resolved to bound,
@@ -148,8 +166,91 @@ This registers:
 
 - `GET /explore/products` for a full page and no-JavaScript fallback;
 - `POST /explore/products` for the no-JavaScript private-state fallback;
-- `GET /explore/products?format=csv` for the current result page; and
+- `GET /explore/products?format=xlsx|csv|tsv|json` for the current result page; and
 - `WS /explore/products/ws` for htmx 4 incremental updates.
+
+## Detail object links
+
+A canonical domain column may declare an internal object link. `id_field` is
+relative to that column's relation, so a link on `shipper.co_name` with
+`id_field => 'id'` automatically selects `shipper.id`. The ID remains hidden
+and the displayed company name becomes the link in Detail HTML results.
+Aggregate/Graph cells and exported data remain unchanged.
+
+```perl
+co_name => {
+    type => 'string',
+    link => {
+        url_template => '/backoffice/client.mcgi?id={{id}}',
+        id_field => 'id',
+    },
+},
+```
+
+Templates must be same-application paths beginning with one `/` and must
+contain `{{id}}`. Components URL-encodes the selected ID and HTML-escapes the
+completed link before rendering it.
+
+## Selected-row actions
+
+Selected-row actions come from the canonical domain contract. The Components
+host only renders actions that are bulk-scoped (or explicitly bulk-enabled)
+and have a registered host handler. Required action fields are normalized and
+validated again on POST; select choices are resolved again for the current
+request so a stale browser cannot submit a choice that the user can no longer
+use.
+
+Authorized actions appear in the Detail column picker as `Action: <label>`.
+Adding one and running the query places its checkbox column in the requested
+column order and displays its action button. Multiple action columns may be
+selected at once; their selected rows, counts, buttons, and dialogs remain
+independent. Removing an action column removes that action UI from the result.
+
+```perl
+actions => {
+    add_note => {
+        label => 'Add Note',
+        scope => 'bulk',
+        inputs => [
+            {
+                id => 'note_type', label => 'Note type', type => 'select',
+                choice_source => 'note_types', required => 1,
+            },
+            {
+                id => 'comment', label => 'Comment', type => 'textarea',
+                required => 1, max_length => 255,
+            },
+        ],
+        execution => {kind => 'host', operation => 'add_note'},
+    },
+},
+```
+
+Register dynamic choices, authorization, and the application-owned execution
+boundary on the explorer:
+
+```perl
+choice_sources => {
+    note_types => sub ($controller, $action, $input) {
+        return [{value => 'internal', label => 'Internal'}];
+    },
+},
+action_authorizer => sub ($controller, $request) {
+    return {status => 'enabled'};
+},
+action_handlers => {
+    add_note => sub ($controller, $request) {
+        # $request->{selected_ids} is unique and bounded.
+        # $request->{inputs} contains normalized, validated form values.
+        return {ok => 1, applied_count => scalar @{$request->{selected_ids}}};
+    },
+},
+```
+
+The action route is `POST /explore/products/actions/:action_id`. Browser forms
+carry a session-bound CSRF token. Hosts remain responsible for checking every
+target against the current tenant/user and for transaction, audit, and
+business-rule behavior inside the handler.
 
 The plugin adds its packaged `public/` directory to Mojolicious static paths.
 The htmx runtime and WebSocket extension are served locally; the browser does
@@ -202,6 +303,11 @@ message and tests.
   measure sources come from closed allowlists and the governed domain catalog.
 - Values remain separate from SQL and compile as adapter parameters.
 - Browser input cannot select an adapter or submit SQL.
+- Selected-row action IDs must be declared by the domain and registered by the
+  host. Action targets are deduplicated and bounded, action choices are
+  re-resolved, authorization is repeated for execute, and POSTs require the
+  session-bound CSRF token. An action that declares a capability stays hidden
+  unless the explorer registers an `action_authorizer`.
 - WebSocket handshakes with an `Origin` header default to same-host only. A host
   behind unusual proxy or multi-origin routing can provide an explicit
   `origin_check` callback to the plugin.
@@ -268,7 +374,7 @@ bound filter values, relationship joins, grouping and aggregates, ordered
 Available/Set field selection, multiple Available/Set filters and draft-filter
 semantics, configured date/time detail columns and aggregate buckets,
 multi-column ordering, shareable GET and private POST rendering, private URL
-redirection, static assets, CSV export, and real Mojolicious WebSocket message
+redirection, static assets, all export formats, and real Mojolicious WebSocket message
 round trips.
 
 That is bounded evidence for the included domains, states, transport envelopes,
@@ -279,7 +385,6 @@ security, or performance.
 ## Explicitly deferred
 
 - persisted saved-view stores and sharing policy;
-- row and bulk action forms;
 - emailed and scheduled exports;
 - dashboards, extension view packages, maps, and custom visual encodings;
 - push broadcasts from external data changes; and
