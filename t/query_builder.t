@@ -99,6 +99,29 @@ is_deeply $linked_detail_statement->columns, [qw(product_name __selecto_link_id)
 is $linked_detail->{columns}[0]{link_key}, '__selecto_link_id',
     'the visible linked name references its hidden object id';
 
+my $library_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    query_library_view => 'low_stock_products',
+    query_library_segment => 'premium',
+    query_library_param_name => ['threshold', 'minimum_price'],
+    query_library_param_value => ['8', '25.50'],
+    view => 'detail',
+    limit => 25,
+    page => 1,
+});
+my $library_result = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $library_state,
+);
+my $library_statement = $postgresql->compile($domain, $library_result->{query});
+like $library_statement->sql, qr/"s0"\."units_in_stock" < \$1/,
+    'a named view segment compiles as a governed query constraint';
+like $library_statement->sql, qr/"s0"\."unit_price" >= \$2/,
+    'additional named segments compose with the named view';
+is_deeply $library_statement->params, [8, '25.50'],
+    'query-library values remain bound and typed';
+is_deeply $library_result->{query}->applied_query_library->{segments},
+    [qw(low_stock premium)], 'component-built queries retain named-segment provenance';
+
 my $aggregate_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'graph',

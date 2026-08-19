@@ -12,7 +12,7 @@ This is alpha software. Its browser transport is pinned to htmx
 ## Current surface
 
 - a reusable `Selecto::Components` Mojolicious plugin;
-- separate View and Filters builder tabs, with active-tab continuity across
+- separate View, Filters, and domain-driven Query Library builder tabs, with active-tab continuity across
   WebSocket fragment replacements;
 - locally staged builder edits with an explicit Run boundary, so unfinished
   view, column, filter, sort, and pagination changes do not execute queries;
@@ -123,6 +123,19 @@ In the default shareable mode, canonical parameters are:
   `order`/`direction` values, `limit`, and `page`; and
 - `q=1`, which distinguishes an authored empty selection from the initial
   default state.
+
+When a domain declares `query_library`, canonical state also includes
+`query_library_view`, repeated `query_library_segment`, aligned
+`query_library_param_name`/`query_library_param_value` pairs, and an internal
+materialized-view marker. The marker lets a newly selected view seed Detail
+columns and ordering once while keeping those controls editable on subsequent
+requests. Named view segments and additional segments continue to constrain the
+query alongside visual filters. Query-library `capability` values are rendered
+as metadata only and are not an authorization decision.
+
+Projection association shapes are adapted to the Perl component builder as
+validated dotted field paths. Parameter values are type-checked by
+`selecto-perl` and remain bound values in the compiled statement.
 
 ## Plugin usage
 

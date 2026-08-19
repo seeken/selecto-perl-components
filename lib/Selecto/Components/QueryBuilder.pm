@@ -4,6 +4,7 @@ use Mojo::Base -base, -signatures;
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
 use Selecto::Expression ();
+use Selecto::QueryLibrary ();
 
 sub build ($class, $config, $domain, $state) {
     die "cannot build an invalid explorer state\n" unless $state->valid;
@@ -95,6 +96,7 @@ sub _detail ($class, $config, $domain, $state) {
     }
     $query = $query->limit($state->limit)
         ->offset(($state->page - 1) * $state->limit);
+    $query = _with_query_library($query, $domain, $state);
     return {
         query => $query,
         columns => \@columns,
@@ -171,6 +173,7 @@ sub _aggregate ($class, $config, $domain, $state) {
     $query = $query->order_by($_, 'asc') for @groups;
     $query = $query->limit($state->limit)
         ->offset(($state->page - 1) * $state->limit);
+    $query = _with_query_library($query, $domain, $state);
     return {
         query => $query,
         columns => \@columns,
@@ -274,6 +277,30 @@ sub _with_filters ($query, $state) {
     }
     return $query unless @expressions;
     return $query->where(@expressions == 1 ? $expressions[0] : Selecto::Expression->all(\@expressions));
+}
+
+sub _with_query_library ($query, $domain, $state) {
+    my @segments;
+    push @segments, @{Selecto::QueryLibrary->view_segments(
+        $domain, $state->query_library_view,
+    )} if defined($state->query_library_view) && length($state->query_library_view);
+    push @segments, @{$state->query_library_segments // []};
+    my %seen;
+    @segments = grep { !$seen{$_}++ } @segments;
+
+    for my $segment (@segments) {
+        my $specs = Selecto::QueryLibrary->parameter_specs(
+            $domain, segments => [$segment],
+        );
+        my %params = map {
+            exists($state->query_library_parameters->{$_})
+                ? ($_ => $state->query_library_parameters->{$_}) : ()
+        } keys %$specs;
+        $query = Selecto::QueryLibrary->apply_segment(
+            $domain, $query, $segment, \%params,
+        );
+    }
+    return $query;
 }
 
 sub _field_alias ($field) {

@@ -22,6 +22,57 @@ is_deeply $initial->fields,
     'configured detail fields become initial state';
 is_deeply $initial->groups, ['category.category_name'], 'configured group becomes initial state';
 
+my $library_view = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    query_library_view => 'low_stock_products',
+    query_library_param_name => 'threshold',
+    query_library_param_value => '8',
+    view => 'aggregate',
+    group => 'category.category_name',
+    measure => 'count',
+});
+ok $library_view->valid, 'a named query-library view produces valid explorer state';
+is $library_view->view, 'detail', 'a named projection switches to the Detail explorer';
+is_deeply $library_view->fields,
+    [qw(id product_name unit_price units_in_stock category.category_name)],
+    'the portable projection seeds editable flat detail columns';
+is_deeply $library_view->orders, [
+    {field => 'unit_price', direction => 'desc'},
+    {field => 'id', direction => 'asc'},
+], 'the portable ordering seeds detail sorting';
+is_deeply $library_view->query_library_parameters, {threshold => 8},
+    'typed query-library parameters are normalized in request state';
+my $library_pairs = $library_view->query_pairs;
+like join('&', @$library_pairs), qr/query_library_view&low_stock_products/,
+    'canonical query state retains the named view';
+like join('&', @$library_pairs), qr/query_library_materialized_view&low_stock_products/,
+    'canonical query state records that the named preset was materialized';
+
+my $edited_library_view = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    query_library_view => 'low_stock_products',
+    query_library_materialized_view => 'low_stock_products',
+    query_library_param_name => 'threshold',
+    query_library_param_value => '8',
+    field => ['product_name'],
+    order => ['product_name'],
+    direction => ['asc'],
+});
+is_deeply $edited_library_view->fields, ['product_name'],
+    'materialized query-library projections remain editable';
+is_deeply $edited_library_view->orders, [{field => 'product_name', direction => 'asc'}],
+    'materialized query-library ordering remains editable';
+
+my $invalid_library_parameter = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    query_library_view => 'low_stock_products',
+    query_library_param_name => 'threshold',
+    query_library_param_value => 'many',
+});
+ok !$invalid_library_parameter->valid, 'invalid typed query-library parameters stop the query';
+like join(' ', @{$invalid_library_parameter->errors}), qr/query-library parameters/,
+    'invalid query-library parameters return an actionable state error';
+
 my $detail_catalog = $config->detail_column_catalog($domain);
 my %detail_by_path = map { $_->{path} => $_ } @$detail_catalog;
 is $detail_by_path{'action:add_product_note'}{label}, 'Action: Add Product Note',

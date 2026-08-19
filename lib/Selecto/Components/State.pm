@@ -4,14 +4,16 @@ use Mojo::Base -base, -signatures;
 use Digest::SHA qw(sha256_hex);
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
+use Selecto::QueryLibrary ();
 
-has [qw(view chart_type fields field_configs filters groups group_configs measures measure_configs measure orders order direction limit page errors)];
+has [qw(view chart_type fields field_configs filters groups group_configs measures measure_configs measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
         q query_signature view chart_type field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls
+        query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
         order direction limit page
     )];
 }
@@ -23,8 +25,11 @@ sub from_input ($class, $config, $domain, $input) {
     my $detail_map = $config->detail_column_map($domain);
     my @errors;
     my $configured = _first($input, 'q') ? 1 : 0;
+    my $query_library = _query_library_state($domain, $input, \@errors);
 
     my $view = _first($input, 'view') // $config->default_view;
+    $view = 'detail' if @{$query_library->{projection_fields}}
+        || @{$query_library->{orders}};
     if (!$config->allows_view($view)) {
         push @errors, 'Choose an available view.';
         $view = $config->default_view;
@@ -42,6 +47,11 @@ sub from_input ($class, $config, $domain, $input) {
     my $field_values = _values($input, 'field');
     my $field_aliases = _values($input, 'field_alias');
     my $field_formats = _values($input, 'field_format');
+    if ($query_library->{materialize} && @{$query_library->{projection_fields}}) {
+        $field_values = [@{$query_library->{projection_fields}}];
+        $field_aliases = [];
+        $field_formats = [];
+    }
     $field_values = [@{$config->resolved_default_fields($domain)}]
         if !$configured && !grep { length(_scalar($_)) } @$field_values;
     my @valid_fields;
@@ -210,6 +220,10 @@ sub from_input ($class, $config, $domain, $input) {
 
     my $order_fields = _values($input, 'order');
     my $order_directions = _values($input, 'direction');
+    if ($query_library->{materialize} && @{$query_library->{orders}}) {
+        $order_fields = [map { $_->[0] } @{$query_library->{orders}}];
+        $order_directions = [map { $_->[1] } @{$query_library->{orders}}];
+    }
     my ($default_order) = grep { $field_map->{$_} } @valid_fields;
     $default_order //= $config->primary_key($domain);
     $order_fields = [$default_order] unless grep { length(_scalar($_)) } @$order_fields;
@@ -357,6 +371,10 @@ sub from_input ($class, $config, $domain, $input) {
         limit => $limit,
         page => $page,
         errors => \@errors,
+        query_library_view => $query_library->{view},
+        query_library_materialized_view => $query_library->{view},
+        query_library_segments => $query_library->{segments},
+        query_library_parameters => $query_library->{parameters},
     );
     my $query_signature = _first($input, 'query_signature');
     $state->page(1) if defined($query_signature) && !ref($query_signature)
@@ -369,6 +387,17 @@ sub valid ($self) { return @{$self->errors} ? 0 : 1; }
 
 sub query_pairs ($self) {
     my @pairs = (q => 1, view => $self->view);
+    push @pairs, query_library_view => $self->query_library_view
+        if defined($self->query_library_view) && length($self->query_library_view);
+    push @pairs, query_library_materialized_view => $self->query_library_materialized_view
+        if defined($self->query_library_materialized_view)
+        && length($self->query_library_materialized_view);
+    push @pairs, query_library_segment => $_ for @{$self->query_library_segments // []};
+    for my $name (sort keys %{$self->query_library_parameters // {}}) {
+        push @pairs,
+            query_library_param_name => $name,
+            query_library_param_value => $self->query_library_parameters->{$name};
+    }
     push @pairs, chart_type => $self->chart_type if $self->view eq 'graph';
     for my $field (@{$self->fields}) {
         my $column = $self->field_configs->{$field} // {};
@@ -442,6 +471,10 @@ sub as_hash ($self) {
         direction => $self->direction,
         limit => $self->limit,
         page => $self->page,
+        query_library_view => $self->query_library_view,
+        query_library_materialized_view => $self->query_library_materialized_view,
+        query_library_segments => [@{$self->query_library_segments // []}],
+        query_library_parameters => {%{$self->query_library_parameters // {}}},
     };
 }
 
@@ -489,6 +522,87 @@ sub _valid_temporal_value ($value) {
     return 0 unless defined($value) && !ref($value)
         && "$value" =~ /\A(\d{4}-\d{2}-\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?\z/;
     return Selecto::Components::DateShortcut->valid_date($1);
+}
+
+sub _query_library_state ($domain, $input, $errors) {
+    my $library = Selecto::QueryLibrary->library($domain);
+    my $view = _trim(_first($input, 'query_library_view'));
+    my $materialized_view = _trim(_first($input, 'query_library_materialized_view'));
+    my @segments = grep { length } map { _trim($_) }
+        @{_values($input, 'query_library_segment')};
+    my %seen_segment;
+    @segments = grep { !$seen_segment{$_}++ } @segments;
+
+    if (length($view) && !_library_definition_exists($library->{views}, $view)) {
+        push @$errors, 'Choose an available query-library view.';
+        $view = '';
+    }
+    for my $segment (@segments) {
+        push @$errors, 'Choose an available query-library segment.'
+            unless _library_definition_exists($library->{segments}, $segment);
+    }
+    @segments = grep { _library_definition_exists($library->{segments}, $_) } @segments;
+
+    my $parameter_names = _values($input, 'query_library_param_name');
+    my $parameter_values = _values($input, 'query_library_param_value');
+    my %parameters;
+    for my $index (0 .. $#$parameter_names) {
+        my $name = _trim($parameter_names->[$index]);
+        next unless length($name);
+        if (exists($parameters{$name})) {
+            push @$errors, 'A query-library parameter can be submitted only once.';
+            next;
+        }
+        $parameters{$name} = _scalar($parameter_values->[$index]);
+    }
+
+    my $selection = {
+        (length($view) ? (view => $view) : ()),
+        segments => \@segments,
+    };
+    my ($normalized, $specs) = ({}, {});
+    my $ok = eval {
+        $specs = Selecto::QueryLibrary->parameter_specs($domain, %$selection);
+        my @unknown = grep { !exists($specs->{$_}) } keys %parameters;
+        Selecto::Error->throw(
+            'invalid_query_library', 'unknown query-library parameters', {names => \@unknown}
+        ) if @unknown;
+        $normalized = Selecto::QueryLibrary->normalize_parameters_for_selection(
+            $domain, $selection, \%parameters,
+        );
+        1;
+    };
+    push @$errors, 'Complete the query-library parameters with valid values.' unless $ok;
+
+    my (@projection_fields, @orders);
+    if (length($view)) {
+        my $view_spec = Selecto::QueryLibrary->definition($domain, 'views', $view);
+        if (defined($view_spec->{projection}) && !ref($view_spec->{projection})
+            && length("$view_spec->{projection}")) {
+            @projection_fields = @{Selecto::QueryLibrary->projection_fields(
+                $domain, $view_spec->{projection},
+            )};
+        }
+        if (defined($view_spec->{ordering}) && !ref($view_spec->{ordering})
+            && length("$view_spec->{ordering}")) {
+            @orders = @{Selecto::QueryLibrary->ordering_entries(
+                $domain, $view_spec->{ordering},
+            )};
+        }
+    }
+
+    return {
+        view => length($view) ? $view : undef,
+        materialize => length($view) && $view ne $materialized_view ? 1 : 0,
+        segments => \@segments,
+        parameters => $ok ? $normalized : \%parameters,
+        projection_fields => \@projection_fields,
+        orders => \@orders,
+    };
+}
+
+sub _library_definition_exists ($registry, $id) {
+    return scalar grep { "$_" eq "$id" && ref($registry->{$_}) eq 'HASH' } keys %$registry;
 }
 
 1;
