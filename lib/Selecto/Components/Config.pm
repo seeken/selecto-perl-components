@@ -15,7 +15,11 @@ has max_limit      => 100;
 has max_filters    => 20;
 has max_orders     => 10;
 has max_measures   => 10;
+has max_action_rows => 1000;
 has show_sql       => 0;
+has action_handlers => sub { return {} };
+has choice_sources  => sub { return {} };
+has 'action_authorizer';
 
 my @DATE_FORMATS = (
     { id => 'day', label => 'Day' },
@@ -49,6 +53,25 @@ sub new ($class, @args) {
         unless $self->max_orders =~ /\A\d+\z/ && $self->max_orders >= 1 && $self->max_orders <= 20;
     die "max_measures must be between 1 and 20\n"
         unless $self->max_measures =~ /\A\d+\z/ && $self->max_measures >= 1 && $self->max_measures <= 20;
+    die "max_action_rows must be between 1 and 1000\n"
+        unless $self->max_action_rows =~ /\A\d+\z/
+            && $self->max_action_rows >= 1 && $self->max_action_rows <= 1000;
+    die "action_handlers must be an object\n" unless ref($self->action_handlers) eq 'HASH';
+    die "choice_sources must be an object\n" unless ref($self->choice_sources) eq 'HASH';
+    die "action_authorizer must be a coderef\n"
+        if defined($self->action_authorizer) && ref($self->action_authorizer) ne 'CODE';
+    for my $id (keys %{$self->action_handlers}) {
+        die "action handler id must be a lowercase identifier\n"
+            unless $id =~ /\A[a-z][a-z0-9_-]*\z/;
+        die "action handler $id must be a coderef\n"
+            unless ref($self->action_handlers->{$id}) eq 'CODE';
+    }
+    for my $id (keys %{$self->choice_sources}) {
+        die "choice source id must be a lowercase identifier\n"
+            unless $id =~ /\A[a-z][a-z0-9_-]*\z/;
+        die "choice source $id must be a coderef\n"
+            unless ref($self->choice_sources->{$id}) eq 'CODE';
+    }
 
     my %known_view = map { $_ => 1 } qw(detail aggregate graph);
     my %seen_view;
@@ -94,26 +117,144 @@ sub allows_view ($self, $view) {
     return scalar grep { $_ eq $view } @{$self->views};
 }
 
+sub action_handler ($self, $id) {
+    return $self->action_handlers->{$id};
+}
+
+sub choice_source ($self, $id) {
+    return $self->choice_sources->{$id};
+}
+
+sub has_bulk_actions ($self, $domain) {
+    return @{$self->bulk_action_catalog($domain)} ? 1 : 0;
+}
+
+sub action_column_path ($self, $id) {
+    return 'action:' . $id;
+}
+
+sub action_id_from_column ($self, $path) {
+    return undef unless defined($path) && !ref($path)
+        && "$path" =~ /\Aaction:([a-z][a-z0-9_-]*)\z/;
+    return $1;
+}
+
+sub bulk_action_catalog ($self, $domain, $available = undef) {
+    my @actions;
+    if (defined($available)) {
+        @actions = grep { ref($_) eq 'HASH' && defined($_->{id}) } @{$available // []};
+    } else {
+        my $specs = $domain->actions;
+        return [] unless ref($specs) eq 'HASH';
+        for my $id (sort keys %$specs) {
+            my $spec = $specs->{$id};
+            next unless $self->action_handler($id) && _bulk_action_spec($spec);
+            push @actions, {%$spec, id => $id};
+        }
+    }
+    return [map {
+        my $id = "$_->{id}";
+        my $label = defined($_->{label}) && !ref($_->{label}) ? "$_->{label}"
+            : defined($_->{name}) && !ref($_->{name}) ? "$_->{name}" : _humanize($id);
+        $label = 'Action: ' . $label unless $label =~ /\AAction\s*:/i;
+        {
+            path => $self->action_column_path($id),
+            label => $label,
+            type => 'action',
+            action_id => $id,
+        }
+    } sort { $a->{id} cmp $b->{id} } @actions];
+}
+
+sub detail_column_catalog ($self, $domain, $available = undef) {
+    return [
+        @{$self->bulk_action_catalog($domain, $available)},
+        @{$self->field_catalog($domain)},
+    ];
+}
+
+sub detail_column_map ($self, $domain, $available = undef) {
+    return {map { $_->{path} => {%$_} } @{$self->detail_column_catalog($domain, $available)}};
+}
+
+sub primary_key ($self, $domain) {
+    my $contract = $domain->contract;
+    my $primary_key = ref($contract) eq 'HASH' && ref($contract->{source}) eq 'HASH'
+        ? $contract->{source}{primary_key} : undef;
+    $primary_key = 'id' unless defined($primary_key) && !ref($primary_key)
+        && "$primary_key" =~ /\A[A-Za-z][A-Za-z0-9_]*\z/;
+    return "$primary_key";
+}
+
 sub field_catalog ($self, $domain) {
     my @catalog;
     my $fields = $domain->fields;
+    my $contract = $domain->contract;
+    my $source = ref($contract) eq 'HASH' && ref($contract->{source}) eq 'HASH'
+        ? $contract->{source} : {};
     push @catalog, map {
-        { path => $_, label => _humanize($_), type => $fields->{$_}, association => undef }
+        my $path = $_;
+        my $link = _field_link($domain, $path, $source->{columns}{$path});
+        {
+            path => $path,
+            label => _humanize($path),
+            type => $fields->{$path},
+            association => undef,
+            (defined($link) ? (link => $link) : ()),
+        }
     } sort keys %$fields;
     my $associations = $domain->associations;
     for my $association_name (sort keys %$associations) {
         my $association = $associations->{$association_name};
         my $association_fields = $association->fields;
+        my $association_spec = ref($source->{associations}) eq 'HASH'
+            ? $source->{associations}{$association_name} : undef;
+        my $queryable = ref($association_spec) eq 'HASH'
+            ? $association_spec->{queryable} : undef;
+        my $schema = defined($queryable) && ref($contract) eq 'HASH'
+            && ref($contract->{schemas}) eq 'HASH'
+            ? $contract->{schemas}{$queryable} : undef;
         push @catalog, map {
+            my $field = $_;
+            my $path = "$association_name.$field";
+            my $link = _field_link(
+                $domain,
+                $path,
+                ref($schema) eq 'HASH' ? $schema->{columns}{$field} : undef,
+            );
             {
-                path => "$association_name.$_",
-                label => _humanize($association_name) . ' · ' . _humanize($_),
-                type => $association_fields->{$_},
+                path => $path,
+                label => _humanize($association_name) . ' · ' . _humanize($field),
+                type => $association_fields->{$field},
                 association => $association_name,
+                (defined($link) ? (link => $link) : ()),
             }
         } sort keys %$association_fields;
     }
     return \@catalog;
+}
+
+sub _field_link ($domain, $path, $column) {
+    return undef unless ref($column) eq 'HASH' && exists($column->{link});
+    my $link = $column->{link};
+    die "link metadata for $path must be an object\n" unless ref($link) eq 'HASH';
+    my $template = $link->{url_template};
+    die "link URL template for $path must be a safe application path containing {{id}}\n"
+        unless defined($template) && !ref($template)
+            && "$template" =~ m{\A/(?!/)[^\x00-\x20\x7f]*\{\{id\}\}[^\x00-\x20\x7f]*\z}
+            && do { my $rest = "$template"; $rest =~ s/\{\{id\}\}//g; $rest !~ /[{}]/ };
+    my $id_field = exists($link->{id_field}) ? $link->{id_field} : 'id';
+    die "link id field for $path must be a relative field name\n"
+        unless defined($id_field) && !ref($id_field)
+            && "$id_field" =~ /\A[A-Za-z_][A-Za-z0-9_]*\z/;
+    my ($association) = "$path" =~ /\A([^.]+)\./;
+    my $resolved_id_field = defined($association) ? "$association.$id_field" : "$id_field";
+    my $resolved = eval { $domain->resolve($resolved_id_field) };
+    die "link id field $resolved_id_field for $path is not queryable\n" unless $resolved;
+    return {
+        url_template => "$template",
+        id_field => $resolved_id_field,
+    };
 }
 
 sub field_map ($self, $domain) {
@@ -121,7 +262,7 @@ sub field_map ($self, $domain) {
 }
 
 sub resolved_default_fields ($self, $domain) {
-    my $map = $self->field_map($domain);
+    my $map = $self->detail_column_map($domain);
     my @configured = grep { $map->{$_} } @{$self->default_fields // []};
     return \@configured if @configured;
     return [map { $_->{path} } @{$self->field_catalog($domain)}[0 .. _last_index($self->field_catalog($domain), 6)]];
@@ -308,7 +449,11 @@ sub query_params_enabled ($self, $domain) {
 
 sub validate_domain ($self, $domain) {
     my $map = $self->field_map($domain);
-    for my $field (@{$self->default_fields}, @{$self->default_group}) {
+    my $detail_map = $self->detail_column_map($domain);
+    for my $field (@{$self->default_fields}) {
+        die "configured explorer field $field is outside the domain\n" unless $detail_map->{$field};
+    }
+    for my $field (@{$self->default_group}) {
         die "configured explorer field $field is outside the domain\n" unless $map->{$field};
     }
     for my $measure (@{$self->measures}) {
@@ -326,6 +471,14 @@ sub validate_domain ($self, $domain) {
 sub _last_index ($catalog, $maximum) {
     my $last = @$catalog - 1;
     return $last < $maximum - 1 ? $last : $maximum - 1;
+}
+
+sub _bulk_action_spec ($spec) {
+    return 0 unless ref($spec) eq 'HASH';
+    return 1 if lc($spec->{scope} // '') eq 'bulk';
+    my $bulk = $spec->{bulk};
+    return 1 if defined($bulk) && !ref($bulk) && "$bulk" =~ /\A(?:1|true)\z/i;
+    return ref($bulk) eq 'HASH' && $bulk->{enabled} ? 1 : 0;
 }
 
 sub _humanize ($value) {

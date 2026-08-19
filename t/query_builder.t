@@ -17,10 +17,26 @@ my $domain = TestSelectoComponents::domain();
 my $dbh = bless {}, 'TestSelectoComponents::CompileDBH';
 my $postgresql = Selecto::PostgreSQL->new(dbh => $dbh);
 
+my $unsafe_link_contract = $domain->contract;
+$unsafe_link_contract->{source}{columns}{product_name}{link}{url_template}
+    = 'javascript:alert(1)?id={{id}}';
+my $unsafe_link_domain = Selecto::Domain->parse($unsafe_link_contract, strict => 1);
+eval { $config->field_catalog($unsafe_link_domain) };
+like $@, qr/safe application path/, 'external or executable object-link templates are rejected';
+
+my $unknown_link_id_contract = $domain->contract;
+$unknown_link_id_contract->{source}{columns}{product_name}{link}{id_field} = 'missing_id';
+my $unknown_link_id_domain = Selecto::Domain->parse($unknown_link_id_contract, strict => 1);
+eval { $config->field_catalog($unknown_link_id_domain) };
+like $@, qr/is not queryable/, 'object links cannot select an id outside the governed domain';
+
 my $detail_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'detail',
-    field => ['product_name', 'category.category_name', 'unit_price'],
+    field => [
+        'action:add_product_note', 'product_name', 'category.category_name',
+        'unit_price', 'action:mark_for_review',
+    ],
     group => ['category.category_name'],
     measure => 'count',
     filter_field => ['unit_price', 'category.category_name'],
@@ -40,8 +56,48 @@ like $detail_statement->sql, qr/ORDER BY "s0"\."unit_price" DESC/, 'sort field a
 like $detail_statement->sql, qr/LIMIT 25 OFFSET 25\z/, 'page compiles to bounded limit and offset';
 is_deeply $detail_statement->params, ['12.50', 'Tools', 'Produce'], 'values remain out of SQL';
 is_deeply $detail_statement->columns,
-    [qw(product_name category__category_name unit_price)],
-    'detail aliases are stable and relationship-safe';
+    [qw(product_name category__category_name unit_price __selecto_action_target)],
+    'detail aliases are stable and include the hidden selected-row action target';
+is $detail->{columns}[1]{link_key}, '__selecto_action_target',
+    'a linked display column reuses an already selected hidden object id';
+is $detail->{columns}[1]{link}{url_template}, '/products/view?id={{id}}',
+    'the query result retains the governed object link template';
+is_deeply [map { $_->{key} } @{$detail->{columns}}],
+    [qw(
+        __selecto_action_column_add_product_note product_name
+        category__category_name unit_price __selecto_action_column_mark_for_review
+    )],
+    'selected action pseudo-columns retain their requested display order';
+is $detail->{action_key}, '__selecto_action_target',
+    'the detail result identifies its hidden action target';
+is_deeply $detail->{action_ids}, [qw(add_product_note mark_for_review)],
+    'the detail result identifies each independent selected action column';
+
+my $action_only_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'action:add_product_note', measure => 'count',
+    limit => 25, page => 1,
+});
+my $action_only = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $action_only_state,
+);
+my $action_only_statement = $postgresql->compile($domain, $action_only->{query});
+is_deeply $action_only_statement->columns, ['__selecto_action_target'],
+    'an action-only detail view queries only its hidden governed target key';
+like $action_only_statement->sql, qr/ORDER BY "s0"\."id" ASC/,
+    'an action-only detail view remains deterministically ordered';
+
+my $linked_detail_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'product_name', measure => 'count',
+    order => 'product_name', limit => 25, page => 1,
+});
+my $linked_detail = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $linked_detail_state,
+);
+my $linked_detail_statement = $postgresql->compile($domain, $linked_detail->{query});
+is_deeply $linked_detail_statement->columns, [qw(product_name __selecto_link_id)],
+    'a linked name automatically fetches its object id as a hidden query column';
+is $linked_detail->{columns}[0]{link_key}, '__selecto_link_id',
+    'the visible linked name references its hidden object id';
 
 my $aggregate_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
@@ -49,6 +105,9 @@ my $aggregate_state = Selecto::Components::State->from_input($config, $domain, {
     field => ['product_name'],
     group => ['category.category_name'],
     measure => 'total_price',
+    filter_field => 'unit_price',
+    filter_op => 'gte',
+    filter_value => '12.50',
     order => 'product_name',
     direction => 'asc',
     limit => 10,
@@ -58,6 +117,10 @@ my $aggregate = Selecto::Components::QueryBuilder->build($config, $domain, $aggr
 my $aggregate_statement = $postgresql->compile($domain, $aggregate->{query});
 like $aggregate_statement->sql, qr/SUM\("s0"\."unit_price"\) AS "total_price"/, 'configured aggregate compiles';
 like $aggregate_statement->sql, qr/GROUP BY "j_category"\."category_name"/, 'configured group compiles';
+like $aggregate_statement->sql, qr/WHERE "s0"\."unit_price" >= \$1/,
+    'aggregate queries apply the configured filters before grouping';
+is_deeply $aggregate_statement->params, ['12.50'],
+    'aggregate filter values remain bound parameters';
 ok $aggregate->{graph}, 'graph uses aggregate query with graph rendering metadata';
 
 my $multi_measure_state = Selecto::Components::State->from_input($config, $domain, {
@@ -86,8 +149,17 @@ like $multi_measure_statement->sql, qr/COUNT\(\*\) AS "count"/,
 like $multi_measure_statement->sql,
     qr/COUNT\(CASE WHEN "s0"\."unit_price" >= \$7 AND "s0"\."unit_price" <= \$8 THEN 1 END\) AS "total_price__bucket_1"/,
     'a numeric measure bucket expands to a governed conditional count column';
-like $multi_measure_statement->sql, qr/GROUP BY CASE WHEN "s0"\."unit_price" >=/,
-    'numeric group buckets compile as governed grouping expressions';
+like $multi_measure_statement->sql, qr/GROUP BY ROLLUP \(CASE WHEN "s0"\."unit_price" >=/,
+    'numeric group buckets compile as governed rollup expressions';
+like $multi_measure_statement->sql, qr/GROUPING\(CASE WHEN .*?\) AS "__selecto_rollup_grouping"/,
+    'aggregate rollup carries governed grouping metadata for hierarchy rendering';
+like $multi_measure_statement->sql,
+    qr/\ASELECT \* FROM \(SELECT .*\) AS rollupfix ORDER BY 1 ASC NULLS FIRST LIMIT 25 OFFSET 0\z/s,
+    'ordered bucket rollups use the PostgreSQL positional outer-sort workaround';
+unlike $multi_measure_statement->sql, qr/ORDER BY CASE/,
+    'the rollup outer sort does not rebuild the parameterized bucket expression';
+is scalar(@{$multi_measure_statement->params}), 9,
+    'ordered bucket rollups do not duplicate their bound bucket parameters';
 is_deeply [map { $_->{label} } @{$multi_measure->{columns}}],
     ['Price band', 'Products', 'Price counts: 0-10', '11+'],
     'multiple measures and expanded bucket columns preserve configured display order';
@@ -175,10 +247,37 @@ my $formatted_aggregate = Selecto::Components::QueryBuilder->build(
 );
 my $formatted_aggregate_statement = $postgresql->compile($domain, $formatted_aggregate->{query});
 like $formatted_aggregate_statement->sql,
-    qr/GROUP BY TO_CHAR\("s0"\."created_on", 'YYYY-MM'\)/,
-    'aggregate date configuration defines the SQL grouping bucket';
+    qr/GROUP BY ROLLUP \(TO_CHAR\("s0"\."created_on", 'YYYY-MM'\)\)/,
+    'aggregate date configuration defines the SQL rollup bucket';
 is $formatted_aggregate->{columns}[0]{label}, 'Month',
     'aggregate group label uses its independent configuration';
+
+my $drilldown_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => ['created_on', 'product_name'],
+    group => 'created_on',
+    group_format => 'month',
+    measure => 'count',
+    filter_field => ['unit_price', 'created_on'],
+    filter_op => ['gte', 'eq'],
+    filter_value => ['10', '2026-08'],
+    filter_group => [0, 1],
+    order => 'created_on',
+    limit => 25,
+    page => 1,
+});
+my $drilldown_statement = $postgresql->compile(
+    $domain,
+    Selecto::Components::QueryBuilder->build($config, $domain, $drilldown_state)->{query},
+);
+like $drilldown_statement->sql, qr/"s0"\."unit_price" >= \$1/,
+    'aggregate drilldown retains the original detail filter';
+like $drilldown_statement->sql,
+    qr/TO_CHAR\("s0"\."created_on", 'YYYY-MM'\) = \$2/,
+    'aggregate drilldown filters by the exact governed grouping expression';
+is_deeply $drilldown_statement->params, ['10', '2026-08'],
+    'original and grouped drilldown values remain aligned bound parameters';
 
 my $between_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

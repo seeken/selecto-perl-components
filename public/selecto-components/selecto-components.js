@@ -2,6 +2,7 @@
   "use strict";
 
   var activeBuilderTabs = Object.create(null);
+  var chartInstances = new WeakMap();
   var dateFormats = [
     ["day", "Day"], ["day_hour", "Day + Hour"], ["week", "Week"],
     ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"],
@@ -50,6 +51,11 @@
       panel.hidden = !active;
       panel.disabled = !active;
     });
+    root.querySelectorAll("[data-sc-graph-options]").forEach(function (panel) {
+      var graphActive = view === "graph";
+      panel.hidden = !graphActive;
+      panel.disabled = !graphActive;
+    });
     root.querySelectorAll("[data-sc-picker-root]").forEach(refreshColumnPicker);
   }
 
@@ -60,9 +66,111 @@
     });
   }
 
+  function chartJsType(type) {
+    if (type === "area") return "line";
+    if (type === "horizontal_bar" || type === "stacked_bar") return "bar";
+    return type;
+  }
+
+  function chartColorWithAlpha(color, alpha) {
+    var match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color || "");
+    if (!match) return color;
+    return "rgba(" + parseInt(match[1], 16) + "," + parseInt(match[2], 16) + "," +
+      parseInt(match[3], 16) + "," + alpha + ")";
+  }
+
+  function chartOptions(root, type) {
+    var options = {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {mode: "nearest", intersect: true},
+      plugins: {
+        legend: {labels: {color: "#dce6e8", usePointStyle: true}},
+        tooltip: {callbacks: {title: function (items) {
+          if (!items.length) return "";
+          var raw = items[0].raw;
+          return raw && raw.label ? raw.label : items[0].label;
+        }}}
+      },
+      onClick: function (_event, elements) {
+        if (!elements.length) return;
+        var form = root.querySelector('[data-sc-graph-drilldown="' + elements[0].index + '"]');
+        if (!form) return;
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else form.submit();
+      }
+    };
+    if (type !== "pie" && type !== "doughnut") {
+      var axis = {
+        ticks: {color: "#9fb0b3"},
+        grid: {color: "rgba(159,176,179,.15)"},
+        border: {color: "rgba(159,176,179,.35)"}
+      };
+      options.scales = {x: Object.assign({}, axis), y: Object.assign({}, axis, {beginAtZero: true})};
+    }
+    if (type === "horizontal_bar") options.indexAxis = "y";
+    if (type === "stacked_bar") {
+      options.scales.x.stacked = true;
+      options.scales.y.stacked = true;
+    }
+    return options;
+  }
+
+  function initializeChart(root) {
+    if (!root || chartInstances.has(root) || !window.Chart) return;
+    var canvas = root.querySelector("canvas");
+    if (!canvas) return;
+    var type = root.dataset.chartType || "bar";
+    var data;
+    try {
+      data = JSON.parse(root.dataset.chartData || "{}");
+    } catch (_error) {
+      return;
+    }
+    (data.datasets || []).forEach(function (dataset) {
+      if (type === "line" || type === "area") dataset.tension = 0.28;
+      if (type === "area") {
+        dataset.fill = "origin";
+        dataset.backgroundColor = chartColorWithAlpha(dataset.borderColor, 0.22);
+      }
+      if (type === "scatter") {
+        dataset.pointRadius = 5;
+        dataset.pointHoverRadius = 7;
+        dataset.showLine = false;
+      }
+    });
+    try {
+      var chart = new window.Chart(canvas, {
+        type: chartJsType(type),
+        data: data,
+        options: chartOptions(root, type)
+      });
+      chartInstances.set(root, chart);
+      root.classList.add("is-ready");
+    } catch (_error) {
+      root.classList.remove("is-ready");
+    }
+  }
+
+  function restoreCharts() {
+    document.querySelectorAll("[data-sc-chart]").forEach(initializeChart);
+  }
+
+  function destroyChartsWithin(node) {
+    if (!node || !node.querySelectorAll) return;
+    var roots = Array.from(node.querySelectorAll("[data-sc-chart]"));
+    if (node.matches && node.matches("[data-sc-chart]")) roots.unshift(node);
+    roots.forEach(function (root) {
+      var chart = chartInstances.get(root);
+      if (chart) chart.destroy();
+      chartInstances.delete(root);
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     restoreBuilderTabs();
     restoreResultViews();
+    restoreCharts();
   });
 
   document.addEventListener("htmx:after:ws:connection", function () {
@@ -103,12 +211,18 @@
     window.requestAnimationFrame(function () {
       restoreBuilderTabs();
       restoreResultViews();
+      restoreCharts();
     });
   });
 
   document.addEventListener("htmx:after:swap", function () {
     restoreBuilderTabs();
     restoreResultViews();
+    restoreCharts();
+  });
+
+  document.addEventListener("htmx:before:swap", function (event) {
+    destroyChartsWithin(event.detail && event.detail.target);
   });
 
   document.addEventListener("click", function (event) {
@@ -217,7 +331,14 @@
     controls.appendChild(createColumnControl("down", label, "↓"));
     controls.appendChild(createColumnControl("remove", label, "×"));
     item.appendChild(controls);
-    if (kind === "order") {
+    if (kind === "field" && type === "action") {
+      ["field_alias", "field_format"].forEach(function (name) {
+        var alignment = document.createElement("input");
+        alignment.type = "hidden";
+        alignment.name = name;
+        item.appendChild(alignment);
+      });
+    } else if (kind === "order") {
       var directionLabel = document.createElement("label");
       directionLabel.className = "sc-order-direction";
       directionLabel.appendChild(document.createTextNode("Direction"));
@@ -623,6 +744,7 @@
     fieldInput.name = "filter_field";
     fieldInput.value = field;
     item.appendChild(fieldInput);
+    item.appendChild(hiddenFilterValue("filter_group", "0"));
     var heading = document.createElement("div");
     heading.className = "sc-filter-set-heading";
     appendLabel(heading, label, type);
@@ -873,5 +995,199 @@
   document.addEventListener("dragend", function (event) {
     var item = event.target.closest("[data-sc-picker-set-item]");
     if (item) item.classList.remove("is-dragging");
+  });
+
+  function bulkActionResults(root) {
+    return root && root.closest(".sc-results");
+  }
+
+  function actionIdFor(root) {
+    return root && root.dataset.scActionId || "";
+  }
+
+  function actionControls(results, selector, actionId) {
+    if (!results || !actionId) return [];
+    return Array.from(results.querySelectorAll(selector)).filter(function (input) {
+      return input.dataset.scActionId === actionId;
+    });
+  }
+
+  function actionRoot(results, actionId) {
+    return Array.from(results.querySelectorAll("[data-sc-bulk-action]")).find(function (root) {
+      return actionIdFor(root) === actionId;
+    });
+  }
+
+  function selectedRowIds(root) {
+    var results = bulkActionResults(root);
+    if (!results) return [];
+    var seen = Object.create(null);
+    return actionControls(results, "[data-sc-row-select]:checked", actionIdFor(root)).reduce(function (ids, input) {
+      if (input.value && !seen[input.value]) {
+        seen[input.value] = true;
+        ids.push(input.value);
+      }
+      return ids;
+    }, []);
+  }
+
+  function populateActionTargets(form, ids) {
+    var target = form.querySelector("[data-sc-action-targets]");
+    if (!target) return;
+    target.replaceChildren();
+    ids.forEach(function (id) {
+      var input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "selected_id";
+      input.value = id;
+      target.appendChild(input);
+    });
+    var count = form.querySelector("[data-sc-action-selection-count]");
+    if (count) count.textContent = ids.length;
+  }
+
+  function refreshBulkAction(root) {
+    if (!root) return;
+    var actionId = actionIdFor(root);
+    var ids = selectedRowIds(root);
+    var count = root.querySelector("[data-sc-selection-count]");
+    var label = root.querySelector("[data-sc-selection-label]");
+    if (count) count.textContent = ids.length;
+    if (label) label.textContent = ids.length === 1 ? "row selected" : "rows selected";
+    root.querySelectorAll("[data-sc-action-open]").forEach(function (button) {
+      button.disabled = ids.length === 0 || button.dataset.scActionDisabled === "1";
+    });
+    var results = bulkActionResults(root);
+    var pageToggle = actionControls(results, "[data-sc-select-page]", actionId)[0];
+    var rowToggles = actionControls(results, "[data-sc-row-select]:not(:disabled)", actionId);
+    var checked = rowToggles.filter(function (input) { return input.checked; }).length;
+    if (pageToggle) {
+      pageToggle.checked = rowToggles.length > 0 && checked === rowToggles.length;
+      pageToggle.indeterminate = checked > 0 && checked < rowToggles.length;
+    }
+  }
+
+  function restoreBulkActions() {
+    document.querySelectorAll("[data-sc-bulk-action]").forEach(refreshBulkAction);
+  }
+
+  document.addEventListener("DOMContentLoaded", restoreBulkActions);
+  document.addEventListener("htmx:after:swap", restoreBulkActions);
+  document.addEventListener("htmx:after:ws:message", function () {
+    window.requestAnimationFrame(restoreBulkActions);
+  });
+
+  document.addEventListener("change", function (event) {
+    if (event.target.matches("[data-sc-select-page]")) {
+      var results = event.target.closest(".sc-results");
+      var actionId = event.target.dataset.scActionId;
+      actionControls(results, "[data-sc-row-select]:not(:disabled)", actionId).forEach(function (input) {
+        input.checked = event.target.checked;
+      });
+      refreshBulkAction(actionRoot(results, actionId));
+      return;
+    }
+    if (event.target.matches("[data-sc-row-select]")) {
+      var rowResults = event.target.closest(".sc-results");
+      refreshBulkAction(actionRoot(rowResults, event.target.dataset.scActionId));
+    }
+  });
+
+  document.addEventListener("click", function (event) {
+    var open = event.target.closest("[data-sc-action-open]");
+    if (open && !open.disabled) {
+      var root = open.closest("[data-sc-bulk-action]");
+      var dialog = document.getElementById(open.dataset.scActionOpen);
+      var form = dialog && dialog.querySelector("[data-sc-action-form]");
+      var ids = selectedRowIds(root);
+      if (!form || ids.length === 0) return;
+      form.reset();
+      populateActionTargets(form, ids);
+      var result = form.querySelector("[data-sc-action-result]");
+      if (result) {
+        result.hidden = true;
+        result.textContent = "";
+        result.classList.remove("is-success", "is-error");
+      }
+      var submit = form.querySelector('button[type="submit"]');
+      if (submit) {
+        submit.disabled = false;
+        submit.textContent = "Apply to selected rows";
+      }
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "");
+      return;
+    }
+
+    var close = event.target.closest("[data-sc-action-close]");
+    if (close) {
+      var closeDialog = close.closest("[data-sc-action-dialog]");
+      if (!closeDialog) return;
+      if (typeof closeDialog.close === "function") closeDialog.close();
+      else closeDialog.removeAttribute("open");
+    }
+  });
+
+  document.addEventListener("submit", function (event) {
+    var form = event.target.closest("[data-sc-action-form]");
+    if (!form || typeof window.fetch !== "function") return;
+    event.preventDefault();
+    var root = form.closest("[data-sc-bulk-action]");
+    var ids = selectedRowIds(root);
+    populateActionTargets(form, ids);
+    if (!ids.length || !form.reportValidity()) return;
+
+    var submit = form.querySelector('button[type="submit"]');
+    var result = form.querySelector("[data-sc-action-result]");
+    if (submit) {
+      submit.disabled = true;
+      submit.textContent = "Applying…";
+    }
+    if (result) {
+      result.hidden = true;
+      result.classList.remove("is-success", "is-error");
+    }
+
+    window.fetch(form.action, {
+      method: "POST",
+      body: new FormData(form),
+      credentials: "same-origin",
+      headers: {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
+    }).then(function (response) {
+      return response.json().catch(function () {
+        return {ok: false, message: "The server returned an unreadable action response."};
+      }).then(function (payload) {
+        return {response: response, payload: payload};
+      });
+    }).then(function (outcome) {
+      var succeeded = outcome.response.ok && outcome.payload.ok;
+      if (result) {
+        result.hidden = false;
+        result.classList.add(succeeded ? "is-success" : "is-error");
+        result.textContent = outcome.payload.message || (succeeded ? "Action completed." : "Action failed.");
+      }
+      if (succeeded) {
+        actionControls(
+          bulkActionResults(root), "[data-sc-row-select]:checked", actionIdFor(root)
+        ).forEach(function (input) {
+          input.checked = false;
+        });
+        refreshBulkAction(root);
+        if (submit) submit.textContent = "Applied";
+      } else if (submit) {
+        submit.disabled = false;
+        submit.textContent = "Apply to selected rows";
+      }
+    }).catch(function () {
+      if (result) {
+        result.hidden = false;
+        result.classList.add("is-error");
+        result.textContent = "The action request could not reach the server.";
+      }
+      if (submit) {
+        submit.disabled = false;
+        submit.textContent = "Apply to selected rows";
+      }
+    });
   });
 })();

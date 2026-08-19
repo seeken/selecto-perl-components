@@ -22,9 +22,39 @@ is_deeply $initial->fields,
     'configured detail fields become initial state';
 is_deeply $initial->groups, ['category.category_name'], 'configured group becomes initial state';
 
+my $detail_catalog = $config->detail_column_catalog($domain);
+my %detail_by_path = map { $_->{path} => $_ } @$detail_catalog;
+is $detail_by_path{'action:add_product_note'}{label}, 'Action: Add Product Note',
+    'bulk actions are available as named detail columns';
+is $detail_by_path{'action:mark_for_review'}{type}, 'action',
+    'each configured bulk action has its own action-column type';
+
+my $action_columns = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => ['action:add_product_note', 'product_name', 'action:mark_for_review'],
+    field_alias => ['', 'Product', ''],
+    field_format => ['', '', ''],
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+});
+ok $action_columns->valid, 'multiple action columns are valid detail selections';
+is_deeply $action_columns->fields,
+    ['action:add_product_note', 'product_name', 'action:mark_for_review'],
+    'action columns retain their order among data columns';
+is_deeply $action_columns->field_configs->{'action:add_product_note'},
+    {alias => '', format => ''}, 'action columns do not accept presentation configuration';
+my $action_only = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'action:add_product_note', measure => 'count',
+});
+ok $action_only->valid, 'an action can be the only selected detail column';
+is $action_only->order, 'id', 'action-only detail results use the domain primary key for stable ordering';
+
 my $configured = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'graph',
+    chart_type => 'area',
     field => ['product_name', 'unit_price'],
     group => ['category.category_name'],
     measure => 'total_price',
@@ -37,12 +67,146 @@ my $configured = Selecto::Components::State->from_input($config, $domain, {
     page => 3,
 });
 ok $configured->valid, 'configured graph state is valid';
+is $configured->chart_type, 'area', 'configured chart type is retained';
 is $configured->measure, 'total_price', 'configured measure is retained';
 is $configured->page, 3, 'page is retained';
 is_deeply $configured->filters, [
     { field => 'unit_price', op => 'gte', value => '12.50', value_end => '' },
     { field => 'category.category_name', op => 'in', value => 'Tools, Produce', value_end => '' },
 ], 'filters retain governed field, operator, and bound value intent';
+
+for my $chart_type (qw(bar horizontal_bar stacked_bar line area pie doughnut scatter)) {
+    my $chart = Selecto::Components::State->from_input($config, $domain, {
+        q => 1,
+        view => 'graph',
+        chart_type => $chart_type,
+        field => 'product_name',
+        group => 'category.category_name',
+        measure => 'count',
+        order => 'product_name',
+    });
+    ok $chart->valid, "$chart_type is an available dashboard chart type";
+    is $chart->chart_type, $chart_type, "$chart_type survives state normalization";
+}
+
+my $invalid_chart = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'graph',
+    chart_type => 'javascript:alert(1)',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+});
+ok !$invalid_chart->valid, 'an unknown chart type is rejected';
+is $invalid_chart->chart_type, 'bar', 'an invalid chart type falls back safely';
+like join(' ', @{$invalid_chart->errors}), qr/available chart type/,
+    'invalid chart type reports a governed validation error';
+
+my $page_baseline = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+    limit => 25,
+    page => 3,
+});
+my $page_only = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    query_signature => $page_baseline->query_signature,
+    view => 'detail',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+    limit => 25,
+    page => 7,
+});
+is $page_only->page, 7, 'changing only Page retains the explicitly requested page';
+my $new_query = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    query_signature => $page_baseline->query_signature,
+    view => 'detail',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    filter_field => 'unit_price',
+    filter_op => 'gte',
+    filter_value => '10',
+    order => 'product_name',
+    limit => 25,
+    page => 7,
+});
+is $new_query->page, 1, 'changing query intent resets an existing query to page one';
+
+my $graph_baseline = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'graph',
+    chart_type => 'bar',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+    limit => 25,
+    page => 4,
+});
+my $changed_chart = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    query_signature => $graph_baseline->query_signature,
+    view => 'graph',
+    chart_type => 'line',
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+    limit => 25,
+    page => 4,
+});
+is $changed_chart->page, 1, 'changing chart type resets the result to page one';
+
+my $drilldown = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => ['created_on', 'product_name'],
+    group => 'created_on',
+    group_format => 'month',
+    measure => 'count',
+    filter_field => 'created_on',
+    filter_op => 'eq',
+    filter_value => '2026-08',
+    filter_group => 1,
+    order => 'created_on',
+    limit => 25,
+    page => 1,
+});
+ok $drilldown->valid, 'an aggregate group value is valid detail drilldown state';
+is_deeply $drilldown->filters->[0], {
+    field => 'created_on', op => 'eq', value => '2026-08', value_end => '', grouped => 1,
+}, 'drilldown state marks the filter as a governed grouping expression';
+my $drilldown_pairs = $drilldown->query_pairs;
+my @filter_groups;
+for (my $index = 0; $index < @$drilldown_pairs; $index += 2) {
+    push @filter_groups, $drilldown_pairs->[$index + 1]
+        if $drilldown_pairs->[$index] eq 'filter_group';
+}
+is_deeply \@filter_groups, [1], 'canonical state preserves the aligned drilldown marker';
+
+my $bad_drilldown = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => 'category.category_name',
+    filter_field => 'unit_price',
+    filter_op => 'eq',
+    filter_value => '10',
+    filter_group => 1,
+    order => 'product_name',
+});
+ok !$bad_drilldown->valid, 'a drilldown marker cannot target a field outside the configured groups';
+like join(' ', @{$bad_drilldown->errors}), qr/aggregate drilldown filter is not available/,
+    'invalid drilldown state fails with an actionable error';
 
 my $multiple_measures = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
@@ -331,7 +495,7 @@ is $invalid->limit, $config->max_limit, 'limit is bounded by host configuration'
 
 my $missing_fields = Selecto::Components::State->from_input($config, $domain, {q => 1});
 ok !$missing_fields->valid, 'configured request cannot silently reset an empty field selection';
-like join(' ', @{$missing_fields->errors}), qr/Choose at least one detail field/, 'empty selection has an actionable error';
+like join(' ', @{$missing_fields->errors}), qr/Choose at least one detail column/, 'empty selection has an actionable error';
 
 my $invalid_page = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

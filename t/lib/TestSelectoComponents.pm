@@ -11,6 +11,8 @@ use Selecto::Domain ();
 use Selecto::Engine ();
 use Selecto::Statement ();
 
+our @ACTION_REQUESTS;
+
 sub domain {
     return _domain();
 }
@@ -31,7 +33,13 @@ sub _domain {
             fields => [qw(id product_name category_id unit_price units_in_stock created_on)],
             columns => {
                 id => { type => 'integer' },
-                product_name => { type => 'string' },
+                product_name => {
+                    type => 'string',
+                    link => {
+                        url_template => '/products/view?id={{id}}',
+                        id_field => 'id',
+                    },
+                },
                 category_id => { type => 'integer' },
                 unit_price => { type => 'decimal' },
                 units_in_stock => { type => 'integer' },
@@ -58,6 +66,38 @@ sub _domain {
             },
         },
         joins => { category => { type => 'inner' } },
+        actions => {
+            add_product_note => {
+                label => 'Add Product Note',
+                description => 'Add a note to selected products.',
+                type => 'bulk_action',
+                scope => 'bulk',
+                inputs => [
+                    {
+                        id => 'note_type', label => 'Note type', type => 'select',
+                        choice_source => 'product_note_types', required => 1,
+                    },
+                    {
+                        id => 'comment', label => 'Comment', type => 'textarea',
+                        required => 1, min_length => 1, max_length => 255,
+                    },
+                ],
+                execution => {kind => 'host', operation => 'add_product_note'},
+            },
+            mark_for_review => {
+                label => 'Mark for Review',
+                description => 'Mark selected products for review.',
+                type => 'bulk_action',
+                scope => 'bulk',
+                inputs => [
+                    {
+                        id => 'reason', label => 'Reason', type => 'textarea',
+                        required => 1, min_length => 1, max_length => 120,
+                    },
+                ],
+                execution => {kind => 'host', operation => 'mark_for_review'},
+            },
+        },
         (defined($components) ? (components => $components) : ()),
     }, strict => 1);
 }
@@ -78,6 +118,34 @@ sub config {
             { id => 'count', label => 'Product count', aggregate => 'count' },
             { id => 'total_price', label => 'Total price', aggregate => 'sum', field => 'unit_price' },
         ],
+        choice_sources => {
+            product_note_types => sub {
+                return [
+                    {value => 'internal', label => 'Internal'},
+                    {value => 'public', label => 'Public'},
+                ];
+            },
+        },
+        action_handlers => {
+            add_product_note => sub {
+                my ($controller, $request) = @_;
+                push @ACTION_REQUESTS, $request;
+                return {
+                    ok => 1,
+                    applied_count => scalar(@{$request->{selected_ids}}),
+                    message => 'Product note added.',
+                };
+            },
+            mark_for_review => sub {
+                my ($controller, $request) = @_;
+                push @ACTION_REQUESTS, $request;
+                return {
+                    ok => 1,
+                    applied_count => scalar(@{$request->{selected_ids}}),
+                    message => 'Products marked for review.',
+                };
+            },
+        },
         show_sql => 1,
     };
 }
@@ -107,12 +175,16 @@ package TestSelectoComponents::Adapter;
 use Mojo::Base 'Selecto::Adapter', -signatures;
 use Selecto::Statement ();
 
-our $LAST_QUERY;
+our ($LAST_QUERY, $LAST_COUNT_QUERY, $LAST_COUNT_STATEMENT);
 
 sub name { return 'test'; }
 sub dialect { return __PACKAGE__; }
 sub compile ($self, $domain, $query) {
-    $LAST_QUERY = $query;
+    if (defined $query->limit_value) {
+        $LAST_QUERY = $query;
+    } else {
+        $LAST_COUNT_QUERY = $query;
+    }
     my @columns = map { defined($_->alias_name) ? $_->alias_name : $_->kind } @{$query->selections};
     return Selecto::Statement->new(
         sql => 'SELECT governed_test_query',
@@ -122,13 +194,38 @@ sub compile ($self, $domain, $query) {
     );
 }
 sub execute_query ($self, $statement) {
+    if (@{$statement->columns} == 1 && $statement->columns->[0] eq 'selecto_total_count') {
+        $LAST_COUNT_STATEMENT = $statement;
+        return { columns => $statement->columns, rows => [[42]] };
+    }
+    my $rollup = grep { $_ eq '__selecto_rollup_grouping' } @{$statement->columns};
+    my $group_count = $rollup ? scalar(@{$LAST_QUERY->groups}) : 0;
     my @rows;
     for my $row_index (1, 2) {
-        push @rows, [map {
-            $_ eq 'product_name' && $row_index == 1 ? '=2+2'
+        my $row = [map {
+                $_ eq '__selecto_rollup_grouping' ? 0
+                : $_ eq '__selecto_action_target' ? 100 + $row_index
+                : /\A__selecto_link_/ ? 100 + $row_index
+                : $_ eq 'product_name' && $row_index == 1 ? '=2+2'
                 : /(?:count|price)\z/ ? (($_ eq 'count' ? 2 : 10) * $row_index)
                 : "Value $row_index"
         } @{$statement->columns}];
+        $row->[$group_count - 1] = undef if $rollup && $row_index == 2;
+        push @rows, $row;
+    }
+    if ($rollup) {
+        for my $rolled_up (1 .. $group_count) {
+            my $retained_groups = $group_count - $rolled_up;
+            my $column_index = 0;
+            push @rows, [map {
+                my $value = $_ eq '__selecto_rollup_grouping' ? (1 << $rolled_up) - 1
+                    : $column_index < $retained_groups ? 'Value 1'
+                    : $column_index < $group_count ? undef
+                    : /(?:count|price)\z/ ? 42 : undef;
+                $column_index++;
+                $value;
+            } @{$statement->columns}];
+        }
     }
     return { columns => $statement->columns, rows => \@rows };
 }

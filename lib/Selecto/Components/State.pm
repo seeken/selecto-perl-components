@@ -1,14 +1,15 @@
 package Selecto::Components::State;
 
 use Mojo::Base -base, -signatures;
+use Digest::SHA qw(sha256_hex);
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
 
-has [qw(view fields field_configs filters groups group_configs measures measure_configs measure orders order direction limit page errors)];
+has [qw(view chart_type fields field_configs filters groups group_configs measures measure_configs measure orders order direction limit page errors)];
 
 sub parameter_names ($class) {
     return [qw(
-        q view field field_alias field_format filter_field filter_op filter_value filter_value_end
+        q query_signature view chart_type field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls
         order direction limit page
@@ -19,6 +20,7 @@ sub from_input ($class, $config, $domain, $input) {
     $input = {} unless ref($input) eq 'HASH';
     $config->validate_domain($domain);
     my $field_map = $config->field_map($domain);
+    my $detail_map = $config->detail_column_map($domain);
     my @errors;
     my $configured = _first($input, 'q') ? 1 : 0;
 
@@ -26,6 +28,15 @@ sub from_input ($class, $config, $domain, $input) {
     if (!$config->allows_view($view)) {
         push @errors, 'Choose an available view.';
         $view = $config->default_view;
+    }
+
+    my $chart_type = lc(_scalar(_first($input, 'chart_type')) || 'bar');
+    my %chart_types = map { $_ => 1 } qw(
+        bar horizontal_bar stacked_bar line area pie doughnut scatter
+    );
+    unless ($chart_types{$chart_type}) {
+        push @errors, 'Choose an available chart type.';
+        $chart_type = 'bar';
     }
 
     my $field_values = _values($input, 'field');
@@ -39,8 +50,13 @@ sub from_input ($class, $config, $domain, $input) {
     for my $index (0 .. $#$field_values) {
         my $field = _scalar($field_values->[$index]);
         next unless length($field) && !$seen_field{$field}++;
-        unless ($field_map->{$field}) {
-            push @errors, 'A selected detail field is not available.';
+        unless ($detail_map->{$field}) {
+            push @errors, 'A selected detail column is not available.';
+            next;
+        }
+        if ($detail_map->{$field}{action_id}) {
+            push @valid_fields, $field;
+            $field_configs{$field} = {alias => '', format => ''};
             next;
         }
         my $alias = _trim($field_aliases->[$index]);
@@ -57,7 +73,7 @@ sub from_input ($class, $config, $domain, $input) {
         push @valid_fields, $field;
         $field_configs{$field} = { alias => $alias, format => $format };
     }
-    push @errors, 'Choose at least one detail field.' unless @valid_fields;
+    push @errors, 'Choose at least one detail column.' unless @valid_fields;
     unless (@valid_fields) {
         @valid_fields = @{$config->resolved_default_fields($domain)};
         %field_configs = map { $_ => { alias => '', format => '' } } @valid_fields;
@@ -194,7 +210,9 @@ sub from_input ($class, $config, $domain, $input) {
 
     my $order_fields = _values($input, 'order');
     my $order_directions = _values($input, 'direction');
-    $order_fields = [$valid_fields[0]] unless grep { length(_scalar($_)) } @$order_fields;
+    my ($default_order) = grep { $field_map->{$_} } @valid_fields;
+    $default_order //= $config->primary_key($domain);
+    $order_fields = [$default_order] unless grep { length(_scalar($_)) } @$order_fields;
     my @orders;
     my %seen_order;
     for my $index (0 .. $#$order_fields) {
@@ -219,7 +237,7 @@ sub from_input ($class, $config, $domain, $input) {
         }
         push @orders, { field => $field, direction => $dir };
     }
-    @orders = ({ field => $valid_fields[0], direction => 'asc' }) unless @orders;
+    @orders = ({ field => $default_order, direction => 'asc' }) unless @orders;
     my $order = $orders[0]{field};
     my $direction = $orders[0]{direction};
 
@@ -244,19 +262,24 @@ sub from_input ($class, $config, $domain, $input) {
     my $filter_ops = _values($input, 'filter_op');
     my $filter_values = _values($input, 'filter_value');
     my $filter_end_values = _values($input, 'filter_value_end');
+    my $filter_groups = _values($input, 'filter_group');
     my $filter_count = @$filter_fields;
     $filter_count = @$filter_ops if @$filter_ops > $filter_count;
     $filter_count = @$filter_values if @$filter_values > $filter_count;
     $filter_count = @$filter_end_values if @$filter_end_values > $filter_count;
+    $filter_count = @$filter_groups if @$filter_groups > $filter_count;
     my @filters;
     my %seen_filter_field;
+    my %valid_group_field = map { $_ => 1 } @valid_groups;
+    my $regular_filter_count = 0;
     for my $index (0 .. $filter_count - 1) {
         my $field = _scalar($filter_fields->[$index]);
         my $op = lc(_scalar($filter_ops->[$index]) || 'eq');
         my $value = _scalar($filter_values->[$index]);
         my $value_end = _scalar($filter_end_values->[$index]);
+        my $group_filter = _truthy($filter_groups->[$index], 0);
         next unless length($field) || length($value) || length($value_end);
-        if (@filters >= $config->max_filters) {
+        if (!$group_filter && $regular_filter_count >= $config->max_filters) {
             push @errors, 'Too many filters were submitted.';
             last;
         }
@@ -273,6 +296,11 @@ sub from_input ($class, $config, $domain, $input) {
             push @errors, 'A filter operator is not available.';
             next;
         }
+        if ($group_filter && (!$valid_group_field{$field} || ($op ne 'eq' && $op ne 'is_null'))) {
+            push @errors, 'An aggregate drilldown filter is not available.';
+            next;
+        }
+        $regular_filter_count++ unless $group_filter;
         ($value, $value_end) = ('', '') if $op =~ /_null\z/;
         if ($op eq 'in' && length($value)
             && !grep { length } map { _trim($_) } split /,/, $value, -1) {
@@ -284,7 +312,8 @@ sub from_input ($class, $config, $domain, $input) {
             push @errors, 'A date shortcut is not available.';
             next;
         }
-        if ($config->temporal_type($field_type) && $op ne 'date_shortcut' && $op !~ /_null\z/) {
+        if (!$group_filter && $config->temporal_type($field_type)
+            && $op ne 'date_shortcut' && $op !~ /_null\z/) {
             if (length($value) && !_valid_temporal_value($value)) {
                 push @errors, 'A date filter value is not available.';
                 next;
@@ -294,7 +323,7 @@ sub from_input ($class, $config, $domain, $input) {
                 next;
             }
         }
-        if ($config->boolean_type($field_type) && $op eq 'eq'
+        if (!$group_filter && $config->boolean_type($field_type) && $op eq 'eq'
             && length($value) && $value !~ /\A(?:true|false|0|1)\z/i) {
             push @errors, 'A boolean filter value is not available.';
             next;
@@ -305,13 +334,15 @@ sub from_input ($class, $config, $domain, $input) {
             value => $value,
             value_end => $value_end,
         };
-        $filter->{draft} = 1 if $op !~ /_null\z/
+        $filter->{grouped} = 1 if $group_filter;
+        $filter->{draft} = 1 if !$group_filter && $op !~ /_null\z/
             && (!length($value) || ($op eq 'between' && !length($value_end)));
         push @filters, $filter;
     }
 
-    return $class->new(
+    my $state = $class->new(
         view => $view,
+        chart_type => $chart_type,
         fields => \@valid_fields,
         field_configs => \%field_configs,
         filters => \@filters,
@@ -327,12 +358,18 @@ sub from_input ($class, $config, $domain, $input) {
         page => $page,
         errors => \@errors,
     );
+    my $query_signature = _first($input, 'query_signature');
+    $state->page(1) if defined($query_signature) && !ref($query_signature)
+        && "$query_signature" =~ /\A[0-9a-f]{64}\z/
+        && "$query_signature" ne $state->query_signature;
+    return $state;
 }
 
 sub valid ($self) { return @{$self->errors} ? 0 : 1; }
 
 sub query_pairs ($self) {
     my @pairs = (q => 1, view => $self->view);
+    push @pairs, chart_type => $self->chart_type if $self->view eq 'graph';
     for my $field (@{$self->fields}) {
         my $column = $self->field_configs->{$field} // {};
         push @pairs,
@@ -345,7 +382,8 @@ sub query_pairs ($self) {
             filter_field => $filter->{field},
             filter_op => $filter->{op},
             filter_value => $filter->{value},
-            filter_value_end => $filter->{value_end} // '';
+            filter_value_end => $filter->{value_end} // '',
+            filter_group => $filter->{grouped} ? 1 : 0;
     }
     for my $group (@{$self->groups}) {
         my $column = $self->group_configs->{$group} // {};
@@ -375,9 +413,22 @@ sub query_pairs ($self) {
     return \@pairs;
 }
 
+sub query_signature ($self) {
+    my $pairs = $self->query_pairs;
+    my @parts;
+    for (my $index = 0; $index < @$pairs; $index += 2) {
+        next if $pairs->[$index] eq 'page';
+        my $key = defined($pairs->[$index]) ? "$pairs->[$index]" : '';
+        my $value = defined($pairs->[$index + 1]) ? "$pairs->[$index + 1]" : '';
+        push @parts, length($key) . ":$key", length($value) . ":$value";
+    }
+    return sha256_hex(join('|', @parts));
+}
+
 sub as_hash ($self) {
     return {
         view => $self->view,
+        chart_type => $self->chart_type,
         fields => [@{$self->fields}],
         field_configs => { map { $_ => { %{$self->field_configs->{$_}} } } keys %{$self->field_configs} },
         filters => [map { { %$_ } } @{$self->filters}],

@@ -14,27 +14,95 @@ sub build ($class, $config, $domain, $state) {
 
 sub _detail ($class, $config, $domain, $state) {
     my $field_map = $config->field_map($domain);
+    my $detail_map = $config->detail_column_map($domain);
     my @columns = map {
         my $field = $_;
-        my $column_config = $state->field_configs->{$field} // {};
-        {
-            key => _field_alias($field),
-            field => $field,
-            label => $column_config->{alias} || $field_map->{$field}{label},
-            type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
-            format => $column_config->{format} // '',
+        my $catalog = $detail_map->{$field};
+        if ($catalog->{action_id}) {
+            +{
+                key => '__selecto_action_column_' . $catalog->{action_id},
+                field => $field,
+                label => $catalog->{label},
+                type => 'action',
+                action_id => $catalog->{action_id},
+            };
+        } else {
+            my $column_config = $state->field_configs->{$field} // {};
+            +{
+                key => _field_alias($field),
+                field => $field,
+                label => $column_config->{alias} || $field_map->{$field}{label},
+                type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
+                format => $column_config->{format} // '',
+                (defined($field_map->{$field}{link})
+                    ? (link => {%{$field_map->{$field}{link}}}) : ()),
+            };
         }
     } @{$state->fields};
+    my @query_columns = grep { !$_->{action_id} } @columns;
+    my @action_ids = map { $_->{action_id} } grep { $_->{action_id} } @columns;
+    my $action_key;
+    if (@action_ids) {
+        my $primary_key = $config->primary_key($domain);
+        my ($selected_primary_key) = grep {
+            $_->{field} eq $primary_key && !$_->{format}
+        } @query_columns;
+        if ($selected_primary_key) {
+            $action_key = $selected_primary_key->{key};
+        } else {
+            $action_key = '__selecto_action_target';
+            push @query_columns, {
+                key => $action_key,
+                field => $primary_key,
+                label => $primary_key,
+                type => $field_map->{$primary_key}{type},
+                format => '',
+                hidden => 1,
+            };
+        }
+    }
+    my %query_key = map {
+        (!$_->{format} ? ($_->{field} => $_->{key}) : ())
+    } @query_columns;
+    my %used_key = map { $_->{key} => 1 } @query_columns;
+    for my $column (grep { $_->{link} } @columns) {
+        my $id_field = $column->{link}{id_field};
+        my $link_key = $query_key{$id_field};
+        unless (defined($link_key)) {
+            my $base_key = '__selecto_link_' . _field_alias($id_field);
+            $link_key = $base_key;
+            my $suffix = 1;
+            $link_key = $base_key . '_' . ++$suffix while $used_key{$link_key};
+            push @query_columns, {
+                key => $link_key,
+                field => $id_field,
+                label => $id_field,
+                type => $field_map->{$id_field}{type},
+                format => '',
+                hidden => 1,
+            };
+            $query_key{$id_field} = $link_key;
+            $used_key{$link_key} = 1;
+        }
+        $column->{link_key} = $link_key;
+    }
     my $query = Selecto::Query->new->select(map {
         _column_expression($_)->as($_->{key})
-    } @columns);
+    } @query_columns);
     $query = _with_filters($query, $state);
     for my $order (@{$state->orders}) {
         $query = $query->order_by($order->{field}, $order->{direction});
     }
     $query = $query->limit($state->limit)
         ->offset(($state->page - 1) * $state->limit);
-    return { query => $query, columns => \@columns, graph => 0 };
+    return {
+        query => $query,
+        columns => \@columns,
+        query_columns => \@query_columns,
+        action_key => $action_key,
+        action_ids => \@action_ids,
+        graph => 0,
+    };
 }
 
 sub _aggregate ($class, $config, $domain, $state) {
@@ -94,15 +162,23 @@ sub _aggregate ($class, $config, $domain, $state) {
         push @selections, $expression->as($measure_key);
     }
     my @columns = (@group_columns, @measure_columns);
-    my $query = Selecto::Query->new
-        ->select(@selections)
-        ->group_by(\@groups);
+    my $rollup = $state->view eq 'aggregate' && @groups ? 1 : 0;
+    my $rollup_key = '__selecto_rollup_grouping';
+    push @selections, Selecto::Expression->grouping(\@groups)->as($rollup_key) if $rollup;
+    my $query = Selecto::Query->new->select(@selections);
+    $query = $rollup ? $query->group_by_rollup(\@groups) : $query->group_by(\@groups);
     $query = _with_filters($query, $state);
-    $query = $query
-        ->order_by($groups[0], 'asc')
-        ->limit($state->limit)
+    $query = $query->order_by($_, 'asc') for @groups;
+    $query = $query->limit($state->limit)
         ->offset(($state->page - 1) * $state->limit);
-    return { query => $query, columns => \@columns, graph => $state->view eq 'graph' ? 1 : 0 };
+    return {
+        query => $query,
+        columns => \@columns,
+        graph => $state->view eq 'graph' ? 1 : 0,
+        rollup => $rollup,
+        rollup_key => $rollup ? $rollup_key : undef,
+        group_count => scalar(@groups),
+    };
 }
 
 sub _measure_expression ($measure, $config) {
@@ -174,6 +250,9 @@ sub _with_filters ($query, $state) {
     for my $filter (@{$state->filters}) {
         my ($field, $op, $value, $value_end) = @{$filter}{qw(field op value value_end)};
         next if $filter->{draft};
+        my $operand = $filter->{grouped}
+            ? _group_expression({field => $field}, $state->group_configs->{$field} // {})
+            : $field;
         my $expression;
         if ($op eq 'in') {
             my @values = grep { length } map { _trim($_) } split /,/, $value;
@@ -187,9 +266,9 @@ sub _with_filters ($query, $state) {
                 Selecto::Expression->lt($field, $end),
             ]);
         } elsif ($op eq 'is_null' || $op eq 'not_null') {
-            $expression = Selecto::Expression->can($op)->('Selecto::Expression', $field);
+            $expression = Selecto::Expression->can($op)->('Selecto::Expression', $operand);
         } else {
-            $expression = Selecto::Expression->can($op)->('Selecto::Expression', $field, $value);
+            $expression = Selecto::Expression->can($op)->('Selecto::Expression', $operand, $value);
         }
         push @expressions, $expression;
     }
