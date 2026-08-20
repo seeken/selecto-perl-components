@@ -5,7 +5,7 @@ use Mojo::JSON qw(encode_json);
 use Mojo::Util qw(url_escape xml_escape);
 use Selecto::Components::QueryLibrary ();
 
-my $ASSET_REVISION = '20260820-7';
+my $ASSET_REVISION = '20260820-8';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -735,13 +735,95 @@ sub _results ($class, $model) {
         ? $class->_bulk_actions($model) : '';
     my $body = $result->{graph} ? $class->_graph($result, $model) : $class->_table($result, $model);
     my $pagination = $class->_pagination($model);
-    my $debug = '';
-    if ($model->{config}->show_sql && defined $result->{sql}) {
-        $debug = '<details class="sc-debug"><summary>Compiled SQL and bound parameters</summary><pre>' .
-            _h($result->{sql}) . "\n\n" . _h(join("\n", map { defined($_) ? "$_" : 'NULL' } @{$result->{params}})) .
-            '</pre></details>';
-    }
+    my $debug = $class->_debug_panel($result, $model);
     return $meta . $actions . $body . $pagination . $debug;
+}
+
+sub _debug_panel ($class, $result, $model) {
+    return '' unless $model->{config}->show_sql && ref($result->{debug}) eq 'HASH';
+    my $debug = $result->{debug};
+    my $stats = $debug->{stats} // {};
+    my @cards = (
+        ['Total query time', _debug_ms($stats->{total_ms})],
+        ['Data execution', _debug_ms($stats->{data_query_ms})],
+        ['Count execution', _debug_ms($stats->{count_query_ms})],
+        ['Compilation', _debug_ms($stats->{compile_ms})],
+        ['Rows returned', _debug_number($stats->{returned_rows})],
+        ['Rows matched', _debug_number($stats->{matched_rows})],
+    );
+    my $cards = join '', map {
+        '<article class="sc-debug-stat"><span>' . _h($_->[0]) . '</span><strong>' .
+            _h($_->[1]) . '</strong></article>'
+    } @cards;
+    my $metadata = join ' · ', (
+        'Adapter: ' . _debug_text($stats->{adapter}),
+        'View: ' . _debug_text($stats->{view}),
+        'Page: ' . _debug_number($stats->{page}) . ' of ' .
+            _debug_number($stats->{total_pages}),
+        'Page size: ' . _debug_number($stats->{page_size}),
+    );
+    my $id = $model->{config}->id;
+    my $queries = _debug_query(
+        'selecto-debug-data-' . $id,
+        'Generated data query',
+        $debug->{data_query},
+    );
+    $queries .= _debug_query(
+        'selecto-debug-count-' . $id,
+        'Generated count query',
+        $debug->{count_query},
+    ) if ref($debug->{count_query}) eq 'HASH';
+    return '<details class="sc-debug-panel" data-sc-debug-panel open><summary>' .
+        '<span><small>Sandbox tooling</small><strong>Query Debug</strong></span>' .
+        '<span>' . _h(_debug_ms($stats->{total_ms})) . ' total</span></summary>' .
+        '<div class="sc-debug-body"><div class="sc-debug-stats">' . $cards . '</div>' .
+        '<p class="sc-debug-metadata">' . _h($metadata) . '</p>' . $queries . '</div></details>';
+}
+
+sub _debug_query ($id, $title, $query) {
+    return '' unless ref($query) eq 'HASH' && defined($query->{sql});
+    my $parameters = $query->{params} // [];
+    my $parameter_list = @$parameters ? '<ol class="sc-debug-params">' . join('', map {
+        my $index = $_;
+        '<li><span>$' . ($index + 1) . '</span><code>' .
+            _h(_debug_parameter($parameters->[$index])) . '</code></li>'
+    } 0 .. $#$parameters) . '</ol>' : '<p class="sc-debug-no-params">No bound parameters.</p>';
+    return '<article class="sc-debug-query"><header><h4>' . _h($title) . '</h4>' .
+        '<button class="sc-button sc-secondary" type="button" data-sc-debug-copy="' .
+        _h($id) . '">Copy SQL</button></header><pre id="' . _h($id) .
+        '"><code>' . _h(_format_sql($query->{sql})) . '</code></pre>' .
+        '<div class="sc-debug-parameter-block"><h5>Bound parameters</h5>' .
+        $parameter_list . '</div></article>';
+}
+
+sub _format_sql ($sql) {
+    my $formatted = "$sql";
+    $formatted =~ s/\s+(FROM|(?:LEFT|RIGHT|FULL|INNER|CROSS) JOIN|WHERE|GROUP BY|ORDER BY|HAVING|LIMIT|OFFSET)\s+/\n$1 /gi;
+    return $formatted;
+}
+
+sub _debug_parameter ($value) {
+    return 'NULL' unless defined($value);
+    return encode_json($value) if ref($value);
+    my $encoded = encode_json("$value");
+    return $encoded;
+}
+
+sub _debug_ms ($value) {
+    return '—' unless defined($value) && !ref($value);
+    return "$value ms";
+}
+
+sub _debug_number ($value) {
+    return '—' unless defined($value) && !ref($value);
+    my $number = "$value";
+    1 while $number =~ s/\A(-?\d+)(\d{3})/$1,$2/;
+    return $number;
+}
+
+sub _debug_text ($value) {
+    return '—' unless defined($value) && !ref($value) && length("$value");
+    return "$value";
 }
 
 sub _bulk_actions ($class, $model) {

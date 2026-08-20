@@ -197,6 +197,31 @@
     });
   }
 
+  function copyDebugSql(button) {
+    var target = document.getElementById(button.dataset.scDebugCopy || "");
+    if (!target) return;
+    var text = target.textContent || "";
+    var copied = function () {
+      var original = button.dataset.scOriginalLabel || button.textContent;
+      button.dataset.scOriginalLabel = original;
+      button.textContent = "Copied";
+      window.setTimeout(function () { button.textContent = original; }, 1600);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(copied).catch(function () {});
+      return;
+    }
+    var fallback = document.createElement("textarea");
+    fallback.value = text;
+    fallback.setAttribute("readonly", "");
+    fallback.style.position = "fixed";
+    fallback.style.opacity = "0";
+    document.body.appendChild(fallback);
+    fallback.select();
+    try { if (document.execCommand("copy")) copied(); } catch (_error) {}
+    fallback.remove();
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     restoreBuilderTabs();
     restoreBuilderTrays();
@@ -260,6 +285,11 @@
   });
 
   document.addEventListener("click", function (event) {
+    var debugCopy = event.target.closest("[data-sc-debug-copy]");
+    if (debugCopy) {
+      copyDebugSql(debugCopy);
+      return;
+    }
     var toggle = event.target.closest("[data-sc-builder-toggle]");
     if (toggle) {
       var tray = toggle.closest("[data-sc-builder-shell]");

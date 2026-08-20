@@ -57,10 +57,15 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             $self->config, $engine->domain, $state, {paginate => !$all_rows}
         );
         my $started = time;
+        my $compile_started = time;
         my $statement = $engine->compile($built->{query});
+        my $compile_ms = _elapsed_ms($compile_started);
+        my $data_started = time;
         my $raw = $engine->adapter->execute_query($statement);
+        my $data_query_ms = _elapsed_ms($data_started);
         _validate_result($raw);
         my $total_count;
+        my ($count_statement, $count_compile_ms, $count_query_ms);
         if ($all_rows) {
             $total_count = scalar @{$raw->{rows}};
         } else {
@@ -70,12 +75,17 @@ sub model ($self, $controller, $input = undef, $options = undef) {
                 groups => $built->{query}->groups,
                 grouping_mode => $built->{query}->grouping_mode,
             );
+            my $count_compile_started = time;
             my $count_source = $engine->compile($count_query);
-            my $count_raw = $engine->adapter->execute_query(_count_statement($count_source));
+            $count_statement = _count_statement($count_source);
+            $count_compile_ms = _elapsed_ms($count_compile_started);
+            my $count_started = time;
+            my $count_raw = $engine->adapter->execute_query($count_statement);
+            $count_query_ms = _elapsed_ms($count_started);
             _validate_result($count_raw);
             $total_count = _total_count($count_raw);
         }
-        my $elapsed_ms = int((time - $started) * 1000 + 0.5);
+        my $elapsed_ms = _elapsed_ms($started);
         my $total_pages = $all_rows ? 1
             : int(($total_count + $state->limit - 1) / $state->limit);
         $total_pages = 1 if $total_pages < 1;
@@ -104,6 +114,32 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             ($self->config->show_sql ? (
                 sql => $statement->sql,
                 params => $statement->params,
+                debug => {
+                    data_query => {
+                        sql => $statement->sql,
+                        params => $statement->params,
+                    },
+                    (defined($count_statement) ? (
+                        count_query => {
+                            sql => $count_statement->sql,
+                            params => $count_statement->params,
+                        },
+                    ) : ()),
+                    stats => {
+                        adapter => $engine->adapter->name,
+                        view => $state->view,
+                        returned_rows => scalar(@records),
+                        matched_rows => $total_count,
+                        page => $all_rows ? 1 : $state->page,
+                        total_pages => $total_pages,
+                        page_size => $all_rows ? scalar(@records) : $state->limit,
+                        compile_ms => $compile_ms + ($count_compile_ms // 0),
+                        data_query_ms => $data_query_ms,
+                        count_compile_ms => $count_compile_ms,
+                        count_query_ms => $count_query_ms,
+                        total_ms => $elapsed_ms,
+                    },
+                },
             ) : ()),
         };
         1;
@@ -121,6 +157,10 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         }
     }
     return $model;
+}
+
+sub _elapsed_ms ($started) {
+    return int((time - $started) * 1000 + 0.5);
 }
 
 sub _prepare_nested_records ($built, $records) {
