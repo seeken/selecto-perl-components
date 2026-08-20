@@ -12,6 +12,12 @@ use Selecto::Engine ();
 use Selecto::Statement ();
 
 our @ACTION_REQUESTS;
+our @SAVED_QUERY_REQUESTS;
+our @SAVED_QUERIES = (
+    {name => 'Zulu inventory', url => '/explore/products?q=1&view=detail&field=product_name&limit=25&page=1'},
+    {name => 'alpha inventory', url => '/explore/products?q=1&view=detail&field=product_name&limit=25&page=1'},
+    {name => 'Wrong explorer', url => '/explore/elsewhere?q=1'},
+);
 
 sub domain {
     return _domain();
@@ -186,6 +192,7 @@ sub config {
                 };
             },
         },
+        saved_query_store => TestSelectoComponents::SavedQueryStore->new,
         show_sql => 1,
     };
 }
@@ -208,6 +215,33 @@ sub app {
         explorers => { products => config(), private_products => $private },
     });
     return $app;
+}
+
+package TestSelectoComponents::SavedQueryStore;
+
+sub new { return bless {}, shift }
+
+sub list {
+    return [map { {%$_} } @TestSelectoComponents::SAVED_QUERIES];
+}
+
+sub save {
+    my ($self, $controller, $config, $request) = @_;
+    push @TestSelectoComponents::SAVED_QUERY_REQUESTS, {operation => 'save', %$request};
+    @TestSelectoComponents::SAVED_QUERIES = (
+        grep { $_->{name} ne $request->{name} } @TestSelectoComponents::SAVED_QUERIES,
+        {name => $request->{name}, url => $request->{url}},
+    );
+    return 1;
+}
+
+sub delete {
+    my ($self, $controller, $config, $request) = @_;
+    push @TestSelectoComponents::SAVED_QUERY_REQUESTS, {operation => 'delete', %$request};
+    @TestSelectoComponents::SAVED_QUERIES = grep {
+        $_->{name} ne $request->{name}
+    } @TestSelectoComponents::SAVED_QUERIES;
+    return 1;
 }
 
 package TestSelectoComponents::Adapter;

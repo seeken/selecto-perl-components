@@ -13,9 +13,11 @@ lib/Selecto/Components/Config.pm
 lib/Selecto/Components/DateShortcut.pm
 lib/Selecto/Components/Explorer.pm
 lib/Selecto/Components/QueryBuilder.pm
+lib/Selecto/Components/QueryLibrary.pm
 lib/Selecto/Components/Renderer.pm
 lib/Selecto/Components/State.pm
 mise.toml
+public/selecto-components/chart.umd.min.js
 public/selecto-components/htmx.min.js
 public/selecto-components/hx-ws.min.js
 public/selecto-components/selecto-components.css
@@ -27,4 +29,5 @@ t/date_shortcut.t
 t/lib/TestSelectoComponents.pm
 t/plugin.t
 t/query_builder.t
+t/query_library.t
 t/state.t

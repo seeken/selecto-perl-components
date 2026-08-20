@@ -4,6 +4,7 @@ use warnings;
 use Test::More;
 use Test::Mojo;
 use Mojo::JSON qw(decode_json encode_json);
+use Mojo::URL ();
 use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::DateShortcut ();
@@ -14,16 +15,23 @@ $t->get_ok('/explore/products')
     ->status_is(200)
     ->content_type_like(qr{text/html})
     ->element_exists('section#selecto-channel-products')
+    ->element_exists('[data-sc-workspace]:not(.is-builder-collapsed)')
+    ->element_exists('[data-sc-builder-shell="products"]:not(.is-collapsed)')
+    ->element_exists('[data-sc-builder-toggle][aria-expanded="true"][aria-label="Collapse view menu"]')
+    ->text_is('.sc-builder-tray-header > span' => 'View menu')
     ->element_exists('form#selecto-query-products')
     ->element_exists('form#selecto-query-products input[name="query_signature"][value]')
     ->element_exists('[role="tablist"][aria-label="Explorer sections"]')
     ->element_exists('[role="tab"][data-sc-builder-tab="view"][aria-selected="true"]')
     ->element_exists('[role="tab"][data-sc-builder-tab="filters"][aria-selected="false"]')
+    ->element_exists('[role="tab"][data-sc-builder-tab="saved"][aria-selected="false"]')
+    ->element_exists('[role="tabpanel"][data-sc-builder-panel="view"] [data-sc-query-library-view-controls] select[name="query_library_view"]')
     ->element_exists('[role="tabpanel"][data-sc-builder-panel="view"] .sc-view-tabs')
+    ->element_exists('[role="tabpanel"][data-sc-builder-panel="filters"][hidden] [data-sc-query-library-filter-controls] input[name="query_library_segment"][value="low_stock"]')
     ->element_exists('[role="tabpanel"][data-sc-builder-panel="filters"][hidden] [data-sc-filter-root]')
-    ->element_exists('[role="tab"][data-sc-builder-tab="library"][aria-selected="false"]')
-    ->element_exists('[role="tabpanel"][data-sc-builder-panel="library"][hidden] select[name="query_library_view"]')
-    ->element_exists('input[name="query_library_segment"][value="low_stock"]')
+    ->element_exists('[role="tabpanel"][data-sc-builder-panel="saved"][hidden][data-sc-saved-queries]')
+    ->element_exists_not('[role="tab"][data-sc-builder-tab="library"]')
+    ->element_exists_not('[role="tabpanel"][data-sc-builder-panel="library"]')
     ->content_like(qr/Capability metadata: products\.read/)
     ->element_exists('form[hx-trigger="submit"]')
     ->element_exists('[data-sc-result-view-panel="detail"]:not([disabled])')
@@ -61,9 +69,9 @@ $t->get_ok('/explore/products')
     ->content_like(qr{hx-ws:send})
     ->content_like(qr{/selecto-components/htmx\.min\.js})
     ->content_like(qr{/selecto-components/hx-ws\.min\.js})
-    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260818-10})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260818-10})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260818-10})
+    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260820-6})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260820-6})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260820-6})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')
@@ -75,6 +83,84 @@ $t->get_ok('/explore/products')
     ->element_exists_not('dialog[data-sc-action-dialog]')
     ->element_exists('a.sc-object-link[href="/products/view?id=101"]')
     ->text_is('a.sc-object-link[href="/products/view?id=101"]' => '=2+2');
+
+is $t->tx->res->dom
+    ->at('[data-sc-saved-queries] .sc-saved-query-list li:nth-child(1) a')->all_text,
+    'alpha inventory', 'saved queries are sorted case-insensitively';
+is $t->tx->res->dom
+    ->at('[data-sc-saved-queries] .sc-saved-query-list li:nth-child(2) a')->all_text,
+    'Zulu inventory', 'second saved query follows in alphabetical order';
+ok !$t->tx->res->dom->at('[data-sc-saved-queries] a[href^="/explore/elsewhere"]'),
+    'saved query list rejects URLs for another explorer';
+my $saved_query_form = $t->tx->res->dom->at(
+    'form[action="/explore/products/saved-queries"]',
+);
+ok $saved_query_form, 'saved query form is rendered outside the query builder form';
+ok !$t->tx->res->dom->at(
+    'form#selecto-query-products form[action="/explore/products/saved-queries"]',
+), 'saved query tab does not create nested forms';
+is $saved_query_form->at('input[name="saved_query_name"]')->attr('maxlength'), 30,
+    'saved query names honor the legacy table limit';
+my $saved_csrf_token = $saved_query_form->at('input[name="csrf_token"]')->attr('value');
+my $saved_url = Mojo::URL->new(
+    $saved_query_form->at('input[name="saved_query_url"]')->attr('value'),
+);
+$saved_url->query->param(page => 4);
+$t->post_ok('/explore/products/saved-queries' => {Accept => 'application/json'} => form => {
+    csrf_token => $saved_csrf_token,
+    saved_query_name => '  My inventory  ',
+    saved_query_url => $saved_url->to_string,
+    return_to => '/explore/products',
+})->status_is(200)->json_is('/ok' => 1)->json_is('/name' => 'My inventory')
+    ->json_like('/url' => qr{\bpage=1\z});
+is_deeply $TestSelectoComponents::SAVED_QUERY_REQUESTS[-1], {
+    operation => 'save',
+    name => 'My inventory',
+    url => $t->tx->res->json->{url},
+}, 'saved query store receives a canonical page-one URL';
+
+$t->post_ok('/explore/products/saved-queries' => {Accept => 'application/json'} => form => {
+    saved_query_name => 'No token',
+    saved_query_url => '/explore/products?q=1',
+})->status_is(403)->json_is('/ok' => 0);
+$t->post_ok('/explore/products/saved-queries' => {Accept => 'application/json'} => form => {
+    csrf_token => $saved_csrf_token,
+    saved_query_name => 'x' x 31,
+    saved_query_url => '/explore/products?q=1',
+})->status_is(422)->json_like('/message' => qr/30 characters/);
+
+$t->post_ok('/explore/products/saved-queries/delete' => {Accept => 'application/json'} => form => {
+    csrf_token => $saved_csrf_token,
+    saved_query_name => 'My inventory',
+    return_to => '/explore/products?q=1',
+})->status_is(200)->json_is('/ok' => 1)->json_is('/name' => 'My inventory');
+is_deeply $TestSelectoComponents::SAVED_QUERY_REQUESTS[-1], {
+    operation => 'delete', name => 'My inventory',
+}, 'saved query delete is delegated by name';
+
+$t->get_ok('/explore/private-products')->status_is(200)
+    ->element_exists_not('[data-sc-saved-queries]')
+    ->element_exists_not('form[action="/explore/private-products/saved-queries"]');
+
+my $library_url = '/explore/products?q=1&query_library_view=low_stock_products' .
+    '&query_library_segment=low_stock' .
+    '&query_library_param_name=threshold&query_library_param_value=8' .
+    '&filter_field=unit_price&filter_op=gte&filter_value=10' .
+    '&view=detail&limit=25&page=1';
+$t->get_ok($library_url)
+    ->status_is(200)
+    ->element_exists('[data-sc-workspace].is-builder-collapsed')
+    ->element_exists('[data-sc-builder-shell="products"].is-collapsed')
+    ->element_exists('[data-sc-builder-toggle][aria-expanded="false"][aria-label="Expand view menu"]')
+    ->element_exists('[data-sc-query-library-view-controls] option[value="low_stock_products"][selected]')
+    ->attr_is('[data-sc-query-library-view-controls] option[value="low_stock_products"]' =>
+        'data-sc-view-segments' => '["low_stock"]')
+    ->element_exists('[data-sc-query-library-filter-controls] input[name="query_library_param_name"][value="threshold"]')
+    ->element_exists('[data-sc-query-library-filter-controls] input[name="query_library_param_value"][value="8"][type="number"]')
+    ->text_is('[data-sc-query-summary] [data-sc-query-library-segment-summary="low_stock"]' => 'Segment: Low stock')
+    ->text_is('[data-sc-query-summary] [data-sc-filter-summary]' => 'Unit Price >= 10')
+    ->text_is('[data-sc-query-summary] .sc-query-summary-heading > span' => '2 applied filters')
+    ->text_is('[data-sc-builder-tab="filters"] [data-sc-filter-badge]' => '2');
 
 my $action_columns_url = '/explore/products?q=1&view=detail' .
     '&field=action%3Aadd_product_note&field_alias=&field_format=' .
@@ -160,6 +246,11 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/data-sc-filter-available-item/)
     ->content_like(qr/data-sc-filter-set-item/)
     ->content_like(qr/activeBuilderTabs/)
+    ->content_like(qr/data-sc-builder-shell/)
+    ->content_like(qr/name === "saved"/)
+    ->content_like(qr/function setBuilderTrayCollapsed/)
+    ->content_like(qr/function restoreBuilderTrays/)
+    ->content_like(qr/closest\("\[data-sc-workspace\]"\)/)
     ->content_like(qr/data-sc-builder-panel/)
     ->content_like(qr/htmx:after:swap/)
     ->content_like(qr/markBuilderDirty/)
@@ -189,7 +280,17 @@ $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-bulk-actions/)
     ->content_like(qr/\.sc-chart-canvas/)
     ->content_like(qr/\.sc-bulk-action/)
-    ->content_like(qr/\.sc-action-dialog/);
+    ->content_like(qr/\.sc-action-dialog/)
+    ->content_like(qr/\.sc-workspace\.is-builder-collapsed/)
+    ->content_like(qr/\.sc-builder\.is-collapsed/)
+    ->content_like(qr/margin-left:\s*calc\(50%\s*-\s*50vw\)/)
+    ->content_like(qr/border-left:\s*0/)
+    ->content_like(qr/\.sc-builder\s*\{[^}]*padding:\s*8px\s+16px\s+16px\s+8px/)
+    ->content_like(qr/\.sc-builder-toggle\s*\{[^}]*order:\s*-1/)
+    ->content_like(qr/\.sc-builder-tray-header\s*\{[^}]*justify-content:\s*flex-start/)
+    ->content_like(qr/cubic-bezier\(\.22,\s*1,\s*\.36,\s*1\)/)
+    ->content_like(qr/\@property\s+--sc-tray-width/)
+    ->content_unlike(qr/max-height:\s*calc\(100vh/);
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
     ->status_is(200)

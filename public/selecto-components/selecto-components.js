@@ -2,6 +2,7 @@
   "use strict";
 
   var activeBuilderTabs = Object.create(null);
+  var collapsedBuilderTrays = Object.create(null);
   var chartInstances = new WeakMap();
   var dateFormats = [
     ["day", "Day"], ["day_hour", "Day + Hour"], ["week", "Week"],
@@ -12,7 +13,7 @@
 
   function activateBuilderTab(root, name, remember) {
     if (!root) return;
-    var key = root.dataset.scBuilder;
+    var key = root.dataset.scBuilderShell;
     var available = Array.from(root.querySelectorAll("[data-sc-builder-tab]"));
     if (!available.some(function (tab) { return tab.dataset.scBuilderTab === name; })) {
       name = "view";
@@ -26,11 +27,40 @@
     root.querySelectorAll("[data-sc-builder-panel]").forEach(function (panel) {
       panel.hidden = panel.dataset.scBuilderPanel !== name;
     });
+    var query = root.querySelector("[data-sc-builder-query]");
+    if (query) query.hidden = name === "saved";
   }
 
   function restoreBuilderTabs() {
-    document.querySelectorAll("[data-sc-builder]").forEach(function (root) {
-      activateBuilderTab(root, activeBuilderTabs[root.dataset.scBuilder] || "view", false);
+    document.querySelectorAll("[data-sc-builder-shell]").forEach(function (root) {
+      activateBuilderTab(root, activeBuilderTabs[root.dataset.scBuilderShell] || "view", false);
+    });
+  }
+
+  function setBuilderTrayCollapsed(root, collapsed, remember) {
+    if (!root) return;
+    var key = root.dataset.scBuilderShell;
+    if (remember !== false) collapsedBuilderTrays[key] = !!collapsed;
+    root.classList.toggle("is-collapsed", !!collapsed);
+    root.dataset.scBuilderCollapsed = collapsed ? "true" : "false";
+    var workspace = root.closest("[data-sc-workspace]");
+    if (workspace) workspace.classList.toggle("is-builder-collapsed", !!collapsed);
+    var button = root.querySelector("[data-sc-builder-toggle]");
+    if (button) {
+      button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      button.setAttribute("aria-label", collapsed ? "Expand view menu" : "Collapse view menu");
+      var chevron = button.querySelector("[data-sc-builder-chevron]");
+      if (chevron) chevron.textContent = collapsed ? "›" : "‹";
+    }
+  }
+
+  function restoreBuilderTrays() {
+    document.querySelectorAll("[data-sc-builder-shell]").forEach(function (root) {
+      var key = root.dataset.scBuilderShell;
+      var collapsed = Object.prototype.hasOwnProperty.call(collapsedBuilderTrays, key)
+        ? collapsedBuilderTrays[key]
+        : root.dataset.scBuilderCollapsed === "true";
+      setBuilderTrayCollapsed(root, collapsed, false);
     });
   }
 
@@ -169,6 +199,7 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     restoreBuilderTabs();
+    restoreBuilderTrays();
     restoreResultViews();
     restoreCharts();
   });
@@ -190,6 +221,7 @@
   window.addEventListener("submit", function (event) {
     var form = event.target.closest("[data-sc-builder]");
     if (!form) return;
+    setBuilderTrayCollapsed(form.closest("[data-sc-builder-shell]"), true);
     var connection = document.querySelector("[data-selecto-connection]");
     if (connection && connection.classList.contains("is-live")) return;
     event.preventDefault();
@@ -210,6 +242,7 @@
     }
     window.requestAnimationFrame(function () {
       restoreBuilderTabs();
+      restoreBuilderTrays();
       restoreResultViews();
       restoreCharts();
     });
@@ -217,6 +250,7 @@
 
   document.addEventListener("htmx:after:swap", function () {
     restoreBuilderTabs();
+    restoreBuilderTrays();
     restoreResultViews();
     restoreCharts();
   });
@@ -226,15 +260,21 @@
   });
 
   document.addEventListener("click", function (event) {
+    var toggle = event.target.closest("[data-sc-builder-toggle]");
+    if (toggle) {
+      var tray = toggle.closest("[data-sc-builder-shell]");
+      setBuilderTrayCollapsed(tray, !tray.classList.contains("is-collapsed"));
+      return;
+    }
     var tab = event.target.closest("[data-sc-builder-tab]");
     if (!tab) return;
-    activateBuilderTab(tab.closest("[data-sc-builder]"), tab.dataset.scBuilderTab);
+    activateBuilderTab(tab.closest("[data-sc-builder-shell]"), tab.dataset.scBuilderTab);
   });
 
   document.addEventListener("keydown", function (event) {
     var tab = event.target.closest("[data-sc-builder-tab]");
     if (!tab || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
-    var root = tab.closest("[data-sc-builder]");
+    var root = tab.closest("[data-sc-builder-shell]");
     var tabs = Array.from(root.querySelectorAll("[data-sc-builder-tab]"));
     var offset = event.key === "ArrowRight" ? 1 : -1;
     var next = tabs[(tabs.indexOf(tab) + offset + tabs.length) % tabs.length];
@@ -826,8 +866,34 @@
       choice.hidden = query.length > 0 && !choice.dataset.search.includes(query);
     });
     var builder = root.closest("[data-sc-builder]");
-    var badge = builder && builder.querySelector('[data-sc-builder-tab="filters"] span');
-    if (badge) badge.textContent = items.length;
+    refreshFilterBadge(builder, items.length);
+  }
+
+  function queryLibrarySegmentIds(builder) {
+    var ids = new Set();
+    if (!builder) return ids;
+    var view = builder.querySelector('[name="query_library_view"]');
+    var option = view && view.selectedOptions && view.selectedOptions[0];
+    if (option && option.dataset.scViewSegments) {
+      try {
+        JSON.parse(option.dataset.scViewSegments).forEach(function (id) { ids.add(String(id)); });
+      } catch (_error) {
+        // Invalid presentation metadata cannot affect the submitted governed state.
+      }
+    }
+    builder.querySelectorAll('[name="query_library_segment"]:checked').forEach(function (input) {
+      ids.add(input.value);
+    });
+    return ids;
+  }
+
+  function refreshFilterBadge(builder, visualCount) {
+    if (!builder) return;
+    if (visualCount === undefined) {
+      visualCount = builder.querySelectorAll("[data-sc-filter-set-item]").length;
+    }
+    var badge = builder.querySelector("[data-sc-filter-badge]");
+    if (badge) badge.textContent = visualCount + queryLibrarySegmentIds(builder).size;
   }
 
   document.addEventListener("input", function (event) {
@@ -871,6 +937,8 @@
       updateFilterDraft(filterItem);
     } else if (event.target.matches('[name="filter_value"], [name="filter_value_end"]')) {
       updateFilterDraft(event.target.closest("[data-sc-filter-set-item]"));
+    } else if (event.target.matches('[name="query_library_view"], [name="query_library_segment"]')) {
+      refreshFilterBadge(builder);
     } else if (event.target.matches("[data-sc-group-format], [data-sc-measure-function]")) {
       syncPickerConfig(event.target.closest("[data-sc-picker-set-item]"));
     }

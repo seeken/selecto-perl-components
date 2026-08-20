@@ -18,6 +18,7 @@ WriteMakefile(
         'lib/Selecto/Components/DateShortcut.pm' => '$(INST_LIB)/Selecto/Components/DateShortcut.pm',
         'lib/Selecto/Components/Explorer.pm' => '$(INST_LIB)/Selecto/Components/Explorer.pm',
         'lib/Selecto/Components/QueryBuilder.pm' => '$(INST_LIB)/Selecto/Components/QueryBuilder.pm',
+        'lib/Selecto/Components/QueryLibrary.pm' => '$(INST_LIB)/Selecto/Components/QueryLibrary.pm',
         'lib/Selecto/Components/Renderer.pm' => '$(INST_LIB)/Selecto/Components/Renderer.pm',
         'lib/Selecto/Components/State.pm' => '$(INST_LIB)/Selecto/Components/State.pm',
         'public/selecto-components/chart.umd.min.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/chart.umd.min.js',
