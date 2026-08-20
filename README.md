@@ -12,10 +12,13 @@ This is alpha software. Its browser transport is pinned to htmx
 ## Current surface
 
 - a reusable `Selecto::Components` Mojolicious plugin;
-- separate View, Filters, and domain-driven Query Library builder tabs, with active-tab continuity across
-  WebSocket fragment replacements;
+- named query-library views integrated into View and reusable governed
+  segments and typed parameters integrated into Filters, with active-tab
+  continuity across WebSocket fragment replacements;
 - locally staged builder edits with an explicit Run boundary, so unfinished
   view, column, filter, sort, and pagination changes do not execute queries;
+- a left-side view tray that participates in normal page scrolling, collapses
+  to a chevron rail, and automatically collapses when a query is applied;
 - domain-derived Available/Set field picker with filtering, add/remove controls,
   drag ordering, and accessible move-up/move-down controls;
 - per-column presentation aliases and governed date/time formats for Detail
@@ -51,6 +54,9 @@ This is alpha software. Its browser transport is pinned to htmx
   as hidden governed columns and no extra ID columns in exports;
 - htmx 4 `hx-ws` updates using server-rendered HTML fragments;
 - ordinary HTTP GET fallback, permalinks, and browser-refresh recovery;
+- an optional dedicated Saved queries tab backed by a host-provided object with
+  `list`, `save`, and `delete` methods; saved URLs are validated, canonicalized,
+  and reset to page one while the host owns user and tenant scoping;
 - a domain-selected private URL mode with WebSocket/POST body state and no
   query-state history, permalink, or query-string export link;
 - Excel, CSV, TSV, and JSON exports for the current result page, with
@@ -130,8 +136,10 @@ When a domain declares `query_library`, canonical state also includes
 materialized-view marker. The marker lets a newly selected view seed Detail
 columns and ordering once while keeping those controls editable on subsequent
 requests. Named view segments and additional segments continue to constrain the
-query alongside visual filters. Query-library `capability` values are rendered
-as metadata only and are not an authorization decision.
+query alongside visual filters. They are included in the applied-filter count
+and shown as non-removable segment summaries; remove them by changing the named
+view or segment controls. Query-library `capability` values are rendered as
+metadata only and are not an authorization decision.
 
 Projection association shapes are adapted to the Perl component builder as
 validated dotted field paths. Parameter values are type-checked by

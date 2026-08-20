@@ -20,6 +20,7 @@ has show_sql       => 0;
 has action_handlers => sub { return {} };
 has choice_sources  => sub { return {} };
 has 'action_authorizer';
+has 'saved_query_store';
 
 my @DATE_FORMATS = (
     { id => 'day', label => 'Day' },
@@ -60,6 +61,12 @@ sub new ($class, @args) {
     die "choice_sources must be an object\n" unless ref($self->choice_sources) eq 'HASH';
     die "action_authorizer must be a coderef\n"
         if defined($self->action_authorizer) && ref($self->action_authorizer) ne 'CODE';
+    if (defined(my $store = $self->saved_query_store)) {
+        die "saved_query_store must be an object\n" unless blessed($store);
+        for my $method (qw(list save delete)) {
+            die "saved_query_store must provide $method\n" unless $store->can($method);
+        }
+    }
     for my $id (keys %{$self->action_handlers}) {
         die "action handler id must be a lowercase identifier\n"
             unless $id =~ /\A[a-z][a-z0-9_-]*\z/;
@@ -123,6 +130,10 @@ sub action_handler ($self, $id) {
 
 sub choice_source ($self, $id) {
     return $self->choice_sources->{$id};
+}
+
+sub saved_queries_enabled ($self, $domain) {
+    return defined($self->saved_query_store) && $self->query_params_enabled($domain) ? 1 : 0;
 }
 
 sub has_bulk_actions ($self, $domain) {

@@ -288,19 +288,12 @@ sub _with_query_library ($query, $domain, $state) {
     my %seen;
     @segments = grep { !$seen{$_}++ } @segments;
 
-    for my $segment (@segments) {
-        my $specs = Selecto::QueryLibrary->parameter_specs(
-            $domain, segments => [$segment],
-        );
-        my %params = map {
-            exists($state->query_library_parameters->{$_})
-                ? ($_ => $state->query_library_parameters->{$_}) : ()
-        } keys %$specs;
-        $query = Selecto::QueryLibrary->apply_segment(
-            $domain, $query, $segment, \%params,
-        );
-    }
-    return $query;
+    return Selecto::QueryLibrary->apply_segments(
+        $domain,
+        $query,
+        \@segments,
+        $state->query_library_parameters // {},
+    );
 }
 
 sub _field_alias ($field) {

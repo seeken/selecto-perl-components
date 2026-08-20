@@ -3,9 +3,9 @@ package Selecto::Components::Renderer;
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(encode_json);
 use Mojo::Util qw(url_escape xml_escape);
-use Selecto::QueryLibrary ();
+use Selecto::Components::QueryLibrary ();
 
-my $ASSET_REVISION = '20260818-10';
+my $ASSET_REVISION = '20260820-6';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -46,6 +46,10 @@ sub surface ($class, $model) {
         if defined($model->{action_notice}) && length($model->{action_notice});
     $alert .= '<div class="sc-alert" role="alert">' . _h($model->{action_error}) . '</div>'
         if defined($model->{action_error}) && length($model->{action_error});
+    $alert .= '<div class="sc-action-notice" role="status">' . _h($model->{saved_query_notice}) . '</div>'
+        if defined($model->{saved_query_notice}) && length($model->{saved_query_notice});
+    $alert .= '<div class="sc-alert" role="alert">' . _h($model->{saved_query_error}) . '</div>'
+        if defined($model->{saved_query_error}) && length($model->{saved_query_error});
     my $query_params = $config->query_params_enabled($model->{domain});
     my $export_links = join '', map {
         my ($format, $label) = @$_;
@@ -58,15 +62,25 @@ sub surface ($class, $model) {
           _h($model->{canonical_url}) . '">Permalink</a><div class="sc-export-options" role="group" ' .
           'aria-label="Export current page"><span>Export</span>' . $export_links . '</div></div>'
         : '<div class="sc-hero-actions"><span class="sc-private-mode">Private URL mode</span></div>';
+    my $builder_collapsed = _builder_collapsed($model);
     return '<section id="selecto-surface-' . _h($config->id) . '" class="sc-surface" data-selecto-url="' .
         _h($model->{canonical_url}) . '" data-sc-query-params="' .
         ($query_params ? 'enabled' : 'disabled') . '">' .
         '<header class="sc-hero"><div><h1>' . _h($config->title) . '</h1></div>' .
         $hero_actions . '</header>' .
-        $alert . '<div class="sc-workspace">' .
+        $alert . '<div class="sc-workspace' . ($builder_collapsed ? ' is-builder-collapsed' : '') .
+        '" data-sc-workspace>' .
         $class->_form($model, $field_catalog, $detail_catalog) .
         '<section class="sc-results" aria-live="polite">' . $class->_results($model) . '</section>' .
         '</div></section>';
+}
+
+sub _builder_collapsed ($model) {
+    my $input = $model->{input};
+    return 0 unless ref($input) eq 'HASH' && exists($input->{q});
+    my $value = $input->{q};
+    $value = $value->[0] if ref($value) eq 'ARRAY';
+    return defined($value) && !ref($value) && length("$value") && "$value" ne '0' ? 1 : 0;
 }
 
 sub _format_url ($canonical_url, $format) {
@@ -96,7 +110,16 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
     } @{$config->views};
     my $measure_catalog = $config->measure_catalog($model->{domain});
     my $filter_picker = $class->_filter_picker($state, $catalog, $config);
-    my $query_library_picker = $class->_query_library_picker($state, $model->{domain});
+    my $query_library_views = $class->_query_library_view_controls($state, $model->{domain});
+    my $query_library_filters = $class->_query_library_filter_controls($state, $model->{domain});
+    my $governed_segments = Selecto::Components::QueryLibrary->active_segment_entries(
+        $model->{domain},
+        $state->query_library_view,
+        $state->query_library_segments // [],
+    );
+    my $applied_filter_count = scalar(grep { !$_->{draft} } @{$state->filters})
+        + scalar(@$governed_segments);
+    my $query_summary = $class->_query_summary($state, $catalog, $governed_segments);
     my $detail_controls = $class->_field_picker($state, $detail_catalog // $catalog, $config) .
         $class->_order_picker($state, $catalog, $config->max_orders) .
         _measure_selection_hidden($state) .
@@ -115,136 +138,214 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
     my $builder_id = _h($config->id);
     my $view_tab_id = 'selecto-builder-view-tab-' . $builder_id;
     my $filter_tab_id = 'selecto-builder-filters-tab-' . $builder_id;
+    my $saved_tab_id = 'selecto-builder-saved-tab-' . $builder_id;
     my $view_panel_id = 'selecto-builder-view-panel-' . $builder_id;
     my $filter_panel_id = 'selecto-builder-filters-panel-' . $builder_id;
+    my $saved_panel_id = 'selecto-builder-saved-panel-' . $builder_id;
+    my $saved_enabled = $config->saved_queries_enabled($model->{domain});
+    my $saved_tab = $saved_enabled
+        ? '<button class="sc-builder-tab" type="button" role="tab" id="' . $saved_tab_id .
+          '" aria-controls="' . $saved_panel_id .
+          '" aria-selected="false" data-sc-builder-tab="saved">Saved queries</button>'
+        : '';
     my $builder_tabs = '<div class="sc-builder-tabs" role="tablist" aria-label="Explorer sections">' .
         '<button class="sc-builder-tab" type="button" role="tab" id="' . $view_tab_id .
         '" aria-controls="' . $view_panel_id . '" aria-selected="true" data-sc-builder-tab="view">View</button>' .
         '<button class="sc-builder-tab" type="button" role="tab" id="' . $filter_tab_id .
         '" aria-controls="' . $filter_panel_id . '" aria-selected="false" data-sc-builder-tab="filters">' .
-        'Filters <span>' . scalar(@{$state->filters}) . '</span></button>' .
-        (length($query_library_picker)
-            ? '<button class="sc-builder-tab" type="button" role="tab" id="selecto-builder-library-tab-' .
-              $builder_id . '" aria-controls="selecto-builder-library-panel-' . $builder_id .
-              '" aria-selected="false" data-sc-builder-tab="library">Query Library</button>'
-            : '') . '</div>';
+        'Filters <span data-sc-filter-badge>' . $applied_filter_count . '</span></button>' .
+        $saved_tab . '</div>';
     my $view_panel = '<section class="sc-builder-panel" role="tabpanel" id="' . $view_panel_id .
         '" aria-labelledby="' . $view_tab_id . '" data-sc-builder-panel="view">' .
+        $query_library_views .
         '<div class="sc-view-tabs" role="radiogroup" aria-label="Result view">' . $views . '</div>' .
         $view_controls . '</section>';
     my $filter_panel = '<section class="sc-builder-panel" role="tabpanel" id="' . $filter_panel_id .
         '" aria-labelledby="' . $filter_tab_id . '" data-sc-builder-panel="filters" hidden>' .
-        $filter_picker . '</section>';
-    my $library_panel = length($query_library_picker)
-        ? '<section class="sc-builder-panel" role="tabpanel" id="selecto-builder-library-panel-' .
-          $builder_id . '" aria-labelledby="selecto-builder-library-tab-' . $builder_id .
-          '" data-sc-builder-panel="library" hidden>' . $query_library_picker . '</section>'
-        : '';
-    return '<aside class="sc-builder"><form id="selecto-query-' . _h($config->id) . '" action="' .
+        $query_library_filters . $filter_picker . '</section>';
+    my $saved_queries = $class->_saved_queries($model, $saved_panel_id, $saved_tab_id);
+    my $collapsed = _builder_collapsed($model);
+    my $tray_content_id = 'selecto-builder-tray-content-' . $builder_id;
+    my $tray_header = '<header class="sc-builder-tray-header"><span>View menu</span>' .
+        '<button class="sc-builder-toggle" type="button" data-sc-builder-toggle aria-controls="' .
+        $tray_content_id . '" aria-expanded="' . ($collapsed ? 'false' : 'true') .
+        '" aria-label="' . ($collapsed ? 'Expand view menu' : 'Collapse view menu') . '">' .
+        '<span data-sc-builder-chevron aria-hidden="true">' . ($collapsed ? '&#8250;' : '&#8249;') .
+        '</span></button></header>';
+    return '<aside class="sc-builder' . ($collapsed ? ' is-collapsed' : '') .
+        '" data-sc-builder-shell="' . $builder_id . '" data-sc-builder-collapsed="' .
+        ($collapsed ? 'true' : 'false') . '">' . $tray_header .
+        '<div id="' . $tray_content_id . '" data-sc-builder-content>' .
+        $builder_tabs . '<form id="selecto-query-' . _h($config->id) . '" action="' .
         _h($config->path) . '" method="' . $method . '" hx-ws:send hx-trigger="submit" data-sc-builder="' .
-        $builder_id . '">' . _hidden('q', 1) . _hidden('query_signature', $state->query_signature) .
-        $builder_tabs . $view_panel . $filter_panel . $library_panel .
+        $builder_id . '" data-sc-builder-query>' . _hidden('q', 1) .
+        _hidden('query_signature', $state->query_signature) .
+        $query_summary . $view_panel . $filter_panel .
         '<div class="sc-builder-apply-note"><span>Changes apply only when you run the query.</span>' .
         '<strong data-sc-builder-pending hidden>Pending changes</strong></div>' .
         '<div class="sc-control-row"><label>Rows<select name="limit">' . _limit_options($state, $config) . '</select></label>' .
         '<label>Page<input name="page" inputmode="numeric" value="' . _h($state->page) . '"></label></div>' .
         '<button class="sc-button sc-primary" type="submit">Run query</button>' .
-        '<noscript><p class="sc-note">JavaScript is off; this form still runs as a normal GET.</p></noscript></form></aside>';
+        '<noscript><p class="sc-note">JavaScript is off; this form still runs as a normal GET.</p></noscript></form>' .
+        $saved_queries . '</div></aside>';
 }
 
-sub _query_library_picker ($class, $state, $domain) {
-    my $library = Selecto::QueryLibrary->library($domain);
-    my @views = sort keys %{$library->{views}};
-    my @segments = sort keys %{$library->{segments}};
-    return '' unless @views || @segments;
+sub _saved_queries ($class, $model, $panel_id, $tab_id) {
+    my $config = $model->{config};
+    return '' unless $config->saved_queries_enabled($model->{domain});
+    my $csrf = _h($model->{csrf_token} // '');
+    my $current_url = _h($model->{canonical_url});
+    my $items = join '', map {
+        '<li><a href="' . _h($_->{url}) . '">' . _h($_->{name}) . '</a>' .
+        '<form method="post" action="' . _h($config->path) . '/saved-queries/delete">' .
+        '<input type="hidden" name="csrf_token" value="' . $csrf . '">' .
+        '<input type="hidden" name="saved_query_name" value="' . _h($_->{name}) . '">' .
+        '<input type="hidden" name="return_to" value="' . $current_url . '">' .
+        '<button type="submit" class="sc-saved-query-delete" aria-label="Delete saved query ' .
+        _h($_->{name}) . '">Delete</button></form></li>'
+    } @{$model->{saved_queries} // []};
+    my $list = length($items)
+        ? '<ul class="sc-saved-query-list">' . $items . '</ul>'
+        : '<p class="sc-note">No saved queries yet.</p>';
+    return '<section class="sc-builder-panel sc-saved-queries" role="tabpanel" id="' .
+        _h($panel_id) . '" aria-labelledby="' . _h($tab_id) .
+        '" data-sc-builder-panel="saved" data-sc-saved-queries hidden>' .
+        '<div class="sc-saved-query-heading">' .
+        '<h2>Saved queries</h2></div>' . $list .
+        '<form class="sc-saved-query-form" method="post" action="' . _h($config->path) . '/saved-queries">' .
+        '<input type="hidden" name="csrf_token" value="' . $csrf . '">' .
+        '<input type="hidden" name="saved_query_url" value="' . $current_url . '">' .
+        '<input type="hidden" name="return_to" value="' . $current_url . '">' .
+        '<label>Name<input name="saved_query_name" maxlength="30" required autocomplete="off"></label>' .
+        '<button class="sc-button sc-secondary" type="submit">Save query</button></form></section>';
+}
 
+sub _query_library_view_controls ($class, $state, $domain) {
+    my $views = Selecto::Components::QueryLibrary->entries($domain, 'views');
+    return '' unless @$views;
     my $selected_view = $state->query_library_view // '';
-    my %selected_segment = map { $_ => 1 } @{$state->query_library_segments // []};
     my $view_options = '<option value=""' . ($selected_view eq '' ? ' selected' : '') .
-        '>No named view</option>' . join('', map {
-            my $spec = $library->{views}{$_};
-            '<option value="' . _h($_) . '"' . ($selected_view eq $_ ? ' selected' : '') . '>' .
-                _h(_definition_label($_, $spec)) . '</option>'
-        } @views);
+        ' data-sc-view-segments="[]">No named view</option>' . join('', map {
+            my $entry = $_;
+            my $segment_ids = Selecto::Components::QueryLibrary->view_segment_ids(
+                $domain, $entry->{id},
+            );
+            '<option value="' . _h($entry->{id}) . '" data-sc-view-segments="' .
+                _h(encode_json($segment_ids)) . '"' .
+                ($selected_view eq $entry->{id} ? ' selected' : '') . '>' .
+                _h($entry->{label}) . '</option>'
+        } @$views);
     my $view_description = '';
-    if (length($selected_view) && ref($library->{views}{$selected_view}) eq 'HASH') {
-        my $spec = $library->{views}{$selected_view};
-        my $description = _definition_text($spec->{description});
-        my $capability = _definition_text($spec->{capability});
+    if (my ($entry) = grep { $_->{id} eq $selected_view } @$views) {
         $view_description = '<div class="sc-query-library-summary"><strong>' .
-            _h(_definition_label($selected_view, $spec)) . '</strong>' .
-            (length($description) ? '<p>' . _h($description) . '</p>' : '') .
-            (length($capability) ? '<small>Capability metadata: ' . _h($capability) . '</small>' : '') .
+            _h($entry->{label}) . '</strong>' .
+            (length($entry->{description}) ? '<p>' . _h($entry->{description}) . '</p>' : '') .
+            (length($entry->{capability}) ? '<small>Capability metadata: ' .
+                _h($entry->{capability}) . '</small>' : '') .
             '</div>';
     }
 
-    my $segment_choices = join('', map {
-        my $id = $_;
-        my $spec = $library->{segments}{$id};
-        my $description = _definition_text($spec->{description});
-        my $capability = _definition_text($spec->{capability});
-        '<label class="sc-query-library-choice"><input type="checkbox" name="query_library_segment" value="' .
-            _h($id) . '"' . ($selected_segment{$id} ? ' checked' : '') . '><span><strong>' .
-            _h(_definition_label($id, $spec)) . '</strong>' .
-            (length($description) ? '<small>' . _h($description) . '</small>' : '') .
-            (length($capability) ? '<small>Capability metadata: ' . _h($capability) . '</small>' : '') .
-            '</span></label>'
-    } @segments);
+    return '<section class="sc-query-library sc-query-library-view" ' .
+        'data-sc-query-library-view-controls><p class="sc-picker-hint">Named views seed the ' .
+        'editable Detail columns and ordering. The seeded view remains editable.</p>' .
+        '<label>Named view<select name="query_library_view">' . $view_options . '</select></label>' .
+        (length($selected_view) ? _hidden('query_library_materialized_view', $selected_view) : '') .
+        $view_description . '</section>';
+}
 
-    my $parameters = '';
-    my $parameter_specs = {};
-    my $spec_ok = eval {
-        $parameter_specs = Selecto::QueryLibrary->parameter_specs(
+sub _query_library_filter_controls ($class, $state, $domain) {
+    my $segments = Selecto::Components::QueryLibrary->entries($domain, 'segments');
+    my $parameters = [];
+    eval {
+        $parameters = Selecto::Components::QueryLibrary->parameter_entries(
             $domain,
-            (length($selected_view) ? (view => $selected_view) : ()),
-            segments => [keys %selected_segment],
+            $state->query_library_view,
+            $state->query_library_segments // [],
         );
         1;
     };
-    if ($spec_ok) {
-        $parameters = join('', map {
-            my $id = $_;
-            my $spec = $parameter_specs->{$id};
-            my $type = lc(_definition_text($spec->{type}) || 'string');
-            my $input_type = $type =~ /\A(?:integer|float|decimal)\z/ ? 'number'
-                : $type eq 'date' ? 'date'
-                : $type =~ /datetime/ ? 'datetime-local' : 'text';
-            my $value = exists($state->query_library_parameters->{$id})
-                ? $state->query_library_parameters->{$id}
-                : defined($spec->{default}) && !ref($spec->{default}) ? $spec->{default} : '';
-            my $required = ($spec->{required} // !exists($spec->{default})) ? ' required' : '';
-            my $control = $type eq 'boolean'
+    return '' unless @$segments || @$parameters;
+
+    my %selected_segment = map { $_ => 1 } @{$state->query_library_segments // []};
+
+    my $segment_choices = join('', map {
+        my $entry = $_;
+        '<label class="sc-query-library-choice"><input type="checkbox" name="query_library_segment" value="' .
+            _h($entry->{id}) . '"' . ($selected_segment{$entry->{id}} ? ' checked' : '') .
+            '><span><strong>' . _h($entry->{label}) . '</strong>' .
+            (length($entry->{description}) ? '<small>' . _h($entry->{description}) . '</small>' : '') .
+            (length($entry->{capability}) ? '<small>Capability metadata: ' .
+                _h($entry->{capability}) . '</small>' : '') .
+            '</span></label>'
+    } @$segments);
+
+    my $parameter_controls = join('', map {
+            my $entry = $_;
+            my $input_type = Selecto::Components::QueryLibrary->input_type($entry->{type});
+            my $value = exists($state->query_library_parameters->{$entry->{id}})
+                ? $state->query_library_parameters->{$entry->{id}}
+                : defined($entry->{default}) && !ref($entry->{default}) ? $entry->{default} : '';
+            my $required = $entry->{required} ? ' required' : '';
+            my $control = $input_type eq 'checkbox'
                 ? '<select name="query_library_param_value"' . $required . '><option value="false"' .
                   ("$value" =~ /\A(?:0|false|off|no)\z/i ? ' selected' : '') . '>False</option>' .
                   '<option value="true"' . ("$value" =~ /\A(?:1|true|on|yes)\z/i ? ' selected' : '') .
                   '>True</option></select>'
                 : '<input type="' . $input_type . '" name="query_library_param_value" value="' .
-                  _h($value) . '"' . ($type =~ /\A(?:float|decimal)\z/ ? ' step="any"' : '') . $required . '>';
-            '<label><span>' . _h(_definition_label($id, $spec)) .
-                (($spec->{required} // !exists($spec->{default})) ? ' *' : '') . '</span>' .
-                _hidden('query_library_param_name', $id) . $control . '</label>'
-        } sort keys %$parameter_specs);
-    }
+                  _h($value) . '"' . ($entry->{type} =~ /\A(?:float|decimal)\z/
+                    ? ' step="any"' : '') . $required . '>';
+            '<label><span>' . _h($entry->{label}) . ($entry->{required} ? ' *' : '') . '</span>' .
+                _hidden('query_library_param_name', $entry->{id}) . $control .
+                (length($entry->{description}) ? '<small>' . _h($entry->{description}) . '</small>' : '') .
+                '</label>'
+        } @$parameters);
 
-    return '<div class="sc-query-library"><p class="sc-picker-hint">Named views seed editable Detail columns and ordering. Named segments remain active alongside visual filters.</p>' .
-        (@views ? '<label>Named view<select name="query_library_view">' . $view_options . '</select></label>' .
-          (length($selected_view) ? _hidden('query_library_materialized_view', $selected_view) : '') : '') .
-        $view_description .
-        (@segments ? '<fieldset><legend>Additional named segments</legend><div class="sc-query-library-choices">' .
+    return '<section class="sc-query-library sc-query-library-filters" ' .
+        'data-sc-query-library-filter-controls><p class="sc-picker-hint">Named segments add ' .
+        'governed constraints alongside the visual filters below.</p>' .
+        (@$segments ? '<fieldset><legend>Named segments</legend><div class="sc-query-library-choices">' .
             $segment_choices . '</div></fieldset>' : '') .
-        (length($parameters) ? '<fieldset><legend>Parameters</legend><div class="sc-query-library-parameters">' .
-            $parameters . '</div></fieldset>' : '') . '</div>';
+        (length($parameter_controls) ? '<fieldset><legend>Parameters</legend><div class="sc-query-library-parameters">' .
+            $parameter_controls . '</div></fieldset>' : '') . '</section>';
 }
 
-sub _definition_label ($id, $spec) {
-    return _definition_text($spec->{label}) || _humanize($id);
+sub _query_library_picker ($class, $state, $domain) {
+    return $class->_query_library_view_controls($state, $domain) .
+        $class->_query_library_filter_controls($state, $domain);
 }
 
-sub _definition_text ($value) {
-    return '' unless defined($value) && !ref($value);
-    my $text = "$value";
-    $text =~ s/\A\s+|\s+\z//g;
-    return $text;
+sub _query_summary ($class, $state, $catalog, $governed_segments) {
+    my %by_path = map { $_->{path} => $_ } @$catalog;
+    my @filters = grep { !$_->{draft} } @{$state->filters};
+    my @chips = map {
+        my $filter = $_;
+        my $field = $by_path{$filter->{field}};
+        my $label = $field ? $field->{label} : _humanize($filter->{field});
+        '<span data-sc-filter-summary>' . _h(_filter_summary_text($label, $filter)) . '</span>'
+    } @filters;
+    push @chips, map {
+        '<span data-sc-query-library-segment-summary="' . _h($_->{id}) . '">' .
+            _h('Segment: ' . $_->{label}) . '</span>'
+    } @$governed_segments;
+    my $count = @filters + @$governed_segments;
+    my $filter_label = $count == 1 ? 'applied filter' : 'applied filters';
+    my $chips = @chips ? '<div class="sc-query-summary-chips">' . join('', @chips) . '</div>'
+        : '<p>No filters applied</p>';
+    return '<section class="sc-query-summary" data-sc-query-summary><div class="sc-query-summary-heading">' .
+        '<div><small>View controller</small><strong>' . _h(_humanize($state->view)) .
+        ' results</strong></div><span>' . $count . ' ' . $filter_label . '</span></div>' .
+        $chips . '</section>';
+}
+
+sub _filter_summary_text ($label, $filter) {
+    my $operator = $filter->{op} // 'eq';
+    return "$label " . ($operator eq 'is_null' ? 'is empty' : 'is not empty')
+        if $operator eq 'is_null' || $operator eq 'not_null';
+    return "$label between " . ($filter->{value} // '') . ' and ' . ($filter->{value_end} // '')
+        if $operator eq 'between';
+    my %symbols = (eq => '=', ne => '!=', gt => '>', gte => '>=', lt => '<', lte => '<=');
+    my $display_operator = $symbols{$operator} // _humanize($operator);
+    return "$label $display_operator " . ($filter->{value} // '');
 }
 
 sub _chart_type_picker ($class, $state) {
