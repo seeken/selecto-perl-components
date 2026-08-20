@@ -143,6 +143,23 @@ sub _domain {
                 ],
                 execution => {kind => 'host', operation => 'mark_for_review'},
             },
+            build_shipments => {
+                label => 'Build Shipments',
+                description => 'Group selected products into shipments.',
+                type => 'bulk_action',
+                scope => 'bulk',
+                selection => {
+                    mode => 'groups',
+                    palette => 'lucky_charms',
+                    max_groups => 4,
+                    group_inputs => [{
+                        id => 'carrier_id', label => 'Carrier ID', type => 'number',
+                        required => 1, minimum => 1,
+                    }],
+                },
+                submit_label => 'Build shipments',
+                execution => {kind => 'host', operation => 'build_shipments'},
+            },
         },
         (defined($components) ? (components => $components) : ()),
     }, strict => 1);
@@ -189,6 +206,16 @@ sub config {
                     ok => 1,
                     applied_count => scalar(@{$request->{selected_ids}}),
                     message => 'Products marked for review.',
+                };
+            },
+            build_shipments => sub {
+                my ($controller, $request) = @_;
+                push @ACTION_REQUESTS, $request;
+                return {
+                    ok => 1,
+                    applied_count => scalar(@{$request->{selected_ids}}),
+                    built_count => scalar(@{$request->{groups}}),
+                    message => 'Shipments built.',
                 };
             },
         },

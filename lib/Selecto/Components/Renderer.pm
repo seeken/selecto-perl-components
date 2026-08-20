@@ -5,7 +5,7 @@ use Mojo::JSON qw(encode_json);
 use Mojo::Util qw(url_escape xml_escape);
 use Selecto::Components::QueryLibrary ();
 
-my $ASSET_REVISION = '20260820-8';
+my $ASSET_REVISION = '20260820-12';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -832,6 +832,10 @@ sub _bulk_actions ($class, $model) {
     my $config = $model->{config};
     my $panels = '';
     for my $action (@$actions) {
+        if (($action->{selection}{mode} // 'rows') eq 'groups') {
+            $panels .= _grouped_action_panel($model, $action);
+            next;
+        }
         my $id = $action->{id};
         my $dialog_id = 'selecto-action-' . $config->id . '-' . $id;
         my $enabled = ($action->{status} // 'enabled') eq 'enabled';
@@ -861,6 +865,45 @@ sub _bulk_actions ($class, $model) {
             '<span data-sc-selection-label>rows selected</span></div>' . $button . $dialog . '</section>';
     }
     return '<div class="sc-bulk-actions" data-sc-bulk-actions>' . $panels . '</div>';
+}
+
+sub _grouped_action_panel ($model, $action) {
+    my $config = $model->{config};
+    my $id = $action->{id};
+    my $dialog_id = 'selecto-action-' . $config->id . '-' . $id;
+    my $enabled = ($action->{status} // 'enabled') eq 'enabled';
+    my $description = length($action->{description} // '')
+        ? '<p class="sc-action-description">' . _h($action->{description}) . '</p>' : '';
+    my $button = '<button type="button" class="sc-button sc-secondary" data-sc-action-open="' .
+        _h($dialog_id) . '" data-sc-action-disabled="' . ($enabled ? '0' : '1') . '" disabled' .
+        ($enabled ? '' : ' title="' . _h($action->{status_reason} // 'Action unavailable') . '"') .
+        '>' . _h($action->{label}) . '</button>';
+    my $dialog = '<dialog class="sc-action-dialog sc-group-action-dialog" id="' . _h($dialog_id) .
+        '" data-sc-action-dialog><form method="post" action="' .
+        _h($config->path . '/actions/' . $id) .
+        '" data-sc-action-form><header><div><p class="sc-eyebrow">Grouped-row action</p><h3>' .
+        _h($action->{label}) . '</h3></div><button type="button" class="sc-action-close" ' .
+        'data-sc-action-close aria-label="Close action form">×</button></header>' . $description .
+        '<p class="sc-action-target-summary">Build <strong data-sc-action-group-count>0</strong> ' .
+        'loads from <strong data-sc-action-selection-count>0</strong> selected rows.</p>' .
+        '<input type="hidden" name="csrf_token" value="' . _h($model->{csrf_token} // '') . '">' .
+        '<input type="hidden" name="return_to" value="' . _h($model->{canonical_url}) . '">' .
+        '<input type="hidden" name="action_groups" value="[]" data-sc-action-groups>' .
+        '<div data-sc-action-targets></div><div class="sc-group-action-groups" ' .
+        'data-sc-group-action-groups></div>' .
+        '<div class="sc-action-result" data-sc-action-result role="status" hidden></div>' .
+        '<footer><button type="button" class="sc-button sc-secondary" data-sc-action-close>Cancel</button>' .
+        '<button type="submit" class="sc-button sc-primary">' .
+        _h($action->{submit_label}) . '</button></footer></form></dialog>';
+    return '<section class="sc-bulk-action sc-group-action" data-sc-bulk-action ' .
+        'data-sc-action-id="' . _h($id) . '" data-sc-action-mode="groups" ' .
+        'data-sc-action-state-key="' . _h($config->id . ':' . $id) . '" ' .
+        'data-sc-action-submit-label="' . _h($action->{submit_label}) . '" ' .
+        'data-sc-action-markers="' . _h(encode_json($action->{selection}{markers})) . '" ' .
+        'data-sc-group-inputs="' . _h(encode_json($action->{selection}{group_inputs})) . '">' .
+        '<div><strong data-sc-selection-count>0</strong> <span data-sc-selection-label>rows assigned</span>' .
+        '<span class="sc-group-count-summary"> · <strong data-sc-group-count>0</strong> loads</span></div>' .
+        $button . $dialog . '</section>';
 }
 
 sub _action_input ($input) {
@@ -901,10 +944,15 @@ sub _table ($class, $result, $model) {
     my $head = join '', map {
         my $column = $_;
         if ($column->{action_id}) {
-            '<th scope="col" class="sc-select-column" data-sc-action-column="' .
-                _h($column->{action_id}) . '"><label><input type="checkbox" data-sc-select-page ' .
-                'data-sc-action-id="' . _h($column->{action_id}) . '" aria-label="Select every row for ' .
-                _h($column->{label}) . '"><span>' . _h($column->{label}) . '</span></label></th>';
+            my $action = $actions{$column->{action_id}};
+            ($action->{selection}{mode} // 'rows') eq 'groups'
+                ? '<th scope="col" class="sc-select-column sc-group-select-column" ' .
+                    'data-sc-action-column="' . _h($column->{action_id}) . '">' .
+                    _h($column->{label}) . '</th>'
+                : '<th scope="col" class="sc-select-column" data-sc-action-column="' .
+                    _h($column->{action_id}) . '"><label><input type="checkbox" data-sc-select-page ' .
+                    'data-sc-action-id="' . _h($column->{action_id}) . '" aria-label="Select every row for ' .
+                    _h($column->{label}) . '"><span>' . _h($column->{label}) . '</span></label></th>';
         } else {
             '<th scope="col">' . _h($column->{label}) . '</th>';
         }
@@ -926,12 +974,21 @@ sub _table ($class, $result, $model) {
             my $column = $columns[$column_index];
             if ($column->{action_id}) {
                 my $target = $record->{$result->{action_key}};
-                $cells .= '<td class="sc-select-column" data-sc-action-column="' .
-                    _h($column->{action_id}) . '"><input type="checkbox" data-sc-row-select ' .
-                    'data-sc-action-id="' . _h($column->{action_id}) . '" value="' .
-                    _h(defined($target) ? $target : '') . '" aria-label="Select row ' .
-                    _h($index + 1) . ' for ' . _h($column->{label}) . '"' .
-                    (defined($target) && "$target" ne '' ? '' : ' disabled') . '></td>';
+                my $action = $actions{$column->{action_id}};
+                if (($action->{selection}{mode} // 'rows') eq 'groups') {
+                    $cells .= '<td class="sc-select-column sc-group-select-column" ' .
+                        'data-sc-action-column="' . _h($column->{action_id}) . '"><div ' .
+                        'class="sc-group-markers" data-sc-group-markers data-sc-action-id="' .
+                        _h($column->{action_id}) . '" data-sc-row-id="' .
+                        _h(defined($target) ? $target : '') . '"></div></td>';
+                } else {
+                    $cells .= '<td class="sc-select-column" data-sc-action-column="' .
+                        _h($column->{action_id}) . '"><input type="checkbox" data-sc-row-select ' .
+                        'data-sc-action-id="' . _h($column->{action_id}) . '" value="' .
+                        _h(defined($target) ? $target : '') . '" aria-label="Select row ' .
+                        _h($index + 1) . ' for ' . _h($column->{label}) . '"' .
+                        (defined($target) && "$target" ne '' ? '' : ' disabled') . '></td>';
+                }
                 next;
             }
             if ($column->{nested}) {

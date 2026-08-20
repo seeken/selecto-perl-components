@@ -402,6 +402,7 @@ sub _run_action ($controller, $explorer) {
     } @{$resolved->{action}{inputs}};
     my $request = Selecto::Components::Actions->request(
         $config, $resolved->{action}, \@selected_ids, \%raw_inputs,
+        {group_payload => scalar $controller->param('action_groups')},
     );
     return _action_response($controller, $return_to, {
         ok => 0, status => 422, message => join(' ', @{$request->{errors}}),
@@ -411,6 +412,7 @@ sub _run_action ($controller, $explorer) {
     my $execute_decision = Selecto::Components::Actions->authorize(
         $config, $controller, $resolved->{action}, 'execute', {
             ids => $request->{selected_ids}, inputs => $request->{inputs},
+            groups => $request->{groups},
         },
     );
     return _action_response($controller, $return_to, {

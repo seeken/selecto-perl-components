@@ -71,14 +71,16 @@ $t->get_ok('/explore/products')
     ->content_like(qr{hx-ws:send})
     ->content_like(qr{/selecto-components/htmx\.min\.js})
     ->content_like(qr{/selecto-components/hx-ws\.min\.js})
-    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260820-8})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260820-8})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260820-8})
+    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260820-12})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260820-12})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260820-12})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:add_product_note"][data-type="action"]')
     ->text_is('[data-sc-picker-kind="field"] button[data-field="action:add_product_note"] strong' => 'Action: Add Product Note')
+    ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:build_shipments"][data-type="action"]')
+    ->text_is('[data-sc-picker-kind="field"] button[data-field="action:build_shipments"] strong' => 'Action: Build Shipments')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:mark_for_review"][data-type="action"]')
     ->element_exists_not('[data-sc-bulk-actions]')
     ->element_exists_not('input[data-sc-row-select]')
@@ -245,6 +247,66 @@ is $TestSelectoComponents::ACTION_REQUESTS[-1]{action}{id}, 'mark_for_review',
 is_deeply $TestSelectoComponents::ACTION_REQUESTS[-1]{selected_ids}, ['202'],
     'the second action receives its own selected rows';
 
+my $grouped_action_url = '/explore/products?q=1&view=detail' .
+    '&field=action%3Abuild_shipments&field_alias=&field_format=' .
+    '&field=product_name&field_alias=&field_format=' .
+    '&group=category.category_name&measure=count&order=product_name&direction=asc&limit=25&page=1';
+$t->get_ok($grouped_action_url)
+    ->status_is(200)
+    ->element_exists('[data-sc-bulk-action][data-sc-action-id="build_shipments"][data-sc-action-mode="groups"]')
+    ->element_exists('th.sc-group-select-column[data-sc-action-column="build_shipments"]')
+    ->element_exists_not('th[data-sc-action-column="build_shipments"] input[data-sc-select-page]')
+    ->element_exists('[data-sc-group-markers][data-sc-action-id="build_shipments"][data-sc-row-id="101"]')
+    ->element_exists('[data-sc-group-markers][data-sc-action-id="build_shipments"][data-sc-row-id="102"]')
+    ->element_exists('input[name="action_groups"][data-sc-action-groups]')
+    ->element_exists('[data-sc-group-action-groups]')
+    ->content_like(qr{red_star})
+    ->content_like(qr{green_circle})
+    ->content_like(qr{carrier_id});
+
+my $grouped_csrf = $t->tx->res->dom
+    ->at('form[action="/explore/products/actions/build_shipments"] input[name="csrf_token"]')
+    ->attr('value');
+my $group_payload = encode_json([
+    {
+        index => 0,
+        marker => {id => 'forged', color => '#000000'},
+        selected_ids => [101, 102],
+        inputs => {carrier_id => 501},
+    },
+    {index => 1, selected_ids => [103], inputs => {carrier_id => 777}},
+]);
+$t->post_ok('/explore/products/actions/build_shipments' => {Accept => 'application/json'} => form => {
+    csrf_token => $grouped_csrf,
+    selected_id => [101, 102, 103],
+    action_groups => $group_payload,
+})->status_is(200)->json_is('/ok' => 1)->json_is('/built_count' => 2);
+is_deeply [map { $_->{marker}{id} } @{$TestSelectoComponents::ACTION_REQUESTS[-1]{groups}}],
+    [qw(red_star green_circle)],
+    'grouped action markers are reconstructed from the governed palette';
+is_deeply $TestSelectoComponents::ACTION_REQUESTS[-1]{groups}[0]{selected_ids},
+    ['101', '102'], 'grouped actions preserve each marker row assignment';
+is $TestSelectoComponents::ACTION_REQUESTS[-1]{groups}[1]{inputs}{carrier_id}, '777',
+    'grouped actions normalize the per-group carrier input';
+
+$t->post_ok('/explore/products/actions/build_shipments' => {Accept => 'application/json'} => form => {
+    csrf_token => $grouped_csrf,
+    selected_id => [101],
+    action_groups => encode_json([
+        {index => 0, selected_ids => [101], inputs => {carrier_id => 0}},
+    ]),
+})->status_is(422)->json_is('/ok' => 0)
+    ->json_like('/message' => qr/Red star: Carrier ID is below its minimum/);
+
+$t->post_ok('/explore/products/actions/build_shipments' => {Accept => 'application/json'} => form => {
+    csrf_token => $grouped_csrf,
+    selected_id => [101],
+    action_groups => encode_json([
+        {index => 99, selected_ids => [101], inputs => {carrier_id => 501}},
+    ]),
+})->status_is(422)->json_is('/ok' => 0)
+    ->json_like('/message' => qr/group marker is invalid/);
+
 $t->post_ok('/explore/products/actions/add_product_note' => {Accept => 'application/json'} => form => {
     selected_id => 101,
     action_input_note_type => 'internal',
@@ -279,6 +341,14 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/data-sc-debug-copy/)
     ->content_like(qr/data-sc-graph-drilldown/)
     ->content_like(qr/populateActionTargets/)
+    ->content_like(qr/function renderGroupedActionRows/)
+    ->content_like(qr/function reorderGroupedActionRows/)
+    ->content_like(qr/prefers-reduced-motion: reduce/)
+    ->content_like(qr/cubic-bezier\(\.2,\.8,\.2,1\)/)
+    ->content_like(qr/function renderGroupedActionDialog/)
+    ->content_like(qr/function serializeGroupedAction/)
+    ->content_like(qr/function markerSvgPart/)
+    ->content_like(qr/createElementNS\("http:\/\/www\.w3\.org\/2000\/svg"/)
     ->content_like(qr/window\.fetch/)
     ->content_like(qr/HTMLFormElement\.prototype\.submit\.call\(form\)/)
     ->content_like(qr/requestSubmit/);
@@ -294,6 +364,9 @@ $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-chart-canvas/)
     ->content_like(qr/\.sc-bulk-action/)
     ->content_like(qr/\.sc-action-dialog/)
+    ->content_like(qr/\.sc-group-marker/)
+    ->content_like(qr/\.sc-group-action-card/)
+    ->content_unlike(qr/\.sc-group-marker-glyph[^}]*font-family/s)
     ->content_like(qr/\.sc-workspace\.is-builder-collapsed/)
     ->content_like(qr/\.sc-builder\.is-collapsed/)
     ->content_like(qr/margin-left:\s*calc\(50%\s*-\s*50vw\)/)

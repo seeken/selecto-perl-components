@@ -36,10 +36,11 @@ This is alpha software. Its browser transport is pinned to htmx
   selected child fields share an inline nested table backed by a correlated
   JSON collection, so each root object remains one result row;
 - domain-declared selected-row actions exposed as optional Detail columns; each
-  chosen action owns its checkbox set, select-all-page control, button, and
-  typed dialog, with hidden primary-key selection, dynamic host choices,
-  preview/execute authorization callbacks, CSRF protection, and server-side
-  input revalidation;
+  chosen action owns its selection UI, button, and typed dialog. Ordinary
+  actions use independent checkbox sets, while grouped actions can assign rows
+  to trusted colored-shape markers and collect inputs for each group. Both use
+  hidden primary-key selection, dynamic host choices, preview/execute
+  authorization callbacks, CSRF protection, and server-side input revalidation;
 - total matched-row and page counts plus full data-and-count query timing, with
   changed query intent resetting to page one while page-only Run and
   Previous/Next retain explicit pagination;
@@ -305,6 +306,38 @@ The action route is `POST /explore/products/actions/:action_id`. Browser forms
 carry a session-bound CSRF token. Hosts remain responsible for checking every
 target against the current tenant/user and for transaction, audit, and
 business-rule behavior inside the handler.
+
+An action can instead group rows before it runs. The built-in `lucky_charms`
+palette starts with a red star and green circle, then exposes a new distinct
+shape as each group is created. A selected row displays only its filled marker;
+clicking it again unassigns the row and restores the available outlines. The
+result table keeps rows with the same marker adjacent, orders marker groups by
+palette order, and retains the original query order within each group and among
+unassigned rows. Reordering uses a short positional animation and honors the
+browser's reduced-motion preference.
+
+```perl
+load_build => {
+    label => 'Load Build',
+    scope => 'bulk',
+    selection => {
+        mode => 'groups',
+        palette => 'lucky_charms',
+        max_groups => 8,
+        group_inputs => [{
+            id => 'carrier_id', label => 'Carrier ID', type => 'number',
+            required => 1, minimum => 1,
+        }],
+    },
+    submit_label => 'Build loads',
+    execution => {kind => 'host', operation => 'load_build'},
+},
+```
+
+The handler receives normalized `selected_ids` plus `groups`, ordered by marker
+index. Each group has its trusted server-resolved `marker`, its own
+`selected_ids`, and normalized `inputs`. The browser cannot submit custom
+marker colors, shapes, or labels.
 
 The plugin adds its packaged `public/` directory to Mojolicious static paths.
 The htmx runtime and WebSocket extension are served locally; the browser does
