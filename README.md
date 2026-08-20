@@ -67,7 +67,9 @@ This is alpha software. Its browser transport is pinned to htmx
 - Excel, CSV, TSV, and JSON exports for every row matched by the active query,
   independent of the current page, with spreadsheet-formula neutralization for
   delimited formats;
-- optional compiled SQL display for development; and
+- an optional collapsible Query Debug panel with generated data/count SQL,
+  bound parameters, execution timings, pagination, adapter, and row statistics;
+  and
 - a real PostgreSQL-backed Northwind example using the existing independently
   authored `selecto-perl-northwind` fixture.
 
@@ -352,7 +354,9 @@ message and tests.
   filter values are sensitive.
 - Raw database exceptions are not rendered. Known `Selecto::Error` messages
   remain visible; unexpected failures become a generic error.
-- Raw SQL is hidden unless the host explicitly enables `show_sql`.
+- Raw SQL is hidden unless the host explicitly enables `show_sql`. Enabling it
+  renders the Query Debug panel and should remain limited to trusted development
+  environments.
 
 A host Content Security Policy can remain self-contained:
 
