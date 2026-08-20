@@ -207,6 +207,7 @@ sub field_catalog ($self, $domain) {
     push @catalog, map {
         my $path = $_;
         my $link = _field_link($domain, $path, $source->{columns}{$path});
+        my $html_format = _field_html_format($path, $source->{columns}{$path});
         my $dimension = $dimensions_by_key->{$path};
         {
             path => $path,
@@ -214,6 +215,7 @@ sub field_catalog ($self, $domain) {
             type => $fields->{$path},
             association => undef,
             (defined($link) ? (link => $link) : ()),
+            (defined($html_format) ? (html_format => $html_format) : ()),
             ($dimension ? (dimension => {%$dimension}) : ()),
         }
     } sort keys %$fields;
@@ -236,6 +238,10 @@ sub field_catalog ($self, $domain) {
                 $path,
                 ref($schema) eq 'HASH' ? $schema->{columns}{$field} : undef,
             );
+            my $html_format = _field_html_format(
+                $path,
+                ref($schema) eq 'HASH' ? $schema->{columns}{$field} : undef,
+            );
             my $dimension = $dimensions_by_display->{$path};
             {
                 path => $path,
@@ -244,6 +250,7 @@ sub field_catalog ($self, $domain) {
                 association => $association_name,
                 denormalizing => $association->cardinality eq 'many' ? 1 : 0,
                 (defined($link) ? (link => $link) : ()),
+                (defined($html_format) ? (html_format => $html_format) : ()),
                 ($dimension ? (dimension => {%$dimension}) : ()),
             }
         } sort keys %$association_fields;
@@ -298,6 +305,14 @@ sub _field_link ($domain, $path, $column) {
         url_template => "$template",
         id_field => $resolved_id_field,
     };
+}
+
+sub _field_html_format ($path, $column) {
+    return undef unless ref($column) eq 'HASH' && exists($column->{html_format});
+    my $format = $column->{html_format};
+    die "HTML format for $path must be vin_last_six\n"
+        unless defined($format) && !ref($format) && "$format" eq 'vin_last_six';
+    return "$format";
 }
 
 sub field_map ($self, $domain) {

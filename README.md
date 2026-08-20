@@ -227,6 +227,24 @@ Templates must be same-application paths beginning with one `/` and must
 contain `{{id}}`. Components URL-encodes the selected ID and HTML-escapes the
 completed link before rendering it.
 
+## HTML-only value formatting
+
+A canonical domain column may opt into a governed HTML formatter. The
+`vin_last_six` formatter leaves the first 11 characters of a valid
+17-character VIN at normal weight and wraps its final six characters in
+`<strong>`. Short or malformed values are displayed normally. Formatting is
+also applied inside to-many nested tables and to grouped HTML values.
+
+```perl
+vin => {
+    type => 'string',
+    html_format => 'vin_last_six',
+},
+```
+
+This is a presentation rule only. Excel, CSV, TSV, and JSON exports retain the
+original unformatted value.
+
 ## Selected-row actions
 
 Selected-row actions come from the canonical domain contract. The Components
