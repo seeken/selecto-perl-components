@@ -249,11 +249,15 @@ package TestSelectoComponents::Adapter;
 use Mojo::Base 'Selecto::Adapter', -signatures;
 use Selecto::Statement ();
 
-our ($LAST_QUERY, $LAST_COUNT_QUERY, $LAST_COUNT_STATEMENT);
+our (
+    $LAST_QUERY, $LAST_COUNT_QUERY, $LAST_COUNT_STATEMENT,
+    $LAST_COMPILED_QUERY, $LAST_DATA_QUERY, $COUNT_EXECUTIONS,
+);
 
 sub name { return 'test'; }
 sub dialect { return __PACKAGE__; }
 sub compile ($self, $domain, $query) {
+    $LAST_COMPILED_QUERY = $query;
     if (defined $query->limit_value) {
         $LAST_QUERY = $query;
     } else {
@@ -270,12 +274,15 @@ sub compile ($self, $domain, $query) {
 sub execute_query ($self, $statement) {
     if (@{$statement->columns} == 1 && $statement->columns->[0] eq 'selecto_total_count') {
         $LAST_COUNT_STATEMENT = $statement;
+        $COUNT_EXECUTIONS++;
         return { columns => $statement->columns, rows => [[42]] };
     }
+    $LAST_DATA_QUERY = $LAST_COMPILED_QUERY;
     my $rollup = grep { $_ eq '__selecto_rollup_grouping' } @{$statement->columns};
-    my $group_count = $rollup ? scalar(@{$LAST_QUERY->groups}) : 0;
+    my $group_count = $rollup ? scalar(@{$LAST_DATA_QUERY->groups}) : 0;
     my @rows;
-    for my $row_index (1, 2) {
+    my $row_count = defined($LAST_DATA_QUERY->limit_value) ? 2 : 42;
+    for my $row_index (1 .. $row_count) {
         my $row = [map {
                 $_ eq '__selecto_rollup_grouping' ? 0
                 : $_ eq '__selecto_action_target' ? 100 + $row_index
