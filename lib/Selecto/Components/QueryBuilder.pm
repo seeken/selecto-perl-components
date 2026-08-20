@@ -55,6 +55,8 @@ sub _detail ($class, $config, $domain, $state, $options) {
                 path => $field,
                 label => $column_config->{alias} || _humanize($resolved->{field}),
                 type => $field_map->{$field}{type},
+                (defined($field_map->{$field}{html_format})
+                    ? (html_format => $field_map->{$field}{html_format}) : ()),
             };
             next;
         }
@@ -67,6 +69,8 @@ sub _detail ($class, $config, $domain, $state, $options) {
             format => $column_config->{format} // '',
             (defined($field_map->{$field}{link})
                 ? (link => {%{$field_map->{$field}{link}}}) : ()),
+            (defined($field_map->{$field}{html_format})
+                ? (html_format => $field_map->{$field}{html_format}) : ()),
         };
     }
     my @query_columns = grep { !$_->{action_id} } @columns;
@@ -152,6 +156,8 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             type => $dimension ? $dimension->{display_type}
                 : $column_config->{format} ? 'string' : $field_map->{$field}{type},
             format => $column_config->{format} // '',
+            (defined($field_map->{$field}{html_format})
+                ? (html_format => $field_map->{$field}{html_format}) : ()),
             ($dimension ? (
                 dimension => {%$dimension},
                 drilldown_field => $dimension->{key_field},

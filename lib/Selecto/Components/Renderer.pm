@@ -940,7 +940,7 @@ sub _table ($class, $result, $model) {
                 next;
             }
             if ($column->{measure}) {
-                $cells .= '<td>' . _h(_display($record->{$column->{key}})) . '</td>';
+                $cells .= '<td>' . _html_display($column, $record->{$column->{key}}) . '</td>';
                 next;
             }
             my $group_index = $group_position{$column_index};
@@ -948,13 +948,13 @@ sub _table ($class, $result, $model) {
             if ($result->{rollup} && $level == 0) {
                 $content = $group_index == 0 ? '<span class="sc-rollup-total-label">Total</span>' : '';
             } elsif (!$result->{rollup} || $group_index == $level - 1) {
-                my $label = _display_group($record->{$column->{key}});
+                my $label_html = _html_display($column, $record->{$column->{key}}, 1);
                 my $pairs = $result->{drilldowns}[$index][$group_index];
                 $content = $pairs
-                    ? $class->_drilldown_control($model, $pairs, $label, $group_index + 1)
+                    ? $class->_drilldown_control($model, $pairs, $label_html, $group_index + 1)
                     : $column->{link}
-                        ? _object_link($column, $record, $label)
-                        : _h($label);
+                        ? _object_link($column, $record, $label_html)
+                        : $label_html;
             }
             $cells .= '<td>' . $content . '</td>';
         }
@@ -978,7 +978,7 @@ sub _nested_table ($column, $value) {
         '<tr>' . join('', map {
             my $cell = $record->{$_->{field}};
             my $display = ref($cell) ? encode_json($cell) : _display($cell);
-            '<td>' . _h($display) . '</td>'
+            '<td>' . _html_display($_, $display) . '</td>'
         } @fields) . '</tr>'
     } @$value;
     return '<table class="sc-nested-table"><thead><tr>' . $head .
@@ -1074,7 +1074,7 @@ sub _graph ($class, $result, $model) {
         $class->_table($result, $model);
 }
 
-sub _drilldown_control ($class, $model, $pairs, $label, $level) {
+sub _drilldown_control ($class, $model, $pairs, $label_html, $level) {
     my $method = $model->{config}->query_params_enabled($model->{domain}) ? 'get' : 'post';
     my $hidden = '';
     for (my $index = 0; $index < @$pairs; $index += 2) {
@@ -1083,7 +1083,7 @@ sub _drilldown_control ($class, $model, $pairs, $label, $level) {
     return '<form class="sc-drilldown-form" action="' . _h($model->{config}->path) . '" method="' .
         $method . '" hx-ws:send>' . $hidden .
         '<button class="sc-drilldown-value" style="--sc-rollup-level:' . _h($level) .
-        '" type="submit">' . _h($label) . '</button></form>';
+        '" type="submit">' . $label_html . '</button></form>';
 }
 
 sub _pagination ($class, $model) {
@@ -1164,13 +1164,22 @@ sub _numeric ($value) {
 
 sub _display ($value) { return defined($value) ? "$value" : '—'; }
 sub _display_group ($value) { return defined($value) ? "$value" : '[NULL]'; }
-sub _object_link ($column, $record, $label) {
+sub _html_display ($column, $value, $group = 0) {
+    my $display = $group ? _display_group($value) : _display($value);
+    return _h($display) unless ($column->{html_format} // '') eq 'vin_last_six';
+    return _h($display) unless defined($value) && !ref($value)
+        && "$value" =~ /\A[A-Za-z0-9]{17}\z/;
+    my $prefix = substr("$value", 0, 11);
+    my $suffix = substr("$value", 11, 6);
+    return _h($prefix) . '<strong class="sc-vin-suffix">' . _h($suffix) . '</strong>';
+}
+sub _object_link ($column, $record, $label_html) {
     my $id = $record->{$column->{link_key}};
-    return _h($label) unless defined($id) && !ref($id) && length("$id");
+    return $label_html unless defined($id) && !ref($id) && length("$id");
     my $href = $column->{link}{url_template};
     my $escaped_id = url_escape("$id");
     $href =~ s/\{\{id\}\}/$escaped_id/g;
-    return '<a class="sc-object-link" href="' . _h($href) . '">' . _h($label) . '</a>';
+    return '<a class="sc-object-link" href="' . _h($href) . '">' . $label_html . '</a>';
 }
 sub _humanize ($value) { my $text = "$value"; $text =~ s/_/ /g; return ucfirst $text; }
 sub _h ($value) { return xml_escape(defined($value) ? "$value" : ''); }

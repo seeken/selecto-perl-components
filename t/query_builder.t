@@ -32,6 +32,37 @@ my $unknown_link_id_domain = Selecto::Domain->parse($unknown_link_id_contract, s
 eval { $config->field_catalog($unknown_link_id_domain) };
 like $@, qr/is not queryable/, 'object links cannot select an id outside the governed domain';
 
+my $vin_format_contract = $domain->contract;
+$vin_format_contract->{source}{columns}{product_name}{html_format} = 'vin_last_six';
+my $vin_format_domain = Selecto::Domain->parse($vin_format_contract, strict => 1);
+is $config->field_map($vin_format_domain)->{product_name}{html_format}, 'vin_last_six',
+    'canonical column HTML formatting enters the governed field catalog';
+my $vin_format_state = Selecto::Components::State->from_input(
+    $config, $vin_format_domain,
+    {q => 1, view => 'detail', field => ['product_name'], limit => 25, page => 1},
+);
+my $vin_format_result = Selecto::Components::QueryBuilder->build(
+    $config, $vin_format_domain, $vin_format_state,
+);
+is $vin_format_result->{columns}[0]{html_format}, 'vin_last_six',
+    'detail query columns retain their HTML-only formatter';
+is Selecto::Components::Renderer::_html_display(
+    $vin_format_result->{columns}[0], '1HGCM82633A004352',
+), '1HGCM82633A<strong class="sc-vin-suffix">004352</strong>',
+    'a 17-character VIN renders with its final six characters bold';
+is Selecto::Components::Renderer::_html_display(
+    $vin_format_result->{columns}[0], 'VIN-TOO-SHORT',
+), 'VIN-TOO-SHORT', 'a non-17-character VIN is left intact';
+
+my $unknown_html_format_contract = $domain->contract;
+$unknown_html_format_contract->{source}{columns}{product_name}{html_format} = 'raw_html';
+my $unknown_html_format_domain = Selecto::Domain->parse(
+    $unknown_html_format_contract, strict => 1,
+);
+eval { $config->field_catalog($unknown_html_format_domain) };
+like $@, qr/must be vin_last_six/,
+    'unrecognized domain HTML formatters are rejected instead of rendering raw HTML';
+
 my $detail_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'detail',
@@ -455,7 +486,7 @@ $collection_contract->{schemas}{variants} = {
         id => {type => 'integer'},
         product_id => {type => 'integer'},
         sku => {type => 'string'},
-        serial_number => {type => 'string'},
+        serial_number => {type => 'string', html_format => 'vin_last_six'},
     },
     associations => {},
 };
@@ -491,18 +522,20 @@ is_deeply $collection_statement->columns,
     'the child collection occupies one stable result column';
 is_deeply [map { $_->{label} } @{$collection_result->{columns}[1]{nested_fields}}],
     ['Sku', 'Serial Number'], 'nested child fields preserve their requested order';
+is $collection_result->{columns}[1]{nested_fields}[1]{html_format}, 'vin_last_six',
+    'nested child fields retain domain-declared HTML formatting';
 is_deeply [map { $_->arguments->[0] } @{$collection_result->{count_selections}}],
     ['id'], 'the pagination count selects only the root key';
 
 my $nested_records = [{
     __selecto_nested_variants =>
-        '[{"sku":"SKU-A","serial_number":"VIN-1"},{"sku":"SKU-B","serial_number":"VIN-2"}]',
+        '[{"sku":"SKU-A","serial_number":"1HGCM82633A004352"},{"sku":"SKU-B","serial_number":"VIN-2"}]',
 }];
 Selecto::Components::Explorer::_prepare_nested_records(
     $collection_result, $nested_records,
 );
 is_deeply $nested_records->[0]{__selecto_nested_variants}, [
-    {sku => 'SKU-A', serial_number => 'VIN-1'},
+    {sku => 'SKU-A', serial_number => '1HGCM82633A004352'},
     {sku => 'SKU-B', serial_number => 'VIN-2'},
 ], 'JSON child collections are decoded into records for rendering';
 my $nested_html = Selecto::Components::Renderer->_table(
@@ -515,11 +548,12 @@ my $nested_html = Selecto::Components::Renderer->_table(
 );
 like $nested_html, qr{class="sc-nested-table"},
     'to-many data renders as an inline nested table';
-like $nested_html, qr{<th scope="col">Sku</th>.*<td>SKU-A</td>.*<td>VIN-2</td>}s,
-    'the nested table renders its headers and every child row';
+like $nested_html,
+    qr{<th scope="col">Sku</th>.*<td>SKU-A</td>.*1HGCM82633A<strong class="sc-vin-suffix">004352</strong>.*<td>VIN-2</td>}s,
+    'the nested table renders every child row and applies its VIN formatter';
 is Selecto::Components::Explorer::_delimited_cell(
     $nested_records->[0]{__selecto_nested_variants}
-), '"[{""serial_number"":""VIN-1"",""sku"":""SKU-A""},{""serial_number"":""VIN-2"",""sku"":""SKU-B""}]"',
+), '"[{""serial_number"":""1HGCM82633A004352"",""sku"":""SKU-A""},{""serial_number"":""VIN-2"",""sku"":""SKU-B""}]"',
     'flat exports encode a nested collection as JSON instead of a Perl reference';
 
 my $collection_sort_state = Selecto::Components::State->from_input(
