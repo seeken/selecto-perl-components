@@ -5,7 +5,7 @@ use Mojo::JSON qw(encode_json);
 use Mojo::Util qw(url_escape xml_escape);
 use Selecto::Components::QueryLibrary ();
 
-my $ASSET_REVISION = '20260820-6';
+my $ASSET_REVISION = '20260820-7';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -60,7 +60,7 @@ sub surface ($class, $model) {
     my $hero_actions = $query_params
         ? '<div class="sc-hero-actions"><a class="sc-button sc-secondary" href="' .
           _h($model->{canonical_url}) . '">Permalink</a><div class="sc-export-options" role="group" ' .
-          'aria-label="Export current page"><span>Export</span>' . $export_links . '</div></div>'
+          'aria-label="Export all matched rows"><span>Export all</span>' . $export_links . '</div></div>'
         : '<div class="sc-hero-actions"><span class="sc-private-mode">Private URL mode</span></div>';
     my $builder_collapsed = _builder_collapsed($model);
     return '<section id="selecto-surface-' . _h($config->id) . '" class="sc-surface" data-selecto-url="' .
@@ -542,6 +542,13 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
         }
     } elsif ($kind eq 'group') {
         my $format = $item_config->{format} // '';
+        if ($field->{dimension}) {
+            $controls .= _hidden('group_format', '') .
+                _hidden('group_bucket_ranges', '') .
+                _hidden('group_prefix_length', '2') .
+                _hidden('group_exclude_articles', '1');
+            return $controls;
+        }
         my $format_options = join '', map {
             my ($value, $text) = @$_;
             $value = '' if $value eq 'default';
@@ -845,6 +852,11 @@ sub _table ($class, $result, $model) {
                     (defined($target) && "$target" ne '' ? '' : ' disabled') . '></td>';
                 next;
             }
+            if ($column->{nested}) {
+                $cells .= '<td class="sc-nested-cell">' .
+                    _nested_table($column, $record->{$column->{key}}) . '</td>';
+                next;
+            }
             if ($column->{measure}) {
                 $cells .= '<td>' . _h(_display($record->{$column->{key}})) . '</td>';
                 next;
@@ -869,6 +881,26 @@ sub _table ($class, $result, $model) {
     my $column_count = scalar(@columns);
     $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count . '">No rows matched this query.</td></tr>';
     return '<div class="sc-table-wrap"><table><thead><tr>' . $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>';
+}
+
+sub _nested_table ($column, $value) {
+    return '<span class="sc-nested-empty">No data</span>'
+        unless ref($value) eq 'ARRAY' && @$value;
+    my @fields = @{$column->{nested_fields} // []};
+    return '<span class="sc-nested-empty">No data</span>' unless @fields;
+    my $head = join '', map {
+        '<th scope="col">' . _h($_->{label}) . '</th>'
+    } @fields;
+    my $rows = join '', map {
+        my $record = ref($_) eq 'HASH' ? $_ : {};
+        '<tr>' . join('', map {
+            my $cell = $record->{$_->{field}};
+            my $display = ref($cell) ? encode_json($cell) : _display($cell);
+            '<td>' . _h($display) . '</td>'
+        } @fields) . '</tr>'
+    } @$value;
+    return '<table class="sc-nested-table"><thead><tr>' . $head .
+        '</tr></thead><tbody>' . $rows . '</tbody></table>';
 }
 
 sub _graph ($class, $result, $model) {

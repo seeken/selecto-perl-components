@@ -200,18 +200,21 @@ sub primary_key ($self, $domain) {
 sub field_catalog ($self, $domain) {
     my @catalog;
     my $fields = $domain->fields;
+    my ($dimensions_by_key, $dimensions_by_display) = _star_dimensions($domain);
     my $contract = $domain->contract;
     my $source = ref($contract) eq 'HASH' && ref($contract->{source}) eq 'HASH'
         ? $contract->{source} : {};
     push @catalog, map {
         my $path = $_;
         my $link = _field_link($domain, $path, $source->{columns}{$path});
+        my $dimension = $dimensions_by_key->{$path};
         {
             path => $path,
-            label => _humanize($path),
+            label => $dimension ? $dimension->{label} : _humanize($path),
             type => $fields->{$path},
             association => undef,
             (defined($link) ? (link => $link) : ()),
+            ($dimension ? (dimension => {%$dimension}) : ()),
         }
     } sort keys %$fields;
     my $associations = $domain->associations;
@@ -233,16 +236,45 @@ sub field_catalog ($self, $domain) {
                 $path,
                 ref($schema) eq 'HASH' ? $schema->{columns}{$field} : undef,
             );
+            my $dimension = $dimensions_by_display->{$path};
             {
                 path => $path,
                 label => _humanize($association_name) . ' · ' . _humanize($field),
                 type => $association_fields->{$field},
                 association => $association_name,
+                denormalizing => $association->cardinality eq 'many' ? 1 : 0,
                 (defined($link) ? (link => $link) : ()),
+                ($dimension ? (dimension => {%$dimension}) : ()),
             }
         } sort keys %$association_fields;
     }
     return \@catalog;
+}
+
+sub _star_dimensions ($domain) {
+    my (%by_key, %by_display);
+    my $associations = $domain->associations;
+    for my $name (sort keys %$associations) {
+        my $association = $associations->{$name};
+        next unless $association->can('join_mode')
+            && $association->join_mode eq 'star_dimension';
+        my $key_field = $association->dimension_key;
+        my $display_field = $name . '.' . $association->display_field;
+        my $display_type = $association->fields->{$association->display_field};
+        my $label = $association->display_name;
+        $label = _humanize($name) unless defined($label) && length($label);
+        my $dimension = {
+            association => $name,
+            key_field => $key_field,
+            display_field => $display_field,
+            display_type => $display_type,
+            label => $label,
+        };
+        die "more than one star dimension uses key $key_field\n" if $by_key{$key_field};
+        $by_key{$key_field} = $dimension;
+        $by_display{$display_field} = $dimension;
+    }
+    return (\%by_key, \%by_display);
 }
 
 sub _field_link ($domain, $path, $column) {

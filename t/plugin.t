@@ -64,14 +64,16 @@ $t->get_ok('/explore/products')
     ->element_exists('[data-sc-export-format="csv"][href*="format=csv"]')
     ->element_exists('[data-sc-export-format="tsv"][href*="format=tsv"]')
     ->element_exists('[data-sc-export-format="json"][href*="format=json"]')
+    ->text_is('.sc-export-options > span' => 'Export all')
+    ->attr_is('.sc-export-options' => 'aria-label' => 'Export all matched rows')
     ->content_like(qr{>Excel</a>.*>CSV</a>.*>TSV</a>.*>JSON</a>}s)
     ->content_like(qr{hx-ws:connect="/explore/products/ws"})
     ->content_like(qr{hx-ws:send})
     ->content_like(qr{/selecto-components/htmx\.min\.js})
     ->content_like(qr{/selecto-components/hx-ws\.min\.js})
-    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260820-6})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260820-6})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260820-6})
+    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260820-7})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260820-7})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260820-7})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')
@@ -422,20 +424,31 @@ $t->get_ok('/explore/products?q=1&view=detail&field=drop_table&order=drop_table&
 
 my $export_url = '/explore/products?q=1&view=detail&field=action%3Aadd_product_note' .
     '&field=product_name&field=unit_price&group=category.category_name&measure=count' .
-    '&order=product_name&direction=asc&limit=10&page=1';
+    '&order=product_name&direction=asc&limit=10&page=2';
+
+my $count_executions_before_export =
+    $TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0;
 
 $t->get_ok($export_url . '&format=csv')
     ->status_is(200)
     ->content_type_like(qr{text/csv})
-    ->header_like('Content-Disposition' => qr/products-page-1\.csv/)
+    ->header_like('Content-Disposition' => qr/products-export\.csv/)
     ->content_like(qr/"Product Name","Unit Price"\r?\n/)
     ->content_unlike(qr/Action: Add Product Note/)
     ->content_like(qr/"'=2\+2"/);
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, undef,
+    'CSV export executes the active query without a row limit';
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->offset_value, undef,
+    'CSV export ignores the requested result page';
+is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $count_executions_before_export,
+    'all-row export does not issue a redundant count query';
+is scalar(split /\r?\n/, $t->tx->res->body), 43,
+    'CSV export contains its header and all 42 matched rows';
 
 $t->get_ok($export_url . '&format=tsv')
     ->status_is(200)
     ->content_type_like(qr{text/tab-separated-values})
-    ->header_like('Content-Disposition' => qr/products-page-1\.tsv/)
+    ->header_like('Content-Disposition' => qr/products-export\.tsv/)
     ->content_like(qr/"Product Name"\t"Unit Price"\r?\n/)
     ->content_unlike(qr/Action: Add Product Note/)
     ->content_like(qr/"'=2\+2"/);
@@ -443,11 +456,12 @@ $t->get_ok($export_url . '&format=tsv')
 $t->get_ok($export_url . '&format=json')
     ->status_is(200)
     ->content_type_like(qr{application/json})
-    ->header_like('Content-Disposition' => qr/products-page-1\.json/)
+    ->header_like('Content-Disposition' => qr/products-export\.json/)
+    ->json_is('/scope' => 'all')
     ->json_is('/page' => 1)
-    ->json_is('/total_pages' => 5)
+    ->json_is('/total_pages' => 1)
     ->json_is('/total_count' => 42)
-    ->json_is('/row_count' => 2)
+    ->json_is('/row_count' => 42)
     ->json_is('/columns' => ['Product Name', 'Unit Price'])
     ->json_is('/rows/0/Product Name' => '=2+2')
     ->json_is('/rows/0/Unit Price' => 10);
@@ -455,7 +469,7 @@ $t->get_ok($export_url . '&format=json')
 $t->get_ok($export_url . '&format=xlsx')
     ->status_is(200)
     ->content_type_like(qr{application/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet})
-    ->header_like('Content-Disposition' => qr/products-page-1\.xlsx/)
+    ->header_like('Content-Disposition' => qr/products-export\.xlsx/)
     ->content_like(qr{\APK});
 
 $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({

@@ -32,6 +32,9 @@ This is alpha software. Its browser transport is pinned to htmx
   as Today, This Month, This Quarter, and This Year;
 - Detail, Aggregate, and Graph result views, with Bar, Horizontal Bar, Stacked
   Bar, Line, Area, Pie, Doughnut, and Scatter dashboard charts;
+- automatic Detail denormalization prevention for to-many relationships:
+  selected child fields share an inline nested table backed by a correlated
+  JSON collection, so each root object remains one result row;
 - domain-declared selected-row actions exposed as optional Detail columns; each
   chosen action owns its checkbox set, select-all-page control, button, and
   typed dialog, with hidden primary-key selection, dynamic host choices,
@@ -44,6 +47,8 @@ This is alpha software. Its browser transport is pinned to htmx
   grand total, plus clickable Graph group values; drilldowns retain existing
   filters and apply the selected group path as exact governed Detail predicates,
   including formatted dates, numeric/date buckets, and text prefixes;
+- star-dimension Aggregate and Graph groups that display the referenced name,
+  group by the stable fact key, and use that hidden key for Detail drilldowns;
 - `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `in`, `is_null`, and
   `not_null` filters supported by the current native Perl query contract;
 - a domain-derived Available/Set aggregate picker where every governed column
@@ -59,8 +64,9 @@ This is alpha software. Its browser transport is pinned to htmx
   and reset to page one while the host owns user and tenant scoping;
 - a domain-selected private URL mode with WebSocket/POST body state and no
   query-state history, permalink, or query-string export link;
-- Excel, CSV, TSV, and JSON exports for the current result page, with
-  spreadsheet-formula neutralization for delimited formats;
+- Excel, CSV, TSV, and JSON exports for every row matched by the active query,
+  independent of the current page, with spreadsheet-formula neutralization for
+  delimited formats;
 - optional compiled SQL display for development; and
 - a real PostgreSQL-backed Northwind example using the existing independently
   authored `selecto-perl-northwind` fixture.
@@ -144,6 +150,13 @@ metadata only and are not an authorization decision.
 Projection association shapes are adapted to the Perl component builder as
 validated dotted field paths. Parameter values are type-checked by
 `selecto-perl` and remain bound values in the compiled statement.
+
+For a canonical join with `type => 'star_dimension'`, grouping either its
+`dimension_key` or configured joined `display_field` shows the dimension name
+but groups on the key. The key is carried as a hidden result column, so clicking
+the displayed name creates an exact, direct predicate such as `status = 'D'`.
+Star dimensions intentionally do not offer bucketing or prefix formats because
+their name/key pair is the grouping unit.
 
 ## Plugin usage
 

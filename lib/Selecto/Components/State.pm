@@ -100,6 +100,7 @@ sub from_input ($class, $config, $domain, $input) {
     my @valid_groups;
     my %group_configs;
     my %seen_group;
+    my %seen_group_identity;
     for my $index (0 .. $#$group_values) {
         my $group = _scalar($group_values->[$index]);
         next unless length($group) && !$seen_group{$group}++;
@@ -108,6 +109,12 @@ sub from_input ($class, $config, $domain, $input) {
         } elsif (@valid_groups >= 3) {
             push @errors, 'Choose no more than three group fields.';
         } else {
+            my $dimension = $field_map->{$group}{dimension};
+            my $group_identity = $dimension ? $dimension->{key_field} : $group;
+            if ($seen_group_identity{$group_identity}++) {
+                push @errors, 'Choose a star dimension only once.';
+                next;
+            }
             my $alias = _trim($group_aliases->[$index]);
             if (length($alias) > 80 || $alias =~ /[\x00-\x1f\x7f]/) {
                 push @errors, 'A group column alias is not available.';
@@ -115,7 +122,10 @@ sub from_input ($class, $config, $domain, $input) {
             }
             my $format = _scalar($group_formats->[$index]);
             my $field_type = $field_map->{$group}{type};
-            if (!$config->allows_group_format($field_type, $format)) {
+            if ($field_map->{$group}{dimension} && length($format)) {
+                push @errors, 'A star dimension cannot use a group format.';
+                $format = '';
+            } elsif (!$config->allows_group_format($field_type, $format)) {
                 push @errors, 'A group column format is not available.';
                 $format = '';
             }
@@ -224,7 +234,9 @@ sub from_input ($class, $config, $domain, $input) {
         $order_fields = [map { $_->[0] } @{$query_library->{orders}}];
         $order_directions = [map { $_->[1] } @{$query_library->{orders}}];
     }
-    my ($default_order) = grep { $field_map->{$_} } @valid_fields;
+    my ($default_order) = grep {
+        $field_map->{$_} && !$field_map->{$_}{denormalizing}
+    } @valid_fields;
     $default_order //= $config->primary_key($domain);
     $order_fields = [$default_order] unless grep { length(_scalar($_)) } @$order_fields;
     my @orders;
@@ -238,6 +250,10 @@ sub from_input ($class, $config, $domain, $input) {
         }
         unless ($field_map->{$field}) {
             push @errors, 'Choose an available sort field.';
+            next;
+        }
+        if ($field_map->{$field}{denormalizing}) {
+            push @errors, 'A to-many field cannot order root detail rows.';
             next;
         }
         if ($seen_order{$field}++) {

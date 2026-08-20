@@ -94,13 +94,15 @@ sub _routes ($app, $explorer, $origin_check) {
     my $config = $explorer->config;
     my $routes = $app->routes;
     $routes->get($config->path)->to(cb => sub ($controller) {
-        my $model = _decorate_model($controller, $explorer->model($controller));
+        my $format = lc($controller->param('format') // '');
+        $format = 'xlsx' if $format eq 'excel';
+        my $model = _decorate_model($controller, $explorer->model(
+            $controller, undef, {all_rows => $EXPORT_FORMATS{$format} ? 1 : 0},
+        ));
         if (!$config->query_params_enabled($model->{domain})
             && length($controller->req->url->query->to_string)) {
             return $controller->redirect_to($config->path);
         }
-        my $format = lc($controller->param('format') // '');
-        $format = 'xlsx' if $format eq 'excel';
         if ($config->query_params_enabled($model->{domain}) && $EXPORT_FORMATS{$format}) {
             return _render_export($controller, $explorer, $model, $format);
         }
@@ -488,8 +490,7 @@ sub _render_export ($controller, $explorer, $model, $format) {
         );
     }
     my $export = $EXPORT_FORMATS{$format};
-    my $filename = $model->{config}->id . '-page-' . $model->{state}->page .
-        '.' . $export->{extension};
+    my $filename = $model->{config}->id . '-export.' . $export->{extension};
     $controller->res->headers->cache_control('no-store');
     $controller->res->headers->content_disposition(qq{attachment; filename="$filename"});
     $controller->res->headers->content_type($export->{content_type});
