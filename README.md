@@ -12,10 +12,13 @@ This is alpha software. Its browser transport is pinned to htmx
 ## Current surface
 
 - a reusable `Selecto::Components` Mojolicious plugin;
-- separate View, Filters, and domain-driven Query Library builder tabs, with active-tab continuity across
-  WebSocket fragment replacements;
+- named query-library views integrated into View and reusable governed
+  segments and typed parameters integrated into Filters, with active-tab
+  continuity across WebSocket fragment replacements;
 - locally staged builder edits with an explicit Run boundary, so unfinished
   view, column, filter, sort, and pagination changes do not execute queries;
+- a left-side view tray that participates in normal page scrolling, collapses
+  to a chevron rail, and automatically collapses when a query is applied;
 - domain-derived Available/Set field picker with filtering, add/remove controls,
   drag ordering, and accessible move-up/move-down controls;
 - per-column presentation aliases and governed date/time formats for Detail
@@ -29,11 +32,15 @@ This is alpha software. Its browser transport is pinned to htmx
   as Today, This Month, This Quarter, and This Year;
 - Detail, Aggregate, and Graph result views, with Bar, Horizontal Bar, Stacked
   Bar, Line, Area, Pie, Doughnut, and Scatter dashboard charts;
+- automatic Detail denormalization prevention for to-many relationships:
+  selected child fields share an inline nested table backed by a correlated
+  JSON collection, so each root object remains one result row;
 - domain-declared selected-row actions exposed as optional Detail columns; each
-  chosen action owns its checkbox set, select-all-page control, button, and
-  typed dialog, with hidden primary-key selection, dynamic host choices,
-  preview/execute authorization callbacks, CSRF protection, and server-side
-  input revalidation;
+  chosen action owns its selection UI, button, and typed dialog. Ordinary
+  actions use independent checkbox sets, while grouped actions can assign rows
+  to trusted colored-shape markers and collect inputs for each group. Both use
+  hidden primary-key selection, dynamic host choices, preview/execute
+  authorization callbacks, CSRF protection, and server-side input revalidation;
 - total matched-row and page counts plus full data-and-count query timing, with
   changed query intent resetting to page one while page-only Run and
   Previous/Next retain explicit pagination;
@@ -41,6 +48,8 @@ This is alpha software. Its browser transport is pinned to htmx
   grand total, plus clickable Graph group values; drilldowns retain existing
   filters and apply the selected group path as exact governed Detail predicates,
   including formatted dates, numeric/date buckets, and text prefixes;
+- star-dimension Aggregate and Graph groups that display the referenced name,
+  group by the stable fact key, and use that hidden key for Detail drilldowns;
 - `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `in`, `is_null`, and
   `not_null` filters supported by the current native Perl query contract;
 - a domain-derived Available/Set aggregate picker where every governed column
@@ -51,11 +60,17 @@ This is alpha software. Its browser transport is pinned to htmx
   as hidden governed columns and no extra ID columns in exports;
 - htmx 4 `hx-ws` updates using server-rendered HTML fragments;
 - ordinary HTTP GET fallback, permalinks, and browser-refresh recovery;
+- an optional dedicated Saved queries tab backed by a host-provided object with
+  `list`, `save`, and `delete` methods; saved URLs are validated, canonicalized,
+  and reset to page one while the host owns user and tenant scoping;
 - a domain-selected private URL mode with WebSocket/POST body state and no
   query-state history, permalink, or query-string export link;
-- Excel, CSV, TSV, and JSON exports for the current result page, with
-  spreadsheet-formula neutralization for delimited formats;
-- optional compiled SQL display for development; and
+- Excel, CSV, TSV, and JSON exports for every row matched by the active query,
+  independent of the current page, with spreadsheet-formula neutralization for
+  delimited formats;
+- an optional collapsible Query Debug panel with generated data/count SQL,
+  bound parameters, execution timings, pagination, adapter, and row statistics;
+  and
 - a real PostgreSQL-backed Northwind example using the existing independently
   authored `selecto-perl-northwind` fixture.
 
@@ -130,12 +145,21 @@ When a domain declares `query_library`, canonical state also includes
 materialized-view marker. The marker lets a newly selected view seed Detail
 columns and ordering once while keeping those controls editable on subsequent
 requests. Named view segments and additional segments continue to constrain the
-query alongside visual filters. Query-library `capability` values are rendered
-as metadata only and are not an authorization decision.
+query alongside visual filters. They are included in the applied-filter count
+and shown as non-removable segment summaries; remove them by changing the named
+view or segment controls. Query-library `capability` values are rendered as
+metadata only and are not an authorization decision.
 
 Projection association shapes are adapted to the Perl component builder as
 validated dotted field paths. Parameter values are type-checked by
 `selecto-perl` and remain bound values in the compiled statement.
+
+For a canonical join with `type => 'star_dimension'`, grouping either its
+`dimension_key` or configured joined `display_field` shows the dimension name
+but groups on the key. The key is carried as a hidden result column, so clicking
+the displayed name creates an exact, direct predicate such as `status = 'D'`.
+Star dimensions intentionally do not offer bucketing or prefix formats because
+their name/key pair is the grouping unit.
 
 ## Plugin usage
 
@@ -204,6 +228,24 @@ Templates must be same-application paths beginning with one `/` and must
 contain `{{id}}`. Components URL-encodes the selected ID and HTML-escapes the
 completed link before rendering it.
 
+## HTML-only value formatting
+
+A canonical domain column may opt into a governed HTML formatter. The
+`vin_last_six` formatter leaves the first 11 characters of a valid
+17-character VIN at normal weight and wraps its final six characters in
+`<strong>`. Short or malformed values are displayed normally. Formatting is
+also applied inside to-many nested tables and to grouped HTML values.
+
+```perl
+vin => {
+    type => 'string',
+    html_format => 'vin_last_six',
+},
+```
+
+This is a presentation rule only. Excel, CSV, TSV, and JSON exports retain the
+original unformatted value.
+
 ## Selected-row actions
 
 Selected-row actions come from the canonical domain contract. The Components
@@ -264,6 +306,45 @@ The action route is `POST /explore/products/actions/:action_id`. Browser forms
 carry a session-bound CSRF token. Hosts remain responsible for checking every
 target against the current tenant/user and for transaction, audit, and
 business-rule behavior inside the handler.
+
+An action can instead group rows before it runs. The built-in `lucky_charms`
+palette uses pink hearts, orange stars, yellow moons, green clovers, blue
+diamonds, and purple horseshoes in that order, exposing a new distinct shape as
+each group is created. A selected row displays only its filled marker;
+clicking it again unassigns the row and restores the available outlines. The
+result table keeps rows with the same marker adjacent, orders marker groups by
+palette order, and retains the original query order within each group and among
+unassigned rows. Reordering uses a short positional animation and honors the
+browser's reduced-motion preference.
+
+```perl
+load_build => {
+    label => 'Load Build',
+    scope => 'bulk',
+    selection => {
+        mode => 'groups',
+        palette => 'lucky_charms',
+        max_groups => 6,
+        row_details => [
+            {id => 'origin', label => 'Origin', field => 'origin.city'},
+            {id => 'destination', label => 'Destination', field => 'destination.city'},
+        ],
+        group_inputs => [{
+            id => 'carrier_id', label => 'Carrier ID', type => 'number',
+            required => 1, minimum => 1,
+        }],
+    },
+    submit_label => 'Build loads',
+    execution => {kind => 'host', operation => 'load_build'},
+},
+```
+
+The handler receives normalized `selected_ids` plus `groups`, ordered by marker
+index. Each group has its trusted server-resolved `marker`, its own
+`selected_ids`, and normalized `inputs`. The browser cannot submit custom
+marker colors, shapes, or labels. `row_details` are governed hidden fields
+shown beside each selected row in the confirmation card; they are display-only
+and are not submitted to the handler.
 
 The plugin adds its packaged `public/` directory to Mojolicious static paths.
 The htmx runtime and WebSocket extension are served locally; the browser does
@@ -331,7 +412,9 @@ message and tests.
   filter values are sensitive.
 - Raw database exceptions are not rendered. Known `Selecto::Error` messages
   remain visible; unexpected failures become a generic error.
-- Raw SQL is hidden unless the host explicitly enables `show_sql`.
+- Raw SQL is hidden unless the host explicitly enables `show_sql`. Enabling it
+  renders the Query Debug panel and should remain limited to trusted development
+  environments.
 
 A host Content Security Policy can remain self-contained:
 

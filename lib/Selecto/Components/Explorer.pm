@@ -1,7 +1,7 @@
 package Selecto::Components::Explorer;
 
 use Mojo::Base -base, -signatures;
-use Mojo::JSON qw(encode_json);
+use Mojo::JSON qw(decode_json encode_json);
 use Mojo::URL ();
 use File::Temp qw(tempfile);
 use Scalar::Util qw(blessed looks_like_number);
@@ -23,10 +23,13 @@ sub input_from_controller ($self, $controller) {
     return \%input;
 }
 
-sub model ($self, $controller, $input = undef) {
+sub model ($self, $controller, $input = undef, $options = undef) {
+    $options //= {};
+    die "explorer model options must be an object\n" unless ref($options) eq 'HASH';
     my $input_supplied = defined $input;
     my $engine;
     my $state;
+    my $all_rows = 0;
     my $model = {
         config => $self->config,
         input => undef,
@@ -35,6 +38,8 @@ sub model ($self, $controller, $input = undef) {
     };
     my $ok = eval {
         $engine = $self->config->engine($controller);
+        $all_rows = $options->{all_rows}
+            && $self->config->query_params_enabled($engine->domain) ? 1 : 0;
         $input = $input_supplied || $self->config->query_params_enabled($engine->domain)
             ? ($input // $self->input_from_controller($controller))
             : {};
@@ -49,30 +54,47 @@ sub model ($self, $controller, $input = undef) {
         return 1 unless $state->valid;
 
         my $built = Selecto::Components::QueryBuilder->build(
-            $self->config, $engine->domain, $state
+            $self->config, $engine->domain, $state, {paginate => !$all_rows}
         );
         my $started = time;
+        my $compile_started = time;
         my $statement = $engine->compile($built->{query});
+        my $compile_ms = _elapsed_ms($compile_started);
+        my $data_started = time;
         my $raw = $engine->adapter->execute_query($statement);
+        my $data_query_ms = _elapsed_ms($data_started);
         _validate_result($raw);
-        my $count_query = Selecto::Query->new(
-            selections => $built->{query}->selections,
-            predicate => $built->{query}->predicate,
-            groups => $built->{query}->groups,
-            grouping_mode => $built->{query}->grouping_mode,
-        );
-        my $count_source = $engine->compile($count_query);
-        my $count_raw = $engine->adapter->execute_query(_count_statement($count_source));
-        _validate_result($count_raw);
-        my $elapsed_ms = int((time - $started) * 1000 + 0.5);
-        my $total_count = _total_count($count_raw);
-        my $total_pages = int(($total_count + $state->limit - 1) / $state->limit);
+        my $total_count;
+        my ($count_statement, $count_compile_ms, $count_query_ms);
+        if ($all_rows) {
+            $total_count = scalar @{$raw->{rows}};
+        } else {
+            my $count_query = Selecto::Query->new(
+                selections => $built->{count_selections} // $built->{query}->selections,
+                predicate => $built->{query}->predicate,
+                groups => $built->{query}->groups,
+                grouping_mode => $built->{query}->grouping_mode,
+            );
+            my $count_compile_started = time;
+            my $count_source = $engine->compile($count_query);
+            $count_statement = _count_statement($count_source);
+            $count_compile_ms = _elapsed_ms($count_compile_started);
+            my $count_started = time;
+            my $count_raw = $engine->adapter->execute_query($count_statement);
+            $count_query_ms = _elapsed_ms($count_started);
+            _validate_result($count_raw);
+            $total_count = _total_count($count_raw);
+        }
+        my $elapsed_ms = _elapsed_ms($started);
+        my $total_pages = $all_rows ? 1
+            : int(($total_count + $state->limit - 1) / $state->limit);
         $total_pages = 1 if $total_pages < 1;
         my @records = map {
             my %record;
             @record{@{$raw->{columns}}} = @$_;
             \%record;
         } @{$raw->{rows}};
+        _prepare_nested_records($built, \@records);
         _prepare_rollup_records($built, \@records);
         my $drilldowns = _drilldowns($state, $built, \@records);
         $model->{result} = {
@@ -85,12 +107,39 @@ sub model ($self, $controller, $input = undef) {
             count => scalar(@records),
             total_count => $total_count,
             total_pages => $total_pages,
-            has_more => $state->page < $total_pages ? 1 : 0,
+            has_more => !$all_rows && $state->page < $total_pages ? 1 : 0,
+            all_rows => $all_rows,
             elapsed_ms => $elapsed_ms,
             adapter_name => $engine->adapter->name,
             ($self->config->show_sql ? (
                 sql => $statement->sql,
                 params => $statement->params,
+                debug => {
+                    data_query => {
+                        sql => $statement->sql,
+                        params => $statement->params,
+                    },
+                    (defined($count_statement) ? (
+                        count_query => {
+                            sql => $count_statement->sql,
+                            params => $count_statement->params,
+                        },
+                    ) : ()),
+                    stats => {
+                        adapter => $engine->adapter->name,
+                        view => $state->view,
+                        returned_rows => scalar(@records),
+                        matched_rows => $total_count,
+                        page => $all_rows ? 1 : $state->page,
+                        total_pages => $total_pages,
+                        page_size => $all_rows ? scalar(@records) : $state->limit,
+                        compile_ms => $compile_ms + ($count_compile_ms // 0),
+                        data_query_ms => $data_query_ms,
+                        count_compile_ms => $count_compile_ms,
+                        count_query_ms => $count_query_ms,
+                        total_ms => $elapsed_ms,
+                    },
+                },
             ) : ()),
         };
         1;
@@ -108,6 +157,31 @@ sub model ($self, $controller, $input = undef) {
         }
     }
     return $model;
+}
+
+sub _elapsed_ms ($started) {
+    return int((time - $started) * 1000 + 0.5);
+}
+
+sub _prepare_nested_records ($built, $records) {
+    my @columns = grep { $_->{nested} } @{$built->{columns} // []};
+    return unless @columns;
+    for my $record (@$records) {
+        for my $column (@columns) {
+            my $value = $record->{$column->{key}};
+            if (defined($value) && !ref($value)) {
+                my $decoded;
+                my $ok = eval { $decoded = decode_json($value); 1 };
+                $value = $ok ? $decoded : undef;
+            }
+            if (ref($value) eq 'ARRAY'
+                && !grep { ref($_) ne 'HASH' } @$value) {
+                $record->{$column->{key}} = $value;
+            } else {
+                $record->{$column->{key}} = [];
+            }
+        }
+    }
 }
 
 sub _prepare_rollup_records ($built, $records) {
@@ -133,7 +207,9 @@ sub _prepare_rollup_records ($built, $records) {
 sub _drilldowns ($state, $built, $records) {
     return [] if $state->view eq 'detail';
     my @groups = grep { !$_->{measure} } @{$built->{columns}};
-    my %group_field = map { $_->{field} => 1 } @groups;
+    my %group_field = map {
+        ($_->{field} => 1, (defined($_->{drilldown_field}) ? ($_->{drilldown_field} => 1) : ()))
+    } @groups;
     my @drilldowns;
     for my $record (@$records) {
         my $available_levels = $built->{rollup}
@@ -144,13 +220,15 @@ sub _drilldowns ($state, $built, $records) {
         my @row_drilldowns;
         for my $group_index (0 .. $available_levels - 1) {
             my $group = $groups[$group_index];
-            my $value = $record->{$group->{key}};
+            my $value_key = $group->{drilldown_key} // $group->{key};
+            my $value = $record->{$value_key};
             push @group_filters, {
-                field => $group->{field},
+                field => $group->{drilldown_field} // $group->{field},
                 op => defined($value) ? 'eq' : 'is_null',
                 value => defined($value) ? "$value" : '',
                 value_end => '',
-                grouped => 1,
+                grouped => exists($group->{drilldown_grouped})
+                    ? $group->{drilldown_grouped} : 1,
             };
             my $drilldown = Selecto::Components::State->new(
                 %{$state->as_hash},
@@ -224,7 +302,8 @@ sub json ($self, $model) {
         }
     } @{$model->{result}{records}};
     return encode_json({
-        page => $model->{state}->page,
+        scope => $model->{result}{all_rows} ? 'all' : 'page',
+        page => $model->{result}{all_rows} ? 1 : $model->{state}->page,
         total_pages => $model->{result}{total_pages},
         total_count => $model->{result}{total_count},
         row_count => scalar(@rows),
@@ -262,7 +341,7 @@ sub xlsx ($self, $model) {
                 $worksheet->write_blank($row_index, $column_index, undef);
                 next;
             }
-            my $text = "$value";
+            my $text = _flat_value($value);
             if (!ref($value) && looks_like_number($value) && $text !~ /\A[+-]?0\d/) {
                 $worksheet->write_number($row_index, $column_index, 0 + $value);
             } else {
@@ -326,8 +405,17 @@ sub _unique_headers (@labels) {
 
 sub _json_value ($value) {
     return undef unless defined($value);
+    return [map { _json_value($_) } @$value] if ref($value) eq 'ARRAY';
+    return {map { $_ => _json_value($value->{$_}) } keys %$value}
+        if ref($value) eq 'HASH';
     return "$value" if ref($value);
     return $value;
+}
+
+sub _flat_value ($value) {
+    return '' unless defined($value);
+    return encode_json(_json_value($value)) if ref($value);
+    return "$value";
 }
 
 sub _validate_result ($result) {
@@ -347,8 +435,7 @@ sub _public_error ($error) {
 }
 
 sub _delimited_cell ($value) {
-    $value = '' unless defined $value;
-    $value = "$value";
+    $value = _flat_value($value);
     $value = "'$value" if $value =~ /\A[=+\-@]/;
     $value =~ s/"/""/g;
     return qq{"$value"};

@@ -4,7 +4,29 @@ use 5.034;
 use strict;
 use warnings;
 use Mojo::Base -base, -signatures;
+use Mojo::JSON qw(decode_json);
 use Storable qw(dclone);
+
+my @LUCKY_CHARMS_MARKERS = (
+    {
+        id => 'pink_heart', label => 'Pink heart', shape => 'heart', color => '#ec4899',
+    },
+    {
+        id => 'orange_star', label => 'Orange star', shape => 'star', color => '#f97316',
+    },
+    {
+        id => 'yellow_moon', label => 'Yellow moon', shape => 'moon', color => '#eab308',
+    },
+    {
+        id => 'green_clover', label => 'Green clover', shape => 'clover', color => '#22c55e',
+    },
+    {
+        id => 'blue_diamond', label => 'Blue diamond', shape => 'diamond', color => '#2563eb',
+    },
+    {
+        id => 'purple_horseshoe', label => 'Purple horseshoe', shape => 'horseshoe', color => '#9333ea',
+    },
+);
 
 sub available ($class, $config, $domain, $controller, $phase = 'preview', $target = undef) {
     my $actions = $domain->actions;
@@ -39,7 +61,8 @@ sub authorize ($class, $config, $controller, $action, $phase, $target = undef) {
     return $class->_authorize($config, $controller, $action, $phase, $target);
 }
 
-sub request ($class, $config, $action, $selected_ids, $raw_inputs) {
+sub request ($class, $config, $action, $selected_ids, $raw_inputs, $options = undef) {
+    $options = {} unless ref($options) eq 'HASH';
     my @errors;
     my @ids;
     my %seen;
@@ -57,32 +80,16 @@ sub request ($class, $config, $action, $selected_ids, $raw_inputs) {
     push @errors, 'Select at least one row.' unless @ids;
     push @errors, 'Too many rows were selected for one action.' if @ids > $config->max_action_rows;
 
-    $raw_inputs = {} unless ref($raw_inputs) eq 'HASH';
-    my %inputs;
-    for my $input (@{$action->{inputs}}) {
-        my $id = $input->{id};
-        my $value = exists($raw_inputs->{$id}) && defined($raw_inputs->{$id})
-            ? "$raw_inputs->{$id}" : '';
-        $value =~ s/\r\n?/\n/g;
-        $value =~ s/\A\s+|\s+\z//g if $input->{trim};
+    my ($inputs, $input_errors) = _request_inputs($action->{inputs}, $raw_inputs);
+    push @errors, @$input_errors;
 
-        if ($input->{required} && $value eq '') {
-            push @errors, "$input->{label} is required.";
-            next;
-        }
-        next if $value eq '' && !$input->{required};
-
-        if ($input->{type} eq 'select') {
-            my %allowed = map { ($_->{value} . '') => 1 } @{$input->{options}};
-            push @errors, "$input->{label} is not an available choice." unless $allowed{$value};
-        }
-        if (defined($input->{min_length}) && length($value) < $input->{min_length}) {
-            push @errors, "$input->{label} is too short.";
-        }
-        if (defined($input->{max_length}) && length($value) > $input->{max_length}) {
-            push @errors, "$input->{label} is too long.";
-        }
-        $inputs{$id} = $value;
+    my $groups = [];
+    if (($action->{selection}{mode} // 'rows') eq 'groups') {
+        my ($normalized_groups, $group_errors) = _request_groups(
+            $action, \@ids, $options->{group_payload},
+        );
+        $groups = $normalized_groups;
+        push @errors, @$group_errors;
     }
 
     return {
@@ -90,7 +97,8 @@ sub request ($class, $config, $action, $selected_ids, $raw_inputs) {
         errors => \@errors,
         action => $action,
         selected_ids => \@ids,
-        inputs => \%inputs,
+        inputs => $inputs,
+        groups => $groups,
     };
 }
 
@@ -102,7 +110,52 @@ sub _normalize_action ($class, $id, $spec, $config, $controller) {
     $action->{description} = _text($action->{description});
     $action->{scope} = lc(_text($action->{scope}) || 'row');
     $action->{inputs} = $class->_normalize_inputs($action->{inputs}, $config, $controller, $action);
+    $action->{selection} = $class->_normalize_selection(
+        $action->{selection}, $config, $controller, $action,
+    );
+    $action->{submit_label} = _text($action->{submit_label})
+        || ($action->{selection}{mode} eq 'groups' ? $action->{label} : 'Apply to selected rows');
     return $action;
+}
+
+sub _normalize_selection ($class, $spec, $config, $controller, $action) {
+    return {mode => 'rows'} unless ref($spec) eq 'HASH'
+        && lc(_text($spec->{mode})) eq 'groups';
+    my $palette = lc(_text($spec->{palette}) || 'lucky_charms');
+    return {mode => 'rows'} unless $palette eq 'lucky_charms';
+    my $maximum = _text($spec->{max_groups});
+    $maximum = scalar(@LUCKY_CHARMS_MARKERS)
+        unless $maximum =~ /\A\d+\z/ && $maximum >= 1
+            && $maximum <= @LUCKY_CHARMS_MARKERS;
+    my @markers = map { dclone($_) } @LUCKY_CHARMS_MARKERS[0 .. $maximum - 1];
+    return {
+        mode => 'groups',
+        palette => $palette,
+        max_groups => 0 + $maximum,
+        markers => \@markers,
+        group_inputs => $class->_normalize_inputs(
+            $spec->{group_inputs}, $config, $controller, $action,
+        ),
+        row_details => $class->_normalize_row_details($spec->{row_details}),
+    };
+}
+
+sub _normalize_row_details ($class, $specs) {
+    return [] unless ref($specs) eq 'ARRAY';
+    my (@details, %seen);
+    for my $spec (@$specs) {
+        next unless ref($spec) eq 'HASH';
+        my $id = _text($spec->{id});
+        my $field = _text($spec->{field});
+        next unless $id =~ /\A[a-z][a-z0-9_]*\z/ && !$seen{$id}++;
+        next unless $field =~ /\A[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\z/;
+        push @details, {
+            id => $id,
+            field => $field,
+            label => _text($spec->{label}) || _humanize($id),
+        };
+    }
+    return \@details;
 }
 
 sub _normalize_inputs ($class, $specs, $config, $controller, $action) {
@@ -132,6 +185,8 @@ sub _normalize_inputs ($class, $specs, $config, $controller, $action) {
             (defined($spec->{min_length}) ? (min_length => 0 + $spec->{min_length}) : ()),
             (defined($spec->{max_length}) ? (max_length => 0 + $spec->{max_length}) : ()),
             (defined($spec->{rows}) ? (rows => 0 + $spec->{rows}) : ()),
+            (defined($spec->{minimum}) ? (minimum => 0 + $spec->{minimum}) : ()),
+            (defined($spec->{maximum}) ? (maximum => 0 + $spec->{maximum}) : ()),
         };
         my $options = $spec->{options};
         my $source = _text($spec->{choice_source});
@@ -143,6 +198,104 @@ sub _normalize_inputs ($class, $specs, $config, $controller, $action) {
         push @inputs, $input;
     }
     return \@inputs;
+}
+
+sub _request_inputs {
+    my ($specs, $raw) = @_;
+    $specs = [] unless ref($specs) eq 'ARRAY';
+    $raw = {} unless ref($raw) eq 'HASH';
+    my (%inputs, @errors);
+    for my $input (@$specs) {
+        my $id = $input->{id};
+        my $value = exists($raw->{$id}) && defined($raw->{$id}) ? "$raw->{$id}" : '';
+        $value =~ s/\r\n?/\n/g;
+        $value =~ s/\A\s+|\s+\z//g if $input->{trim};
+        if ($input->{required} && $value eq '') {
+            push @errors, "$input->{label} is required.";
+            next;
+        }
+        next if $value eq '' && !$input->{required};
+        if ($input->{type} eq 'select') {
+            my %allowed = map { ($_->{value} . '') => 1 } @{$input->{options}};
+            push @errors, "$input->{label} is not an available choice." unless $allowed{$value};
+        }
+        if ($input->{type} eq 'number' && $value !~ /\A-?(?:\d+(?:\.\d*)?|\.\d+)\z/) {
+            push @errors, "$input->{label} must be a number.";
+        } elsif ($input->{type} eq 'number') {
+            push @errors, "$input->{label} is below its minimum."
+                if defined($input->{minimum}) && $value < $input->{minimum};
+            push @errors, "$input->{label} is above its maximum."
+                if defined($input->{maximum}) && $value > $input->{maximum};
+        }
+        if (defined($input->{min_length}) && length($value) < $input->{min_length}) {
+            push @errors, "$input->{label} is too short.";
+        }
+        if (defined($input->{max_length}) && length($value) > $input->{max_length}) {
+            push @errors, "$input->{label} is too long.";
+        }
+        $inputs{$id} = $value;
+    }
+    return (\%inputs, \@errors);
+}
+
+sub _request_groups {
+    my ($action, $selected_ids, $payload) = @_;
+    my @errors;
+    my $raw_groups;
+    if (!defined($payload) || ref($payload) || length($payload) > 131_072
+        || !eval { $raw_groups = decode_json($payload); 1 }
+        || ref($raw_groups) ne 'ARRAY') {
+        return ([], ['The action groups are invalid.']);
+    }
+    my $selection = $action->{selection};
+    push @errors, 'Create at least one group.' unless @$raw_groups;
+    push @errors, 'Too many groups were created.'
+        if @$raw_groups > $selection->{max_groups};
+
+    my %selected = map { $_ => 1 } @$selected_ids;
+    my (%used_row, %used_index);
+    my @groups;
+    for my $raw (@$raw_groups) {
+        unless (ref($raw) eq 'HASH') {
+            push @errors, 'A group is invalid.';
+            next;
+        }
+        my $index = $raw->{index};
+        unless (defined($index) && !ref($index) && "$index" =~ /\A\d+\z/
+            && $index < $selection->{max_groups} && !$used_index{$index}++) {
+            push @errors, 'A group marker is invalid.';
+            next;
+        }
+        my @group_ids;
+        my $raw_ids = $raw->{selected_ids};
+        if (ref($raw_ids) eq 'ARRAY') {
+            for my $value (@$raw_ids) {
+                next unless defined($value) && !ref($value);
+                my $id = "$value";
+                $id =~ s/\A\s+|\s+\z//g;
+                if (!$selected{$id} || $used_row{$id}++) {
+                    push @errors, 'A selected row appears in an invalid group.';
+                    next;
+                }
+                push @group_ids, $id;
+            }
+        }
+        push @errors, 'Every group must contain at least one row.' unless @group_ids;
+        my ($inputs, $input_errors) = _request_inputs(
+            $selection->{group_inputs}, $raw->{inputs},
+        );
+        push @errors, map { $selection->{markers}[$index]{label} . ': ' . $_ } @$input_errors;
+        push @groups, {
+            index => 0 + $index,
+            marker => dclone($selection->{markers}[$index]),
+            selected_ids => \@group_ids,
+            inputs => $inputs,
+        };
+    }
+    push @errors, 'Every selected row must belong to exactly one group.'
+        if grep { !$used_row{$_} } @$selected_ids;
+    @groups = sort { $a->{index} <=> $b->{index} } @groups;
+    return (\@groups, \@errors);
 }
 
 sub _authorize ($class, $config, $controller, $action, $phase, $target) {
