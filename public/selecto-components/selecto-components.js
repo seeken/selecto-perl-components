@@ -926,7 +926,31 @@
     if (badge) badge.textContent = visualCount + queryLibrarySegmentIds(builder).size;
   }
 
+  function syncPromotedFilterInput(control) {
+    var field = control && control.dataset.filterField;
+    var kind = control && control.dataset.scPromotedFilterInput;
+    if (!field || !kind) return;
+    var filterItem = Array.from(document.querySelectorAll("[data-sc-filter-set-item]")).find(function (item) {
+      return item.dataset.field === field;
+    });
+    if (!filterItem) return;
+    var target = filterItem.querySelector('[name="filter_' + kind + '"]');
+    if (target) target.value = control.value;
+    updateFilterDraft(filterItem);
+  }
+
+  function promotedFilterBuilder(control) {
+    var root = control && control.closest("[data-sc-promoted-filters]");
+    var submit = root && root.querySelector("button[form]");
+    return submit ? document.getElementById(submit.getAttribute("form")) : null;
+  }
+
   document.addEventListener("input", function (event) {
+    if (event.target.matches("[data-sc-promoted-filter-input]")) {
+      syncPromotedFilterInput(event.target);
+      markBuilderDirty(promotedFilterBuilder(event.target));
+      return;
+    }
     if (event.target.matches("[data-sc-picker-filter]")) {
       var pickerRoot = event.target.closest("[data-sc-picker-root]");
       if (!pickerRoot) return;
@@ -951,6 +975,11 @@
   });
 
   document.addEventListener("change", function (event) {
+    if (event.target.matches("[data-sc-promoted-filter-input]")) {
+      syncPromotedFilterInput(event.target);
+      markBuilderDirty(promotedFilterBuilder(event.target));
+      return;
+    }
     var builder = event.target.closest("[data-sc-builder]");
     if (!builder) return;
     if (event.target.matches('input[name="view"]')) {

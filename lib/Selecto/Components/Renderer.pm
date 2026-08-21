@@ -5,7 +5,7 @@ use Mojo::JSON qw(encode_json);
 use Mojo::Util qw(url_escape xml_escape);
 use Selecto::Components::QueryLibrary ();
 
-my $ASSET_REVISION = '20260821-5';
+my $ASSET_REVISION = '20260821-6';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -71,7 +71,8 @@ sub surface ($class, $model) {
         $alert . '<div class="sc-workspace' . ($builder_collapsed ? ' is-builder-collapsed' : '') .
         '" data-sc-workspace>' .
         $class->_form($model, $field_catalog, $detail_catalog) .
-        '<section class="sc-results" aria-live="polite">' . $class->_results($model) . '</section>' .
+        '<section class="sc-results" aria-live="polite">' .
+        $class->_promoted_filter_header($model, $field_catalog) . $class->_results($model) . '</section>' .
         '</div></section>';
 }
 
@@ -335,6 +336,81 @@ sub _query_summary ($class, $state, $catalog, $governed_segments) {
         '<div><small>View controller</small><strong>' . _h(_humanize($state->view)) .
         ' results</strong></div><span>' . $count . ' ' . $filter_label . '</span></div>' .
         $chips . '</section>';
+}
+
+sub _promoted_filter_header ($class, $model, $catalog) {
+    my $state = $model->{state};
+    my $config = $model->{config};
+    my %by_path = map { $_->{path} => $_ } @$catalog;
+    my @promoted = grep { $_->{promoted} && !$_->{grouped} } @{$state->filters};
+    return '' unless @promoted;
+    my $form_id = 'selecto-query-' . $config->id;
+    my $cards = join '', map {
+        my $filter = $_;
+        my $field = $by_path{$filter->{field}};
+        return '' unless $field;
+        '<article class="sc-promoted-filter" data-sc-promoted-filter data-field="' .
+            _h($filter->{field}) . '"><header><strong>' . _h($field->{label}) .
+            '</strong><small>' . _h(_filter_operator_label($config, $field->{type}, $filter->{op})) .
+            '</small></header>' .
+            $class->_promoted_filter_value_controls($config, $field, $filter) . '</article>'
+    } @promoted;
+    return '' unless length($cards);
+    return '<section class="sc-promoted-filters" data-sc-promoted-filters><div class="sc-promoted-filters-heading">' .
+        '<div><small>View filters</small><strong>Quick filters</strong></div>' .
+        '<button class="sc-button sc-primary" type="submit" form="' . _h($form_id) .
+        '">Run query</button></div><div class="sc-promoted-filter-grid">' . $cards . '</div></section>';
+}
+
+sub _promoted_filter_value_controls ($class, $config, $field, $filter) {
+    my $operator = $filter->{op};
+    my $value = $filter->{value} // '';
+    my $value_end = $filter->{value_end} // '';
+    my $field_name = $field->{path};
+    my $label = $field->{label};
+    my $type = $field->{type};
+    return '<p class="sc-promoted-filter-note">No value needed.</p>' if $operator =~ /_null\z/;
+    if ($operator eq 'date_shortcut') {
+        my $options = join '', map {
+            '<option value="' . _h($_->{id}) . '"' . ($_->{id} eq $value ? ' selected' : '') . '>' .
+                _h($_->{label}) . '</option>'
+        } @{$config->date_shortcuts};
+        return '<label>Period<select data-sc-promoted-filter-input="value" data-filter-field="' .
+            _h($field_name) . '" aria-label="Period for ' . _h($label) . '">' . $options . '</select></label>';
+    }
+    if ($operator eq 'between') {
+        my $input_type = $config->temporal_type($type)
+            ? (lc($type) eq 'date' ? 'date' : 'datetime-local')
+            : ($config->numeric_type($type) ? 'number' : 'text');
+        my $step = $input_type eq 'number' ? ' step="any"' : '';
+        return '<div class="sc-promoted-filter-range"><label>Start<input type="' . $input_type . '"' . $step .
+            ' value="' . _h($value) . '" data-sc-promoted-filter-input="value" data-filter-field="' .
+            _h($field_name) . '" aria-label="Start value for ' . _h($label) . '"></label>' .
+            '<label>End<input type="' . $input_type . '"' . $step . ' value="' . _h($value_end) .
+            '" data-sc-promoted-filter-input="value_end" data-filter-field="' . _h($field_name) .
+            '" aria-label="End value for ' . _h($label) . '"></label></div>';
+    }
+    if ($config->boolean_type($type)) {
+        return '<label>Value<select data-sc-promoted-filter-input="value" data-filter-field="' .
+            _h($field_name) . '" aria-label="Value for ' . _h($label) . '"><option value=""' .
+            (!length($value) ? ' selected' : '') . '>Choose true or false</option><option value="true"' .
+            (lc($value) eq 'true' || $value eq '1' ? ' selected' : '') . '>True</option><option value="false"' .
+            (lc($value) eq 'false' || $value eq '0' ? ' selected' : '') . '>False</option></select></label>';
+    }
+    my $input_type = $operator eq 'in' ? 'text' : $config->temporal_type($type)
+        ? (lc($type) eq 'date' ? 'date' : 'datetime-local')
+        : ($config->numeric_type($type) ? 'number' : 'text');
+    my $step = $input_type eq 'number' ? ' step="any"' : '';
+    my $placeholder = $operator eq 'in' ? 'Comma-separated values'
+        : ($config->temporal_type($type) ? 'Choose a date' : 'Enter a value');
+    return '<label>Value<input type="' . $input_type . '"' . $step . ' value="' . _h($value) .
+        '" placeholder="' . _h($placeholder) . '" data-sc-promoted-filter-input="value" data-filter-field="' .
+        _h($field_name) . '" aria-label="Value for ' . _h($label) . '"></label>';
+}
+
+sub _filter_operator_label ($config, $type, $operator) {
+    my ($entry) = grep { $_->[0] eq $operator } @{$config->filter_operators($type)};
+    return $entry ? $entry->[1] : _humanize($operator);
 }
 
 sub _filter_summary_text ($label, $filter) {
@@ -626,11 +702,14 @@ sub _filter_picker ($class, $state, $catalog, $config) {
         my $filter_controls = $filter->{grouped}
             ? _hidden('filter_op', $filter->{op}) . _hidden('filter_value', $filter->{value}) .
               _hidden('filter_value_end', '') . '<p class="sc-filter-value-note">Aggregate value: <strong>' .
-              _h(defined($filter->{value}) && length($filter->{value}) ? $filter->{value} : '(empty)') .
-              '</strong></p>'
+            _h(defined($filter->{value}) && length($filter->{value}) ? $filter->{value} : '(empty)') .
+            '</strong></p>'
             : '<label>Operator<select name="filter_op" aria-label="Operator for ' .
               _h($field->{label}) . '">' . $ops . '</select></label>' .
-              $class->_filter_value_controls($config, $field, $filter);
+              $class->_filter_value_controls($config, $field, $filter) .
+              '<label class="sc-filter-promote"><input type="checkbox" name="filter_promote_field" value="' .
+              _h($filter->{field}) . '"' . ($filter->{promoted} ? ' checked' : '') .
+              '> Promote to View Controller</label>';
         '<article class="sc-filter-set-item' . ($filter->{draft} ? ' is-draft' : '') .
         '" data-sc-filter-set-item' . ($filter->{grouped} ? ' data-sc-grouped-filter' : '') .
         ' data-field="' . _h($filter->{field}) . '" data-label="' .

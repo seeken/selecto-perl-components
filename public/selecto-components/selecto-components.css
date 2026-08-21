@@ -65,6 +65,20 @@ a { color: inherit; }
 .sc-builder .sc-saved-query-form { display: grid; gap: 8px; }
 .sc-saved-query-form label { display: grid; font-size: .78rem; font-weight: 700; gap: 4px; }
 .sc-results { min-height: 540px; overflow: visible; }
+.sc-promoted-filters { border-bottom: 1px solid var(--sc-border); display: grid; gap: 12px; padding: 15px 18px; }
+.sc-promoted-filters-heading { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
+.sc-promoted-filters-heading > div { display: grid; gap: 2px; }
+.sc-promoted-filters-heading small { color: var(--sc-muted); font-size: .65rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.sc-promoted-filters-heading strong { font-size: .9rem; }
+.sc-promoted-filter-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.sc-promoted-filter { background: #101719; border: 1px solid var(--sc-border); border-radius: 10px; display: grid; gap: 8px; min-width: 0; padding: 10px; }
+.sc-promoted-filter header { align-items: center; display: flex; gap: 8px; justify-content: space-between; }
+.sc-promoted-filter header strong { font-size: .78rem; }
+.sc-promoted-filter header small { color: var(--sc-muted); font-size: .65rem; font-weight: 700; }
+.sc-promoted-filter label { color: var(--sc-muted); display: grid; font-size: .72rem; font-weight: 700; gap: 4px; }
+.sc-promoted-filter input, .sc-promoted-filter select { background: #0e1517; border: 1px solid var(--sc-border); border-radius: 8px; color: var(--sc-ink); min-height: 36px; padding: 7px 9px; width: 100%; }
+.sc-promoted-filter-range { display: grid; gap: 7px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.sc-promoted-filter-note { color: var(--sc-muted); font-size: .75rem; margin: 2px 0; }
 .sc-builder form { display: grid; gap: 18px; }
 .sc-builder [data-sc-builder-query][hidden] { display: none; }
 .sc-builder fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
@@ -148,6 +162,8 @@ a { color: inherit; }
 .sc-filter-set-heading button:hover { border-color: var(--sc-danger); color: var(--sc-danger); }
 .sc-filter-editor { display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .sc-filter-editor label { min-width: 0; }
+.sc-filter-promote { align-items: center; color: var(--sc-accent) !important; cursor: pointer; display: flex; font-size: .72rem !important; gap: 7px; margin-top: 8px; }
+.sc-filter-promote input { accent-color: var(--sc-accent); height: 15px; margin: 0; width: 15px; }
 .sc-filter-editor input, .sc-filter-editor select { margin-top: 4px !important; min-width: 0; }
 .sc-filter-editor input[readonly] { color: var(--sc-muted); cursor: not-allowed; }
 .sc-filter-values { display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-width: 0; }
