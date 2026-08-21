@@ -20,6 +20,7 @@ has show_sql       => 0;
 has action_handlers => sub { return {} };
 has choice_sources  => sub { return {} };
 has 'action_authorizer';
+has 'saved_query_store';
 
 my @DATE_FORMATS = (
     { id => 'day', label => 'Day' },
@@ -60,6 +61,12 @@ sub new ($class, @args) {
     die "choice_sources must be an object\n" unless ref($self->choice_sources) eq 'HASH';
     die "action_authorizer must be a coderef\n"
         if defined($self->action_authorizer) && ref($self->action_authorizer) ne 'CODE';
+    if (defined(my $store = $self->saved_query_store)) {
+        die "saved_query_store must be an object\n" unless blessed($store);
+        for my $method (qw(list save delete)) {
+            die "saved_query_store must provide $method\n" unless $store->can($method);
+        }
+    }
     for my $id (keys %{$self->action_handlers}) {
         die "action handler id must be a lowercase identifier\n"
             unless $id =~ /\A[a-z][a-z0-9_-]*\z/;
@@ -123,6 +130,10 @@ sub action_handler ($self, $id) {
 
 sub choice_source ($self, $id) {
     return $self->choice_sources->{$id};
+}
+
+sub saved_queries_enabled ($self, $domain) {
+    return defined($self->saved_query_store) && $self->query_params_enabled($domain) ? 1 : 0;
 }
 
 sub has_bulk_actions ($self, $domain) {
@@ -189,18 +200,23 @@ sub primary_key ($self, $domain) {
 sub field_catalog ($self, $domain) {
     my @catalog;
     my $fields = $domain->fields;
+    my ($dimensions_by_key, $dimensions_by_display) = _star_dimensions($domain);
     my $contract = $domain->contract;
     my $source = ref($contract) eq 'HASH' && ref($contract->{source}) eq 'HASH'
         ? $contract->{source} : {};
     push @catalog, map {
         my $path = $_;
         my $link = _field_link($domain, $path, $source->{columns}{$path});
+        my $html_format = _field_html_format($path, $source->{columns}{$path});
+        my $dimension = $dimensions_by_key->{$path};
         {
             path => $path,
-            label => _humanize($path),
+            label => $dimension ? $dimension->{label} : _humanize($path),
             type => $fields->{$path},
             association => undef,
             (defined($link) ? (link => $link) : ()),
+            (defined($html_format) ? (html_format => $html_format) : ()),
+            ($dimension ? (dimension => {%$dimension}) : ()),
         }
     } sort keys %$fields;
     my $associations = $domain->associations;
@@ -222,16 +238,50 @@ sub field_catalog ($self, $domain) {
                 $path,
                 ref($schema) eq 'HASH' ? $schema->{columns}{$field} : undef,
             );
+            my $html_format = _field_html_format(
+                $path,
+                ref($schema) eq 'HASH' ? $schema->{columns}{$field} : undef,
+            );
+            my $dimension = $dimensions_by_display->{$path};
             {
                 path => $path,
                 label => _humanize($association_name) . ' · ' . _humanize($field),
                 type => $association_fields->{$field},
                 association => $association_name,
+                denormalizing => $association->cardinality eq 'many' ? 1 : 0,
                 (defined($link) ? (link => $link) : ()),
+                (defined($html_format) ? (html_format => $html_format) : ()),
+                ($dimension ? (dimension => {%$dimension}) : ()),
             }
         } sort keys %$association_fields;
     }
     return \@catalog;
+}
+
+sub _star_dimensions ($domain) {
+    my (%by_key, %by_display);
+    my $associations = $domain->associations;
+    for my $name (sort keys %$associations) {
+        my $association = $associations->{$name};
+        next unless $association->can('join_mode')
+            && $association->join_mode eq 'star_dimension';
+        my $key_field = $association->dimension_key;
+        my $display_field = $name . '.' . $association->display_field;
+        my $display_type = $association->fields->{$association->display_field};
+        my $label = $association->display_name;
+        $label = _humanize($name) unless defined($label) && length($label);
+        my $dimension = {
+            association => $name,
+            key_field => $key_field,
+            display_field => $display_field,
+            display_type => $display_type,
+            label => $label,
+        };
+        die "more than one star dimension uses key $key_field\n" if $by_key{$key_field};
+        $by_key{$key_field} = $dimension;
+        $by_display{$display_field} = $dimension;
+    }
+    return (\%by_key, \%by_display);
 }
 
 sub _field_link ($domain, $path, $column) {
@@ -255,6 +305,14 @@ sub _field_link ($domain, $path, $column) {
         url_template => "$template",
         id_field => $resolved_id_field,
     };
+}
+
+sub _field_html_format ($path, $column) {
+    return undef unless ref($column) eq 'HASH' && exists($column->{html_format});
+    my $format = $column->{html_format};
+    die "HTML format for $path must be vin_last_six\n"
+        unless defined($format) && !ref($format) && "$format" eq 'vin_last_six';
+    return "$format";
 }
 
 sub field_map ($self, $domain) {

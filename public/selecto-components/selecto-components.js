@@ -2,6 +2,7 @@
   "use strict";
 
   var activeBuilderTabs = Object.create(null);
+  var collapsedBuilderTrays = Object.create(null);
   var chartInstances = new WeakMap();
   var dateFormats = [
     ["day", "Day"], ["day_hour", "Day + Hour"], ["week", "Week"],
@@ -12,7 +13,7 @@
 
   function activateBuilderTab(root, name, remember) {
     if (!root) return;
-    var key = root.dataset.scBuilder;
+    var key = root.dataset.scBuilderShell;
     var available = Array.from(root.querySelectorAll("[data-sc-builder-tab]"));
     if (!available.some(function (tab) { return tab.dataset.scBuilderTab === name; })) {
       name = "view";
@@ -26,11 +27,40 @@
     root.querySelectorAll("[data-sc-builder-panel]").forEach(function (panel) {
       panel.hidden = panel.dataset.scBuilderPanel !== name;
     });
+    var query = root.querySelector("[data-sc-builder-query]");
+    if (query) query.hidden = name === "saved";
   }
 
   function restoreBuilderTabs() {
-    document.querySelectorAll("[data-sc-builder]").forEach(function (root) {
-      activateBuilderTab(root, activeBuilderTabs[root.dataset.scBuilder] || "view", false);
+    document.querySelectorAll("[data-sc-builder-shell]").forEach(function (root) {
+      activateBuilderTab(root, activeBuilderTabs[root.dataset.scBuilderShell] || "view", false);
+    });
+  }
+
+  function setBuilderTrayCollapsed(root, collapsed, remember) {
+    if (!root) return;
+    var key = root.dataset.scBuilderShell;
+    if (remember !== false) collapsedBuilderTrays[key] = !!collapsed;
+    root.classList.toggle("is-collapsed", !!collapsed);
+    root.dataset.scBuilderCollapsed = collapsed ? "true" : "false";
+    var workspace = root.closest("[data-sc-workspace]");
+    if (workspace) workspace.classList.toggle("is-builder-collapsed", !!collapsed);
+    var button = root.querySelector("[data-sc-builder-toggle]");
+    if (button) {
+      button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      button.setAttribute("aria-label", collapsed ? "Expand view menu" : "Collapse view menu");
+      var chevron = button.querySelector("[data-sc-builder-chevron]");
+      if (chevron) chevron.textContent = collapsed ? "›" : "‹";
+    }
+  }
+
+  function restoreBuilderTrays() {
+    document.querySelectorAll("[data-sc-builder-shell]").forEach(function (root) {
+      var key = root.dataset.scBuilderShell;
+      var collapsed = Object.prototype.hasOwnProperty.call(collapsedBuilderTrays, key)
+        ? collapsedBuilderTrays[key]
+        : root.dataset.scBuilderCollapsed === "true";
+      setBuilderTrayCollapsed(root, collapsed, false);
     });
   }
 
@@ -167,8 +197,34 @@
     });
   }
 
+  function copyDebugSql(button) {
+    var target = document.getElementById(button.dataset.scDebugCopy || "");
+    if (!target) return;
+    var text = target.textContent || "";
+    var copied = function () {
+      var original = button.dataset.scOriginalLabel || button.textContent;
+      button.dataset.scOriginalLabel = original;
+      button.textContent = "Copied";
+      window.setTimeout(function () { button.textContent = original; }, 1600);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(copied).catch(function () {});
+      return;
+    }
+    var fallback = document.createElement("textarea");
+    fallback.value = text;
+    fallback.setAttribute("readonly", "");
+    fallback.style.position = "fixed";
+    fallback.style.opacity = "0";
+    document.body.appendChild(fallback);
+    fallback.select();
+    try { if (document.execCommand("copy")) copied(); } catch (_error) {}
+    fallback.remove();
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     restoreBuilderTabs();
+    restoreBuilderTrays();
     restoreResultViews();
     restoreCharts();
   });
@@ -190,6 +246,7 @@
   window.addEventListener("submit", function (event) {
     var form = event.target.closest("[data-sc-builder]");
     if (!form) return;
+    setBuilderTrayCollapsed(form.closest("[data-sc-builder-shell]"), true);
     var connection = document.querySelector("[data-selecto-connection]");
     if (connection && connection.classList.contains("is-live")) return;
     event.preventDefault();
@@ -210,6 +267,7 @@
     }
     window.requestAnimationFrame(function () {
       restoreBuilderTabs();
+      restoreBuilderTrays();
       restoreResultViews();
       restoreCharts();
     });
@@ -217,6 +275,7 @@
 
   document.addEventListener("htmx:after:swap", function () {
     restoreBuilderTabs();
+    restoreBuilderTrays();
     restoreResultViews();
     restoreCharts();
   });
@@ -226,15 +285,26 @@
   });
 
   document.addEventListener("click", function (event) {
+    var debugCopy = event.target.closest("[data-sc-debug-copy]");
+    if (debugCopy) {
+      copyDebugSql(debugCopy);
+      return;
+    }
+    var toggle = event.target.closest("[data-sc-builder-toggle]");
+    if (toggle) {
+      var tray = toggle.closest("[data-sc-builder-shell]");
+      setBuilderTrayCollapsed(tray, !tray.classList.contains("is-collapsed"));
+      return;
+    }
     var tab = event.target.closest("[data-sc-builder-tab]");
     if (!tab) return;
-    activateBuilderTab(tab.closest("[data-sc-builder]"), tab.dataset.scBuilderTab);
+    activateBuilderTab(tab.closest("[data-sc-builder-shell]"), tab.dataset.scBuilderTab);
   });
 
   document.addEventListener("keydown", function (event) {
     var tab = event.target.closest("[data-sc-builder-tab]");
     if (!tab || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
-    var root = tab.closest("[data-sc-builder]");
+    var root = tab.closest("[data-sc-builder-shell]");
     var tabs = Array.from(root.querySelectorAll("[data-sc-builder-tab]"));
     var offset = event.key === "ArrowRight" ? 1 : -1;
     var next = tabs[(tabs.indexOf(tab) + offset + tabs.length) % tabs.length];
@@ -826,11 +896,64 @@
       choice.hidden = query.length > 0 && !choice.dataset.search.includes(query);
     });
     var builder = root.closest("[data-sc-builder]");
-    var badge = builder && builder.querySelector('[data-sc-builder-tab="filters"] span');
-    if (badge) badge.textContent = items.length;
+    refreshFilterBadge(builder, items.length);
+  }
+
+  function queryLibrarySegmentIds(builder) {
+    var ids = new Set();
+    if (!builder) return ids;
+    var view = builder.querySelector('[name="query_library_view"]');
+    var option = view && view.selectedOptions && view.selectedOptions[0];
+    if (option && option.dataset.scViewSegments) {
+      try {
+        JSON.parse(option.dataset.scViewSegments).forEach(function (id) { ids.add(String(id)); });
+      } catch (_error) {
+        // Invalid presentation metadata cannot affect the submitted governed state.
+      }
+    }
+    builder.querySelectorAll('[name="query_library_segment"]:checked').forEach(function (input) {
+      ids.add(input.value);
+    });
+    return ids;
+  }
+
+  function refreshFilterBadge(builder, visualCount) {
+    if (!builder) return;
+    if (visualCount === undefined) {
+      visualCount = builder.querySelectorAll("[data-sc-filter-set-item]").length;
+    }
+    var badge = builder.querySelector("[data-sc-filter-badge]");
+    if (badge) badge.textContent = visualCount + queryLibrarySegmentIds(builder).size;
+  }
+
+  function syncPromotedFilterInput(control) {
+    var field = control && control.dataset.filterField;
+    var kind = control && control.dataset.scPromotedFilterInput;
+    if (!field || !kind) return;
+    var filterItem = Array.from(document.querySelectorAll("[data-sc-filter-set-item]")).find(function (item) {
+      return item.dataset.field === field;
+    });
+    if (!filterItem) return;
+    var target = filterItem.querySelector('[name="filter_' + kind + '"]');
+    if (target) {
+      target.value = control.value;
+      if (kind === "op") target.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    updateFilterDraft(filterItem);
+  }
+
+  function promotedFilterBuilder(control) {
+    var root = control && control.closest("[data-sc-promoted-filters]");
+    var submit = root && root.querySelector("button[form]");
+    return submit ? document.getElementById(submit.getAttribute("form")) : null;
   }
 
   document.addEventListener("input", function (event) {
+    if (event.target.matches("[data-sc-promoted-filter-input]")) {
+      syncPromotedFilterInput(event.target);
+      markBuilderDirty(promotedFilterBuilder(event.target));
+      return;
+    }
     if (event.target.matches("[data-sc-picker-filter]")) {
       var pickerRoot = event.target.closest("[data-sc-picker-root]");
       if (!pickerRoot) return;
@@ -855,6 +978,11 @@
   });
 
   document.addEventListener("change", function (event) {
+    if (event.target.matches("[data-sc-promoted-filter-input]")) {
+      syncPromotedFilterInput(event.target);
+      markBuilderDirty(promotedFilterBuilder(event.target));
+      return;
+    }
     var builder = event.target.closest("[data-sc-builder]");
     if (!builder) return;
     if (event.target.matches('input[name="view"]')) {
@@ -871,6 +999,8 @@
       updateFilterDraft(filterItem);
     } else if (event.target.matches('[name="filter_value"], [name="filter_value_end"]')) {
       updateFilterDraft(event.target.closest("[data-sc-filter-set-item]"));
+    } else if (event.target.matches('[name="query_library_view"], [name="query_library_segment"]')) {
+      refreshFilterBadge(builder);
     } else if (event.target.matches("[data-sc-group-format], [data-sc-measure-function]")) {
       syncPickerConfig(event.target.closest("[data-sc-picker-set-item]"));
     }
@@ -1005,6 +1135,10 @@
     return root && root.dataset.scActionId || "";
   }
 
+  function actionMode(root) {
+    return root && root.dataset.scActionMode || "rows";
+  }
+
   function actionControls(results, selector, actionId) {
     if (!results || !actionId) return [];
     return Array.from(results.querySelectorAll(selector)).filter(function (input) {
@@ -1013,14 +1147,293 @@
   }
 
   function actionRoot(results, actionId) {
+    if (!results) return null;
     return Array.from(results.querySelectorAll("[data-sc-bulk-action]")).find(function (root) {
       return actionIdFor(root) === actionId;
     });
   }
 
+  var groupedActionStates = Object.create(null);
+
+  function groupedActionState(root) {
+    var key = root.dataset.scActionStateKey || actionIdFor(root);
+    if (!groupedActionStates[key]) {
+      groupedActionStates[key] = {groupCount: 0, assignments: Object.create(null), inputs: Object.create(null)};
+    }
+    return groupedActionStates[key];
+  }
+
+  function groupedActionMarkers(root) {
+    if (root._scActionMarkers) return root._scActionMarkers;
+    try {
+      root._scActionMarkers = JSON.parse(root.dataset.scActionMarkers || "[]");
+    } catch (_error) {
+      root._scActionMarkers = [];
+    }
+    return root._scActionMarkers;
+  }
+
+  function groupedActionInputSpecs(root) {
+    if (root._scGroupInputs) return root._scGroupInputs;
+    try {
+      root._scGroupInputs = JSON.parse(root.dataset.scGroupInputs || "[]");
+    } catch (_error) {
+      root._scGroupInputs = [];
+    }
+    return root._scGroupInputs;
+  }
+
+  function groupedActionRows(root) {
+    var results = bulkActionResults(root);
+    return actionControls(results, "[data-sc-group-markers]", actionIdFor(root));
+  }
+
+  function groupedRowDetails(cell) {
+    try {
+      var details = JSON.parse(cell.dataset.scRowDetails || "[]");
+      return Array.isArray(details) ? details.filter(function (detail) {
+        return detail && typeof detail === "object";
+      }) : [];
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  function selectedGroupedRows(root) {
+    var state = groupedActionState(root);
+    return groupedActionRows(root).reduce(function (rows, cell) {
+      var rowId = cell.dataset.scRowId;
+      if (rowId && Object.prototype.hasOwnProperty.call(state.assignments, rowId)) {
+        rows.push({
+          id: rowId,
+          index: state.assignments[rowId],
+          details: groupedRowDetails(cell)
+        });
+      }
+      return rows;
+    }, []);
+  }
+
+  function activeActionGroups(root) {
+    var state = groupedActionState(root);
+    var markers = groupedActionMarkers(root);
+    var byIndex = Object.create(null);
+    selectedGroupedRows(root).forEach(function (row) {
+      if (!byIndex[row.index]) {
+        byIndex[row.index] = {
+          index: row.index,
+          marker: markers[row.index],
+          selected_ids: [],
+          orders: [],
+          inputs: state.inputs[row.index] || Object.create(null)
+        };
+      }
+      byIndex[row.index].selected_ids.push(row.id);
+      byIndex[row.index].orders.push(row);
+    });
+    return Object.keys(byIndex).map(Number).sort(function (left, right) {
+      return left - right;
+    }).map(function (index) {
+      return byIndex[index];
+    });
+  }
+
+  function markerSvgPart(svg, name, attributes) {
+    var part = document.createElementNS("http://www.w3.org/2000/svg", name);
+    Object.keys(attributes).forEach(function (attribute) {
+      part.setAttribute(attribute, attributes[attribute]);
+    });
+    svg.appendChild(part);
+    return part;
+  }
+
+  function markerGlyph(marker, filled) {
+    var glyph = document.createElement("span");
+    glyph.className = "sc-group-marker-glyph";
+    glyph.dataset.scMarkerShape = marker.shape;
+    glyph.setAttribute("aria-hidden", "true");
+
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("focusable", "false");
+    var shape = {
+      fill: filled ? "currentColor" : "none",
+      stroke: "currentColor",
+      "stroke-width": filled ? "1.1" : "1.7",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round"
+    };
+
+    if (marker.shape === "star") {
+      markerSvgPart(svg, "polygon", Object.assign({
+        points: "12,2.3 14.9,8.2 21.4,9.1 16.7,13.7 17.8,20.2 12,17.2 6.2,20.2 7.3,13.7 2.6,9.1 9.1,8.2"
+      }, shape));
+    } else if (marker.shape === "circle") {
+      markerSvgPart(svg, "circle", Object.assign({cx: "12", cy: "12", r: "8.2"}, shape));
+    } else if (marker.shape === "horseshoe") {
+      markerSvgPart(svg, "path", Object.assign({
+        d: "M5 3.5v8.3a7 7 0 0 0 14 0V3.5h-4v8.3a3 3 0 0 1-6 0V3.5Z"
+      }, shape));
+    } else if (marker.shape === "moon") {
+      markerSvgPart(svg, "path", Object.assign({
+        d: "M18.8 16.8A8.5 8.5 0 0 1 9.2 4.7a8.5 8.5 0 1 0 9.6 12.1Z"
+      }, shape));
+    } else if (marker.shape === "heart") {
+      markerSvgPart(svg, "path", Object.assign({
+        d: "M12 20.3 4.2 13A5.2 5.2 0 0 1 12 6.2 5.2 5.2 0 0 1 19.8 13Z"
+      }, shape));
+    } else if (marker.shape === "clover") {
+      [[9, 8], [15, 8], [9, 14], [15, 14]].forEach(function (center) {
+        markerSvgPart(svg, "circle", Object.assign({
+          cx: String(center[0]), cy: String(center[1]), r: "3.5"
+        }, shape));
+      });
+      markerSvgPart(svg, "path", {
+        d: "M12 16.5v4", fill: "none", stroke: "currentColor",
+        "stroke-width": filled ? "2.1" : "1.7", "stroke-linecap": "round"
+      });
+    } else if (marker.shape === "diamond") {
+      markerSvgPart(svg, "polygon", Object.assign({points: "12,2.5 21,12 12,21.5 3,12"}, shape));
+    } else if (marker.shape === "rainbow") {
+      [0, 3, 6].forEach(function (inset) {
+        markerSvgPart(svg, "path", {
+          d: "M" + (3 + inset / 2) + " " + (18 - inset / 2) +
+            "a" + (9 - inset / 2) + " " + (9 - inset / 2) + " 0 0 1 " +
+            (18 - inset) + " 0",
+          fill: "none", stroke: "currentColor",
+          "stroke-width": filled ? "2.2" : "1.35", "stroke-linecap": "round"
+        });
+      });
+    } else {
+      markerSvgPart(svg, "circle", Object.assign({cx: "12", cy: "12", r: "8.2"}, shape));
+    }
+    glyph.appendChild(svg);
+    return glyph;
+  }
+
+  function markerButton(marker, index, rowId, selected) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "sc-group-marker" + (selected ? " is-selected" : "");
+    button.dataset.scGroupMarker = String(index);
+    button.dataset.scRowId = rowId;
+    button.style.setProperty("--sc-marker-color", marker.color);
+    button.title = selected ? "Remove from " + marker.label + " load" : "Add to " + marker.label + " load";
+    button.setAttribute("aria-label", button.title);
+    button.appendChild(markerGlyph(marker, selected));
+    return button;
+  }
+
+  function rememberGroupedRowOrder(root) {
+    if (root._scGroupedRowOrder) return root._scGroupedRowOrder;
+    root._scGroupedRowOrder = Object.create(null);
+    groupedActionRows(root).forEach(function (cell, index) {
+      var rowId = cell.dataset.scRowId;
+      if (rowId) root._scGroupedRowOrder[rowId] = index;
+    });
+    return root._scGroupedRowOrder;
+  }
+
+  function reorderGroupedActionRows(root) {
+    var state = groupedActionState(root);
+    var originalOrder = rememberGroupedRowOrder(root);
+    var tableBodies = new Map();
+    groupedActionRows(root).forEach(function (cell) {
+      var row = cell.closest("tr");
+      var body = row && row.parentElement;
+      if (!row || !body || body.tagName !== "TBODY") return;
+      if (!tableBodies.has(body)) tableBodies.set(body, []);
+      tableBodies.get(body).push({row: row, id: cell.dataset.scRowId});
+    });
+    tableBodies.forEach(function (rows, body) {
+      var firstPositions = new Map();
+      rows.forEach(function (entry) {
+        Array.from(entry.row.children).forEach(function (cell) {
+          if (typeof cell.getAnimations === "function") {
+            cell.getAnimations().forEach(function (animation) { animation.cancel(); });
+          }
+        });
+        firstPositions.set(entry.row, entry.row.getBoundingClientRect().top);
+      });
+      rows.sort(function (left, right) {
+        var leftAssigned = Object.prototype.hasOwnProperty.call(state.assignments, left.id);
+        var rightAssigned = Object.prototype.hasOwnProperty.call(state.assignments, right.id);
+        if (leftAssigned !== rightAssigned) return leftAssigned ? -1 : 1;
+        if (leftAssigned && state.assignments[left.id] !== state.assignments[right.id]) {
+          return state.assignments[left.id] - state.assignments[right.id];
+        }
+        return (originalOrder[left.id] || 0) - (originalOrder[right.id] || 0);
+      });
+      rows.forEach(function (entry) { body.appendChild(entry.row); });
+      if (typeof window.matchMedia === "function"
+          && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      rows.forEach(function (entry) {
+        var previousTop = firstPositions.get(entry.row);
+        var currentTop = entry.row.getBoundingClientRect().top;
+        var distance = previousTop - currentTop;
+        if (Math.abs(distance) < 1) return;
+        Array.from(entry.row.children).forEach(function (cell) {
+          if (typeof cell.animate !== "function") return;
+          cell.animate([
+            {transform: "translateY(" + distance + "px)"},
+            {transform: "translateY(0)"}
+          ], {
+            duration: 280,
+            easing: "cubic-bezier(.2,.8,.2,1)"
+          });
+        });
+      });
+    });
+  }
+
+  function renderGroupedActionRows(root) {
+    var state = groupedActionState(root);
+    var markers = groupedActionMarkers(root);
+    groupedActionRows(root).forEach(function (cell) {
+      var rowId = cell.dataset.scRowId;
+      cell.replaceChildren();
+      if (!rowId || !markers.length) return;
+      if (Object.prototype.hasOwnProperty.call(state.assignments, rowId)) {
+        var selectedIndex = state.assignments[rowId];
+        if (markers[selectedIndex]) {
+          cell.appendChild(markerButton(markers[selectedIndex], selectedIndex, rowId, true));
+        }
+        return;
+      }
+      var visibleCount = Math.min(state.groupCount + 1, markers.length);
+      for (var index = 0; index < visibleCount; index += 1) {
+        cell.appendChild(markerButton(markers[index], index, rowId, false));
+      }
+    });
+    reorderGroupedActionRows(root);
+  }
+
+  function restoreGroupedAction(root) {
+    var visible = Object.create(null);
+    groupedActionRows(root).forEach(function (cell) {
+      if (cell.dataset.scRowId) visible[cell.dataset.scRowId] = true;
+    });
+    var state = groupedActionState(root);
+    Object.keys(state.assignments).forEach(function (rowId) {
+      if (!visible[rowId]) delete state.assignments[rowId];
+    });
+    renderGroupedActionRows(root);
+  }
+
+  function resetGroupedAction(root) {
+    var state = groupedActionState(root);
+    state.groupCount = 0;
+    state.assignments = Object.create(null);
+    state.inputs = Object.create(null);
+    renderGroupedActionRows(root);
+  }
+
   function selectedRowIds(root) {
     var results = bulkActionResults(root);
     if (!results) return [];
+    if (actionMode(root) === "groups") {
+      return selectedGroupedRows(root).map(function (row) { return row.id; });
+    }
     var seen = Object.create(null);
     return actionControls(results, "[data-sc-row-select]:checked", actionIdFor(root)).reduce(function (ids, input) {
       if (input.value && !seen[input.value]) {
@@ -1053,7 +1466,18 @@
     var count = root.querySelector("[data-sc-selection-count]");
     var label = root.querySelector("[data-sc-selection-label]");
     if (count) count.textContent = ids.length;
-    if (label) label.textContent = ids.length === 1 ? "row selected" : "rows selected";
+    if (label) label.textContent = actionMode(root) === "groups"
+      ? (ids.length === 1 ? "row assigned" : "rows assigned")
+      : (ids.length === 1 ? "row selected" : "rows selected");
+    if (actionMode(root) === "groups") {
+      var groups = activeActionGroups(root);
+      var groupCount = root.querySelector("[data-sc-group-count]");
+      if (groupCount) groupCount.textContent = groups.length;
+      root.querySelectorAll("[data-sc-action-open]").forEach(function (button) {
+        button.disabled = ids.length === 0 || button.dataset.scActionDisabled === "1";
+      });
+      return;
+    }
     root.querySelectorAll("[data-sc-action-open]").forEach(function (button) {
       button.disabled = ids.length === 0 || button.dataset.scActionDisabled === "1";
     });
@@ -1068,7 +1492,10 @@
   }
 
   function restoreBulkActions() {
-    document.querySelectorAll("[data-sc-bulk-action]").forEach(refreshBulkAction);
+    document.querySelectorAll("[data-sc-bulk-action]").forEach(function (root) {
+      if (actionMode(root) === "groups") restoreGroupedAction(root);
+      refreshBulkAction(root);
+    });
   }
 
   document.addEventListener("DOMContentLoaded", restoreBulkActions);
@@ -1077,7 +1504,121 @@
     window.requestAnimationFrame(restoreBulkActions);
   });
 
+  function groupInputControl(spec, value, groupIndex) {
+    var control;
+    if (spec.type === "select") {
+      control = document.createElement("select");
+      var blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = "Choose " + String(spec.label || spec.id).toLowerCase();
+      control.appendChild(blank);
+      (spec.options || []).forEach(function (option) {
+        var item = document.createElement("option");
+        item.value = option.value;
+        item.textContent = option.label;
+        control.appendChild(item);
+      });
+    } else if (spec.type === "textarea") {
+      control = document.createElement("textarea");
+      control.rows = spec.rows || 4;
+    } else {
+      control = document.createElement("input");
+      control.type = spec.type === "string" ? "text" : spec.type;
+    }
+    control.dataset.scGroupInput = spec.id;
+    control.dataset.scGroupIndex = String(groupIndex);
+    control.required = Boolean(spec.required);
+    if (spec.minimum !== undefined) control.min = spec.minimum;
+    if (spec.maximum !== undefined) control.max = spec.maximum;
+    if (spec.min_length !== undefined) control.minLength = spec.min_length;
+    if (spec.max_length !== undefined) control.maxLength = spec.max_length;
+    control.value = value === undefined || value === null ? "" : value;
+    return control;
+  }
+
+  function renderGroupedActionDialog(root, form) {
+    var groups = activeActionGroups(root);
+    var specs = groupedActionInputSpecs(root);
+    var container = form.querySelector("[data-sc-group-action-groups]");
+    if (!container) return;
+    container.replaceChildren();
+    groups.forEach(function (group) {
+      var card = document.createElement("section");
+      card.className = "sc-group-action-card";
+      card.style.setProperty("--sc-marker-color", group.marker.color);
+
+      var header = document.createElement("header");
+      header.className = "sc-group-action-card-header";
+      var marker = document.createElement("span");
+      marker.className = "sc-group-dialog-marker";
+      marker.style.setProperty("--sc-marker-color", group.marker.color);
+      marker.appendChild(markerGlyph(group.marker, true));
+      var heading = document.createElement("div");
+      var title = document.createElement("h4");
+      title.textContent = group.marker.label + " load";
+      var summary = document.createElement("p");
+      summary.textContent = group.selected_ids.length +
+        (group.selected_ids.length === 1 ? " order" : " orders");
+      heading.append(title, summary);
+      header.append(marker, heading);
+      card.appendChild(header);
+
+      var orders = document.createElement("ul");
+      orders.className = "sc-group-action-orders";
+      group.orders.forEach(function (order) {
+        var item = document.createElement("li");
+        var orderId = document.createElement("strong");
+        orderId.textContent = "Order " + order.id;
+        item.appendChild(orderId);
+        var locations = (order.details || []).map(function (detail) {
+          return detail.value === undefined || detail.value === null ? "" : String(detail.value);
+        }).filter(function (value) { return value.length > 0; });
+        if (locations.length) {
+          var route = document.createElement("span");
+          route.textContent = locations.join(" \u2192 ");
+          item.appendChild(route);
+        }
+        orders.appendChild(item);
+      });
+      card.appendChild(orders);
+
+      specs.forEach(function (spec) {
+        var label = document.createElement("label");
+        label.className = "sc-action-input";
+        var caption = document.createElement("span");
+        caption.textContent = spec.label + (spec.required ? " *" : "");
+        label.append(caption, groupInputControl(spec, group.inputs[spec.id], group.index));
+        card.appendChild(label);
+      });
+      container.appendChild(card);
+    });
+    var groupCount = form.querySelector("[data-sc-action-group-count]");
+    if (groupCount) groupCount.textContent = groups.length;
+    populateActionTargets(form, selectedRowIds(root));
+    serializeGroupedAction(root, form);
+  }
+
+  function serializeGroupedAction(root, form) {
+    var state = groupedActionState(root);
+    form.querySelectorAll("[data-sc-group-input]").forEach(function (control) {
+      var index = control.dataset.scGroupIndex;
+      if (!state.inputs[index]) state.inputs[index] = Object.create(null);
+      state.inputs[index][control.dataset.scGroupInput] = control.value;
+    });
+    var payload = activeActionGroups(root).map(function (group) {
+      return {index: group.index, selected_ids: group.selected_ids, inputs: state.inputs[group.index] || {}};
+    });
+    var hidden = form.querySelector("[data-sc-action-groups]");
+    if (hidden) hidden.value = JSON.stringify(payload);
+  }
+
   document.addEventListener("change", function (event) {
+    if (event.target.matches("[data-sc-group-input]")) {
+      var groupForm = event.target.closest("[data-sc-action-form]");
+      var groupRoot = groupForm && groupForm.closest("[data-sc-bulk-action]");
+      if (groupRoot) serializeGroupedAction(groupRoot, groupForm);
+      return;
+    }
     if (event.target.matches("[data-sc-select-page]")) {
       var results = event.target.closest(".sc-results");
       var actionId = event.target.dataset.scActionId;
@@ -1094,6 +1635,27 @@
   });
 
   document.addEventListener("click", function (event) {
+    var groupMarker = event.target.closest("[data-sc-group-marker]");
+    if (groupMarker) {
+      var markerResults = groupMarker.closest(".sc-results");
+      var markerCell = groupMarker.closest("[data-sc-group-markers]");
+      var markerRoot = actionRoot(markerResults, markerCell.dataset.scActionId);
+      if (!markerRoot) return;
+      var markerState = groupedActionState(markerRoot);
+      var rowId = markerCell.dataset.scRowId;
+      var markerIndex = Number(groupMarker.dataset.scGroupMarker);
+      if (Object.prototype.hasOwnProperty.call(markerState.assignments, rowId)
+          && markerState.assignments[rowId] === markerIndex) {
+        delete markerState.assignments[rowId];
+      } else {
+        if (markerIndex === markerState.groupCount) markerState.groupCount += 1;
+        markerState.assignments[rowId] = markerIndex;
+      }
+      renderGroupedActionRows(markerRoot);
+      refreshBulkAction(markerRoot);
+      return;
+    }
+
     var open = event.target.closest("[data-sc-action-open]");
     if (open && !open.disabled) {
       var root = open.closest("[data-sc-bulk-action]");
@@ -1103,6 +1665,7 @@
       if (!form || ids.length === 0) return;
       form.reset();
       populateActionTargets(form, ids);
+      if (actionMode(root) === "groups") renderGroupedActionDialog(root, form);
       var result = form.querySelector("[data-sc-action-result]");
       if (result) {
         result.hidden = true;
@@ -1112,7 +1675,7 @@
       var submit = form.querySelector('button[type="submit"]');
       if (submit) {
         submit.disabled = false;
-        submit.textContent = "Apply to selected rows";
+        submit.textContent = root.dataset.scActionSubmitLabel || "Apply to selected rows";
       }
       if (typeof dialog.showModal === "function") dialog.showModal();
       else dialog.setAttribute("open", "");
@@ -1135,13 +1698,14 @@
     var root = form.closest("[data-sc-bulk-action]");
     var ids = selectedRowIds(root);
     populateActionTargets(form, ids);
+    if (actionMode(root) === "groups") serializeGroupedAction(root, form);
     if (!ids.length || !form.reportValidity()) return;
 
     var submit = form.querySelector('button[type="submit"]');
     var result = form.querySelector("[data-sc-action-result]");
     if (submit) {
       submit.disabled = true;
-      submit.textContent = "Applying…";
+      submit.textContent = actionMode(root) === "groups" ? "Building…" : "Applying…";
     }
     if (result) {
       result.hidden = true;
@@ -1167,16 +1731,20 @@
         result.textContent = outcome.payload.message || (succeeded ? "Action completed." : "Action failed.");
       }
       if (succeeded) {
-        actionControls(
-          bulkActionResults(root), "[data-sc-row-select]:checked", actionIdFor(root)
-        ).forEach(function (input) {
-          input.checked = false;
-        });
+        if (actionMode(root) === "groups") {
+          resetGroupedAction(root);
+        } else {
+          actionControls(
+            bulkActionResults(root), "[data-sc-row-select]:checked", actionIdFor(root)
+          ).forEach(function (input) {
+            input.checked = false;
+          });
+        }
         refreshBulkAction(root);
-        if (submit) submit.textContent = "Applied";
+        if (submit) submit.textContent = actionMode(root) === "groups" ? "Built" : "Applied";
       } else if (submit) {
         submit.disabled = false;
-        submit.textContent = "Apply to selected rows";
+        submit.textContent = root.dataset.scActionSubmitLabel || "Apply to selected rows";
       }
     }).catch(function () {
       if (result) {
@@ -1186,7 +1754,7 @@
       }
       if (submit) {
         submit.disabled = false;
-        submit.textContent = "Apply to selected rows";
+        submit.textContent = root.dataset.scActionSubmitLabel || "Apply to selected rows";
       }
     });
   });

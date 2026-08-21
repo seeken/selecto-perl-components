@@ -12,6 +12,12 @@ use Selecto::Engine ();
 use Selecto::Statement ();
 
 our @ACTION_REQUESTS;
+our @SAVED_QUERY_REQUESTS;
+our @SAVED_QUERIES = (
+    {name => 'Zulu inventory', url => '/explore/products?q=1&view=detail&field=product_name&limit=25&page=1'},
+    {name => 'alpha inventory', url => '/explore/products?q=1&view=detail&field=product_name&limit=25&page=1'},
+    {name => 'Wrong explorer', url => '/explore/elsewhere?q=1'},
+);
 
 sub domain {
     return _domain();
@@ -137,6 +143,26 @@ sub _domain {
                 ],
                 execution => {kind => 'host', operation => 'mark_for_review'},
             },
+            build_shipments => {
+                label => 'Build Shipments',
+                description => 'Group selected products into shipments.',
+                type => 'bulk_action',
+                scope => 'bulk',
+                selection => {
+                    mode => 'groups',
+                    palette => 'lucky_charms',
+                    max_groups => 6,
+                    row_details => [{
+                        id => 'stock', label => 'Stock', field => 'units_in_stock',
+                    }],
+                    group_inputs => [{
+                        id => 'carrier_id', label => 'Carrier ID', type => 'number',
+                        required => 1, minimum => 1,
+                    }],
+                },
+                submit_label => 'Build shipments',
+                execution => {kind => 'host', operation => 'build_shipments'},
+            },
         },
         (defined($components) ? (components => $components) : ()),
     }, strict => 1);
@@ -185,7 +211,18 @@ sub config {
                     message => 'Products marked for review.',
                 };
             },
+            build_shipments => sub {
+                my ($controller, $request) = @_;
+                push @ACTION_REQUESTS, $request;
+                return {
+                    ok => 1,
+                    applied_count => scalar(@{$request->{selected_ids}}),
+                    built_count => scalar(@{$request->{groups}}),
+                    message => 'Shipments built.',
+                };
+            },
         },
+        saved_query_store => TestSelectoComponents::SavedQueryStore->new,
         show_sql => 1,
     };
 }
@@ -210,16 +247,47 @@ sub app {
     return $app;
 }
 
+package TestSelectoComponents::SavedQueryStore;
+
+sub new { return bless {}, shift }
+
+sub list {
+    return [map { {%$_} } @TestSelectoComponents::SAVED_QUERIES];
+}
+
+sub save {
+    my ($self, $controller, $config, $request) = @_;
+    push @TestSelectoComponents::SAVED_QUERY_REQUESTS, {operation => 'save', %$request};
+    @TestSelectoComponents::SAVED_QUERIES = (
+        grep { $_->{name} ne $request->{name} } @TestSelectoComponents::SAVED_QUERIES,
+        {name => $request->{name}, url => $request->{url}},
+    );
+    return 1;
+}
+
+sub delete {
+    my ($self, $controller, $config, $request) = @_;
+    push @TestSelectoComponents::SAVED_QUERY_REQUESTS, {operation => 'delete', %$request};
+    @TestSelectoComponents::SAVED_QUERIES = grep {
+        $_->{name} ne $request->{name}
+    } @TestSelectoComponents::SAVED_QUERIES;
+    return 1;
+}
+
 package TestSelectoComponents::Adapter;
 
 use Mojo::Base 'Selecto::Adapter', -signatures;
 use Selecto::Statement ();
 
-our ($LAST_QUERY, $LAST_COUNT_QUERY, $LAST_COUNT_STATEMENT);
+our (
+    $LAST_QUERY, $LAST_COUNT_QUERY, $LAST_COUNT_STATEMENT,
+    $LAST_COMPILED_QUERY, $LAST_DATA_QUERY, $COUNT_EXECUTIONS,
+);
 
 sub name { return 'test'; }
 sub dialect { return __PACKAGE__; }
 sub compile ($self, $domain, $query) {
+    $LAST_COMPILED_QUERY = $query;
     if (defined $query->limit_value) {
         $LAST_QUERY = $query;
     } else {
@@ -236,15 +304,19 @@ sub compile ($self, $domain, $query) {
 sub execute_query ($self, $statement) {
     if (@{$statement->columns} == 1 && $statement->columns->[0] eq 'selecto_total_count') {
         $LAST_COUNT_STATEMENT = $statement;
+        $COUNT_EXECUTIONS++;
         return { columns => $statement->columns, rows => [[42]] };
     }
+    $LAST_DATA_QUERY = $LAST_COMPILED_QUERY;
     my $rollup = grep { $_ eq '__selecto_rollup_grouping' } @{$statement->columns};
-    my $group_count = $rollup ? scalar(@{$LAST_QUERY->groups}) : 0;
+    my $group_count = $rollup ? scalar(@{$LAST_DATA_QUERY->groups}) : 0;
     my @rows;
-    for my $row_index (1, 2) {
+    my $row_count = defined($LAST_DATA_QUERY->limit_value) ? 2 : 42;
+    for my $row_index (1 .. $row_count) {
         my $row = [map {
                 $_ eq '__selecto_rollup_grouping' ? 0
                 : $_ eq '__selecto_action_target' ? 100 + $row_index
+                : $_ eq '__selecto_action_build_shipments_stock' ? 20 + $row_index
                 : /\A__selecto_link_/ ? 100 + $row_index
                 : $_ eq 'product_name' && $row_index == 1 ? '=2+2'
                 : /(?:count|price)\z/ ? (($_ eq 'count' ? 2 : 10) * $row_index)

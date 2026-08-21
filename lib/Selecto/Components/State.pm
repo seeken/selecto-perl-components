@@ -10,7 +10,7 @@ has [qw(view chart_type fields field_configs filters groups group_configs measur
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature view chart_type field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group
+        q query_signature view chart_type field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_promote_field
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
@@ -100,6 +100,7 @@ sub from_input ($class, $config, $domain, $input) {
     my @valid_groups;
     my %group_configs;
     my %seen_group;
+    my %seen_group_identity;
     for my $index (0 .. $#$group_values) {
         my $group = _scalar($group_values->[$index]);
         next unless length($group) && !$seen_group{$group}++;
@@ -108,6 +109,12 @@ sub from_input ($class, $config, $domain, $input) {
         } elsif (@valid_groups >= 3) {
             push @errors, 'Choose no more than three group fields.';
         } else {
+            my $dimension = $field_map->{$group}{dimension};
+            my $group_identity = $dimension ? $dimension->{key_field} : $group;
+            if ($seen_group_identity{$group_identity}++) {
+                push @errors, 'Choose a star dimension only once.';
+                next;
+            }
             my $alias = _trim($group_aliases->[$index]);
             if (length($alias) > 80 || $alias =~ /[\x00-\x1f\x7f]/) {
                 push @errors, 'A group column alias is not available.';
@@ -115,7 +122,10 @@ sub from_input ($class, $config, $domain, $input) {
             }
             my $format = _scalar($group_formats->[$index]);
             my $field_type = $field_map->{$group}{type};
-            if (!$config->allows_group_format($field_type, $format)) {
+            if ($field_map->{$group}{dimension} && length($format)) {
+                push @errors, 'A star dimension cannot use a group format.';
+                $format = '';
+            } elsif (!$config->allows_group_format($field_type, $format)) {
                 push @errors, 'A group column format is not available.';
                 $format = '';
             }
@@ -224,7 +234,9 @@ sub from_input ($class, $config, $domain, $input) {
         $order_fields = [map { $_->[0] } @{$query_library->{orders}}];
         $order_directions = [map { $_->[1] } @{$query_library->{orders}}];
     }
-    my ($default_order) = grep { $field_map->{$_} } @valid_fields;
+    my ($default_order) = grep {
+        $field_map->{$_} && !$field_map->{$_}{denormalizing}
+    } @valid_fields;
     $default_order //= $config->primary_key($domain);
     $order_fields = [$default_order] unless grep { length(_scalar($_)) } @$order_fields;
     my @orders;
@@ -238,6 +250,10 @@ sub from_input ($class, $config, $domain, $input) {
         }
         unless ($field_map->{$field}) {
             push @errors, 'Choose an available sort field.';
+            next;
+        }
+        if ($field_map->{$field}{denormalizing}) {
+            push @errors, 'A to-many field cannot order root detail rows.';
             next;
         }
         if ($seen_order{$field}++) {
@@ -277,6 +293,8 @@ sub from_input ($class, $config, $domain, $input) {
     my $filter_values = _values($input, 'filter_value');
     my $filter_end_values = _values($input, 'filter_value_end');
     my $filter_groups = _values($input, 'filter_group');
+    my %promoted_filter_field = map { $_ => 1 } grep { length } map { _scalar($_) }
+        @{_values($input, 'filter_promote_field')};
     my $filter_count = @$filter_fields;
     $filter_count = @$filter_ops if @$filter_ops > $filter_count;
     $filter_count = @$filter_values if @$filter_values > $filter_count;
@@ -349,6 +367,7 @@ sub from_input ($class, $config, $domain, $input) {
             value_end => $value_end,
         };
         $filter->{grouped} = 1 if $group_filter;
+        $filter->{promoted} = 1 if !$group_filter && $promoted_filter_field{$field};
         $filter->{draft} = 1 if !$group_filter && $op !~ /_null\z/
             && (!length($value) || ($op eq 'between' && !length($value_end)));
         push @filters, $filter;
@@ -413,6 +432,7 @@ sub query_pairs ($self) {
             filter_value => $filter->{value},
             filter_value_end => $filter->{value_end} // '',
             filter_group => $filter->{grouped} ? 1 : 0;
+        push @pairs, filter_promote_field => $filter->{field} if $filter->{promoted};
     }
     for my $group (@{$self->groups}) {
         my $column = $self->group_configs->{$group} // {};

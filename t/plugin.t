@@ -4,6 +4,7 @@ use warnings;
 use Test::More;
 use Test::Mojo;
 use Mojo::JSON qw(decode_json encode_json);
+use Mojo::URL ();
 use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::DateShortcut ();
@@ -14,16 +15,23 @@ $t->get_ok('/explore/products')
     ->status_is(200)
     ->content_type_like(qr{text/html})
     ->element_exists('section#selecto-channel-products')
+    ->element_exists('[data-sc-workspace]:not(.is-builder-collapsed)')
+    ->element_exists('[data-sc-builder-shell="products"]:not(.is-collapsed)')
+    ->element_exists('[data-sc-builder-toggle][aria-expanded="true"][aria-label="Collapse view menu"]')
+    ->text_is('.sc-builder-tray-header > span' => 'View menu')
     ->element_exists('form#selecto-query-products')
     ->element_exists('form#selecto-query-products input[name="query_signature"][value]')
     ->element_exists('[role="tablist"][aria-label="Explorer sections"]')
     ->element_exists('[role="tab"][data-sc-builder-tab="view"][aria-selected="true"]')
     ->element_exists('[role="tab"][data-sc-builder-tab="filters"][aria-selected="false"]')
+    ->element_exists('[role="tab"][data-sc-builder-tab="saved"][aria-selected="false"]')
+    ->element_exists('[role="tabpanel"][data-sc-builder-panel="view"] [data-sc-query-library-view-controls] select[name="query_library_view"]')
     ->element_exists('[role="tabpanel"][data-sc-builder-panel="view"] .sc-view-tabs')
+    ->element_exists('[role="tabpanel"][data-sc-builder-panel="filters"][hidden] [data-sc-query-library-filter-controls] input[name="query_library_segment"][value="low_stock"]')
     ->element_exists('[role="tabpanel"][data-sc-builder-panel="filters"][hidden] [data-sc-filter-root]')
-    ->element_exists('[role="tab"][data-sc-builder-tab="library"][aria-selected="false"]')
-    ->element_exists('[role="tabpanel"][data-sc-builder-panel="library"][hidden] select[name="query_library_view"]')
-    ->element_exists('input[name="query_library_segment"][value="low_stock"]')
+    ->element_exists('[role="tabpanel"][data-sc-builder-panel="saved"][hidden][data-sc-saved-queries]')
+    ->element_exists_not('[role="tab"][data-sc-builder-tab="library"]')
+    ->element_exists_not('[role="tabpanel"][data-sc-builder-panel="library"]')
     ->content_like(qr/Capability metadata: products\.read/)
     ->element_exists('form[hx-trigger="submit"]')
     ->element_exists('[data-sc-result-view-panel="detail"]:not([disabled])')
@@ -56,25 +64,116 @@ $t->get_ok('/explore/products')
     ->element_exists('[data-sc-export-format="csv"][href*="format=csv"]')
     ->element_exists('[data-sc-export-format="tsv"][href*="format=tsv"]')
     ->element_exists('[data-sc-export-format="json"][href*="format=json"]')
+    ->text_is('.sc-export-options > span' => 'Export all')
+    ->attr_is('.sc-export-options' => 'aria-label' => 'Export all matched rows')
     ->content_like(qr{>Excel</a>.*>CSV</a>.*>TSV</a>.*>JSON</a>}s)
     ->content_like(qr{hx-ws:connect="/explore/products/ws"})
     ->content_like(qr{hx-ws:send})
     ->content_like(qr{/selecto-components/htmx\.min\.js})
     ->content_like(qr{/selecto-components/hx-ws\.min\.js})
-    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260818-10})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260818-10})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260818-10})
+    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260821-8})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260821-8})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260821-8})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:add_product_note"][data-type="action"]')
     ->text_is('[data-sc-picker-kind="field"] button[data-field="action:add_product_note"] strong' => 'Action: Add Product Note')
+    ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:build_shipments"][data-type="action"]')
+    ->text_is('[data-sc-picker-kind="field"] button[data-field="action:build_shipments"] strong' => 'Action: Build Shipments')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:mark_for_review"][data-type="action"]')
     ->element_exists_not('[data-sc-bulk-actions]')
     ->element_exists_not('input[data-sc-row-select]')
     ->element_exists_not('dialog[data-sc-action-dialog]')
     ->element_exists('a.sc-object-link[href="/products/view?id=101"]')
-    ->text_is('a.sc-object-link[href="/products/view?id=101"]' => '=2+2');
+    ->text_is('a.sc-object-link[href="/products/view?id=101"]' => '=2+2')
+    ->element_exists('details.sc-debug-panel[data-sc-debug-panel][open]')
+    ->text_is('.sc-debug-panel > summary strong' => 'Query Debug')
+    ->text_is('.sc-debug-stat:nth-child(5) span' => 'Rows returned')
+    ->text_is('.sc-debug-stat:nth-child(5) strong' => '2')
+    ->text_is('.sc-debug-stat:nth-child(6) strong' => '42')
+    ->text_is('.sc-debug-query:nth-of-type(1) h4' => 'Generated data query')
+    ->element_exists('.sc-debug-query button[data-sc-debug-copy="selecto-debug-data-products"]')
+    ->element_exists('.sc-debug-query:nth-of-type(1) code.sc-sql .sc-sql-keyword')
+    ->text_is('.sc-debug-query:nth-of-type(1) .sc-debug-no-params' => 'No bound parameters.');
+
+is $t->tx->res->dom
+    ->at('[data-sc-saved-queries] .sc-saved-query-list li:nth-child(1) a')->all_text,
+    'alpha inventory', 'saved queries are sorted case-insensitively';
+is $t->tx->res->dom
+    ->at('[data-sc-saved-queries] .sc-saved-query-list li:nth-child(2) a')->all_text,
+    'Zulu inventory', 'second saved query follows in alphabetical order';
+ok !$t->tx->res->dom->at('[data-sc-saved-queries] a[href^="/explore/elsewhere"]'),
+    'saved query list rejects URLs for another explorer';
+my $saved_query_form = $t->tx->res->dom->at(
+    'form[action="/explore/products/saved-queries"]',
+);
+ok $saved_query_form, 'saved query form is rendered outside the query builder form';
+ok !$t->tx->res->dom->at(
+    'form#selecto-query-products form[action="/explore/products/saved-queries"]',
+), 'saved query tab does not create nested forms';
+is $saved_query_form->at('input[name="saved_query_name"]')->attr('maxlength'), 30,
+    'saved query names honor the legacy table limit';
+my $saved_csrf_token = $saved_query_form->at('input[name="csrf_token"]')->attr('value');
+my $saved_url = Mojo::URL->new(
+    $saved_query_form->at('input[name="saved_query_url"]')->attr('value'),
+);
+$saved_url->query->param(page => 4);
+$t->post_ok('/explore/products/saved-queries' => {Accept => 'application/json'} => form => {
+    csrf_token => $saved_csrf_token,
+    saved_query_name => '  My inventory  ',
+    saved_query_url => $saved_url->to_string,
+    return_to => '/explore/products',
+})->status_is(200)->json_is('/ok' => 1)->json_is('/name' => 'My inventory')
+    ->json_like('/url' => qr{\bpage=1\z});
+is_deeply $TestSelectoComponents::SAVED_QUERY_REQUESTS[-1], {
+    operation => 'save',
+    name => 'My inventory',
+    url => $t->tx->res->json->{url},
+}, 'saved query store receives a canonical page-one URL';
+
+$t->post_ok('/explore/products/saved-queries' => {Accept => 'application/json'} => form => {
+    saved_query_name => 'No token',
+    saved_query_url => '/explore/products?q=1',
+})->status_is(403)->json_is('/ok' => 0);
+$t->post_ok('/explore/products/saved-queries' => {Accept => 'application/json'} => form => {
+    csrf_token => $saved_csrf_token,
+    saved_query_name => 'x' x 31,
+    saved_query_url => '/explore/products?q=1',
+})->status_is(422)->json_like('/message' => qr/30 characters/);
+
+$t->post_ok('/explore/products/saved-queries/delete' => {Accept => 'application/json'} => form => {
+    csrf_token => $saved_csrf_token,
+    saved_query_name => 'My inventory',
+    return_to => '/explore/products?q=1',
+})->status_is(200)->json_is('/ok' => 1)->json_is('/name' => 'My inventory');
+is_deeply $TestSelectoComponents::SAVED_QUERY_REQUESTS[-1], {
+    operation => 'delete', name => 'My inventory',
+}, 'saved query delete is delegated by name';
+
+$t->get_ok('/explore/private-products')->status_is(200)
+    ->element_exists_not('[data-sc-saved-queries]')
+    ->element_exists_not('form[action="/explore/private-products/saved-queries"]');
+
+my $library_url = '/explore/products?q=1&query_library_view=low_stock_products' .
+    '&query_library_segment=low_stock' .
+    '&query_library_param_name=threshold&query_library_param_value=8' .
+    '&filter_field=unit_price&filter_op=gte&filter_value=10' .
+    '&view=detail&limit=25&page=1';
+$t->get_ok($library_url)
+    ->status_is(200)
+    ->element_exists('[data-sc-workspace].is-builder-collapsed')
+    ->element_exists('[data-sc-builder-shell="products"].is-collapsed')
+    ->element_exists('[data-sc-builder-toggle][aria-expanded="false"][aria-label="Expand view menu"]')
+    ->element_exists('[data-sc-query-library-view-controls] option[value="low_stock_products"][selected]')
+    ->attr_is('[data-sc-query-library-view-controls] option[value="low_stock_products"]' =>
+        'data-sc-view-segments' => '["low_stock"]')
+    ->element_exists('[data-sc-query-library-filter-controls] input[name="query_library_param_name"][value="threshold"]')
+    ->element_exists('[data-sc-query-library-filter-controls] input[name="query_library_param_value"][value="8"][type="number"]')
+    ->text_is('[data-sc-query-summary] [data-sc-query-library-segment-summary="low_stock"]' => 'Segment: Low stock')
+    ->text_is('[data-sc-query-summary] [data-sc-filter-summary]' => 'Unit Price >= 10')
+    ->text_is('[data-sc-query-summary] .sc-query-summary-heading > span' => '2 applied filters')
+    ->text_is('[data-sc-builder-tab="filters"] [data-sc-filter-badge]' => '2');
 
 my $action_columns_url = '/explore/products?q=1&view=detail' .
     '&field=action%3Aadd_product_note&field_alias=&field_format=' .
@@ -148,6 +247,72 @@ is $TestSelectoComponents::ACTION_REQUESTS[-1]{action}{id}, 'mark_for_review',
 is_deeply $TestSelectoComponents::ACTION_REQUESTS[-1]{selected_ids}, ['202'],
     'the second action receives its own selected rows';
 
+my $grouped_action_url = '/explore/products?q=1&view=detail' .
+    '&field=action%3Abuild_shipments&field_alias=&field_format=' .
+    '&field=product_name&field_alias=&field_format=' .
+    '&group=category.category_name&measure=count&order=product_name&direction=asc&limit=25&page=1';
+$t->get_ok($grouped_action_url)
+    ->status_is(200)
+    ->element_exists('[data-sc-bulk-action][data-sc-action-id="build_shipments"][data-sc-action-mode="groups"]')
+    ->element_exists('th.sc-group-select-column[data-sc-action-column="build_shipments"]')
+    ->element_exists_not('th[data-sc-action-column="build_shipments"] input[data-sc-select-page]')
+    ->element_exists('[data-sc-group-markers][data-sc-action-id="build_shipments"][data-sc-row-id="101"]')
+    ->element_exists('[data-sc-group-markers][data-sc-action-id="build_shipments"][data-sc-row-id="102"]')
+    ->attr_like('[data-sc-group-markers][data-sc-action-id="build_shipments"][data-sc-row-id="101"]' =>
+        'data-sc-row-details' => qr/Stock.*21/)
+    ->element_exists('input[name="action_groups"][data-sc-action-groups]')
+    ->element_exists('[data-sc-group-action-groups]')
+    ->content_like(qr{pink_heart})
+    ->content_like(qr{orange_star})
+    ->content_like(qr{yellow_moon})
+    ->content_like(qr{green_clover})
+    ->content_like(qr{blue_diamond})
+    ->content_like(qr{purple_horseshoe})
+    ->content_like(qr{carrier_id});
+
+my $grouped_csrf = $t->tx->res->dom
+    ->at('form[action="/explore/products/actions/build_shipments"] input[name="csrf_token"]')
+    ->attr('value');
+my $group_payload = encode_json([
+    {
+        index => 0,
+        marker => {id => 'forged', color => '#000000'},
+        selected_ids => [101, 102],
+        inputs => {carrier_id => 501},
+    },
+    {index => 1, selected_ids => [103], inputs => {carrier_id => 777}},
+]);
+$t->post_ok('/explore/products/actions/build_shipments' => {Accept => 'application/json'} => form => {
+    csrf_token => $grouped_csrf,
+    selected_id => [101, 102, 103],
+    action_groups => $group_payload,
+})->status_is(200)->json_is('/ok' => 1)->json_is('/built_count' => 2);
+is_deeply [map { $_->{marker}{id} } @{$TestSelectoComponents::ACTION_REQUESTS[-1]{groups}}],
+    [qw(pink_heart orange_star)],
+    'grouped action markers are reconstructed from the governed palette';
+is_deeply $TestSelectoComponents::ACTION_REQUESTS[-1]{groups}[0]{selected_ids},
+    ['101', '102'], 'grouped actions preserve each marker row assignment';
+is $TestSelectoComponents::ACTION_REQUESTS[-1]{groups}[1]{inputs}{carrier_id}, '777',
+    'grouped actions normalize the per-group carrier input';
+
+$t->post_ok('/explore/products/actions/build_shipments' => {Accept => 'application/json'} => form => {
+    csrf_token => $grouped_csrf,
+    selected_id => [101],
+    action_groups => encode_json([
+        {index => 0, selected_ids => [101], inputs => {carrier_id => 0}},
+    ]),
+})->status_is(422)->json_is('/ok' => 0)
+    ->json_like('/message' => qr/Pink heart: Carrier ID is below its minimum/);
+
+$t->post_ok('/explore/products/actions/build_shipments' => {Accept => 'application/json'} => form => {
+    csrf_token => $grouped_csrf,
+    selected_id => [101],
+    action_groups => encode_json([
+        {index => 99, selected_ids => [101], inputs => {carrier_id => 501}},
+    ]),
+})->status_is(422)->json_is('/ok' => 0)
+    ->json_like('/message' => qr/group marker is invalid/);
+
 $t->post_ok('/explore/products/actions/add_product_note' => {Accept => 'application/json'} => form => {
     selected_id => 101,
     action_input_note_type => 'internal',
@@ -160,6 +325,11 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/data-sc-filter-available-item/)
     ->content_like(qr/data-sc-filter-set-item/)
     ->content_like(qr/activeBuilderTabs/)
+    ->content_like(qr/data-sc-builder-shell/)
+    ->content_like(qr/name === "saved"/)
+    ->content_like(qr/function setBuilderTrayCollapsed/)
+    ->content_like(qr/function restoreBuilderTrays/)
+    ->content_like(qr/closest\("\[data-sc-workspace\]"\)/)
     ->content_like(qr/data-sc-builder-panel/)
     ->content_like(qr/htmx:after:swap/)
     ->content_like(qr/markBuilderDirty/)
@@ -173,8 +343,19 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/data-sc-row-select/)
     ->content_like(qr/function actionControls/)
     ->content_like(qr/function initializeChart/)
+    ->content_like(qr/function copyDebugSql/)
+    ->content_like(qr/data-sc-debug-copy/)
     ->content_like(qr/data-sc-graph-drilldown/)
     ->content_like(qr/populateActionTargets/)
+    ->content_like(qr/function renderGroupedActionRows/)
+    ->content_like(qr/function reorderGroupedActionRows/)
+    ->content_like(qr/function groupedRowDetails/)
+    ->content_like(qr/prefers-reduced-motion: reduce/)
+    ->content_like(qr/cubic-bezier\(\.2,\.8,\.2,1\)/)
+    ->content_like(qr/function renderGroupedActionDialog/)
+    ->content_like(qr/function serializeGroupedAction/)
+    ->content_like(qr/function markerSvgPart/)
+    ->content_like(qr/createElementNS\("http:\/\/www\.w3\.org\/2000\/svg"/)
     ->content_like(qr/window\.fetch/)
     ->content_like(qr/HTMLFormElement\.prototype\.submit\.call\(form\)/)
     ->content_like(qr/requestSubmit/);
@@ -189,11 +370,34 @@ $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-bulk-actions/)
     ->content_like(qr/\.sc-chart-canvas/)
     ->content_like(qr/\.sc-bulk-action/)
-    ->content_like(qr/\.sc-action-dialog/);
+    ->content_like(qr/\.sc-action-dialog/)
+    ->content_like(qr/\.sc-group-marker/)
+    ->content_like(qr/\.sc-group-action-card/)
+    ->content_like(qr/\.sc-group-action-orders/)
+    ->content_like(qr/width:\s*max-content/)
+    ->content_unlike(qr/\.sc-nested-table th[^}]*text-overflow/s)
+    ->content_like(qr/\.sc-table-wrap\s*>\s*table\s*>\s*thead\s*>\s*tr\s*>\s*th:first-child/)
+    ->content_like(qr/\.sc-table-wrap\s*>\s*table\s*>\s*tbody\s*>\s*tr\s*>\s*td:first-child/)
+    ->content_like(qr/\.sc-results\s*\{[^}]*overflow:\s*visible/s)
+    ->content_like(qr/\.sc-table-wrap\s*\{[^}]*overflow:\s*visible/s)
+    ->content_like(qr/\.sc-table-wrap\s*>\s*table\s*\{[^}]*width:\s*max-content/s)
+    ->content_like(qr/\.sc-sql-keyword/)
+    ->content_like(qr/\.sc-sql-parameter/)
+    ->content_unlike(qr/\.sc-group-marker-glyph[^}]*font-family/s)
+    ->content_like(qr/\.sc-workspace\.is-builder-collapsed/)
+    ->content_like(qr/\.sc-builder\.is-collapsed/)
+    ->content_like(qr/margin-left:\s*calc\(50%\s*-\s*50vw\)/)
+    ->content_like(qr/border-left:\s*0/)
+    ->content_like(qr/\.sc-builder\s*\{[^}]*padding:\s*8px\s+16px\s+16px\s+8px/)
+    ->content_like(qr/\.sc-builder-toggle\s*\{[^}]*order:\s*-1/)
+    ->content_like(qr/\.sc-builder-tray-header\s*\{[^}]*justify-content:\s*flex-start/)
+    ->content_like(qr/cubic-bezier\(\.22,\s*1,\s*\.36,\s*1\)/)
+    ->content_like(qr/\@property\s+--sc-tray-width/)
+    ->content_unlike(qr/max-height:\s*calc\(100vh/);
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
     ->status_is(200)
-    ->content_like(qr/SELECT governed_test_query/)
+    ->element_exists('.sc-debug-query:nth-of-type(1) code.sc-sql .sc-sql-keyword')
     ->content_like(qr/12\.50/)
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>5</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 5')
@@ -205,6 +409,14 @@ is $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->limit_value, undef,
     'total count removes the page limit';
 is $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->offset_value, undef,
     'total count removes the page offset';
+
+$t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50&filter_promote_field=unit_price')
+    ->status_is(200)
+    ->element_exists('[data-sc-promoted-filters]')
+    ->element_exists('[data-sc-promoted-filter][data-field="unit_price"] select[data-sc-promoted-filter-input="op"] option[value="gte"][selected]')
+    ->element_exists('[data-sc-promoted-filter][data-field="unit_price"] input[data-sc-promoted-filter-input="value"][value="12.50"]')
+    ->element_exists('[data-sc-filter-set-item][data-field="unit_price"] input[name="filter_promote_field"][value="unit_price"][checked]')
+    ->element_exists('button[form="selecto-query-products"][type="submit"]');
 
 $t->get_ok('/explore/products?q=1&view=detail&field=created_on&field_alias=Created+month&field_format=month&field=product_name&field_alias=&field_format=&group=created_on&group_alias=Month&group_format=month&measure=count&order=created_on&direction=desc&order=product_name&direction=asc&limit=25&page=1')
     ->status_is(200)
@@ -321,20 +533,31 @@ $t->get_ok('/explore/products?q=1&view=detail&field=drop_table&order=drop_table&
 
 my $export_url = '/explore/products?q=1&view=detail&field=action%3Aadd_product_note' .
     '&field=product_name&field=unit_price&group=category.category_name&measure=count' .
-    '&order=product_name&direction=asc&limit=10&page=1';
+    '&order=product_name&direction=asc&limit=10&page=2';
+
+my $count_executions_before_export =
+    $TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0;
 
 $t->get_ok($export_url . '&format=csv')
     ->status_is(200)
     ->content_type_like(qr{text/csv})
-    ->header_like('Content-Disposition' => qr/products-page-1\.csv/)
+    ->header_like('Content-Disposition' => qr/products-export\.csv/)
     ->content_like(qr/"Product Name","Unit Price"\r?\n/)
     ->content_unlike(qr/Action: Add Product Note/)
     ->content_like(qr/"'=2\+2"/);
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, undef,
+    'CSV export executes the active query without a row limit';
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->offset_value, undef,
+    'CSV export ignores the requested result page';
+is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $count_executions_before_export,
+    'all-row export does not issue a redundant count query';
+is scalar(split /\r?\n/, $t->tx->res->body), 43,
+    'CSV export contains its header and all 42 matched rows';
 
 $t->get_ok($export_url . '&format=tsv')
     ->status_is(200)
     ->content_type_like(qr{text/tab-separated-values})
-    ->header_like('Content-Disposition' => qr/products-page-1\.tsv/)
+    ->header_like('Content-Disposition' => qr/products-export\.tsv/)
     ->content_like(qr/"Product Name"\t"Unit Price"\r?\n/)
     ->content_unlike(qr/Action: Add Product Note/)
     ->content_like(qr/"'=2\+2"/);
@@ -342,11 +565,12 @@ $t->get_ok($export_url . '&format=tsv')
 $t->get_ok($export_url . '&format=json')
     ->status_is(200)
     ->content_type_like(qr{application/json})
-    ->header_like('Content-Disposition' => qr/products-page-1\.json/)
+    ->header_like('Content-Disposition' => qr/products-export\.json/)
+    ->json_is('/scope' => 'all')
     ->json_is('/page' => 1)
-    ->json_is('/total_pages' => 5)
+    ->json_is('/total_pages' => 1)
     ->json_is('/total_count' => 42)
-    ->json_is('/row_count' => 2)
+    ->json_is('/row_count' => 42)
     ->json_is('/columns' => ['Product Name', 'Unit Price'])
     ->json_is('/rows/0/Product Name' => '=2+2')
     ->json_is('/rows/0/Unit Price' => 10);
@@ -354,7 +578,7 @@ $t->get_ok($export_url . '&format=json')
 $t->get_ok($export_url . '&format=xlsx')
     ->status_is(200)
     ->content_type_like(qr{application/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet})
-    ->header_like('Content-Disposition' => qr/products-page-1\.xlsx/)
+    ->header_like('Content-Disposition' => qr/products-export\.xlsx/)
     ->content_like(qr{\APK});
 
 $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({

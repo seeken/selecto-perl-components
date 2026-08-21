@@ -6,40 +6,74 @@ use Selecto::Components::DateShortcut ();
 use Selecto::Expression ();
 use Selecto::QueryLibrary ();
 
-sub build ($class, $config, $domain, $state) {
+sub build ($class, $config, $domain, $state, $options = undef) {
     die "cannot build an invalid explorer state\n" unless $state->valid;
+    $options //= {};
+    die "query builder options must be an object\n" unless ref($options) eq 'HASH';
     return $state->view eq 'detail'
-        ? $class->_detail($config, $domain, $state)
-        : $class->_aggregate($config, $domain, $state);
+        ? $class->_detail($config, $domain, $state, $options)
+        : $class->_aggregate($config, $domain, $state, $options);
 }
 
-sub _detail ($class, $config, $domain, $state) {
+sub _detail ($class, $config, $domain, $state, $options) {
     my $field_map = $config->field_map($domain);
     my $detail_map = $config->detail_column_map($domain);
-    my @columns = map {
-        my $field = $_;
+    my (@columns, %nested_column);
+    for my $field (@{$state->fields}) {
         my $catalog = $detail_map->{$field};
         if ($catalog->{action_id}) {
-            +{
+            push @columns, {
                 key => '__selecto_action_column_' . $catalog->{action_id},
                 field => $field,
                 label => $catalog->{label},
                 type => 'action',
                 action_id => $catalog->{action_id},
             };
-        } else {
-            my $column_config = $state->field_configs->{$field} // {};
-            +{
-                key => _field_alias($field),
-                field => $field,
-                label => $column_config->{alias} || $field_map->{$field}{label},
-                type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
-                format => $column_config->{format} // '',
-                (defined($field_map->{$field}{link})
-                    ? (link => {%{$field_map->{$field}{link}}}) : ()),
-            };
+            next;
         }
-    } @{$state->fields};
+        my $resolved = $domain->resolve($field);
+        if ($resolved->{association} && $resolved->{association}->cardinality eq 'many') {
+            my $association = $resolved->{association};
+            my $name = $association->name;
+            my $nested = $nested_column{$name};
+            unless ($nested) {
+                $nested = {
+                    key => '__selecto_nested_' . _field_alias($name),
+                    field => $name,
+                    label => _humanize($name),
+                    type => 'nested',
+                    nested => 1,
+                    association => $name,
+                    nested_fields => [],
+                };
+                $nested_column{$name} = $nested;
+                push @columns, $nested;
+            }
+            my $column_config = $state->field_configs->{$field} // {};
+            push @{$nested->{nested_fields}}, {
+                field => $resolved->{field},
+                path => $field,
+                label => $column_config->{alias} || _humanize($resolved->{field}),
+                type => $field_map->{$field}{type},
+                (defined($field_map->{$field}{html_format})
+                    ? (html_format => $field_map->{$field}{html_format}) : ()),
+            };
+            next;
+        }
+        my $column_config = $state->field_configs->{$field} // {};
+        push @columns, {
+            key => _field_alias($field),
+            field => $field,
+            label => $column_config->{alias} || $field_map->{$field}{label},
+            type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
+            source_type => $field_map->{$field}{type},
+            format => $column_config->{format} // '',
+            (defined($field_map->{$field}{link})
+                ? (link => {%{$field_map->{$field}{link}}}) : ()),
+            (defined($field_map->{$field}{html_format})
+                ? (html_format => $field_map->{$field}{html_format}) : ()),
+        };
+    }
     my @query_columns = grep { !$_->{action_id} } @columns;
     my @action_ids = map { $_->{action_id} } grep { $_->{action_id} } @columns;
     my $action_key;
@@ -63,9 +97,47 @@ sub _detail ($class, $config, $domain, $state) {
         }
     }
     my %query_key = map {
-        (!$_->{format} ? ($_->{field} => $_->{key}) : ())
+        (!$_->{format} && !$_->{nested} ? ($_->{field} => $_->{key}) : ())
     } @query_columns;
     my %used_key = map { $_->{key} => 1 } @query_columns;
+    my %action_row_details;
+    my $action_specs = $domain->actions;
+    for my $action_id (@action_ids) {
+        my $selection = ref($action_specs) eq 'HASH' && ref($action_specs->{$action_id}) eq 'HASH'
+            ? $action_specs->{$action_id}{selection} : undef;
+        next unless ref($selection) eq 'HASH' && ($selection->{mode} // '') eq 'groups'
+            && ref($selection->{row_details}) eq 'ARRAY';
+        my (@details, %seen_detail);
+        for my $detail (@{$selection->{row_details}}) {
+            next unless ref($detail) eq 'HASH';
+            my $id = defined($detail->{id}) && !ref($detail->{id}) ? "$detail->{id}" : '';
+            my $field = defined($detail->{field}) && !ref($detail->{field}) ? "$detail->{field}" : '';
+            next unless $id =~ /\A[a-z][a-z0-9_]*\z/ && !$seen_detail{$id}++
+                && $field =~ /\A[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\z/
+                && $field_map->{$field};
+            my $key = $query_key{$field};
+            unless (defined($key)) {
+                my $base_key = '__selecto_action_' . _field_alias($action_id) . '_' . _field_alias($id);
+                $key = $base_key;
+                my $suffix = 1;
+                $key = $base_key . '_' . ++$suffix while $used_key{$key};
+                push @query_columns, {
+                    key => $key,
+                    field => $field,
+                    label => $field_map->{$field}{label},
+                    type => $field_map->{$field}{type},
+                    format => '',
+                    hidden => 1,
+                };
+                $query_key{$field} = $key;
+                $used_key{$key} = 1;
+            }
+            my $label = defined($detail->{label}) && !ref($detail->{label})
+                ? "$detail->{label}" : _humanize($id);
+            push @details, {id => $id, label => $label, key => $key};
+        }
+        $action_row_details{$action_id} = \@details if @details;
+    }
     for my $column (grep { $_->{link} } @columns) {
         my $id_field = $column->{link}{id_field};
         my $link_key = $query_key{$id_field};
@@ -90,12 +162,13 @@ sub _detail ($class, $config, $domain, $state) {
     my $query = Selecto::Query->new->select(map {
         _column_expression($_)->as($_->{key})
     } @query_columns);
-    $query = _with_filters($query, $state);
+    $query = _with_filters($query, $state, $config, $domain);
     for my $order (@{$state->orders}) {
         $query = $query->order_by($order->{field}, $order->{direction});
     }
     $query = $query->limit($state->limit)
-        ->offset(($state->page - 1) * $state->limit);
+        ->offset(($state->page - 1) * $state->limit)
+        if !exists($options->{paginate}) || $options->{paginate};
     $query = _with_query_library($query, $domain, $state);
     return {
         query => $query,
@@ -103,25 +176,60 @@ sub _detail ($class, $config, $domain, $state) {
         query_columns => \@query_columns,
         action_key => $action_key,
         action_ids => \@action_ids,
+        action_row_details => \%action_row_details,
+        count_selections => [Selecto::Expression->field($config->primary_key($domain))],
         graph => 0,
     };
 }
 
-sub _aggregate ($class, $config, $domain, $state) {
+sub _aggregate ($class, $config, $domain, $state, $options) {
     my $field_map = $config->field_map($domain);
+    my $rollup = $state->view eq 'aggregate' && @{$state->groups} ? 1 : 0;
     my @group_columns = map {
         my $field = $_;
         my $column_config = $state->group_configs->{$field} // {};
+        my $dimension = $field_map->{$field}{dimension};
         {
             key => _field_alias($field),
             field => $field,
             label => $column_config->{alias} || $field_map->{$field}{label},
-            type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
+            type => $dimension ? $dimension->{display_type}
+                : $column_config->{format} ? 'string' : $field_map->{$field}{type},
+            source_type => $field_map->{$field}{type},
             format => $column_config->{format} // '',
+            (defined($field_map->{$field}{html_format})
+                ? (html_format => $field_map->{$field}{html_format}) : ()),
+            ($dimension ? (
+                dimension => {%$dimension},
+                drilldown_field => $dimension->{key_field},
+                drilldown_key => '__selecto_dimension_key_' . _field_alias($field),
+                drilldown_grouped => 0,
+            ) : ()),
         }
     } @{$state->groups};
-    my @groups = map { _group_expression($_, $state->group_configs->{$_->{field}} // {}) } @group_columns;
-    my @selections = map { $groups[$_]->as($group_columns[$_]{key}) } 0 .. $#group_columns;
+    my (@groups, @group_selections, @group_orders, @dimension_key_selections);
+    for my $column (@group_columns) {
+        if (my $dimension = $column->{dimension}) {
+            my $key = Selecto::Expression->field($dimension->{key_field});
+            my $display = $rollup
+                ? Selecto::Expression->dimension_display(
+                    $dimension->{display_field}, $dimension->{key_field}
+                )
+                : Selecto::Expression->min($dimension->{display_field});
+            push @groups, $key;
+            push @group_selections, $display->as($column->{key});
+            push @group_orders, $display;
+            push @dimension_key_selections, $key->as($column->{drilldown_key});
+        } else {
+            my $group = _group_expression(
+                $column, $state->group_configs->{$column->{field}} // {}
+            );
+            push @groups, $group;
+            push @group_selections, $group->as($column->{key});
+            push @group_orders, $group;
+        }
+    }
+    my @selections = @group_selections;
     my @measure_columns;
     for my $measure_id (@{$state->measures}) {
         my $measure = $config->measure($measure_id, $domain);
@@ -164,15 +272,16 @@ sub _aggregate ($class, $config, $domain, $state) {
         push @selections, $expression->as($measure_key);
     }
     my @columns = (@group_columns, @measure_columns);
-    my $rollup = $state->view eq 'aggregate' && @groups ? 1 : 0;
+    push @selections, @dimension_key_selections;
     my $rollup_key = '__selecto_rollup_grouping';
     push @selections, Selecto::Expression->grouping(\@groups)->as($rollup_key) if $rollup;
     my $query = Selecto::Query->new->select(@selections);
     $query = $rollup ? $query->group_by_rollup(\@groups) : $query->group_by(\@groups);
-    $query = _with_filters($query, $state);
-    $query = $query->order_by($_, 'asc') for @groups;
+    $query = _with_filters($query, $state, $config, $domain);
+    $query = $query->order_by($_, 'asc') for @group_orders;
     $query = $query->limit($state->limit)
-        ->offset(($state->page - 1) * $state->limit);
+        ->offset(($state->page - 1) * $state->limit)
+        if !exists($options->{paginate}) || $options->{paginate};
     $query = _with_query_library($query, $domain, $state);
     return {
         query => $query,
@@ -219,14 +328,20 @@ sub _bucket_measure_label ($label, $function, $alias, $index) {
 }
 
 sub _column_expression ($column) {
+    return Selecto::Expression->related_collection(
+        $column->{association},
+        [map { $_->{field} } @{$column->{nested_fields}}],
+    ) if $column->{nested};
+    my $field = _temporal_expression($column->{field}, $column->{source_type} // $column->{type});
     return $column->{format}
-        ? Selecto::Expression->datetime_format($column->{field}, $column->{format})
-        : Selecto::Expression->field($column->{field});
+        ? Selecto::Expression->datetime_format($field, $column->{format})
+        : $field;
 }
 
 sub _group_expression ($column, $config) {
     my $format = $config->{format} // '';
-    return Selecto::Expression->field($column->{field}) unless length($format) && $format ne 'default';
+    my $field = _temporal_expression($column->{field}, $column->{source_type} // $column->{type});
+    return $field unless length($format) && $format ne 'default';
     if ($format eq 'buckets' || $format eq 'age_buckets'
         || $format eq 'custom_buckets' || $format eq 'year_buckets') {
         my $kind = $format eq 'buckets' ? 'numeric_ranges'
@@ -235,38 +350,46 @@ sub _group_expression ($column, $config) {
         my $specification = Selecto::Components::BucketParser->specification(
             $config->{bucket_ranges}, $kind
         );
-        return Selecto::Expression->bucket($column->{field}, $specification);
+        return Selecto::Expression->bucket($field, $specification);
     }
     if ($format eq 'text_prefix') {
-        return Selecto::Expression->bucket($column->{field}, {
+        return Selecto::Expression->bucket($field, {
             kind => 'text_prefix',
             prefix_length => $config->{prefix_length} // 2,
             exclude_articles => $config->{exclude_articles} ? 1 : 0,
             ignore_case => 1,
         });
     }
-    return Selecto::Expression->datetime_format($column->{field}, $format);
+    return Selecto::Expression->datetime_format($field, $format);
 }
 
-sub _with_filters ($query, $state) {
+sub _temporal_expression ($field, $type) {
+    return Selecto::Expression->epoch_datetime($field)
+        if defined($type) && !ref($type) && lc("$type") eq 'epoch_datetime';
+    return Selecto::Expression->field($field);
+}
+
+sub _with_filters ($query, $state, $config, $domain) {
     my @expressions;
+    my $field_map = $config->field_map($domain);
     for my $filter (@{$state->filters}) {
         my ($field, $op, $value, $value_end) = @{$filter}{qw(field op value value_end)};
         next if $filter->{draft};
+        my $type = $field_map->{$field}{type};
         my $operand = $filter->{grouped}
-            ? _group_expression({field => $field}, $state->group_configs->{$field} // {})
-            : $field;
+            ? _group_expression({field => $field, type => $type}, $state->group_configs->{$field} // {})
+            : _temporal_expression($field, $type);
         my $expression;
         if ($op eq 'in') {
             my @values = grep { length } map { _trim($_) } split /,/, $value;
-            $expression = Selecto::Expression->in($field, \@values);
+            $expression = Selecto::Expression->in($operand, \@values);
         } elsif ($op eq 'between') {
-            $expression = Selecto::Expression->between($field, $value, $value_end);
+            $expression = Selecto::Expression->between($operand, $value, $value_end);
         } elsif ($op eq 'date_shortcut') {
             my ($start, $end) = Selecto::Components::DateShortcut->bounds($value);
             $expression = Selecto::Expression->all([
-                Selecto::Expression->gte($field, $start),
-                Selecto::Expression->lt($field, $end),
+                Selecto::Expression->gte($operand, $start),
+                Selecto::Expression->lt($operand, $end),
             ]);
         } elsif ($op eq 'is_null' || $op eq 'not_null') {
             $expression = Selecto::Expression->can($op)->('Selecto::Expression', $operand);
@@ -288,19 +411,12 @@ sub _with_query_library ($query, $domain, $state) {
     my %seen;
     @segments = grep { !$seen{$_}++ } @segments;
 
-    for my $segment (@segments) {
-        my $specs = Selecto::QueryLibrary->parameter_specs(
-            $domain, segments => [$segment],
-        );
-        my %params = map {
-            exists($state->query_library_parameters->{$_})
-                ? ($_ => $state->query_library_parameters->{$_}) : ()
-        } keys %$specs;
-        $query = Selecto::QueryLibrary->apply_segment(
-            $domain, $query, $segment, \%params,
-        );
-    }
-    return $query;
+    return Selecto::QueryLibrary->apply_segments(
+        $domain,
+        $query,
+        \@segments,
+        $state->query_library_parameters // {},
+    );
 }
 
 sub _field_alias ($field) {
@@ -313,6 +429,12 @@ sub _trim ($value) {
     $value = "$value";
     $value =~ s/\A\s+|\s+\z//g;
     return $value;
+}
+
+sub _humanize ($value) {
+    my $text = "$value";
+    $text =~ s/_/ /g;
+    return join ' ', map { ucfirst lc $_ } split /\s+/, $text;
 }
 
 1;
