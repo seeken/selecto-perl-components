@@ -70,12 +70,13 @@ a { color: inherit; }
 .sc-promoted-filters-heading > div { display: grid; gap: 2px; }
 .sc-promoted-filters-heading small { color: var(--sc-muted); font-size: .65rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .sc-promoted-filters-heading strong { font-size: .9rem; }
-.sc-promoted-filter-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.sc-promoted-filter-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 260px)); justify-content: start; }
 .sc-promoted-filter { background: #101719; border: 1px solid var(--sc-border); border-radius: 10px; display: grid; gap: 8px; min-width: 0; padding: 10px; }
 .sc-promoted-filter header { align-items: center; display: flex; gap: 8px; justify-content: space-between; }
 .sc-promoted-filter header strong { font-size: .78rem; }
 .sc-promoted-filter header small { color: var(--sc-muted); font-size: .65rem; font-weight: 700; }
 .sc-promoted-filter label { color: var(--sc-muted); display: grid; font-size: .72rem; font-weight: 700; gap: 4px; }
+.sc-promoted-filter-mode { color: var(--sc-accent) !important; }
 .sc-promoted-filter input, .sc-promoted-filter select { background: #0e1517; border: 1px solid var(--sc-border); border-radius: 8px; color: var(--sc-ink); min-height: 36px; padding: 7px 9px; width: 100%; }
 .sc-promoted-filter-range { display: grid; gap: 7px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .sc-promoted-filter-note { color: var(--sc-muted); font-size: .75rem; margin: 2px 0; }

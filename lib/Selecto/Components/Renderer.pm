@@ -5,7 +5,7 @@ use Mojo::JSON qw(encode_json);
 use Mojo::Util qw(url_escape xml_escape);
 use Selecto::Components::QueryLibrary ();
 
-my $ASSET_REVISION = '20260821-6';
+my $ASSET_REVISION = '20260821-8';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -351,8 +351,8 @@ sub _promoted_filter_header ($class, $model, $catalog) {
         return '' unless $field;
         '<article class="sc-promoted-filter" data-sc-promoted-filter data-field="' .
             _h($filter->{field}) . '"><header><strong>' . _h($field->{label}) .
-            '</strong><small>' . _h(_filter_operator_label($config, $field->{type}, $filter->{op})) .
-            '</small></header>' .
+            '</strong></header>' .
+            $class->_promoted_filter_mode_control($config, $field, $filter) .
             $class->_promoted_filter_value_controls($config, $field, $filter) . '</article>'
     } @promoted;
     return '' unless length($cards);
@@ -360,6 +360,17 @@ sub _promoted_filter_header ($class, $model, $catalog) {
         '<div><small>View filters</small><strong>Quick filters</strong></div>' .
         '<button class="sc-button sc-primary" type="submit" form="' . _h($form_id) .
         '">Run query</button></div><div class="sc-promoted-filter-grid">' . $cards . '</div></section>';
+}
+
+sub _promoted_filter_mode_control ($class, $config, $field, $filter) {
+    my $operator = $filter->{op};
+    my $options = join '', map {
+        '<option value="' . _h($_->[0]) . '"' . ($_->[0] eq $operator ? ' selected' : '') . '>' .
+            _h($_->[1]) . '</option>'
+    } @{$config->filter_operators($field->{type})};
+    return '<label class="sc-promoted-filter-mode">Match<select data-sc-promoted-filter-input="op" data-filter-field="' .
+        _h($field->{path}) . '" aria-label="Match mode for ' . _h($field->{label}) . '">' .
+        $options . '</select></label>';
 }
 
 sub _promoted_filter_value_controls ($class, $config, $field, $filter) {
@@ -406,11 +417,6 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter) {
     return '<label>Value<input type="' . $input_type . '"' . $step . ' value="' . _h($value) .
         '" placeholder="' . _h($placeholder) . '" data-sc-promoted-filter-input="value" data-filter-field="' .
         _h($field_name) . '" aria-label="Value for ' . _h($label) . '"></label>';
-}
-
-sub _filter_operator_label ($config, $type, $operator) {
-    my ($entry) = grep { $_->[0] eq $operator } @{$config->filter_operators($type)};
-    return $entry ? $entry->[1] : _humanize($operator);
 }
 
 sub _filter_summary_text ($label, $filter) {
