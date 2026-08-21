@@ -22,6 +22,22 @@ is_deeply $initial->fields,
     'configured detail fields become initial state';
 is_deeply $initial->groups, ['category.category_name'], 'configured group becomes initial state';
 
+my $promoted_filter = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    filter_field => 'category_id',
+    filter_op => 'eq',
+    filter_value => '7',
+    filter_promote_field => 'category_id',
+    measure => 'count',
+    order => 'product_name',
+});
+ok $promoted_filter->valid, 'a promoted filter produces valid explorer state';
+ok $promoted_filter->filters->[0]{promoted}, 'the selected filter is retained as promoted state';
+like join('&', @{$promoted_filter->query_pairs}), qr/filter_promote_field&category_id/,
+    'canonical query state retains promoted filters';
+
 my $library_view = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     query_library_view => 'low_stock_products',
