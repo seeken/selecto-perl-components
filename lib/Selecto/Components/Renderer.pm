@@ -5,7 +5,7 @@ use Mojo::JSON qw(encode_json);
 use Mojo::Util qw(url_escape xml_escape);
 use Selecto::Components::QueryLibrary ();
 
-my $ASSET_REVISION = '20260820-13';
+my $ASSET_REVISION = '20260821-5';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -791,15 +791,58 @@ sub _debug_query ($id, $title, $query) {
     return '<article class="sc-debug-query"><header><h4>' . _h($title) . '</h4>' .
         '<button class="sc-button sc-secondary" type="button" data-sc-debug-copy="' .
         _h($id) . '">Copy SQL</button></header><pre id="' . _h($id) .
-        '"><code>' . _h(_format_sql($query->{sql})) . '</code></pre>' .
+        '"><code class="sc-sql">' . _highlight_sql($query->{sql}) . '</code></pre>' .
         '<div class="sc-debug-parameter-block"><h5>Bound parameters</h5>' .
         $parameter_list . '</div></article>';
 }
 
 sub _format_sql ($sql) {
     my $formatted = "$sql";
+    $formatted =~ s/\s+/ /g;
     $formatted =~ s/\s+(FROM|(?:LEFT|RIGHT|FULL|INNER|CROSS) JOIN|WHERE|GROUP BY|ORDER BY|HAVING|LIMIT|OFFSET)\s+/\n$1 /gi;
+    $formatted =~ s/,\s*/,\n  /g;
+    $formatted =~ s/\s+(AND|OR)\s+/\n  $1 /gi;
+    $formatted =~ s/\s+ON\s+/\n  ON /gi;
     return $formatted;
+}
+
+sub _highlight_sql ($sql) {
+    my %keyword = map { $_ => 1 } qw(
+        ALL AND AS ASC BETWEEN BY CASE CROSS DESC DISTINCT ELSE END EXISTS
+        FALSE FETCH FIRST FROM FULL GROUP HAVING IN INNER INTERSECT IS JOIN
+        LEFT LIKE LIMIT NOT NULL NULLS OFFSET ON OR ORDER OUTER RIGHT SELECT
+        THEN TRUE UNION USING WHEN WHERE WITH
+    );
+    my $source = _format_sql($sql);
+    my $html = '';
+    while (length $source) {
+        if ($source =~ s/\A(--[^\n]*|\/\*.*?\*\/)//s) {
+            $html .= '<span class="sc-sql-comment">' . _h($1) . '</span>';
+        }
+        elsif ($source =~ s/\A('(?:''|[^'])*')//s) {
+            $html .= '<span class="sc-sql-string">' . _h($1) . '</span>';
+        }
+        elsif ($source =~ s/\A("(?:""|[^"])*")//s) {
+            $html .= '<span class="sc-sql-identifier">' . _h($1) . '</span>';
+        }
+        elsif ($source =~ s/\A(\$\d+)//) {
+            $html .= '<span class="sc-sql-parameter">' . _h($1) . '</span>';
+        }
+        elsif ($source =~ s/\A(\b\d+(?:\.\d+)?\b)//) {
+            $html .= '<span class="sc-sql-number">' . _h($1) . '</span>';
+        }
+        elsif ($source =~ s/\A(\b[A-Za-z_][A-Za-z0-9_]*\b)//) {
+            my $word = $1;
+            $html .= $keyword{uc $word}
+                ? '<span class="sc-sql-keyword">' . _h($word) . '</span>'
+                : _h($word);
+        }
+        else {
+            $source =~ s/\A(.)//s;
+            $html .= _h($1);
+        }
+    }
+    return $html;
 }
 
 sub _debug_parameter ($value) {
@@ -1004,7 +1047,7 @@ sub _table ($class, $result, $model) {
             }
             if ($column->{nested}) {
                 $cells .= '<td class="sc-nested-cell">' .
-                    _nested_table($column, $record->{$column->{key}}) . '</td>';
+                    _nested_table($column, $record->{$column->{key}}, $index == 0) . '</td>';
                 next;
             }
             if ($column->{measure}) {
@@ -1033,24 +1076,21 @@ sub _table ($class, $result, $model) {
     return '<div class="sc-table-wrap"><table><thead><tr>' . $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>';
 }
 
-sub _nested_table ($column, $value) {
-    return '<span class="sc-nested-empty">No data</span>'
-        unless ref($value) eq 'ARRAY' && @$value;
+sub _nested_table ($column, $value, $show_headers = 1) {
     my @fields = @{$column->{nested_fields} // []};
     return '<span class="sc-nested-empty">No data</span>' unless @fields;
-    my $head = join '', map {
+    my $head = $show_headers ? '<thead><tr>' . join('', map {
         '<th scope="col">' . _h($_->{label}) . '</th>'
-    } @fields;
-    my $rows = join '', map {
+    } @fields) . '</tr></thead>' : '';
+    my $rows = ref($value) eq 'ARRAY' && @$value ? join('', map {
         my $record = ref($_) eq 'HASH' ? $_ : {};
         '<tr>' . join('', map {
             my $cell = $record->{$_->{field}};
             my $display = ref($cell) ? encode_json($cell) : _display($cell);
             '<td>' . _html_display($_, $display) . '</td>'
         } @fields) . '</tr>'
-    } @$value;
-    return '<table class="sc-nested-table"><thead><tr>' . $head .
-        '</tr></thead><tbody>' . $rows . '</tbody></table>';
+    } @$value) : '<tr><td class="sc-nested-empty" colspan="' . scalar(@fields) . '">No data</td></tr>';
+    return '<table class="sc-nested-table">' . $head . '<tbody>' . $rows . '</tbody></table>';
 }
 
 sub _graph ($class, $result, $model) {

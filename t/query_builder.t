@@ -565,6 +565,13 @@ my $nested_html = Selecto::Components::Renderer->_table(
 );
 like $nested_html, qr{class="sc-nested-table"},
     'to-many data renders as an inline nested table';
+my $nested_body_without_headers = Selecto::Components::Renderer::_nested_table(
+    $collection_result->{columns}[1], $nested_records->[0]{__selecto_nested_variants}, 0,
+);
+unlike $nested_body_without_headers, qr{<thead>},
+    'subsequent nested tables omit their repeated child headers';
+like $nested_body_without_headers, qr{<td>SKU-A</td>},
+    'subsequent nested tables retain their full child values';
 like $nested_html,
     qr{<th scope="col">Sku</th>.*<td>SKU-A</td>.*1HGCM82633A<strong class="sc-vin-suffix">004352</strong>.*<td>VIN-2</td>}s,
     'the nested table renders every child row and applies its VIN formatter';
