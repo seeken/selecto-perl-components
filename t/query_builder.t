@@ -469,6 +469,35 @@ like $between_statement->sql, qr/"s0"\."created_on" BETWEEN \$1 AND \$2/,
 is_deeply $between_statement->params, ['2026-01-01', '2026-03-31'],
     'both date range values remain bound parameters';
 
+my $epoch_contract = $domain->contract;
+push @{$epoch_contract->{source}{fields}}, 'actual_pickup';
+$epoch_contract->{source}{columns}{actual_pickup} = {type => 'epoch_datetime'};
+my $epoch_domain = Selecto::Domain->parse($epoch_contract, strict => 1);
+my $epoch_state = Selecto::Components::State->from_input($config, $epoch_domain, {
+    q => 1,
+    view => 'detail',
+    field => 'actual_pickup',
+    field_format => 'month',
+    filter_field => 'actual_pickup',
+    filter_op => 'between',
+    filter_value => '2026-01-01T00:00',
+    filter_value_end => '2026-03-31T23:59',
+    order => 'actual_pickup',
+});
+ok $epoch_state->valid, 'epoch datetime fields accept date formatting and date filters';
+my $epoch_component_statement = $postgresql->compile(
+    $epoch_domain,
+    Selecto::Components::QueryBuilder->build($config, $epoch_domain, $epoch_state)->{query},
+);
+like $epoch_component_statement->sql,
+    qr/TO_CHAR\(TO_TIMESTAMP\("s0"\."actual_pickup"\), 'YYYY-MM'\) AS "actual_pickup"/,
+    'epoch detail columns apply the selected date format';
+like $epoch_component_statement->sql,
+    qr/TO_TIMESTAMP\("s0"\."actual_pickup"\) BETWEEN \$1 AND \$2/,
+    'epoch date range filters compare through a timestamp expression';
+is_deeply $epoch_component_statement->params, ['2026-01-01T00:00', '2026-03-31T23:59'],
+    'epoch date filter controls retain bound date-time values';
+
 my $shortcut_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'detail',
