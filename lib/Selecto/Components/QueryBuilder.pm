@@ -99,6 +99,44 @@ sub _detail ($class, $config, $domain, $state, $options) {
         (!$_->{format} && !$_->{nested} ? ($_->{field} => $_->{key}) : ())
     } @query_columns;
     my %used_key = map { $_->{key} => 1 } @query_columns;
+    my %action_row_details;
+    my $action_specs = $domain->actions;
+    for my $action_id (@action_ids) {
+        my $selection = ref($action_specs) eq 'HASH' && ref($action_specs->{$action_id}) eq 'HASH'
+            ? $action_specs->{$action_id}{selection} : undef;
+        next unless ref($selection) eq 'HASH' && ($selection->{mode} // '') eq 'groups'
+            && ref($selection->{row_details}) eq 'ARRAY';
+        my (@details, %seen_detail);
+        for my $detail (@{$selection->{row_details}}) {
+            next unless ref($detail) eq 'HASH';
+            my $id = defined($detail->{id}) && !ref($detail->{id}) ? "$detail->{id}" : '';
+            my $field = defined($detail->{field}) && !ref($detail->{field}) ? "$detail->{field}" : '';
+            next unless $id =~ /\A[a-z][a-z0-9_]*\z/ && !$seen_detail{$id}++
+                && $field =~ /\A[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\z/
+                && $field_map->{$field};
+            my $key = $query_key{$field};
+            unless (defined($key)) {
+                my $base_key = '__selecto_action_' . _field_alias($action_id) . '_' . _field_alias($id);
+                $key = $base_key;
+                my $suffix = 1;
+                $key = $base_key . '_' . ++$suffix while $used_key{$key};
+                push @query_columns, {
+                    key => $key,
+                    field => $field,
+                    label => $field_map->{$field}{label},
+                    type => $field_map->{$field}{type},
+                    format => '',
+                    hidden => 1,
+                };
+                $query_key{$field} = $key;
+                $used_key{$key} = 1;
+            }
+            my $label = defined($detail->{label}) && !ref($detail->{label})
+                ? "$detail->{label}" : _humanize($id);
+            push @details, {id => $id, label => $label, key => $key};
+        }
+        $action_row_details{$action_id} = \@details if @details;
+    }
     for my $column (grep { $_->{link} } @columns) {
         my $id_field = $column->{link}{id_field};
         my $link_key = $query_key{$id_field};
@@ -137,6 +175,7 @@ sub _detail ($class, $config, $domain, $state, $options) {
         query_columns => \@query_columns,
         action_key => $action_key,
         action_ids => \@action_ids,
+        action_row_details => \%action_row_details,
         count_selections => [Selecto::Expression->field($config->primary_key($domain))],
         graph => 0,
     };
