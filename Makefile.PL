@@ -8,7 +8,7 @@ WriteMakefile(
     VERSION_FROM     => 'lib/Selecto/Components.pm',
     ABSTRACT_FROM    => 'lib/Selecto/Components.pm',
     AUTHOR           => 'Chris Rohlfs',
-    LICENSE          => 'unrestricted',
+    LICENSE          => 'artistic_1',
     MIN_PERL_VERSION => '5.034',
     PM => {
         'lib/Selecto/Components.pm' => '$(INST_LIB)/Selecto/Components.pm',
@@ -45,6 +45,6 @@ WriteMakefile(
                 web  => 'https://github.com/seeken/selecto-perl-components',
             },
         },
-        x_license => 'O-Saasy',
+        x_license => 'Artistic-1.0',
     },
 );
