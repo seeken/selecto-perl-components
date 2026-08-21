@@ -935,7 +935,10 @@
     });
     if (!filterItem) return;
     var target = filterItem.querySelector('[name="filter_' + kind + '"]');
-    if (target) target.value = control.value;
+    if (target) {
+      target.value = control.value;
+      if (kind === "op") target.dispatchEvent(new Event("change", { bubbles: true }));
+    }
     updateFilterDraft(filterItem);
   }
 
