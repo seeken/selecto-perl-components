@@ -66,6 +66,7 @@ sub _detail ($class, $config, $domain, $state, $options) {
             field => $field,
             label => $column_config->{alias} || $field_map->{$field}{label},
             type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
+            source_type => $field_map->{$field}{type},
             format => $column_config->{format} // '',
             (defined($field_map->{$field}{link})
                 ? (link => {%{$field_map->{$field}{link}}}) : ()),
@@ -161,7 +162,7 @@ sub _detail ($class, $config, $domain, $state, $options) {
     my $query = Selecto::Query->new->select(map {
         _column_expression($_)->as($_->{key})
     } @query_columns);
-    $query = _with_filters($query, $state);
+    $query = _with_filters($query, $state, $config, $domain);
     for my $order (@{$state->orders}) {
         $query = $query->order_by($order->{field}, $order->{direction});
     }
@@ -194,6 +195,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             label => $column_config->{alias} || $field_map->{$field}{label},
             type => $dimension ? $dimension->{display_type}
                 : $column_config->{format} ? 'string' : $field_map->{$field}{type},
+            source_type => $field_map->{$field}{type},
             format => $column_config->{format} // '',
             (defined($field_map->{$field}{html_format})
                 ? (html_format => $field_map->{$field}{html_format}) : ()),
@@ -275,7 +277,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
     push @selections, Selecto::Expression->grouping(\@groups)->as($rollup_key) if $rollup;
     my $query = Selecto::Query->new->select(@selections);
     $query = $rollup ? $query->group_by_rollup(\@groups) : $query->group_by(\@groups);
-    $query = _with_filters($query, $state);
+    $query = _with_filters($query, $state, $config, $domain);
     $query = $query->order_by($_, 'asc') for @group_orders;
     $query = $query->limit($state->limit)
         ->offset(($state->page - 1) * $state->limit)
@@ -330,14 +332,16 @@ sub _column_expression ($column) {
         $column->{association},
         [map { $_->{field} } @{$column->{nested_fields}}],
     ) if $column->{nested};
+    my $field = _temporal_expression($column->{field}, $column->{source_type} // $column->{type});
     return $column->{format}
-        ? Selecto::Expression->datetime_format($column->{field}, $column->{format})
-        : Selecto::Expression->field($column->{field});
+        ? Selecto::Expression->datetime_format($field, $column->{format})
+        : $field;
 }
 
 sub _group_expression ($column, $config) {
     my $format = $config->{format} // '';
-    return Selecto::Expression->field($column->{field}) unless length($format) && $format ne 'default';
+    my $field = _temporal_expression($column->{field}, $column->{source_type} // $column->{type});
+    return $field unless length($format) && $format ne 'default';
     if ($format eq 'buckets' || $format eq 'age_buckets'
         || $format eq 'custom_buckets' || $format eq 'year_buckets') {
         my $kind = $format eq 'buckets' ? 'numeric_ranges'
@@ -346,38 +350,46 @@ sub _group_expression ($column, $config) {
         my $specification = Selecto::Components::BucketParser->specification(
             $config->{bucket_ranges}, $kind
         );
-        return Selecto::Expression->bucket($column->{field}, $specification);
+        return Selecto::Expression->bucket($field, $specification);
     }
     if ($format eq 'text_prefix') {
-        return Selecto::Expression->bucket($column->{field}, {
+        return Selecto::Expression->bucket($field, {
             kind => 'text_prefix',
             prefix_length => $config->{prefix_length} // 2,
             exclude_articles => $config->{exclude_articles} ? 1 : 0,
             ignore_case => 1,
         });
     }
-    return Selecto::Expression->datetime_format($column->{field}, $format);
+    return Selecto::Expression->datetime_format($field, $format);
 }
 
-sub _with_filters ($query, $state) {
+sub _temporal_expression ($field, $type) {
+    return Selecto::Expression->epoch_datetime($field)
+        if defined($type) && !ref($type) && lc("$type") eq 'epoch_datetime';
+    return Selecto::Expression->field($field);
+}
+
+sub _with_filters ($query, $state, $config, $domain) {
     my @expressions;
+    my $field_map = $config->field_map($domain);
     for my $filter (@{$state->filters}) {
         my ($field, $op, $value, $value_end) = @{$filter}{qw(field op value value_end)};
         next if $filter->{draft};
+        my $type = $field_map->{$field}{type};
         my $operand = $filter->{grouped}
-            ? _group_expression({field => $field}, $state->group_configs->{$field} // {})
-            : $field;
+            ? _group_expression({field => $field, type => $type}, $state->group_configs->{$field} // {})
+            : _temporal_expression($field, $type);
         my $expression;
         if ($op eq 'in') {
             my @values = grep { length } map { _trim($_) } split /,/, $value;
-            $expression = Selecto::Expression->in($field, \@values);
+            $expression = Selecto::Expression->in($operand, \@values);
         } elsif ($op eq 'between') {
-            $expression = Selecto::Expression->between($field, $value, $value_end);
+            $expression = Selecto::Expression->between($operand, $value, $value_end);
         } elsif ($op eq 'date_shortcut') {
             my ($start, $end) = Selecto::Components::DateShortcut->bounds($value);
             $expression = Selecto::Expression->all([
-                Selecto::Expression->gte($field, $start),
-                Selecto::Expression->lt($field, $end),
+                Selecto::Expression->gte($operand, $start),
+                Selecto::Expression->lt($operand, $end),
             ]);
         } elsif ($op eq 'is_null' || $op eq 'not_null') {
             $expression = Selecto::Expression->can($op)->('Selecto::Expression', $operand);
