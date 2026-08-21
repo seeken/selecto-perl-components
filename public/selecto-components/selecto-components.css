@@ -267,6 +267,9 @@ a { color: inherit; }
 .sc-group-action-card-header p { color: var(--sc-muted); font-size: .78rem; overflow-wrap: anywhere; }
 .sc-group-dialog-marker { align-items: center; display: inline-flex; flex: 0 0 38px; height: 38px; justify-content: center; width: 38px; }
 .sc-group-dialog-marker .sc-group-marker-glyph { height: 31px; width: 31px; }
+.sc-group-action-orders { display: grid; gap: 6px; list-style: none; margin: -2px 0 0; padding: 0; }
+.sc-group-action-orders li { align-items: baseline; color: var(--sc-muted); display: flex; flex-wrap: wrap; font-size: .84rem; gap: 7px; }
+.sc-group-action-orders strong { color: var(--sc-ink); }
 
 @media (max-width: 880px) {
   .sc-hero { align-items: start; flex-direction: column; }

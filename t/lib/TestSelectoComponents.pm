@@ -151,7 +151,10 @@ sub _domain {
                 selection => {
                     mode => 'groups',
                     palette => 'lucky_charms',
-                    max_groups => 4,
+                    max_groups => 6,
+                    row_details => [{
+                        id => 'stock', label => 'Stock', field => 'units_in_stock',
+                    }],
                     group_inputs => [{
                         id => 'carrier_id', label => 'Carrier ID', type => 'number',
                         required => 1, minimum => 1,
@@ -313,6 +316,7 @@ sub execute_query ($self, $statement) {
         my $row = [map {
                 $_ eq '__selecto_rollup_grouping' ? 0
                 : $_ eq '__selecto_action_target' ? 100 + $row_index
+                : $_ eq '__selecto_action_build_shipments_stock' ? 20 + $row_index
                 : /\A__selecto_link_/ ? 100 + $row_index
                 : $_ eq 'product_name' && $row_index == 1 ? '=2+2'
                 : /(?:count|price)\z/ ? (($_ eq 'count' ? 2 : 10) * $row_index)

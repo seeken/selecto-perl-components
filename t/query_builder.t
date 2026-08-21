@@ -128,6 +128,23 @@ is_deeply $action_only_statement->columns, ['__selecto_action_target'],
 like $action_only_statement->sql, qr/ORDER BY "s0"\."id" ASC/,
     'an action-only detail view remains deterministically ordered';
 
+my $grouped_action_only_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'action:build_shipments', measure => 'count',
+    limit => 25, page => 1,
+});
+my $grouped_action_only = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $grouped_action_only_state,
+);
+my $grouped_action_only_statement = $postgresql->compile(
+    $domain, $grouped_action_only->{query},
+);
+is_deeply $grouped_action_only_statement->columns, [
+    qw(__selecto_action_target __selecto_action_build_shipments_stock),
+], 'a grouped action fetches its declared hidden row detail';
+is_deeply $grouped_action_only->{action_row_details}{build_shipments}, [{
+    id => 'stock', label => 'Stock', key => '__selecto_action_build_shipments_stock',
+}], 'grouped action row details retain their renderer mapping';
+
 my $linked_detail_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1, view => 'detail', field => 'product_name', measure => 'count',
     order => 'product_name', limit => 25, page => 1,

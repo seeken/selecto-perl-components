@@ -5,7 +5,7 @@ use Mojo::JSON qw(encode_json);
 use Mojo::Util qw(url_escape xml_escape);
 use Selecto::Components::QueryLibrary ();
 
-my $ASSET_REVISION = '20260820-12';
+my $ASSET_REVISION = '20260820-13';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -976,11 +976,22 @@ sub _table ($class, $result, $model) {
                 my $target = $record->{$result->{action_key}};
                 my $action = $actions{$column->{action_id}};
                 if (($action->{selection}{mode} // 'rows') eq 'groups') {
+                    my $detail_specs = $result->{action_row_details}{$column->{action_id}} // [];
+                    my @row_details = map {
+                        +{
+                            id => $_->{id},
+                            label => $_->{label},
+                            value => defined($record->{$_->{key}}) && !ref($record->{$_->{key}})
+                                ? "$record->{$_->{key}}" : '',
+                        }
+                    } grep { ref($_) eq 'HASH' } @$detail_specs;
+                    my $row_details = @row_details
+                        ? ' data-sc-row-details="' . _h(encode_json(\@row_details)) . '"' : '';
                     $cells .= '<td class="sc-select-column sc-group-select-column" ' .
                         'data-sc-action-column="' . _h($column->{action_id}) . '"><div ' .
                         'class="sc-group-markers" data-sc-group-markers data-sc-action-id="' .
                         _h($column->{action_id}) . '" data-sc-row-id="' .
-                        _h(defined($target) ? $target : '') . '"></div></td>';
+                        _h(defined($target) ? $target : '') . '"' . $row_details . '></div></td>';
                 } else {
                     $cells .= '<td class="sc-select-column" data-sc-action-column="' .
                         _h($column->{action_id}) . '"><input type="checkbox" data-sc-row-select ' .

@@ -9,28 +9,22 @@ use Storable qw(dclone);
 
 my @LUCKY_CHARMS_MARKERS = (
     {
-        id => 'red_star', label => 'Red star', shape => 'star', color => '#dc2626',
+        id => 'pink_heart', label => 'Pink heart', shape => 'heart', color => '#ec4899',
     },
     {
-        id => 'green_circle', label => 'Green circle', shape => 'circle', color => '#16a34a',
+        id => 'orange_star', label => 'Orange star', shape => 'star', color => '#f97316',
     },
     {
-        id => 'purple_horseshoe', label => 'Purple horseshoe', shape => 'horseshoe', color => '#9333ea',
-    },
-    {
-        id => 'blue_moon', label => 'Blue moon', shape => 'moon', color => '#2563eb',
-    },
-    {
-        id => 'pink_heart', label => 'Pink heart', shape => 'heart', color => '#db2777',
+        id => 'yellow_moon', label => 'Yellow moon', shape => 'moon', color => '#eab308',
     },
     {
         id => 'green_clover', label => 'Green clover', shape => 'clover', color => '#22c55e',
     },
     {
-        id => 'orange_diamond', label => 'Orange diamond', shape => 'diamond', color => '#ea580c',
+        id => 'blue_diamond', label => 'Blue diamond', shape => 'diamond', color => '#2563eb',
     },
     {
-        id => 'sky_rainbow', label => 'Sky rainbow', shape => 'rainbow', color => '#0891b2',
+        id => 'purple_horseshoe', label => 'Purple horseshoe', shape => 'horseshoe', color => '#9333ea',
     },
 );
 
@@ -142,7 +136,26 @@ sub _normalize_selection ($class, $spec, $config, $controller, $action) {
         group_inputs => $class->_normalize_inputs(
             $spec->{group_inputs}, $config, $controller, $action,
         ),
+        row_details => $class->_normalize_row_details($spec->{row_details}),
     };
+}
+
+sub _normalize_row_details ($class, $specs) {
+    return [] unless ref($specs) eq 'ARRAY';
+    my (@details, %seen);
+    for my $spec (@$specs) {
+        next unless ref($spec) eq 'HASH';
+        my $id = _text($spec->{id});
+        my $field = _text($spec->{field});
+        next unless $id =~ /\A[a-z][a-z0-9_]*\z/ && !$seen{$id}++;
+        next unless $field =~ /\A[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\z/;
+        push @details, {
+            id => $id,
+            field => $field,
+            label => _text($spec->{label}) || _humanize($id),
+        };
+    }
+    return \@details;
 }
 
 sub _normalize_inputs ($class, $specs, $config, $controller, $action) {

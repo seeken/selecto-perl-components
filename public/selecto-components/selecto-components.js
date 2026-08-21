@@ -1156,12 +1156,27 @@
     return actionControls(results, "[data-sc-group-markers]", actionIdFor(root));
   }
 
+  function groupedRowDetails(cell) {
+    try {
+      var details = JSON.parse(cell.dataset.scRowDetails || "[]");
+      return Array.isArray(details) ? details.filter(function (detail) {
+        return detail && typeof detail === "object";
+      }) : [];
+    } catch (_error) {
+      return [];
+    }
+  }
+
   function selectedGroupedRows(root) {
     var state = groupedActionState(root);
     return groupedActionRows(root).reduce(function (rows, cell) {
       var rowId = cell.dataset.scRowId;
       if (rowId && Object.prototype.hasOwnProperty.call(state.assignments, rowId)) {
-        rows.push({id: rowId, index: state.assignments[rowId]});
+        rows.push({
+          id: rowId,
+          index: state.assignments[rowId],
+          details: groupedRowDetails(cell)
+        });
       }
       return rows;
     }, []);
@@ -1177,10 +1192,12 @@
           index: row.index,
           marker: markers[row.index],
           selected_ids: [],
+          orders: [],
           inputs: state.inputs[row.index] || Object.create(null)
         };
       }
       byIndex[row.index].selected_ids.push(row.id);
+      byIndex[row.index].orders.push(row);
     });
     return Object.keys(byIndex).map(Number).sort(function (left, right) {
       return left - right;
@@ -1507,12 +1524,31 @@
       var heading = document.createElement("div");
       var title = document.createElement("h4");
       title.textContent = group.marker.label + " load";
-      var rows = document.createElement("p");
-      rows.textContent = group.selected_ids.length + (group.selected_ids.length === 1 ? " order: " : " orders: ") +
-        group.selected_ids.join(", ");
-      heading.append(title, rows);
+      var summary = document.createElement("p");
+      summary.textContent = group.selected_ids.length +
+        (group.selected_ids.length === 1 ? " order" : " orders");
+      heading.append(title, summary);
       header.append(marker, heading);
       card.appendChild(header);
+
+      var orders = document.createElement("ul");
+      orders.className = "sc-group-action-orders";
+      group.orders.forEach(function (order) {
+        var item = document.createElement("li");
+        var orderId = document.createElement("strong");
+        orderId.textContent = "Order " + order.id;
+        item.appendChild(orderId);
+        var locations = (order.details || []).map(function (detail) {
+          return detail.value === undefined || detail.value === null ? "" : String(detail.value);
+        }).filter(function (value) { return value.length > 0; });
+        if (locations.length) {
+          var route = document.createElement("span");
+          route.textContent = locations.join(" \u2192 ");
+          item.appendChild(route);
+        }
+        orders.appendChild(item);
+      });
+      card.appendChild(orders);
 
       specs.forEach(function (spec) {
         var label = document.createElement("label");

@@ -308,8 +308,9 @@ target against the current tenant/user and for transaction, audit, and
 business-rule behavior inside the handler.
 
 An action can instead group rows before it runs. The built-in `lucky_charms`
-palette starts with a red star and green circle, then exposes a new distinct
-shape as each group is created. A selected row displays only its filled marker;
+palette uses pink hearts, orange stars, yellow moons, green clovers, blue
+diamonds, and purple horseshoes in that order, exposing a new distinct shape as
+each group is created. A selected row displays only its filled marker;
 clicking it again unassigns the row and restores the available outlines. The
 result table keeps rows with the same marker adjacent, orders marker groups by
 palette order, and retains the original query order within each group and among
@@ -323,7 +324,11 @@ load_build => {
     selection => {
         mode => 'groups',
         palette => 'lucky_charms',
-        max_groups => 8,
+        max_groups => 6,
+        row_details => [
+            {id => 'origin', label => 'Origin', field => 'origin.city'},
+            {id => 'destination', label => 'Destination', field => 'destination.city'},
+        ],
         group_inputs => [{
             id => 'carrier_id', label => 'Carrier ID', type => 'number',
             required => 1, minimum => 1,
@@ -337,7 +342,9 @@ load_build => {
 The handler receives normalized `selected_ids` plus `groups`, ordered by marker
 index. Each group has its trusted server-resolved `marker`, its own
 `selected_ids`, and normalized `inputs`. The browser cannot submit custom
-marker colors, shapes, or labels.
+marker colors, shapes, or labels. `row_details` are governed hidden fields
+shown beside each selected row in the confirmation card; they are display-only
+and are not submitted to the handler.
 
 The plugin adds its packaged `public/` directory to Mojolicious static paths.
 The htmx runtime and WebSocket extension are served locally; the browser does
