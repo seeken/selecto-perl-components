@@ -937,9 +937,35 @@
     var target = filterItem.querySelector('[name="filter_' + kind + '"]');
     if (target) {
       target.value = control.value;
-      if (kind === "op") target.dispatchEvent(new Event("change", { bubbles: true }));
+      if (kind === "op") {
+        target.dispatchEvent(new Event("change", { bubbles: true }));
+        refreshPromotedFilterValues(control, filterItem);
+      }
     }
     updateFilterDraft(filterItem);
+  }
+
+  function refreshPromotedFilterValues(control, filterItem) {
+    var card = control && control.closest("[data-sc-promoted-filter]");
+    var source = filterItem && filterItem.querySelector("[data-sc-filter-values]");
+    var current = card && card.querySelector("[data-sc-promoted-filter-values]");
+    if (!card || !source || !current) return;
+    var replacement = document.createElement("div");
+    replacement.setAttribute("data-sc-promoted-filter-values", "");
+    replacement.appendChild(source.cloneNode(true));
+    replacement.querySelectorAll("input, select, textarea").forEach(function (input) {
+      var name = input.getAttribute("name");
+      if (input.type === "hidden") {
+        input.remove();
+        return;
+      }
+      if (name === "filter_value" || name === "filter_value_end") {
+        input.removeAttribute("name");
+        input.dataset.scPromotedFilterInput = name === "filter_value_end" ? "value_end" : "value";
+        input.dataset.filterField = control.dataset.filterField;
+      }
+    });
+    current.replaceWith(replacement);
   }
 
   function promotedFilterBuilder(control) {

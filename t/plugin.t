@@ -71,9 +71,9 @@ $t->get_ok('/explore/products')
     ->content_like(qr{hx-ws:send})
     ->content_like(qr{/selecto-components/htmx\.min\.js})
     ->content_like(qr{/selecto-components/hx-ws\.min\.js})
-    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260821-8})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260821-8})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260821-8})
+    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260821-9})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260821-9})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260821-9})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')
@@ -417,6 +417,11 @@ $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_pric
     ->element_exists('[data-sc-promoted-filter][data-field="unit_price"] input[data-sc-promoted-filter-input="value"][value="12.50"]')
     ->element_exists('[data-sc-filter-set-item][data-field="unit_price"] input[name="filter_promote_field"][value="unit_price"][checked]')
     ->element_exists('button[form="selecto-query-products"][type="submit"]');
+
+$t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=between&filter_value=12.50&filter_value_end=19.50&filter_promote_field=unit_price')
+    ->status_is(200)
+    ->element_exists('[data-sc-promoted-filter][data-field="unit_price"] input[data-sc-promoted-filter-input="value"][value="12.50"]')
+    ->element_exists('[data-sc-promoted-filter][data-field="unit_price"] input[data-sc-promoted-filter-input="value_end"][value="19.50"]');
 
 $t->get_ok('/explore/products?q=1&view=detail&field=created_on&field_alias=Created+month&field_format=month&field=product_name&field_alias=&field_format=&group=created_on&group_alias=Month&group_format=month&measure=count&order=created_on&direction=desc&order=product_name&direction=asc&limit=25&page=1')
     ->status_is(200)
