@@ -5,7 +5,7 @@ use Mojo::JSON qw(encode_json);
 use Mojo::Util qw(url_escape xml_escape);
 use Selecto::Components::QueryLibrary ();
 
-my $ASSET_REVISION = '20260821-8';
+my $ASSET_REVISION = '20260821-9';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -353,7 +353,8 @@ sub _promoted_filter_header ($class, $model, $catalog) {
             _h($filter->{field}) . '"><header><strong>' . _h($field->{label}) .
             '</strong></header>' .
             $class->_promoted_filter_mode_control($config, $field, $filter) .
-            $class->_promoted_filter_value_controls($config, $field, $filter) . '</article>'
+            '<div data-sc-promoted-filter-values>' .
+            $class->_promoted_filter_value_controls($config, $field, $filter) . '</div></article>'
     } @promoted;
     return '' unless length($cards);
     return '<section class="sc-promoted-filters" data-sc-promoted-filters><div class="sc-promoted-filters-heading">' .
