@@ -885,10 +885,56 @@ sub _debug_query ($id, $title, $query) {
 sub _format_sql ($sql) {
     my $formatted = "$sql";
     $formatted =~ s/\s+/ /g;
+    $formatted = _break_top_level_commas($formatted);
     $formatted =~ s/\s+(FROM|(?:LEFT|RIGHT|FULL|INNER|CROSS) JOIN|WHERE|GROUP BY|ORDER BY|HAVING|LIMIT|OFFSET)\s+/\n$1 /gi;
-    $formatted =~ s/,\s*/,\n  /g;
     $formatted =~ s/\s+(AND|OR)\s+/\n  $1 /gi;
     $formatted =~ s/\s+ON\s+/\n  ON /gi;
+    return $formatted;
+}
+
+sub _break_top_level_commas ($sql) {
+    my ($depth, $single_quote, $double_quote) = (0, 0, 0);
+    my $formatted = '';
+    for (my $index = 0; $index < length($sql); $index++) {
+        my $character = substr($sql, $index, 1);
+        my $next = $index + 1 < length($sql) ? substr($sql, $index + 1, 1) : '';
+        $formatted .= $character;
+        if ($single_quote) {
+            if ($character eq q{'}) {
+                if ($next eq q{'}) {
+                    $formatted .= $next;
+                    $index++;
+                } else {
+                    $single_quote = 0;
+                }
+            }
+            next;
+        }
+        if ($double_quote) {
+            if ($character eq q{"}) {
+                if ($next eq q{"}) {
+                    $formatted .= $next;
+                    $index++;
+                } else {
+                    $double_quote = 0;
+                }
+            }
+            next;
+        }
+        if ($character eq q{'}) {
+            $single_quote = 1;
+        } elsif ($character eq q{"}) {
+            $double_quote = 1;
+        } elsif ($character eq '(') {
+            $depth++;
+        } elsif ($character eq ')') {
+            $depth-- if $depth;
+        } elsif ($character eq ',' && !$depth) {
+            $index++ while $index + 1 < length($sql)
+                && substr($sql, $index + 1, 1) =~ /\s/;
+            $formatted .= "\n  ";
+        }
+    }
     return $formatted;
 }
 

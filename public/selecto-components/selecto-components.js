@@ -73,6 +73,29 @@
     if (pending) pending.hidden = false;
   }
 
+  function showResultsLoading(form) {
+    var workspace = form && form.closest("[data-sc-workspace]");
+    var results = workspace && workspace.querySelector(".sc-results");
+    if (!results) return;
+    destroyChartsWithin(results);
+    results.setAttribute("aria-busy", "true");
+
+    var loading = document.createElement("div");
+    loading.className = "sc-results-loading";
+    loading.dataset.scResultsLoading = "true";
+    loading.setAttribute("role", "status");
+
+    var spinner = document.createElement("span");
+    spinner.className = "sc-results-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    var message = document.createElement("strong");
+    message.textContent = "Running query…";
+    var detail = document.createElement("span");
+    detail.textContent = "Loading the new result set";
+    loading.append(spinner, message, detail);
+    results.replaceChildren(loading);
+  }
+
   function stageResultView(root, view) {
     if (!root) return;
     var mode = view === "detail" ? "detail" : "summary";
@@ -246,6 +269,7 @@
   window.addEventListener("submit", function (event) {
     var form = event.target.closest("[data-sc-builder]");
     if (!form) return;
+    showResultsLoading(form);
     setBuilderTrayCollapsed(form.closest("[data-sc-builder-shell]"), true);
     var connection = document.querySelector("[data-selecto-connection]");
     if (connection && connection.classList.contains("is-live")) return;
