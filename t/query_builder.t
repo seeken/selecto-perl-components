@@ -63,6 +63,35 @@ eval { $config->field_catalog($unknown_html_format_domain) };
 like $@, qr/must be vin_last_six/,
     'unrecognized domain HTML formatters are rejected instead of rendering raw HTML';
 
+my $curated_contract = $domain->contract;
+$curated_contract->{source}{columns}{id}{internal} = 1;
+$curated_contract->{source}{columns}{product_name}{label} = 'Product';
+$curated_contract->{schemas}{categories}{columns}{id}{internal} = 1;
+my $curated_domain = Selecto::Domain->parse($curated_contract, strict => 1);
+ok !$config->field_map($curated_domain)->{id},
+    'internal root fields are omitted from the public field catalog';
+ok !$config->field_map($curated_domain)->{'category.id'},
+    'internal association fields are omitted from the public field catalog';
+is $config->field_map($curated_domain)->{product_name}{label}, 'Product',
+    'canonical labels replace generated picker labels';
+is $config->query_field_map($curated_domain)->{id}{type}, 'integer',
+    'internal fields remain available for governed query dependencies';
+my $curated_state = Selecto::Components::State->from_input(
+    $config, $curated_domain,
+    {
+        q => 1, view => 'detail',
+        field => ['action:add_product_note', 'product_name'],
+        limit => 25, page => 1,
+    },
+);
+my $curated_result = Selecto::Components::QueryBuilder->build(
+    $config, $curated_domain, $curated_state,
+);
+is $curated_result->{action_key}, '__selecto_action_target',
+    'an internal primary key still backs selected-row actions';
+is $curated_result->{columns}[1]{link_key}, '__selecto_action_target',
+    'an internal primary key still backs governed object links';
+
 my $detail_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'detail',
