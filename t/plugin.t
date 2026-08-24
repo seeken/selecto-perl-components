@@ -333,6 +333,11 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/data-sc-builder-panel/)
     ->content_like(qr/htmx:after:swap/)
     ->content_like(qr/markBuilderDirty/)
+    ->content_like(qr/function showResultsLoading/)
+    ->content_like(qr/showResultsLoading\(form\)/)
+    ->content_like(qr/showResultsLoading\(form\);\s*setBuilderTrayCollapsed/s)
+    ->content_like(qr/results\.replaceChildren\(loading\)/)
+    ->content_like(qr/Running query/)
     ->content_like(qr/stageResultView/)
     ->content_like(qr/hiddenFilterValue\("filter_group", "0"\)/)
     ->content_like(qr/dateFormats/)
@@ -379,6 +384,9 @@ $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-table-wrap\s*>\s*table\s*>\s*thead\s*>\s*tr\s*>\s*th:first-child/)
     ->content_like(qr/\.sc-table-wrap\s*>\s*table\s*>\s*tbody\s*>\s*tr\s*>\s*td:first-child/)
     ->content_like(qr/\.sc-results\s*\{[^}]*overflow:\s*visible/s)
+    ->content_like(qr/\.sc-results-loading/)
+    ->content_like(qr/\.sc-results-spinner/)
+    ->content_like(qr/animation:\s*sc-results-spin/)
     ->content_like(qr/\.sc-table-wrap\s*\{[^}]*overflow:\s*visible/s)
     ->content_like(qr/\.sc-table-wrap\s*>\s*table\s*\{[^}]*width:\s*max-content/s)
     ->content_like(qr/\.sc-sql-keyword/)
@@ -394,6 +402,17 @@ $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/cubic-bezier\(\.22,\s*1,\s*\.36,\s*1\)/)
     ->content_like(qr/\@property\s+--sc-tray-width/)
     ->content_unlike(qr/max-height:\s*calc\(100vh/);
+
+my $formatted_membership_sql = Selecto::Components::Renderer::_format_sql(
+    'SELECT "s0"."id", "s0"."parent_id" FROM "client_profile" AS "s0" ' .
+    'WHERE "s0"."parent_id" IN ($1, $2, $3) ORDER BY "s0"."id", "s0"."parent_id"',
+);
+like $formatted_membership_sql, qr/"id",\n  "s0"\."parent_id"/,
+    'debug SQL still separates top-level selected fields';
+like $formatted_membership_sql, qr/IN \(\$1, \$2, \$3\)/,
+    'debug SQL keeps an IN parameter list compact';
+unlike $formatted_membership_sql, qr/IN \(\$1,\n/,
+    'debug SQL does not put every membership parameter on its own line';
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
     ->status_is(200)
