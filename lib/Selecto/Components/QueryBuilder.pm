@@ -16,7 +16,7 @@ sub build ($class, $config, $domain, $state, $options = undef) {
 }
 
 sub _detail ($class, $config, $domain, $state, $options) {
-    my $field_map = $config->field_map($domain);
+    my $field_map = $config->query_field_map($domain);
     my $detail_map = $config->detail_column_map($domain);
     my (@columns, %nested_column);
     for my $field (@{$state->fields}) {

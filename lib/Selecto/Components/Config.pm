@@ -197,28 +197,33 @@ sub primary_key ($self, $domain) {
     return "$primary_key";
 }
 
-sub field_catalog ($self, $domain) {
+sub field_catalog ($self, $domain, $options = undef) {
+    $options //= {};
+    die "field catalog options must be an object\n" unless ref($options) eq 'HASH';
+    my $include_internal = $options->{include_internal} ? 1 : 0;
     my @catalog;
     my $fields = $domain->fields;
     my ($dimensions_by_key, $dimensions_by_display) = _star_dimensions($domain);
     my $contract = $domain->contract;
     my $source = ref($contract) eq 'HASH' && ref($contract->{source}) eq 'HASH'
         ? $contract->{source} : {};
-    push @catalog, map {
-        my $path = $_;
+    for my $path (sort keys %$fields) {
+        next if !$include_internal && !$domain->field_is_public($path);
         my $link = _field_link($domain, $path, $source->{columns}{$path});
         my $html_format = _field_html_format($path, $source->{columns}{$path});
+        my $label = _field_label($path, $source->{columns}{$path});
         my $dimension = $dimensions_by_key->{$path};
-        {
+        push @catalog, {
             path => $path,
-            label => $dimension ? $dimension->{label} : _humanize($path),
+            label => $dimension ? $dimension->{label} : $label,
             type => $fields->{$path},
             association => undef,
+            internal => $domain->field_is_public($path) ? 0 : 1,
             (defined($link) ? (link => $link) : ()),
             (defined($html_format) ? (html_format => $html_format) : ()),
             ($dimension ? (dimension => {%$dimension}) : ()),
-        }
-    } sort keys %$fields;
+        };
+    }
     my $associations = $domain->associations;
     for my $association_name (sort keys %$associations) {
         my $association = $associations->{$association_name};
@@ -230,9 +235,9 @@ sub field_catalog ($self, $domain) {
         my $schema = defined($queryable) && ref($contract) eq 'HASH'
             && ref($contract->{schemas}) eq 'HASH'
             ? $contract->{schemas}{$queryable} : undef;
-        push @catalog, map {
-            my $field = $_;
+        for my $field (sort keys %$association_fields) {
             my $path = "$association_name.$field";
+            next if !$include_internal && !$domain->field_is_public($path);
             my $link = _field_link(
                 $domain,
                 $path,
@@ -243,17 +248,24 @@ sub field_catalog ($self, $domain) {
                 ref($schema) eq 'HASH' ? $schema->{columns}{$field} : undef,
             );
             my $dimension = $dimensions_by_display->{$path};
-            {
+            my $field_label = _field_label(
+                $path,
+                ref($schema) eq 'HASH' ? $schema->{columns}{$field} : undef,
+                _humanize($field),
+            );
+            my $label = _humanize($association_name) . ' - ' . $field_label;
+            push @catalog, {
                 path => $path,
-                label => _humanize($association_name) . ' · ' . _humanize($field),
+                label => $dimension ? $dimension->{label} : $label,
                 type => $association_fields->{$field},
                 association => $association_name,
+                internal => $domain->field_is_public($path) ? 0 : 1,
                 denormalizing => $association->cardinality eq 'many' ? 1 : 0,
                 (defined($link) ? (link => $link) : ()),
                 (defined($html_format) ? (html_format => $html_format) : ()),
                 ($dimension ? (dimension => {%$dimension}) : ()),
-            }
-        } sort keys %$association_fields;
+            };
+        }
     }
     return \@catalog;
 }
@@ -315,8 +327,25 @@ sub _field_html_format ($path, $column) {
     return "$format";
 }
 
+sub _field_label ($path, $column, $fallback = undef) {
+    $fallback //= _humanize($path);
+    return $fallback unless ref($column) eq 'HASH' && exists($column->{label});
+    my $label = $column->{label};
+    die "label for $path must be a non-empty scalar no longer than 80 characters\n"
+        if !defined($label) || ref($label) || !length("$label") || length("$label") > 80
+        || "$label" =~ /[\x00-\x1f\x7f]/;
+    return "$label";
+}
+
 sub field_map ($self, $domain) {
     return { map { $_->{path} => { %$_ } } @{$self->field_catalog($domain)} };
+}
+
+sub query_field_map ($self, $domain) {
+    return {
+        map { $_->{path} => { %$_ } }
+        @{$self->field_catalog($domain, {include_internal => 1})}
+    };
 }
 
 sub resolved_default_fields ($self, $domain) {
