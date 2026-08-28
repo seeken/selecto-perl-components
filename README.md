@@ -6,8 +6,7 @@ native [`selecto-perl`](https://github.com/seeken/selecto-perl): Selecto owns th
 domain, immutable query, adapter compilation, bound values, and execution;
 this package owns validated browser state, HTML, WebSockets, and assets.
 
-This is alpha software. Its browser transport is pinned to htmx
-`4.0.0-beta6`, which is itself a prerelease.
+This is alpha software. Its browser transport is pinned to htmx `4.0.0`.
 
 ## Current surface
 
@@ -84,10 +83,11 @@ The URL query string is canonical by default. A WebSocket is only a faster
 transport for the same state:
 
 1. A direct `GET /explore/products?...` normalizes and validates query params.
-2. The form sends the same named fields over htmx 4 as `{headers, body}` JSON.
+2. The form sends the same named fields over htmx 4 as top-level JSON values,
+   alongside the reserved `headers` object.
 3. The server runs the same state parser and Selecto query builder.
-4. It returns a correlated JSON message containing server-rendered HTML and a
-   canonical URL.
+4. It returns a JSON message containing server-rendered HTML and a canonical
+   URL.
 5. htmx swaps only the Explorer surface; a tiny local script calls
    `history.replaceState` with the canonical URL.
 
@@ -376,16 +376,18 @@ merely changing the display label.
 
 ## htmx 4 boundary
 
-The vendored assets are exactly `htmx.org@4.0.0-beta6`:
+The vendored assets are exactly `htmx.org@4.0.0`:
 
 | Asset | SHA-256 |
 | --- | --- |
-| `htmx.min.js` | `28fae7bbe8e8142b702debb9d5234a9a436d9435a4b5165b195aa1a7ed840d25` |
-| `hx-ws.min.js` | `b20cdc95e0bc9ab49f8ab581251bb32cc96d7eaa2e68d1405114cee57b1eff7e` |
+| `htmx.min.js` | `e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f` |
+| `hx-ws.min.js` | `a7c11e4eca05417d6299bb40aaacca01572e44605389fc4d5ef12be408a4d03b` |
 
 The UI uses the htmx 4 names `hx-ws:connect` and `hx-ws:send`. Incoming server
-messages set `content`, `target`, `swap`, and `HX-Request-ID` according to the
-[official htmx 4 WebSocket extension contract](https://four.htmx.org/extensions/hx-ws).
+messages set `content`, `target`, and `swap` according to the
+[official htmx 4 WebSocket extension contract](https://htmx.org/extensions/hx-ws),
+with application metadata under `selecto`. Browser listeners use the final
+`htmx:ws:*` lifecycle events and the asynchronous message JSON API.
 Do not substitute the htmx 2 `ws-connect` protocol without changing the server
 message and tests.
 
@@ -483,5 +485,4 @@ security, or performance.
 - persisted saved-view stores and sharing policy;
 - emailed and scheduled exports;
 - dashboards, extension view packages, maps, and custom visual encodings;
-- push broadcasts from external data changes; and
-- compatibility with htmx 4 final until that release exists and is tested.
+- push broadcasts from external data changes.

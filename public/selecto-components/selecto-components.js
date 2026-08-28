@@ -70,7 +70,7 @@
     if (!root) return;
     root.classList.add("is-dirty");
     var pending = root.querySelector("[data-sc-builder-pending]");
-    if (pending) pending.hidden = false;
+    if (pending) pending.textContent = "Pending changes";
   }
 
   function showResultsLoading(form) {
@@ -252,7 +252,7 @@
     restoreCharts();
   });
 
-  document.addEventListener("htmx:after:ws:connection", function () {
+  document.addEventListener("htmx:ws:after:connection", function () {
     document.querySelectorAll("[data-selecto-connection]").forEach(function (node) {
       node.textContent = "Live";
       node.classList.add("is-live");
@@ -283,11 +283,15 @@
     HTMLFormElement.prototype.submit.call(form);
   }, true);
 
-  document.addEventListener("htmx:after:ws:message", function (event) {
-    var message = event.detail && event.detail.message && event.detail.message.json;
-    var nextUrl = message && message.selecto && message.selecto.url;
-    if (typeof nextUrl === "string" && nextUrl.charAt(0) === "/") {
-      window.history.replaceState({selecto: true}, "", nextUrl);
+  document.addEventListener("htmx:ws:after:message:incoming", function (event) {
+    var incoming = event.detail && event.detail.message;
+    if (incoming && typeof incoming.json === "function") {
+      incoming.json().then(function (message) {
+        var nextUrl = message && message.selecto && message.selecto.url;
+        if (typeof nextUrl === "string" && nextUrl.charAt(0) === "/") {
+          window.history.replaceState({selecto: true}, "", nextUrl);
+        }
+      }).catch(function () {});
     }
     window.requestAnimationFrame(function () {
       restoreBuilderTabs();
@@ -1550,7 +1554,7 @@
 
   document.addEventListener("DOMContentLoaded", restoreBulkActions);
   document.addEventListener("htmx:after:swap", restoreBulkActions);
-  document.addEventListener("htmx:after:ws:message", function () {
+  document.addEventListener("htmx:ws:after:message:incoming", function () {
     window.requestAnimationFrame(restoreBulkActions);
   });
 
