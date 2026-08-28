@@ -1,10 +1,10 @@
 # Third-party notices
 
-## htmx 4.0.0-beta6
+## htmx 4.0.0
 
 The files `public/selecto-components/htmx.min.js` and
 `public/selecto-components/hx-ws.min.js` are vendored from the `htmx.org`
-package, version `4.0.0-beta6`.
+package, version `4.0.0`.
 
 Zero-Clause BSD
 

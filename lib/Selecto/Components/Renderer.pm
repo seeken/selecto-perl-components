@@ -5,7 +5,7 @@ use Mojo::JSON qw(encode_json);
 use Mojo::Util qw(url_escape xml_escape);
 use Selecto::Components::QueryLibrary ();
 
-my $ASSET_REVISION = '20260821-9';
+my $ASSET_REVISION = '20260828-2';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -16,13 +16,14 @@ sub page ($class, $model) {
         '<meta name="viewport" content="width=device-width,initial-scale=1">' .
         '<title>' . $title . '</title>' .
         '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' . $ASSET_REVISION . '">' .
-        '<script defer src="/selecto-components/htmx.min.js"></script>' .
-        '<script defer src="/selecto-components/hx-ws.min.js"></script>' .
+        '<script defer src="/selecto-components/htmx.min.js?v=' . $ASSET_REVISION . '"></script>' .
+        '<script defer src="/selecto-components/hx-ws.min.js?v=' . $ASSET_REVISION . '"></script>' .
         '<script defer src="/selecto-components/chart.umd.min.js?v=' . $ASSET_REVISION . '"></script>' .
         '<script defer src="/selecto-components/selecto-components.js?v=' . $ASSET_REVISION . '"></script>' .
         '</head><body><main class="sc-page"><div class="sc-shell">' .
         '<header class="sc-masthead">' .
-        '<span class="sc-connection" data-selecto-connection>Connecting</span></header>' .
+        '<span class="sc-connection" data-selecto-connection role="status" aria-live="polite" ' .
+        'aria-atomic="true">Connecting</span></header>' .
         '<section id="selecto-channel-' . _h($config->id) . '" hx-ws:connect="' . $ws_path . '" hx-swap="none">' .
         $surface . '</section></div></main></body></html>';
 }
@@ -89,15 +90,13 @@ sub _format_url ($canonical_url, $format) {
     return $canonical_url . $separator . 'format=' . $format;
 }
 
-sub websocket_message ($class, $model, $request_id = undef) {
-    my $message = {
+sub websocket_message ($class, $model) {
+    return {
         content => $class->surface($model),
         target => '#selecto-surface-' . $model->{config}->id,
         swap => 'outerHTML',
         selecto => { url => $model->{canonical_url} },
     };
-    $message->{'HX-Request-ID'} = "$request_id" if defined($request_id) && !ref($request_id);
-    return $message;
 }
 
 sub _form ($class, $model, $catalog, $detail_catalog = undef) {
@@ -183,7 +182,7 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         _hidden('query_signature', $state->query_signature) .
         $query_summary . $view_panel . $filter_panel .
         '<div class="sc-builder-apply-note"><span>Changes apply only when you run the query.</span>' .
-        '<strong data-sc-builder-pending hidden>Pending changes</strong></div>' .
+        '<strong data-sc-builder-pending role="status" aria-live="polite" aria-atomic="true"></strong></div>' .
         '<div class="sc-control-row"><label>Rows<select name="limit">' . _limit_options($state, $config) . '</select></label>' .
         '<label>Page<input name="page" inputmode="numeric" value="' . _h($state->page) . '"></label></div>' .
         '<button class="sc-button sc-primary" type="submit">Run query</button>' .
@@ -1013,6 +1012,7 @@ sub _bulk_actions ($class, $model) {
         }
         my $id = $action->{id};
         my $dialog_id = 'selecto-action-' . $config->id . '-' . $id;
+        my $dialog_title_id = $dialog_id . '-title';
         my $enabled = ($action->{status} // 'enabled') eq 'enabled';
         my $button = '<button type="button" class="sc-button sc-secondary" data-sc-action-open="' .
             _h($dialog_id) . '" data-sc-action-disabled="' . ($enabled ? '0' : '1') . '" disabled' .
@@ -1021,9 +1021,11 @@ sub _bulk_actions ($class, $model) {
         my $inputs = join '', map { _action_input($_) } @{$action->{inputs}};
         my $description = length($action->{description} // '')
             ? '<p class="sc-action-description">' . _h($action->{description}) . '</p>' : '';
-        my $dialog = '<dialog class="sc-action-dialog" id="' . _h($dialog_id) . '" data-sc-action-dialog>' .
+        my $dialog = '<dialog class="sc-action-dialog" id="' . _h($dialog_id) .
+            '" aria-labelledby="' . _h($dialog_title_id) . '" data-sc-action-dialog>' .
             '<form method="post" action="' . _h($config->path . '/actions/' . $id) .
-            '" data-sc-action-form><header><div><p class="sc-eyebrow">Selected-row action</p><h3>' .
+            '" data-sc-action-form><header><div><p class="sc-eyebrow">Selected-row action</p><h3 id="' .
+            _h($dialog_title_id) . '">' .
             _h($action->{label}) . '</h3></div><button type="button" class="sc-action-close" ' .
             'data-sc-action-close aria-label="Close action form">×</button></header>' . $description .
             '<p class="sc-action-target-summary">Apply to <strong data-sc-action-selection-count>0</strong> ' .
@@ -1036,7 +1038,8 @@ sub _bulk_actions ($class, $model) {
             '<button type="submit" class="sc-button sc-primary">Apply to selected rows</button></footer>' .
             '</form></dialog>';
         $panels .= '<section class="sc-bulk-action" data-sc-bulk-action data-sc-action-id="' .
-            _h($id) . '"><div><strong data-sc-selection-count>0</strong> ' .
+            _h($id) . '"><div role="status" aria-live="polite" aria-atomic="true"><strong ' .
+            'data-sc-selection-count>0</strong> ' .
             '<span data-sc-selection-label>rows selected</span></div>' . $button . $dialog . '</section>';
     }
     return '<div class="sc-bulk-actions" data-sc-bulk-actions>' . $panels . '</div>';
@@ -1046,6 +1049,7 @@ sub _grouped_action_panel ($model, $action) {
     my $config = $model->{config};
     my $id = $action->{id};
     my $dialog_id = 'selecto-action-' . $config->id . '-' . $id;
+    my $dialog_title_id = $dialog_id . '-title';
     my $enabled = ($action->{status} // 'enabled') eq 'enabled';
     my $description = length($action->{description} // '')
         ? '<p class="sc-action-description">' . _h($action->{description}) . '</p>' : '';
@@ -1054,9 +1058,11 @@ sub _grouped_action_panel ($model, $action) {
         ($enabled ? '' : ' title="' . _h($action->{status_reason} // 'Action unavailable') . '"') .
         '>' . _h($action->{label}) . '</button>';
     my $dialog = '<dialog class="sc-action-dialog sc-group-action-dialog" id="' . _h($dialog_id) .
+        '" aria-labelledby="' . _h($dialog_title_id) .
         '" data-sc-action-dialog><form method="post" action="' .
         _h($config->path . '/actions/' . $id) .
-        '" data-sc-action-form><header><div><p class="sc-eyebrow">Grouped-row action</p><h3>' .
+        '" data-sc-action-form><header><div><p class="sc-eyebrow">Grouped-row action</p><h3 id="' .
+        _h($dialog_title_id) . '">' .
         _h($action->{label}) . '</h3></div><button type="button" class="sc-action-close" ' .
         'data-sc-action-close aria-label="Close action form">×</button></header>' . $description .
         '<p class="sc-action-target-summary">Build <strong data-sc-action-group-count>0</strong> ' .
@@ -1076,7 +1082,8 @@ sub _grouped_action_panel ($model, $action) {
         'data-sc-action-submit-label="' . _h($action->{submit_label}) . '" ' .
         'data-sc-action-markers="' . _h(encode_json($action->{selection}{markers})) . '" ' .
         'data-sc-group-inputs="' . _h(encode_json($action->{selection}{group_inputs})) . '">' .
-        '<div><strong data-sc-selection-count>0</strong> <span data-sc-selection-label>rows assigned</span>' .
+        '<div role="status" aria-live="polite" aria-atomic="true"><strong ' .
+        'data-sc-selection-count>0</strong> <span data-sc-selection-label>rows assigned</span>' .
         '<span class="sc-group-count-summary"> · <strong data-sc-group-count>0</strong> loads</span></div>' .
         $button . $dialog . '</section>';
 }
@@ -1179,7 +1186,7 @@ sub _table ($class, $result, $model) {
             }
             if ($column->{nested}) {
                 $cells .= '<td class="sc-nested-cell">' .
-                    _nested_table($column, $record->{$column->{key}}, $index == 0) . '</td>';
+                    _nested_table($column, $record->{$column->{key}}, $index + 1) . '</td>';
                 next;
             }
             if ($column->{measure}) {
@@ -1205,15 +1212,19 @@ sub _table ($class, $result, $model) {
     }
     my $column_count = scalar(@columns);
     $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count . '">No rows matched this query.</td></tr>';
-    return '<div class="sc-table-wrap"><table><thead><tr>' . $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>';
+    return '<div class="sc-table-wrap"><table><caption class="sc-visually-hidden">Query results</caption>' .
+        '<thead><tr>' . $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>';
 }
 
-sub _nested_table ($column, $value, $show_headers = 1) {
+sub _nested_table ($column, $value, $row_number = undef) {
     my @fields = @{$column->{nested_fields} // []};
     return '<span class="sc-nested-empty">No data</span>' unless @fields;
-    my $head = $show_headers ? '<thead><tr>' . join('', map {
+    my $caption = defined($row_number)
+        ? ($column->{label} // 'Nested data') . ', result row ' . $row_number
+        : ($column->{label} // 'Nested data');
+    my $head = '<thead><tr>' . join('', map {
         '<th scope="col">' . _h($_->{label}) . '</th>'
-    } @fields) . '</tr></thead>' : '';
+    } @fields) . '</tr></thead>';
     my $rows = ref($value) eq 'ARRAY' && @$value ? join('', map {
         my $record = ref($_) eq 'HASH' ? $_ : {};
         '<tr>' . join('', map {
@@ -1222,7 +1233,8 @@ sub _nested_table ($column, $value, $show_headers = 1) {
             '<td>' . _html_display($_, $display) . '</td>'
         } @fields) . '</tr>'
     } @$value) : '<tr><td class="sc-nested-empty" colspan="' . scalar(@fields) . '">No data</td></tr>';
-    return '<table class="sc-nested-table">' . $head . '<tbody>' . $rows . '</tbody></table>';
+    return '<table class="sc-nested-table"><caption class="sc-visually-hidden">' .
+        _h($caption) . '</caption>' . $head . '<tbody>' . $rows . '</tbody></table>';
 }
 
 sub _graph ($class, $result, $model) {

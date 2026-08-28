@@ -15,6 +15,7 @@ $t->get_ok('/explore/products')
     ->status_is(200)
     ->content_type_like(qr{text/html})
     ->element_exists('section#selecto-channel-products')
+    ->element_exists('[data-selecto-connection][role="status"][aria-live="polite"][aria-atomic="true"]')
     ->element_exists('[data-sc-workspace]:not(.is-builder-collapsed)')
     ->element_exists('[data-sc-builder-shell="products"]:not(.is-collapsed)')
     ->element_exists('[data-sc-builder-toggle][aria-expanded="true"][aria-label="Collapse view menu"]')
@@ -37,7 +38,7 @@ $t->get_ok('/explore/products')
     ->element_exists('[data-sc-result-view-panel="detail"]:not([disabled])')
     ->element_exists('[data-sc-result-view-panel="summary"][hidden][disabled]')
     ->element_exists('[data-sc-graph-options][hidden][disabled] select[name="chart_type"]')
-    ->element_exists('[data-sc-builder-pending][hidden]')
+    ->element_exists('[data-sc-builder-pending][role="status"][aria-live="polite"][aria-atomic="true"]')
     ->element_exists('[data-sc-picker-root]')
     ->element_exists('[data-sc-picker-root][data-sc-picker-kind="field"]')
     ->element_exists('[data-sc-picker-root][data-sc-picker-kind="group"]')
@@ -69,14 +70,15 @@ $t->get_ok('/explore/products')
     ->content_like(qr{>Excel</a>.*>CSV</a>.*>TSV</a>.*>JSON</a>}s)
     ->content_like(qr{hx-ws:connect="/explore/products/ws"})
     ->content_like(qr{hx-ws:send})
-    ->content_like(qr{/selecto-components/htmx\.min\.js})
-    ->content_like(qr{/selecto-components/hx-ws\.min\.js})
-    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260821-9})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260821-9})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260821-9})
+    ->content_like(qr{/selecto-components/htmx\.min\.js\?v=20260828-2})
+    ->content_like(qr{/selecto-components/hx-ws\.min\.js\?v=20260828-2})
+    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260828-2})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260828-2})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260828-2})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')
+    ->text_is('.sc-table-wrap > table > caption' => 'Query results')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:add_product_note"][data-type="action"]')
     ->text_is('[data-sc-picker-kind="field"] button[data-field="action:add_product_note"] strong' => 'Action: Add Product Note')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:build_shipments"][data-type="action"]')
@@ -185,6 +187,7 @@ $t->get_ok($action_columns_url)
     ->element_exists('[data-sc-bulk-actions]')
     ->text_is('[data-sc-bulk-action][data-sc-action-id="add_product_note"] [data-sc-selection-count]' => '0')
     ->text_is('[data-sc-bulk-action][data-sc-action-id="mark_for_review"] [data-sc-selection-count]' => '0')
+    ->element_exists('[data-sc-bulk-action][data-sc-action-id="add_product_note"] > div[role="status"][aria-live="polite"][aria-atomic="true"]')
     ->element_exists('[data-sc-action-open="selecto-action-products-add_product_note"][disabled]')
     ->element_exists('[data-sc-action-open="selecto-action-products-mark_for_review"][disabled]')
     ->element_exists('th[data-sc-action-column="add_product_note"] input[data-sc-select-page][data-sc-action-id="add_product_note"]')
@@ -193,8 +196,10 @@ $t->get_ok($action_columns_url)
     ->element_exists('input[data-sc-row-select][data-sc-action-id="add_product_note"][value="102"]')
     ->element_exists('input[data-sc-row-select][data-sc-action-id="mark_for_review"][value="101"]')
     ->element_exists('input[data-sc-row-select][data-sc-action-id="mark_for_review"][value="102"]')
-    ->element_exists('dialog#selecto-action-products-add_product_note')
-    ->element_exists('dialog#selecto-action-products-mark_for_review')
+    ->element_exists('dialog#selecto-action-products-add_product_note[aria-labelledby="selecto-action-products-add_product_note-title"]')
+    ->element_exists('#selecto-action-products-add_product_note-title')
+    ->element_exists('dialog#selecto-action-products-mark_for_review[aria-labelledby="selecto-action-products-mark_for_review-title"]')
+    ->element_exists('#selecto-action-products-mark_for_review-title')
     ->element_exists('form[action="/explore/products/actions/add_product_note"]')
     ->element_exists('form[action="/explore/products/actions/mark_for_review"]')
     ->element_exists('select[name="action_input_note_type"] option[value="internal"]')
@@ -262,6 +267,8 @@ $t->get_ok($grouped_action_url)
         'data-sc-row-details' => qr/Stock.*21/)
     ->element_exists('input[name="action_groups"][data-sc-action-groups]')
     ->element_exists('[data-sc-group-action-groups]')
+    ->element_exists('dialog#selecto-action-products-build_shipments[aria-labelledby="selecto-action-products-build_shipments-title"]')
+    ->element_exists('#selecto-action-products-build_shipments-title')
     ->content_like(qr{pink_heart})
     ->content_like(qr{orange_star})
     ->content_like(qr{yellow_moon})
@@ -320,7 +327,8 @@ $t->post_ok('/explore/products/actions/add_product_note' => {Accept => 'applicat
 })->status_is(403)->json_is('/ok' => 0);
 
 $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
-    ->content_like(qr/htmx:after:ws:message/)
+    ->content_like(qr/htmx:ws:after:message:incoming/)
+    ->content_like(qr/pending\.textContent\s*=\s*"Pending changes"/)
     ->content_like(qr/data-sc-picker-set-item/)
     ->content_like(qr/data-sc-filter-available-item/)
     ->content_like(qr/data-sc-filter-set-item/)
@@ -364,10 +372,20 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/window\.fetch/)
     ->content_like(qr/HTMLFormElement\.prototype\.submit\.call\(form\)/)
     ->content_like(qr/requestSubmit/);
+$t->get_ok('/selecto-components/htmx.min.js')->status_is(200)
+    ->content_type_like(qr{javascript})
+    ->content_like(qr/version="4\.0\.0"/)
+    ->content_unlike(qr/4\.0\.0-beta/);
+$t->get_ok('/selecto-components/hx-ws.min.js')->status_is(200)
+    ->content_type_like(qr{javascript})
+    ->content_like(qr/htmx:ws:after:message:incoming/)
+    ->content_unlike(qr/htmx:after:ws:message/);
 $t->get_ok('/selecto-components/chart.umd.min.js')->status_is(200)
     ->content_type_like(qr{javascript})
     ->content_like(qr/Chart\.js v4\.5\.1/);
 $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
+    ->content_like(qr/--sc-control-border:\s*#5d7176/)
+    ->content_like(qr/\.sc-builder select[^}]*border:\s*1px solid var\(--sc-control-border\)/s)
     ->content_like(qr/\.sc-workspace/)
     ->content_like(qr/\.sc-list-picker/)
     ->content_like(qr/\.sc-picker-choice\[hidden\]\s*\{\s*display:\s*none/)
@@ -376,6 +394,8 @@ $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-chart-canvas/)
     ->content_like(qr/\.sc-bulk-action/)
     ->content_like(qr/\.sc-action-dialog/)
+    ->content_like(qr/\.sc-visually-hidden/)
+    ->content_like(qr/\.sc-view-tab input:focus-visible \+ span/)
     ->content_like(qr/\.sc-group-marker/)
     ->content_like(qr/\.sc-group-action-card/)
     ->content_like(qr/\.sc-group-action-orders/)
@@ -606,21 +626,19 @@ $t->get_ok($export_url . '&format=xlsx')
     ->content_like(qr{\APK});
 
 $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({
-    headers => {'HX-Request-ID' => 'request-123'},
-    body => {
-        q => 1,
-        view => 'graph',
-        field => ['product_name', 'unit_price'],
-        group => ['category.category_name'],
-        measure => 'total_price',
-        order => 'product_name',
-        direction => 'asc',
-        limit => 25,
-        page => 1,
-    },
+    headers => {},
+    q => 1,
+    view => 'graph',
+    field => ['product_name', 'unit_price'],
+    group => ['category.category_name'],
+    measure => 'total_price',
+    order => 'product_name',
+    direction => 'asc',
+    limit => 25,
+    page => 1,
 })})->message_ok;
 my $message = decode_json($t->message->[1]);
-is $message->{'HX-Request-ID'}, 'request-123', 'WebSocket response correlates with htmx sender';
+ok !exists($message->{'HX-Request-ID'}), 'WebSocket response uses the htmx 4 final message contract';
 is $message->{target}, '#selecto-surface-products', 'WebSocket response targets the explorer surface';
 is $message->{swap}, 'outerHTML', 'WebSocket response replaces the surface without replacing the connection';
 like $message->{content}, qr/Graph results/, 'WebSocket returns server-rendered graph content';
@@ -635,21 +653,18 @@ $t->get_ok($message->{selecto}{url})
     ->content_like(qr/Graph results/);
 
 $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({
-    headers => {'HX-Request-ID' => 'reorder-456'},
-    body => {
-        q => 1,
-        view => 'detail',
-        field => ['unit_price', 'product_name', 'category.category_name'],
-        group => ['category.category_name'],
-        measure => 'count',
-        order => 'product_name',
-        direction => 'asc',
-        limit => 25,
-        page => 1,
-    },
+    headers => {},
+    q => 1,
+    view => 'detail',
+    field => ['unit_price', 'product_name', 'category.category_name'],
+    group => ['category.category_name'],
+    measure => 'count',
+    order => 'product_name',
+    direction => 'asc',
+    limit => 25,
+    page => 1,
 })})->message_ok;
 my $reordered = decode_json($t->message->[1]);
-is $reordered->{'HX-Request-ID'}, 'reorder-456', 'column reorder response correlates with htmx sender';
 like $reordered->{content}, qr{<th scope="col">Unit Price</th><th scope="col">Product Name</th>}s,
     'server-rendered table follows the submitted Set order';
 cmp_ok index($reordered->{selecto}{url}, 'field=unit_price'), '<',
@@ -658,24 +673,21 @@ cmp_ok index($reordered->{selecto}{url}, 'field=unit_price'), '<',
 $t->finish_ok;
 
 $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({
-    headers => {'HX-Request-ID' => 'filters-789'},
-    body => {
-        q => 1,
-        view => 'detail',
-        field => ['product_name', 'unit_price'],
-        filter_field => ['unit_price', 'category.category_name'],
-        filter_op => ['gte', 'eq'],
-        filter_value => ['', 'Camp Pantry'],
-        group => ['category.category_name'],
-        measure => 'count',
-        order => 'product_name',
-        direction => 'asc',
-        limit => 25,
-        page => 1,
-    },
+    headers => {},
+    q => 1,
+    view => 'detail',
+    field => ['product_name', 'unit_price'],
+    filter_field => ['unit_price', 'category.category_name'],
+    filter_op => ['gte', 'eq'],
+    filter_value => ['', 'Camp Pantry'],
+    group => ['category.category_name'],
+    measure => 'count',
+    order => 'product_name',
+    direction => 'asc',
+    limit => 25,
+    page => 1,
 })})->message_ok;
 my $filtered = decode_json($t->message->[1]);
-is $filtered->{'HX-Request-ID'}, 'filters-789', 'filter response correlates with htmx sender';
 like $filtered->{content}, qr/data-sc-filter-set-item data-field="unit_price"/,
     'draft filter remains visible in Set';
 like $filtered->{content}, qr/data-sc-filter-set-item data-field="category\.category_name"/,
@@ -725,21 +737,19 @@ is_deeply TestSelectoComponents::Adapter::_predicate_values(
 ), ['secret-medical-value'], 'private no-JavaScript POST keeps the filter value in the request body';
 
 $t->websocket_ok('/explore/private-products/ws')->send_ok({text => encode_json({
-    headers => {'HX-Request-ID' => 'private-101'},
-    body => {
-        q => 1,
-        view => 'detail',
-        field => ['product_name', 'unit_price'],
-        filter_field => 'product_name',
-        filter_op => 'eq',
-        filter_value => 'secret-medical-value',
-        group => ['category.category_name'],
-        measure => 'count',
-        order => 'product_name',
-        direction => 'asc',
-        limit => 25,
-        page => 1,
-    },
+    headers => {},
+    q => 1,
+    view => 'detail',
+    field => ['product_name', 'unit_price'],
+    filter_field => 'product_name',
+    filter_op => 'eq',
+    filter_value => 'secret-medical-value',
+    group => ['category.category_name'],
+    measure => 'count',
+    order => 'product_name',
+    direction => 'asc',
+    limit => 25,
+    page => 1,
 })})->message_ok;
 my $private_message = decode_json($t->message->[1]);
 is $private_message->{selecto}{url}, '/explore/private-products',

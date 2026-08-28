@@ -140,13 +140,11 @@ sub _routes ($app, $explorer, $origin_check) {
             my $envelope;
             my $ok = eval { $envelope = decode_json($message); 1 };
             return $socket->finish(1003 => 'Expected a JSON message')
-                unless $ok && ref($envelope) eq 'HASH' && ref($envelope->{body}) eq 'HASH';
-            my $headers = ref($envelope->{headers}) eq 'HASH' ? $envelope->{headers} : {};
-            my $request_id = $headers->{'HX-Request-ID'};
-            $request_id = undef unless defined($request_id) && !ref($request_id)
-                && "$request_id" =~ /\A[A-Za-z0-9-]{1,100}\z/;
-            my $model = _decorate_model($socket, $explorer->model($socket, $envelope->{body}));
-            my $response = Selecto::Components::Renderer->websocket_message($model, $request_id);
+                unless $ok && ref($envelope) eq 'HASH' && ref($envelope->{headers}) eq 'HASH';
+            my %input = %$envelope;
+            delete $input{headers};
+            my $model = _decorate_model($socket, $explorer->model($socket, \%input));
+            my $response = Selecto::Components::Renderer->websocket_message($model);
             return $socket->send({text => encode_json($response)});
         });
     });
