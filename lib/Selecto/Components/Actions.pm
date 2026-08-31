@@ -5,6 +5,7 @@ use strict;
 use warnings;
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(decode_json);
+use Selecto::Components::Util qw(humanize);
 use Storable qw(dclone);
 
 my @LUCKY_CHARMS_MARKERS = (
@@ -352,10 +353,7 @@ sub _normalize_options {
 
 sub _humanize {
     my ($value) = @_;
-    my $text = "$value";
-    $text =~ s/[_-]+/ /g;
-    $text =~ s/\b([a-z])/uc($1)/eg;
-    return $text;
+    return humanize($value);
 }
 
 sub _text {

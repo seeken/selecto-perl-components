@@ -3,6 +3,7 @@ package Selecto::Components::Config;
 use Mojo::Base -base, -signatures;
 use Scalar::Util qw(blessed);
 use Selecto::Components::DateShortcut ();
+use Selecto::Components::Util qw(humanize);
 
 has [qw(id title path engine_factory)];
 has views         => sub { return [qw(detail aggregate graph)] };
@@ -568,12 +569,7 @@ sub _bulk_action_spec ($spec) {
     return ref($bulk) eq 'HASH' && $bulk->{enabled} ? 1 : 0;
 }
 
-sub _humanize ($value) {
-    my $text = "$value";
-    $text =~ s/_/ /g;
-    $text =~ s/\b([a-z])/uc($1)/eg;
-    return $text;
-}
+sub _humanize ($value) { return humanize($value); }
 
 sub _default_measure_function ($type) {
     return 'avg' if defined($type) && !ref($type) && "$type" =~ /\A(?:float|double|real)\z/i;

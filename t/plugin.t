@@ -428,6 +428,8 @@ is $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->limit_value, undef,
     'total count removes the page limit';
 is $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->offset_value, undef,
     'total count removes the page offset';
+is_deeply $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->orders, [],
+    'total count drops ordering';
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50&filter_promote_field=unit_price')
     ->status_is(200)
