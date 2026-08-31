@@ -3,6 +3,7 @@ package Selecto::Components::QueryBuilder;
 use Mojo::Base -base, -signatures;
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
+use Selecto::Components::Util qw(humanize trim);
 use Selecto::Expression ();
 use Selecto::QueryLibrary ();
 
@@ -425,16 +426,8 @@ sub _field_alias ($field) {
     return $alias;
 }
 
-sub _trim ($value) {
-    $value = "$value";
-    $value =~ s/\A\s+|\s+\z//g;
-    return $value;
-}
+sub _trim ($value) { return trim($value); }
 
-sub _humanize ($value) {
-    my $text = "$value";
-    $text =~ s/_/ /g;
-    return join ' ', map { ucfirst lc $_ } split /\s+/, $text;
-}
+sub _humanize ($value) { return humanize($value); }
 
 1;

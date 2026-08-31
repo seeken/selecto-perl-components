@@ -1,6 +1,7 @@
 package Selecto::Components::QueryLibrary;
 
 use Mojo::Base -base, -signatures;
+use Selecto::Components::Util qw(humanize);
 use Selecto::QueryLibrary ();
 
 sub entries ($class, $domain, $registry) {
@@ -80,11 +81,6 @@ sub _text ($value) {
     return $text;
 }
 
-sub _humanize ($value) {
-    my $label = "$value";
-    $label =~ s/[._-]+/ /g;
-    $label =~ s/\b([a-z])/\U$1/g;
-    return $label;
-}
+sub _humanize ($value) { return humanize($value); }
 
 1;
