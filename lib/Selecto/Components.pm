@@ -12,6 +12,7 @@ use Selecto::Components::Config ();
 use Selecto::Components::Explorer ();
 use Selecto::Components::Renderer ();
 use Selecto::Components::State ();
+use Selecto::Components::Util qw(humanize);
 
 our $VERSION = '0.1.0';
 
@@ -511,11 +512,6 @@ sub _same_origin ($controller) {
     return $origin_host eq $request_host ? 1 : 0;
 }
 
-sub _humanize ($value) {
-    my $text = "$value";
-    $text =~ s/[_-]+/ /g;
-    $text =~ s/\b([a-z])/uc($1)/eg;
-    return $text;
-}
+sub _humanize ($value) { return humanize($value); }
 
 1;

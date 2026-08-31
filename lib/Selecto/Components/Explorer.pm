@@ -8,7 +8,6 @@ use Scalar::Util qw(blessed looks_like_number);
 use Time::HiRes qw(time);
 use Selecto::Components::QueryBuilder ();
 use Selecto::Components::State ();
-use Selecto::Query ();
 use Selecto::Statement ();
 
 has 'config';
@@ -69,12 +68,9 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         if ($all_rows) {
             $total_count = scalar @{$raw->{rows}};
         } else {
-            my $count_query = Selecto::Query->new(
-                selections => $built->{count_selections} // $built->{query}->selections,
-                predicate => $built->{query}->predicate,
-                groups => $built->{query}->groups,
-                grouping_mode => $built->{query}->grouping_mode,
-            );
+            my $count_query = defined($built->{count_selections})
+                ? $built->{query}->count_query($built->{count_selections})
+                : $built->{query}->count_query;
             my $count_compile_started = time;
             my $count_source = $engine->compile($count_query);
             $count_statement = _count_statement($count_source);
