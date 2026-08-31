@@ -12,6 +12,7 @@ WriteMakefile(
     MIN_PERL_VERSION => '5.034',
     PM => {
         'lib/Selecto/Components.pm' => '$(INST_LIB)/Selecto/Components.pm',
+        'lib/Selecto/Components/APIConsole.pm' => '$(INST_LIB)/Selecto/Components/APIConsole.pm',
         'lib/Selecto/Components/Actions.pm' => '$(INST_LIB)/Selecto/Components/Actions.pm',
         'lib/Selecto/Components/BucketParser.pm' => '$(INST_LIB)/Selecto/Components/BucketParser.pm',
         'lib/Selecto/Components/Config.pm' => '$(INST_LIB)/Selecto/Components/Config.pm',
@@ -27,6 +28,8 @@ WriteMakefile(
         'lib/Selecto/Components/State.pm' => '$(INST_LIB)/Selecto/Components/State.pm',
         'lib/Selecto/Components/Util.pm' => '$(INST_LIB)/Selecto/Components/Util.pm',
         'public/selecto-components/chart.umd.min.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/chart.umd.min.js',
+        'public/selecto-components/api-console.css' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/api-console.css',
+        'public/selecto-components/api-console.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/api-console.js',
         'public/selecto-components/htmx.min.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/htmx.min.js',
         'public/selecto-components/hx-ws.min.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/hx-ws.min.js',
         'public/selecto-components/selecto-components.css' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/selecto-components.css',

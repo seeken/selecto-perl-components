@@ -7,6 +7,7 @@ THIRD_PARTY_NOTICES.md
 cpanfile
 examples/northwind.pl
 lib/Selecto/Components.pm
+lib/Selecto/Components/APIConsole.pm
 lib/Selecto/Components/Actions.pm
 lib/Selecto/Components/BucketParser.pm
 lib/Selecto/Components/Config.pm
@@ -23,12 +24,15 @@ lib/Selecto/Components/State.pm
 lib/Selecto/Components/Util.pm
 mise.toml
 public/selecto-components/chart.umd.min.js
+public/selecto-components/api-console.css
+public/selecto-components/api-console.js
 public/selecto-components/htmx.min.js
 public/selecto-components/hx-ws.min.js
 public/selecto-components/selecto-components.css
 public/selecto-components/selecto-components.js
 script/with-local-sibling
 t/00-load.t
+t/api_console.t
 t/bucket_parser.t
 t/date_shortcut.t
 t/lib/TestSelectoComponents.pm
