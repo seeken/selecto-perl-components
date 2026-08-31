@@ -11,6 +11,10 @@ This is alpha software. Its browser transport is pinned to htmx `4.0.0`.
 ## Current surface
 
 - a reusable `Selecto::Components` Mojolicious plugin;
+- a dependency-free Selecto API Console that discovers a canonical API's
+  manifest, domain, OpenAPI document, public fields, types, query-library
+  views/projections/segments, and orderings at runtime, then builds, runs, and
+  displays bounded queries without domain-specific JavaScript;
 - named query-library views integrated into View and reusable governed
   segments and typed parameters integrated into Filters, with active-tab
   continuity across WebSocket fragment replacements;
@@ -76,6 +80,33 @@ This is alpha software. Its browser transport is pinned to htmx `4.0.0`.
 The package is a behavioral workalike, not a source or API port of Phoenix
 LiveView. It preserves the recognizable Explorer flow while using
 Mojolicious-native transport and lifecycle boundaries.
+
+## API Console contract
+
+The API Console browser code is host-neutral. It does not receive a serialized
+field catalog from Perl and does not contain application domain names. A host
+serves the two packaged assets and provides a mount point containing the
+canonical API base path:
+
+```html
+<link rel="stylesheet" href="/selecto-components/api-console.css">
+<script defer src="/selecto-components/api-console.js"></script>
+<main data-selecto-api-console
+      data-api-base="/api2/orders/v1"
+      data-title="Orders API Console"></main>
+```
+
+On startup it reads the base manifest, `domain`, and `openapi.json` resources
+with same-origin credentials. It derives public field and type controls from
+the canonical domain and query-library controls from the domain's named views,
+projections, segments, parameters, and orderings. Query execution uses the
+advertised versioned `query` route. No adapter, table name, raw SQL, or
+unpublished identifier can be selected by the UI.
+
+Mojolicious hosts may render the complete shell and install its static path
+with `Selecto::Components::APIConsole->page(...)` and
+`Selecto::Components::APIConsole->install_assets($app)`. Other Selecto hosts
+can serve the same JavaScript and CSS unchanged using the HTML contract above.
 
 ## State and transport contract
 
