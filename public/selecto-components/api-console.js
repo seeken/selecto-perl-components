@@ -12,6 +12,12 @@
       .replace(/\b\w/g, (letter) => letter.toUpperCase());
   }
 
+  function compareSemanticFields(left, right) {
+    const options = {numeric: true, sensitivity: "base"};
+    const labelOrder = String(left.label || "").localeCompare(String(right.label || ""), undefined, options);
+    return labelOrder || String(left.path || "").localeCompare(String(right.path || ""), undefined, options);
+  }
+
   function relationFields(relation, schemas, prefix, depth, schemaStack, output) {
     if (!relation || depth > MAX_RELATION_DEPTH) return;
     const columns = relation.columns || {};
@@ -49,7 +55,7 @@
   function collectFields(domain) {
     const output = [];
     relationFields(domain && domain.source, (domain && domain.schemas) || {}, "", 0, [], output);
-    return output;
+    return output.sort(compareSemanticFields);
   }
 
   function operatorsForType(type) {
@@ -819,7 +825,7 @@
     }
   }
 
-  window.SelectoAPIConsole = {APIConsole, collectFields, operatorsForType, segmentParameterSpecs};
+  window.SelectoAPIConsole = {APIConsole, collectFields, compareSemanticFields, operatorsForType, segmentParameterSpecs};
   if (typeof document !== "undefined") {
     window.addEventListener("DOMContentLoaded", () => {
       document.querySelectorAll("[data-selecto-api-console]").forEach((root) => new APIConsole(root).start());

@@ -387,6 +387,7 @@ $t->get_ok('/selecto-components/api-console.js')->status_is(200)
     ->content_type_like(qr{javascript})
     ->content_like(qr/window\.SelectoAPIConsole/)
     ->content_like(qr/function collectFields/)
+    ->content_like(qr/function compareSemanticFields/)
     ->content_like(qr/data-selecto-api-console/)
     ->content_like(qr/credentials:\s*"same-origin"/)
     ->content_unlike(qr/innerHTML\s*=\s*.*domain\.name/);
