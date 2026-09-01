@@ -68,6 +68,14 @@ my $theme_config = Selecto::Components::Config->new(
             on_primary => '#FFFFFF',
         };
     },
+    page_shell_resolver => sub {
+        return {
+            head_start_html => '<meta name="host-shell-start" content="enabled">',
+            head_html => '<meta name="host-shell" content="enabled">',
+            body_start_html => '<nav data-host-shell>Host navigation</nav>',
+            body_class => 'host-shell host-shell-light',
+        };
+    },
 )->for_request($theme_controller);
 my $theme_state = Selecto::Components::State->from_input($theme_config, $domain, {});
 my $themed_html = Selecto::Components::Renderer->page({
@@ -79,6 +87,14 @@ my $themed_html = Selecto::Components::Renderer->page({
 like $themed_html,
     qr{<html lang="en" data-sc-color-scheme="light" style="--sc-brand:#123456;--sc-accent:#ABCDEF;--sc-on-brand:#FFFFFF">},
     'request-resolved theme colors are rendered as scoped Explorer variables';
+like $themed_html, qr{<meta name="host-shell" content="enabled"></head>},
+    'trusted host shell head markup is included in the full page';
+like $themed_html,
+    qr{<meta name="host-shell-start" content="enabled"><link rel="stylesheet" href="/selecto-components/selecto-components\.css},
+    'host dependencies can load before the portable component stylesheet';
+like $themed_html,
+    qr{<body class="host-shell host-shell-light"><nav data-host-shell>Host navigation</nav><main class="sc-page">},
+    'trusted host navigation wraps the portable Explorer surface';
 is $theme_resolver_controller, $theme_controller,
     'the theme resolver receives the request controller';
 
@@ -99,6 +115,15 @@ my $unsafe_scheme = Selecto::Components::Config->new(
 my $scheme_error = eval { $unsafe_scheme->theme_scheme; undef } // $@;
 like $scheme_error, qr/theme scheme must be light or dark/,
     'theme schemes are restricted to the shared light and dark palettes';
+
+my $unsafe_shell = Selecto::Components::Config->new(
+    %{TestSelectoComponents::config()},
+    id => 'unsafe-shell',
+    page_shell_resolver => sub { return {body_class => 'ok" onclick="bad'} },
+);
+my $shell_error = eval { $unsafe_shell->page_shell; undef } // $@;
+like $shell_error, qr/page shell body_class must contain CSS class names/,
+    'host shell body classes cannot inject HTML attributes';
 
 my $table = Selecto::Components::Renderer->_table(
     {

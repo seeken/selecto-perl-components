@@ -77,16 +77,10 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
     my $saved_queries = $class->_saved_queries($model, $saved_panel_id, $saved_tab_id);
     my $collapsed = Selecto::Components::Renderer::_builder_collapsed($model);
     my $tray_content_id = 'selecto-builder-tray-content-' . $builder_id;
-    my $tray_header = '<header class="sc-builder-tray-header"><span>View menu</span>' .
-        '<button class="sc-builder-toggle" type="button" data-sc-builder-toggle aria-controls="' .
-        $tray_content_id . '" aria-expanded="' . ($collapsed ? 'false' : 'true') .
-        '" aria-label="' . ($collapsed ? 'Expand view menu' : 'Collapse view menu') . '">' .
-        '<span data-sc-builder-chevron aria-hidden="true">' . ($collapsed ? '&#8250;' : '&#8249;') .
-        '</span></button></header>';
     return '<aside class="sc-builder' . ($collapsed ? ' is-collapsed' : '') .
         '" data-sc-builder-shell="' . $builder_id . '" data-sc-builder-collapsed="' .
-        ($collapsed ? 'true' : 'false') . '">' . $tray_header .
-        '<div id="' . $tray_content_id . '" data-sc-builder-content>' .
+        ($collapsed ? 'true' : 'false') . '"><div id="' . $tray_content_id .
+        '" data-sc-builder-content>' .
         $builder_tabs . '<form id="selecto-query-' . _h($config->id) . '" action="' .
         _h($config->path) . '" method="' . $method . '" hx-ws:send hx-trigger="submit" data-sc-builder="' .
         $builder_id . '" data-sc-builder-query>' . _hidden('q', 1) .

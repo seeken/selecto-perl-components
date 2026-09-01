@@ -282,6 +282,32 @@ The values are validated before they become scoped CSS custom properties.
 Resolvers should return an empty object when no tenant palette is available;
 the shared dark palette remains the fallback.
 
+## Host page shells
+
+Applications can surround the full Explorer page with their existing
+navigation without coupling that navigation to the portable query surface.
+Supply a `page_shell_resolver` callback; it receives the current Mojolicious
+controller, request-local configuration, and page model.
+
+```perl
+page_shell_resolver => sub ($controller, $config, $model) {
+    return {
+        head_start_html => '<link rel="stylesheet" href="/host/navigation.css">',
+        head_html => '<style>.host-navigation { z-index: 1000 }</style>',
+        body_start_html => '<host-navigation></host-navigation>',
+        body_class => 'host-navigation-enabled',
+    };
+},
+```
+
+`head_start_html` loads before the Selecto component assets, while `head_html`
+loads after them and is suitable for small host compatibility overrides.
+`body_start_html` is emitted immediately inside `body`. These HTML values are
+trusted application markup and must never contain request or user input.
+`body_class` is separately validated as a space-delimited list of CSS class
+names. The shell is applied only to a full page; incremental result surfaces
+remain host-neutral.
+
 ## Domain localization
 
 Canonical domains can opt into request-time presentation localization without

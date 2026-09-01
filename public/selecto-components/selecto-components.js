@@ -3,6 +3,7 @@
 
   var activeBuilderTabs = Object.create(null);
   var collapsedBuilderTrays = Object.create(null);
+  var connectionStatus = "Connecting";
   var chartInstances = new WeakMap();
   var dateFormats = [
     ["day", "Day"], ["day_hour", "Day + Hour"], ["week", "Week"],
@@ -37,6 +38,20 @@
     });
   }
 
+  function builderTrayForToggle(toggle) {
+    var key = toggle && toggle.dataset.scBuilderId;
+    return Array.from(document.querySelectorAll("[data-sc-builder-shell]")).find(function (root) {
+      return root.dataset.scBuilderShell === key;
+    });
+  }
+
+  function builderToggleForTray(root) {
+    var key = root && root.dataset.scBuilderShell;
+    return Array.from(document.querySelectorAll("[data-sc-builder-toggle]")).find(function (button) {
+      return button.dataset.scBuilderId === key;
+    });
+  }
+
   function setBuilderTrayCollapsed(root, collapsed, remember) {
     if (!root) return;
     var key = root.dataset.scBuilderShell;
@@ -45,7 +60,7 @@
     root.dataset.scBuilderCollapsed = collapsed ? "true" : "false";
     var workspace = root.closest("[data-sc-workspace]");
     if (workspace) workspace.classList.toggle("is-builder-collapsed", !!collapsed);
-    var button = root.querySelector("[data-sc-builder-toggle]");
+    var button = builderToggleForTray(root);
     if (button) {
       button.setAttribute("aria-expanded", collapsed ? "false" : "true");
       button.setAttribute("aria-label", collapsed ? "Expand view menu" : "Collapse view menu");
@@ -61,6 +76,13 @@
         ? collapsedBuilderTrays[key]
         : root.dataset.scBuilderCollapsed === "true";
       setBuilderTrayCollapsed(root, collapsed, false);
+    });
+  }
+
+  function renderConnectionStatus() {
+    document.querySelectorAll("[data-selecto-connection]").forEach(function (node) {
+      node.textContent = connectionStatus;
+      node.classList.toggle("is-live", connectionStatus === "Live");
     });
   }
 
@@ -256,6 +278,7 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
+    renderConnectionStatus();
     restoreBuilderTabs();
     restoreBuilderTrays();
     restoreResultViews();
@@ -263,18 +286,16 @@
   });
 
   document.addEventListener("htmx:ws:after:connection", function () {
-    document.querySelectorAll("[data-selecto-connection]").forEach(function (node) {
-      node.textContent = "Live";
-      node.classList.add("is-live");
-    });
+    connectionStatus = "Live";
+    renderConnectionStatus();
   });
 
   document.addEventListener("htmx:ws:close", function () {
-    document.querySelectorAll("[data-selecto-connection]").forEach(function (node) {
-      node.textContent = "Reconnecting";
-      node.classList.remove("is-live");
-    });
+    connectionStatus = "Reconnecting";
+    renderConnectionStatus();
   });
+
+  document.addEventListener("htmx:after:swap", renderConnectionStatus);
 
   window.addEventListener("submit", function (event) {
     var form = event.target.closest("[data-sc-builder]");
@@ -304,6 +325,7 @@
       }).catch(function () {});
     }
     window.requestAnimationFrame(function () {
+      renderConnectionStatus();
       restoreBuilderTabs();
       restoreBuilderTrays();
       restoreResultViews();
@@ -330,8 +352,8 @@
     }
     var toggle = event.target.closest("[data-sc-builder-toggle]");
     if (toggle) {
-      var tray = toggle.closest("[data-sc-builder-shell]");
-      setBuilderTrayCollapsed(tray, !tray.classList.contains("is-collapsed"));
+      var tray = builderTrayForToggle(toggle);
+      if (tray) setBuilderTrayCollapsed(tray, !tray.classList.contains("is-collapsed"));
       return;
     }
     var tab = event.target.closest("[data-sc-builder-tab]");
