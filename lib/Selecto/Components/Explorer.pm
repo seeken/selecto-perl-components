@@ -26,25 +26,26 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     $options //= {};
     die "explorer model options must be an object\n" unless ref($options) eq 'HASH';
     my $input_supplied = defined $input;
+    my $config = $self->config->for_request($controller);
     my $engine;
     my $state;
     my $all_rows = 0;
     my $model = {
-        config => $self->config,
+        config => $config,
         input => undef,
         result => undef,
         runtime_error => undef,
     };
     my $ok = eval {
-        $engine = $self->config->engine($controller);
+        $engine = $config->engine($controller);
         $all_rows = $options->{all_rows}
-            && $self->config->query_params_enabled($engine->domain) ? 1 : 0;
-        $input = $input_supplied || $self->config->query_params_enabled($engine->domain)
+            && $config->query_params_enabled($engine->domain) ? 1 : 0;
+        $input = $input_supplied || $config->query_params_enabled($engine->domain)
             ? ($input // $self->input_from_controller($controller))
             : {};
         $model->{input} = $input;
         $state = Selecto::Components::State->from_input(
-            $self->config, $engine->domain, $input
+            $config, $engine->domain, $input
         );
         $model->{engine} = $engine;
         $model->{domain} = $engine->domain;
@@ -53,7 +54,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         return 1 unless $state->valid;
 
         my $built = Selecto::Components::QueryBuilder->build(
-            $self->config, $engine->domain, $state, {paginate => !$all_rows}
+            $config, $engine->domain, $state, {paginate => !$all_rows}
         );
         my $started = time;
         my $compile_started = time;
@@ -107,7 +108,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             all_rows => $all_rows,
             elapsed_ms => $elapsed_ms,
             adapter_name => $engine->adapter->name,
-            ($self->config->show_sql ? (
+            ($config->show_sql ? (
                 sql => $statement->sql,
                 params => $statement->params,
                 debug => {
@@ -145,7 +146,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         $model->{runtime_error} = _public_error($error);
         if (!$state && $engine) {
             $state = Selecto::Components::State->from_input(
-                $self->config, $engine->domain, {}
+                $config, $engine->domain, {}
             );
             $model->{state} = $state;
             $model->{domain} = $engine->domain;

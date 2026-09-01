@@ -11,7 +11,11 @@ my $ASSET_REVISION = '20260828-2';
 
 sub page ($class, $model) {
     my $config = $model->{config};
-    my $title = _h($config->title);
+    my $localized_title = $config->localize(
+        $model->{domain}, 'domain.title', $config->title,
+        {kind => 'domain', id => $config->id, attribute => 'title'},
+    );
+    my $title = _h($localized_title);
     my $surface = $class->surface($model);
     my $ws_path = _h($config->path . '/ws');
     return '<!doctype html><html lang="en"><head><meta charset="utf-8">' .
@@ -66,10 +70,14 @@ sub surface ($class, $model) {
           'aria-label="Export all matched rows"><span>Export all</span>' . $export_links . '</div></div>'
         : '<div class="sc-hero-actions"><span class="sc-private-mode">Private URL mode</span></div>';
     my $builder_collapsed = _builder_collapsed($model);
+    my $localized_title = $config->localize(
+        $model->{domain}, 'domain.title', $config->title,
+        {kind => 'domain', id => $config->id, attribute => 'title'},
+    );
     return '<section id="selecto-surface-' . _h($config->id) . '" class="sc-surface" data-selecto-url="' .
         _h($model->{canonical_url}) . '" data-sc-query-params="' .
         ($query_params ? 'enabled' : 'disabled') . '">' .
-        '<header class="sc-hero"><div><h1>' . _h($config->title) . '</h1></div>' .
+        '<header class="sc-hero"><div><h1>' . _h($localized_title) . '</h1></div>' .
         $hero_actions . '</header>' .
         $alert . '<div class="sc-workspace' . ($builder_collapsed ? ' is-builder-collapsed' : '') .
         '" data-sc-workspace>' .

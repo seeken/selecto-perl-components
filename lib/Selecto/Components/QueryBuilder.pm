@@ -41,7 +41,10 @@ sub _detail ($class, $config, $domain, $state, $options) {
                 $nested = {
                     key => '__selecto_nested_' . _field_alias($name),
                     field => $name,
-                    label => _humanize($name),
+                    label => $config->localize(
+                        $domain, "associations.$name.label", _humanize($name),
+                        {kind => 'association', id => $name, attribute => 'label'},
+                    ),
                     type => 'nested',
                     nested => 1,
                     association => $name,
@@ -54,7 +57,10 @@ sub _detail ($class, $config, $domain, $state, $options) {
             push @{$nested->{nested_fields}}, {
                 field => $resolved->{field},
                 path => $field,
-                label => $column_config->{alias} || _humanize($resolved->{field}),
+                label => $column_config->{alias} || $config->localize(
+                    $domain, "fields.$field.nested_label", _humanize($resolved->{field}),
+                    {kind => 'nested_field', path => $field, attribute => 'label'},
+                ),
                 type => $field_map->{$field}{type},
                 (defined($field_map->{$field}{html_format})
                     ? (html_format => $field_map->{$field}{html_format}) : ()),
@@ -135,6 +141,13 @@ sub _detail ($class, $config, $domain, $state, $options) {
             }
             my $label = defined($detail->{label}) && !ref($detail->{label})
                 ? "$detail->{label}" : _humanize($id);
+            $label = $config->localize(
+                $domain, "actions.$action_id.selection.row_details.$id.label", $label,
+                {
+                    kind => 'action_row_detail', action_id => $action_id,
+                    id => $id, attribute => 'label',
+                },
+            );
             push @details, {id => $id, label => $label, key => $key};
         }
         $action_row_details{$action_id} = \@details if @details;

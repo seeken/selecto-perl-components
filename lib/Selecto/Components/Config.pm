@@ -3,6 +3,7 @@ package Selecto::Components::Config;
 use Mojo::Base -base, -signatures;
 use Scalar::Util qw(blessed);
 use Selecto::Components::DateShortcut ();
+use Selecto::Components::I18N ();
 use Selecto::Components::Util qw(humanize);
 
 has [qw(id title path engine_factory)];
@@ -22,6 +23,7 @@ has action_handlers => sub { return {} };
 has choice_sources  => sub { return {} };
 has 'action_authorizer';
 has 'saved_query_store';
+has 'localizer';
 
 my @DATE_FORMATS = (
     { id => 'day', label => 'Day' },
@@ -60,6 +62,8 @@ sub new ($class, @args) {
             && $self->max_action_rows >= 1 && $self->max_action_rows <= 1000;
     die "action_handlers must be an object\n" unless ref($self->action_handlers) eq 'HASH';
     die "choice_sources must be an object\n" unless ref($self->choice_sources) eq 'HASH';
+    die "localizer must be a coderef\n"
+        if defined($self->localizer) && ref($self->localizer) ne 'CODE';
     die "action_authorizer must be a coderef\n"
         if defined($self->action_authorizer) && ref($self->action_authorizer) ne 'CODE';
     if (defined(my $store = $self->saved_query_store)) {
@@ -137,6 +141,28 @@ sub saved_queries_enabled ($self, $domain) {
     return defined($self->saved_query_store) && $self->query_params_enabled($domain) ? 1 : 0;
 }
 
+sub localize ($self, $domain, $semantic, $default, $context = undef) {
+    $context = ref($context) eq 'HASH' ? {%$context} : {};
+    $context->{controller} = $self->{_localization_controller}
+        if defined($self->{_localization_controller}) && !exists($context->{controller});
+    return Selecto::Components::I18N->localize(
+        $self->localizer, $domain, $semantic, $default, $context,
+    );
+}
+
+sub for_request ($self, $controller) {
+    my $copy = bless {%$self}, ref($self);
+    $copy->{_localization_controller} = $controller;
+    return $copy;
+}
+
+sub localization_terms ($self, $domain) {
+    return Selecto::Components::I18N->terms($domain, {
+        title => $self->title,
+        measures => $self->measures,
+    });
+}
+
 sub has_bulk_actions ($self, $domain) {
     return @{$self->bulk_action_catalog($domain)} ? 1 : 0;
 }
@@ -168,6 +194,10 @@ sub bulk_action_catalog ($self, $domain, $available = undef) {
         my $id = "$_->{id}";
         my $label = defined($_->{label}) && !ref($_->{label}) ? "$_->{label}"
             : defined($_->{name}) && !ref($_->{name}) ? "$_->{name}" : _humanize($id);
+        $label = $self->localize(
+            $domain, "actions.$id.label", $label,
+            {kind => 'action', id => $id, attribute => 'label'},
+        );
         $label = 'Action: ' . $label unless $label =~ /\AAction\s*:/i;
         {
             path => $self->action_column_path($id),
@@ -214,9 +244,14 @@ sub field_catalog ($self, $domain, $options = undef) {
         my $html_format = _field_html_format($path, $source->{columns}{$path});
         my $label = _field_label($path, $source->{columns}{$path});
         my $dimension = $dimensions_by_key->{$path};
+        $label = $dimension ? $dimension->{label} : $label;
+        $label = $self->localize(
+            $domain, "fields.$path.label", $label,
+            {kind => 'field', path => $path, attribute => 'label'},
+        );
         push @catalog, {
             path => $path,
-            label => $dimension ? $dimension->{label} : $label,
+            label => $label,
             type => $fields->{$path},
             association => undef,
             internal => $domain->field_is_public($path) ? 0 : 1,
@@ -254,10 +289,15 @@ sub field_catalog ($self, $domain, $options = undef) {
                 ref($schema) eq 'HASH' ? $schema->{columns}{$field} : undef,
                 _humanize($field),
             );
-            my $label = _humanize($association_name) . ' - ' . $field_label;
+            my $label = $dimension ? $dimension->{label}
+                : _humanize($association_name) . ' - ' . $field_label;
+            $label = $self->localize(
+                $domain, "fields.$path.label", $label,
+                {kind => 'field', path => $path, attribute => 'label'},
+            );
             push @catalog, {
                 path => $path,
-                label => $dimension ? $dimension->{label} : $label,
+                label => $label,
                 type => $association_fields->{$field},
                 association => $association_name,
                 internal => $domain->field_is_public($path) ? 0 : 1,
@@ -385,6 +425,10 @@ sub measures_for_domain ($self, $domain) {
         my $measure = $_;
         +{
             %$measure,
+            label => $self->localize(
+                $domain, "measures.$measure->{id}.label", $measure->{label},
+                {kind => 'measure', id => $measure->{id}, attribute => 'label'},
+            ),
             type => defined($measure->{field}) ? $fields->{$measure->{field}}{type} : 'rows',
             curated => 1,
         }
@@ -394,7 +438,12 @@ sub measures_for_domain ($self, $domain) {
     my %seen = map { $_->{id} => 1 } @measures;
     unless (grep { !defined($_->{field}) && $_->{aggregate} eq 'count' } @measures) {
         push @measures, {
-            id => '__row_count__', label => 'Row count', aggregate => 'count',
+            id => '__row_count__',
+            label => $self->localize(
+                $domain, 'measures.row_count.label', 'Row count',
+                {kind => 'measure', id => '__row_count__', attribute => 'label'},
+            ),
+            aggregate => 'count',
             type => 'rows', curated => 0, builtin => 1,
         };
         $seen{'__row_count__'} = 1;

@@ -361,7 +361,7 @@ sub _saved_query_response ($controller, $return_to, $result) {
 }
 
 sub _run_action ($controller, $explorer) {
-    my $config = $explorer->config;
+    my $config = $explorer->config->for_request($controller);
     my $return_to = _safe_return_to($config, scalar $controller->param('return_to'));
     my $submitted_token = $controller->param('csrf_token') // '';
     my $expected_token = $controller->session('selecto_components_csrf') // '';
