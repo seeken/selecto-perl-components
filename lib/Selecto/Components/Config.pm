@@ -24,6 +24,7 @@ has choice_sources  => sub { return {} };
 has 'action_authorizer';
 has 'saved_query_store';
 has 'localizer';
+has 'theme_resolver';
 
 my @DATE_FORMATS = (
     { id => 'day', label => 'Day' },
@@ -64,6 +65,8 @@ sub new ($class, @args) {
     die "choice_sources must be an object\n" unless ref($self->choice_sources) eq 'HASH';
     die "localizer must be a coderef\n"
         if defined($self->localizer) && ref($self->localizer) ne 'CODE';
+    die "theme_resolver must be a coderef\n"
+        if defined($self->theme_resolver) && ref($self->theme_resolver) ne 'CODE';
     die "action_authorizer must be a coderef\n"
         if defined($self->action_authorizer) && ref($self->action_authorizer) ne 'CODE';
     if (defined(my $store = $self->saved_query_store)) {
@@ -153,7 +156,44 @@ sub localize ($self, $domain, $semantic, $default, $context = undef) {
 sub for_request ($self, $controller) {
     my $copy = bless {%$self}, ref($self);
     $copy->{_localization_controller} = $controller;
+    delete $copy->{_resolved_theme};
     return $copy;
+}
+
+sub theme_style ($self) {
+    my $theme = $self->_resolved_theme;
+
+    my %properties = (
+        primary    => '--sc-brand',
+        secondary  => '--sc-accent',
+        on_primary => '--sc-on-brand',
+    );
+    my @declarations;
+    for my $key (qw(primary secondary on_primary)) {
+        next unless defined $theme->{$key};
+        die "theme $key must be a hexadecimal color\n"
+            if ref($theme->{$key}) || "$theme->{$key}" !~ /\A#[0-9A-Fa-f]{6}\z/;
+        push @declarations, $properties{$key} . ':' . uc("$theme->{$key}");
+    }
+    return join ';', @declarations;
+}
+
+sub theme_scheme ($self) {
+    my $theme = $self->_resolved_theme;
+    return '' unless defined $theme->{scheme};
+    die "theme scheme must be light or dark\n"
+        if ref($theme->{scheme}) || "$theme->{scheme}" !~ /\A(?:light|dark)\z/;
+    return "$theme->{scheme}";
+}
+
+sub _resolved_theme ($self) {
+    return $self->{_resolved_theme} if exists $self->{_resolved_theme};
+    my $resolver = $self->theme_resolver;
+    return $self->{_resolved_theme} = {} unless $resolver;
+    my $theme = $resolver->($self->{_localization_controller}, $self);
+    $theme = {} unless defined $theme;
+    die "theme_resolver must return an object\n" unless ref($theme) eq 'HASH';
+    return $self->{_resolved_theme} = {%$theme};
 }
 
 sub localization_terms ($self, $domain) {

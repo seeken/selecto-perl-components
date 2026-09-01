@@ -133,12 +133,16 @@
   }
 
   function chartOptions(root, type) {
+    var styles = window.getComputedStyle(root);
+    var ink = styles.getPropertyValue("--sc-ink").trim() || "#dce6e8";
+    var muted = styles.getPropertyValue("--sc-muted").trim() || "#9fb0b3";
+    var border = styles.getPropertyValue("--sc-border").trim() || "#9fb0b3";
     var options = {
       responsive: true,
       maintainAspectRatio: false,
       interaction: {mode: "nearest", intersect: true},
       plugins: {
-        legend: {labels: {color: "#dce6e8", usePointStyle: true}},
+        legend: {labels: {color: ink, usePointStyle: true}},
         tooltip: {callbacks: {title: function (items) {
           if (!items.length) return "";
           var raw = items[0].raw;
@@ -155,9 +159,9 @@
     };
     if (type !== "pie" && type !== "doughnut") {
       var axis = {
-        ticks: {color: "#9fb0b3"},
-        grid: {color: "rgba(159,176,179,.15)"},
-        border: {color: "rgba(159,176,179,.35)"}
+        ticks: {color: muted},
+        grid: {color: chartColorWithAlpha(border, 0.45)},
+        border: {color: border}
       };
       options.scales = {x: Object.assign({}, axis), y: Object.assign({}, axis, {beginAtZero: true})};
     }
@@ -180,7 +184,13 @@
     } catch (_error) {
       return;
     }
-    (data.datasets || []).forEach(function (dataset) {
+    var styles = window.getComputedStyle(root);
+    var brand = styles.getPropertyValue("--sc-brand").trim();
+    (data.datasets || []).forEach(function (dataset, index) {
+      if (brand && index === 0 && type !== "pie" && type !== "doughnut") {
+        dataset.borderColor = brand;
+        dataset.backgroundColor = brand;
+      }
       if (type === "line" || type === "area") dataset.tension = 0.28;
       if (type === "area") {
         dataset.fill = "origin";
