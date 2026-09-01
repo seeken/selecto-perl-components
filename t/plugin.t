@@ -9,6 +9,13 @@ use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::DateShortcut ();
 
+is Selecto::Components::normalize_export_format('Excel'), 'xlsx',
+    'Excel aliases normalize case-insensitively to the governed xlsx format';
+is Selecto::Components::normalize_export_format('JSON'), 'json',
+    'canonical export formats normalize case-insensitively';
+is Selecto::Components::normalize_export_format('html'), '',
+    'non-export formats do not normalize into an export';
+
 my $t = Test::Mojo->new(TestSelectoComponents::app());
 
 $t->get_ok('/explore/products')
@@ -653,6 +660,11 @@ $t->get_ok($export_url . '&format=xlsx')
     ->content_type_like(qr{application/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet})
     ->header_like('Content-Disposition' => qr/products-export\.xlsx/)
     ->content_like(qr{\APK});
+
+$t->get_ok($export_url . '&format=Excel')
+    ->status_is(200)
+    ->content_type_like(qr{application/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet})
+    ->header_like('Content-Disposition' => qr/products-export\.xlsx/);
 
 $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({
     headers => {},
