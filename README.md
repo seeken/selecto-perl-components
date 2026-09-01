@@ -24,6 +24,8 @@ installed npm packages later.
 - named query-library views integrated into View and reusable governed
   segments and typed parameters integrated into Filters, with active-tab
   continuity across WebSocket fragment replacements;
+- optional request-time localization of domain titles, fields, measures,
+  query-library entries, and action forms through portable domain i18n metadata;
 - locally staged builder edits with an explicit Run boundary, so unfinished
   view, column, filter, sort, and pagination changes do not execute queries;
 - a left-side view tray that participates in normal page scrolling, collapses
@@ -254,6 +256,46 @@ This registers:
 - `POST /explore/products` for the no-JavaScript private-state fallback;
 - `GET /explore/products?format=xlsx|csv|tsv|json` for the current result page; and
 - `WS /explore/products/ws` for htmx 4 incremental updates.
+
+## Domain localization
+
+Canonical domains can opt into request-time presentation localization without
+changing field paths or saved-query state; language selection does not alter
+the domain fingerprint. Add a stable
+namespace under `extensions.i18n`; `terms` is optional and can override a
+generated dictionary key or provide defaults for presentation text that lives
+in host configuration, such as the Explorer title and curated measures.
+
+```perl
+extensions => {
+    i18n => {
+        namespace => 'selecto.products',
+        terms => {
+            'domain.title' => {default => 'Product Explorer'},
+            'measures.count.label' => {default => 'Product count'},
+        },
+    },
+},
+```
+
+The Explorer configuration supplies a `localizer` callback. It receives the
+generated dictionary key, portable fallback, and semantic context (including
+the current Mojolicious `controller`) and must return a plain scalar. Errors,
+references, empty strings, and control characters fall back to the portable
+text.
+
+```perl
+localizer => sub ($key, $default, $context) {
+    return MyApp::Dictionary->translate($key, $default);
+},
+```
+
+Generated keys include `fields.<path>.label`,
+`query_library.<registry>.<id>.label`, and nested action/input/option paths
+under `actions.<id>`. Localization happens before display-label sorting.
+`Selecto::Components::I18N->terms($domain, {...})` returns the complete term
+catalog for an application-controlled synchronization or translation workflow.
+The canonical contract is never translated or mutated.
 
 ## Detail object links
 

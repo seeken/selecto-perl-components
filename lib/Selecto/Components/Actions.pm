@@ -36,7 +36,9 @@ sub available ($class, $config, $domain, $controller, $phase = 'preview', $targe
     my @available;
     for my $id (sort keys %$actions) {
         next unless $config->action_handler($id);
-        my $action = $class->_normalize_action($id, $actions->{$id}, $config, $controller);
+        my $action = $class->_normalize_action(
+            $id, $actions->{$id}, $config, $controller, $domain,
+        );
         next unless $action && $class->_bulk_enabled($action);
         my $decision = $class->_authorize($config, $controller, $action, $phase, $target);
         next if $decision->{status} eq 'hidden';
@@ -52,7 +54,9 @@ sub find ($class, $config, $domain, $controller, $id, $phase = 'preview', $targe
     my $actions = $domain->actions;
     return undef unless ref($actions) eq 'HASH' && ref($actions->{$id}) eq 'HASH';
     return undef unless $config->action_handler($id);
-    my $action = $class->_normalize_action($id, $actions->{$id}, $config, $controller);
+    my $action = $class->_normalize_action(
+        $id, $actions->{$id}, $config, $controller, $domain,
+    );
     return undef unless $action && $class->_bulk_enabled($action);
     my $decision = $class->_authorize($config, $controller, $action, $phase, $target);
     return { action => $action, decision => $decision };
@@ -103,23 +107,37 @@ sub request ($class, $config, $action, $selected_ids, $raw_inputs, $options = un
     };
 }
 
-sub _normalize_action ($class, $id, $spec, $config, $controller) {
+sub _normalize_action ($class, $id, $spec, $config, $controller, $domain) {
     return undef unless ref($spec) eq 'HASH';
     my $action = dclone($spec);
     $action->{id} = "$id";
-    $action->{label} = _text($action->{label} // $action->{name}) || _humanize($id);
-    $action->{description} = _text($action->{description});
-    $action->{scope} = lc(_text($action->{scope}) || 'row');
-    $action->{inputs} = $class->_normalize_inputs($action->{inputs}, $config, $controller, $action);
-    $action->{selection} = $class->_normalize_selection(
-        $action->{selection}, $config, $controller, $action,
+    $action->{label} = $config->localize(
+        $domain, "actions.$id.label",
+        _text($action->{label} // $action->{name}) || _humanize($id),
+        {kind => 'action', id => $id, attribute => 'label'},
     );
-    $action->{submit_label} = _text($action->{submit_label})
+    $action->{description} = $config->localize(
+        $domain, "actions.$id.description", _text($action->{description}),
+        {kind => 'action', id => $id, attribute => 'description'},
+    );
+    $action->{scope} = lc(_text($action->{scope}) || 'row');
+    $action->{inputs} = $class->_normalize_inputs(
+        $action->{inputs}, $config, $controller, $action, $domain,
+        "actions.$id.inputs",
+    );
+    $action->{selection} = $class->_normalize_selection(
+        $action->{selection}, $config, $controller, $action, $domain,
+    );
+    my $submit_default = _text($action->{submit_label})
         || ($action->{selection}{mode} eq 'groups' ? $action->{label} : 'Apply to selected rows');
+    $action->{submit_label} = $config->localize(
+        $domain, "actions.$id.submit_label", $submit_default,
+        {kind => 'action', id => $id, attribute => 'submit_label'},
+    );
     return $action;
 }
 
-sub _normalize_selection ($class, $spec, $config, $controller, $action) {
+sub _normalize_selection ($class, $spec, $config, $controller, $action, $domain) {
     return {mode => 'rows'} unless ref($spec) eq 'HASH'
         && lc(_text($spec->{mode})) eq 'groups';
     my $palette = lc(_text($spec->{palette}) || 'lucky_charms');
@@ -135,13 +153,16 @@ sub _normalize_selection ($class, $spec, $config, $controller, $action) {
         max_groups => 0 + $maximum,
         markers => \@markers,
         group_inputs => $class->_normalize_inputs(
-            $spec->{group_inputs}, $config, $controller, $action,
+            $spec->{group_inputs}, $config, $controller, $action, $domain,
+            "actions.$action->{id}.selection.group_inputs",
         ),
-        row_details => $class->_normalize_row_details($spec->{row_details}),
+        row_details => $class->_normalize_row_details(
+            $spec->{row_details}, $config, $domain, $action,
+        ),
     };
 }
 
-sub _normalize_row_details ($class, $specs) {
+sub _normalize_row_details ($class, $specs, $config, $domain, $action) {
     return [] unless ref($specs) eq 'ARRAY';
     my (@details, %seen);
     for my $spec (@$specs) {
@@ -153,13 +174,20 @@ sub _normalize_row_details ($class, $specs) {
         push @details, {
             id => $id,
             field => $field,
-            label => _text($spec->{label}) || _humanize($id),
+            label => $config->localize(
+                $domain, "actions.$action->{id}.selection.row_details.$id.label",
+                _text($spec->{label}) || _humanize($id),
+                {
+                    kind => 'action_row_detail', action_id => $action->{id},
+                    id => $id, attribute => 'label',
+                },
+            ),
         };
     }
     return \@details;
 }
 
-sub _normalize_inputs ($class, $specs, $config, $controller, $action) {
+sub _normalize_inputs ($class, $specs, $config, $controller, $action, $domain, $prefix) {
     my @specs;
     if (ref($specs) eq 'ARRAY') {
         @specs = @$specs;
@@ -179,7 +207,14 @@ sub _normalize_inputs ($class, $specs, $config, $controller, $action) {
         $type = 'string' unless $type =~ /\A(?:string|textarea|select|number|date|datetime-local)\z/;
         my $input = {
             id => $id,
-            label => _text($spec->{label}) || _humanize($id),
+            label => $config->localize(
+                $domain, "$prefix.$id.label",
+                _text($spec->{label}) || _humanize($id),
+                {
+                    kind => 'action_input', action_id => $action->{id},
+                    id => $id, attribute => 'label',
+                },
+            ),
             type => $type,
             required => $spec->{required} ? 1 : 0,
             trim => exists($spec->{trim}) ? ($spec->{trim} ? 1 : 0) : 1,
@@ -195,7 +230,10 @@ sub _normalize_inputs ($class, $specs, $config, $controller, $action) {
             my $resolver = $config->choice_source($source);
             $options = $resolver ? $resolver->($controller, $action, $spec) : [];
         }
-        $input->{options} = _normalize_options($options) if $type eq 'select';
+        $input->{options} = _normalize_options(
+            $options, $source eq '' ? $config : undef, $domain,
+            "$prefix.$id.options", $action->{id}, $id,
+        ) if $type eq 'select';
         push @inputs, $input;
     }
     return \@inputs;
@@ -332,7 +370,7 @@ sub _bulk_enabled ($class, $action) {
 }
 
 sub _normalize_options {
-    my ($options) = @_;
+    my ($options, $config, $domain, $prefix, $action_id, $input_id) = @_;
     my @options;
     if (ref($options) eq 'HASH') {
         @options = map { +{value => "$_", label => _text($options->{$_})} }
@@ -346,6 +384,21 @@ sub _normalize_options {
             } elsif (defined($option) && !ref($option)) {
                 push @options, {value => "$option", label => "$option"};
             }
+        }
+    }
+    if ($config) {
+        for my $option (@options) {
+            my $semantic_value = lc($option->{value});
+            $semantic_value =~ s/[^a-z0-9_]+/_/g;
+            $semantic_value =~ s/\A_+|_+\z//g;
+            next unless length($semantic_value);
+            $option->{label} = $config->localize(
+                $domain, "$prefix.$semantic_value.label", $option->{label},
+                {
+                    kind => 'action_option', action_id => $action_id,
+                    input_id => $input_id, value => $option->{value}, attribute => 'label',
+                },
+            );
         }
     }
     return \@options;

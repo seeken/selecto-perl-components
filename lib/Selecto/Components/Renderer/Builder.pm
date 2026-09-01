@@ -16,12 +16,17 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
     } @{$config->views};
     my $measure_catalog = $config->measure_catalog($model->{domain});
     my $filter_picker = $class->_filter_picker($state, $catalog, $config);
-    my $query_library_views = $class->_query_library_view_controls($state, $model->{domain});
-    my $query_library_filters = $class->_query_library_filter_controls($state, $model->{domain});
+    my $query_library_views = $class->_query_library_view_controls(
+        $state, $model->{domain}, $config,
+    );
+    my $query_library_filters = $class->_query_library_filter_controls(
+        $state, $model->{domain}, $config,
+    );
     my $governed_segments = Selecto::Components::QueryLibrary->active_segment_entries(
         $model->{domain},
         $state->query_library_view,
         $state->query_library_segments // [],
+        $config,
     );
     my $applied_filter_count = scalar(grep { !$_->{draft} } @{$state->filters})
         + scalar(@$governed_segments);
@@ -126,8 +131,8 @@ sub _saved_queries ($class, $model, $panel_id, $tab_id) {
         '<button class="sc-button sc-secondary" type="submit">Save query</button></form></section>';
 }
 
-sub _query_library_view_controls ($class, $state, $domain) {
-    my $views = Selecto::Components::QueryLibrary->entries($domain, 'views');
+sub _query_library_view_controls ($class, $state, $domain, $config = undef) {
+    my $views = Selecto::Components::QueryLibrary->entries($domain, 'views', $config);
     return '' unless @$views;
     my $selected_view = $state->query_library_view // '';
     my $view_options = '<option value=""' . ($selected_view eq '' ? ' selected' : '') .
@@ -159,14 +164,15 @@ sub _query_library_view_controls ($class, $state, $domain) {
         $view_description . '</section>';
 }
 
-sub _query_library_filter_controls ($class, $state, $domain) {
-    my $segments = Selecto::Components::QueryLibrary->entries($domain, 'segments');
+sub _query_library_filter_controls ($class, $state, $domain, $config = undef) {
+    my $segments = Selecto::Components::QueryLibrary->entries($domain, 'segments', $config);
     my $parameters = [];
     eval {
         $parameters = Selecto::Components::QueryLibrary->parameter_entries(
             $domain,
             $state->query_library_view,
             $state->query_library_segments // [],
+            $config,
         );
         1;
     };
@@ -215,9 +221,9 @@ sub _query_library_filter_controls ($class, $state, $domain) {
             $parameter_controls . '</div></fieldset>' : '') . '</section>';
 }
 
-sub _query_library_picker ($class, $state, $domain) {
-    return $class->_query_library_view_controls($state, $domain) .
-        $class->_query_library_filter_controls($state, $domain);
+sub _query_library_picker ($class, $state, $domain, $config = undef) {
+    return $class->_query_library_view_controls($state, $domain, $config) .
+        $class->_query_library_filter_controls($state, $domain, $config);
 }
 
 sub _query_summary ($class, $state, $catalog, $governed_segments) {
