@@ -25,6 +25,7 @@ has 'action_authorizer';
 has 'saved_query_store';
 has 'localizer';
 has 'theme_resolver';
+has 'page_shell_resolver';
 
 my @DATE_FORMATS = (
     { id => 'day', label => 'Day' },
@@ -67,6 +68,8 @@ sub new ($class, @args) {
         if defined($self->localizer) && ref($self->localizer) ne 'CODE';
     die "theme_resolver must be a coderef\n"
         if defined($self->theme_resolver) && ref($self->theme_resolver) ne 'CODE';
+    die "page_shell_resolver must be a coderef\n"
+        if defined($self->page_shell_resolver) && ref($self->page_shell_resolver) ne 'CODE';
     die "action_authorizer must be a coderef\n"
         if defined($self->action_authorizer) && ref($self->action_authorizer) ne 'CODE';
     if (defined(my $store = $self->saved_query_store)) {
@@ -157,6 +160,7 @@ sub for_request ($self, $controller) {
     my $copy = bless {%$self}, ref($self);
     $copy->{_localization_controller} = $controller;
     delete $copy->{_resolved_theme};
+    delete $copy->{_resolved_page_shell};
     return $copy;
 }
 
@@ -194,6 +198,29 @@ sub _resolved_theme ($self) {
     $theme = {} unless defined $theme;
     die "theme_resolver must return an object\n" unless ref($theme) eq 'HASH';
     return $self->{_resolved_theme} = {%$theme};
+}
+
+sub page_shell ($self, $model = undef) {
+    return $self->{_resolved_page_shell} if exists $self->{_resolved_page_shell};
+    my $resolver = $self->page_shell_resolver;
+    return $self->{_resolved_page_shell} = {} unless $resolver;
+    my $shell = $resolver->($self->{_localization_controller}, $self, $model);
+    $shell = {} unless defined $shell;
+    die "page_shell_resolver must return an object\n" unless ref($shell) eq 'HASH';
+
+    my %resolved;
+    for my $key (qw(head_start_html head_html body_start_html)) {
+        next unless defined $shell->{$key};
+        die "page shell $key must be a scalar\n" if ref($shell->{$key});
+        $resolved{$key} = "$shell->{$key}";
+    }
+    if (defined $shell->{body_class}) {
+        die "page shell body_class must contain CSS class names\n"
+            if ref($shell->{body_class})
+                || "$shell->{body_class}" !~ /\A[A-Za-z0-9_-]+(?:\s+[A-Za-z0-9_-]+)*\z/;
+        $resolved{body_class} = "$shell->{body_class}";
+    }
+    return $self->{_resolved_page_shell} = \%resolved;
 }
 
 sub localization_terms ($self, $domain) {
