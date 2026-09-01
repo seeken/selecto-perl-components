@@ -257,6 +257,31 @@ This registers:
 - `GET /explore/products?format=xlsx|csv|tsv|json` for the current result page; and
 - `WS /explore/products/ws` for htmx 4 incremental updates.
 
+## Host themes
+
+An application can adapt an Explorer to request-specific branding without
+loading a host stylesheet into the portable component UI. Supply a
+`theme_resolver` callback in an Explorer configuration. It receives the
+current Mojolicious controller and request-local configuration and returns a
+`scheme` of `light` or `dark`, plus any of `primary`, `secondary`, and
+`on_primary` as six-digit hexadecimal colors.
+
+```perl
+theme_resolver => sub ($controller, $config) {
+    my $palette = MyApp::TenantTheme->for_request($controller);
+    return {
+        scheme     => 'light',
+        primary    => $palette->{brand_color},
+        secondary  => $palette->{accent_color},
+        on_primary => $palette->{brand_text_color},
+    };
+},
+```
+
+The values are validated before they become scoped CSS custom properties.
+Resolvers should return an empty object when no tenant palette is available;
+the shared dark palette remains the fallback.
+
 ## Domain localization
 
 Canonical domains can opt into request-time presentation localization without

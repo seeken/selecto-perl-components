@@ -53,6 +53,53 @@ like $html, qr/saved &lt;b&gt;ok&lt;\/b&gt;/,
 like $html, qr/data-selecto-url="\/explore\/products\?q=1&amp;filter_value=&lt;script&gt;"/,
     'canonical URLs are escaped in attributes';
 
+my $theme_controller = bless {}, 'TestSelectoComponents::ThemeController';
+my $theme_resolver_controller;
+my $theme_config = Selecto::Components::Config->new(
+    %{TestSelectoComponents::config()},
+    id => 'themed-products',
+    path => '/explore/themed-products',
+    theme_resolver => sub {
+        ($theme_resolver_controller) = @_;
+        return {
+            scheme => 'light',
+            primary => '#123456',
+            secondary => '#ABCDEF',
+            on_primary => '#FFFFFF',
+        };
+    },
+)->for_request($theme_controller);
+my $theme_state = Selecto::Components::State->from_input($theme_config, $domain, {});
+my $themed_html = Selecto::Components::Renderer->page({
+    config => $theme_config,
+    state => $theme_state,
+    domain => $domain,
+    canonical_url => '/explore/themed-products',
+});
+like $themed_html,
+    qr{<html lang="en" data-sc-color-scheme="light" style="--sc-brand:#123456;--sc-accent:#ABCDEF;--sc-on-brand:#FFFFFF">},
+    'request-resolved theme colors are rendered as scoped Explorer variables';
+is $theme_resolver_controller, $theme_controller,
+    'the theme resolver receives the request controller';
+
+my $unsafe_theme = Selecto::Components::Config->new(
+    %{TestSelectoComponents::config()},
+    id => 'unsafe-theme',
+    theme_resolver => sub { return {primary => 'red; background:url(x)'} },
+);
+my $theme_error = eval { $unsafe_theme->theme_style; undef } // $@;
+like $theme_error, qr/theme primary must be a hexadecimal color/,
+    'unsafe host theme values cannot enter an HTML style attribute';
+
+my $unsafe_scheme = Selecto::Components::Config->new(
+    %{TestSelectoComponents::config()},
+    id => 'unsafe-scheme',
+    theme_resolver => sub { return {scheme => 'light; color:red'} },
+);
+my $scheme_error = eval { $unsafe_scheme->theme_scheme; undef } // $@;
+like $scheme_error, qr/theme scheme must be light or dark/,
+    'theme schemes are restricted to the shared light and dark palettes';
+
 my $table = Selecto::Components::Renderer->_table(
     {
         columns => [{

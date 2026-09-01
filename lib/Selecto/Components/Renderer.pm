@@ -7,7 +7,7 @@ use Selecto::Components::Renderer::Builder ();
 use Selecto::Components::Renderer::Results ();
 use Selecto::Components::Renderer::Debug ();
 
-my $ASSET_REVISION = '20260828-2';
+my $ASSET_REVISION = '20260901-1';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -18,7 +18,14 @@ sub page ($class, $model) {
     my $title = _h($localized_title);
     my $surface = $class->surface($model);
     my $ws_path = _h($config->path . '/ws');
-    return '<!doctype html><html lang="en"><head><meta charset="utf-8">' .
+    my $theme_style = $config->theme_style;
+    my $theme_scheme = $config->theme_scheme;
+    my $theme_attribute = length($theme_style)
+        ? ' style="' . _h($theme_style) . '"' : '';
+    my $scheme_attribute = length($theme_scheme)
+        ? ' data-sc-color-scheme="' . _h($theme_scheme) . '"' : '';
+    return '<!doctype html><html lang="en"' . $scheme_attribute . $theme_attribute .
+        '><head><meta charset="utf-8">' .
         '<meta name="viewport" content="width=device-width,initial-scale=1">' .
         '<title>' . $title . '</title>' .
         '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' . $ASSET_REVISION . '">' .
