@@ -1,0 +1,50 @@
+#!/usr/bin/env perl
+
+use 5.034;
+use strict;
+use warnings;
+
+use Digest::SHA qw(sha256_hex);
+use File::Copy qw(copy);
+use File::Path qw(make_path);
+use File::Spec;
+use FindBin qw($Bin);
+use JSON::PP qw(decode_json);
+
+my $repo = File::Spec->rel2abs(File::Spec->catdir($Bin, '..'));
+my $dist = $ENV{SELECTO_API_CONSOLE_DIST}
+    // File::Spec->catdir($repo, '..', 'selecto-api-console', 'dist');
+my $manifest_path = File::Spec->catfile($dist, 'manifest.json');
+open my $manifest_file, '<:raw', $manifest_path
+    or die "Cannot read $manifest_path: $!\n";
+my $manifest_json = do { local $/; <$manifest_file> };
+close $manifest_file or die "Cannot close $manifest_path: $!\n";
+my $manifest = decode_json($manifest_json);
+die "Unsupported Selecto API Console asset manifest\n"
+    unless ($manifest->{format} // '') eq 'selecto.api-console.assets.v1';
+
+my @files = qw(
+    compatibility.json
+    index.html
+    selecto-api-console.css
+    selecto-api-console.js
+);
+my $target = File::Spec->catdir($repo, 'public', 'selecto-api-console');
+make_path($target);
+for my $file (@files) {
+    my $source = File::Spec->catfile($dist, $file);
+    open my $source_file, '<:raw', $source or die "Cannot read $source: $!\n";
+    my $content = do { local $/; <$source_file> };
+    close $source_file or die "Cannot close $source: $!\n";
+    my $expected = $manifest->{assets}{$file}{sha256} // '';
+    die "Digest mismatch for $source\n" unless sha256_hex($content) eq $expected;
+    copy($source, File::Spec->catfile($target, $file))
+        or die "Cannot copy $source: $!\n";
+}
+copy($manifest_path, File::Spec->catfile($target, 'manifest.json'))
+    or die "Cannot copy $manifest_path: $!\n";
+my $license = File::Spec->catfile($dist, '..', 'LICENSE');
+copy($license, File::Spec->catfile($target, 'LICENSE'))
+    or die "Cannot copy $license: $!\n";
+
+say "Synced Selecto API Console $manifest->{version} from $dist";

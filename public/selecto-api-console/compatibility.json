@@ -1,0 +1,20 @@
+{
+  "format": "selecto.api-console.compatibility.v1",
+  "canonical_api_contract": "selecto.canonical-domain-api",
+  "targets": [
+    {"id": "elixir_postgresql", "lineage": "selecto_elixir", "runtime": "elixir"},
+    {"id": "go_postgresql", "lineage": "selecto_go", "runtime": "go"},
+    {"id": "rails_postgresql", "lineage": "selecto_rails", "runtime": "ruby"},
+    {"id": "typescript_postgresql", "lineage": "selecto_typescript", "runtime": "node"},
+    {"id": "perl_postgresql", "lineage": "selecto_perl", "runtime": "perl"},
+    {"id": "rust_postgresql", "lineage": "selecto_rust", "runtime": "rust"},
+    {"id": "python_postgresql", "lineage": "selecto_python", "runtime": "python"},
+    {"id": "r_postgresql", "lineage": "selecto_r", "runtime": "r"},
+    {"id": "java_postgresql", "lineage": "selecto_jvm", "runtime": "java"},
+    {"id": "kotlin_postgresql", "lineage": "selecto_jvm", "runtime": "kotlin"},
+    {"id": "scala_postgresql", "lineage": "selecto_jvm", "runtime": "scala"},
+    {"id": "dotnet_postgresql", "lineage": "selecto_dotnet", "runtime": "dotnet"},
+    {"id": "fsharp_postgresql", "lineage": "selecto_dotnet", "runtime": "fsharp"},
+    {"id": "pg_selecto_postgresql", "lineage": "pg_selecto", "runtime": "postgresql_extension"}
+  ]
+}

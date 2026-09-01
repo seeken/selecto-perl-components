@@ -8,7 +8,7 @@ use Mojo::Base -base, -signatures;
 use Mojo::File qw(path);
 use Selecto::Components::Util qw(html_escape);
 
-my $ASSET_REVISION = '20260831-2';
+my $ASSET_REVISION = '0.1.0';
 
 sub install_assets ($class, $app) {
     die "install_assets requires a Mojolicious application\n"
@@ -32,9 +32,9 @@ sub page ($class, %options) {
     return '<!doctype html><html lang="en"><head><meta charset="utf-8">' .
         '<meta name="viewport" content="width=device-width,initial-scale=1">' .
         '<title>' . html_escape($title) . '</title>' .
-        '<link rel="stylesheet" href="/selecto-components/api-console.css?v=' .
+        '<link rel="stylesheet" href="/selecto-api-console/selecto-api-console.css?v=' .
         $ASSET_REVISION . '">' .
-        '<script defer src="/selecto-components/api-console.js?v=' .
+        '<script defer src="/selecto-api-console/selecto-api-console.js?v=' .
         $ASSET_REVISION . '"></script>' .
         '</head><body class="sac-body"><main class="sac-app" ' .
         'data-selecto-api-console data-api-base="' . html_escape($base_path) .
@@ -50,7 +50,8 @@ sub _base_path ($value) {
     $path =~ s{/+\z}{};
     die "base_path must be an absolute URL path\n"
         unless $path =~ m{\A/[A-Za-z0-9._~!\$&'()*+,;=:@%/-]+\z}
-            && index($path, '//') < 0;
+            && index($path, '//') < 0
+            && !grep { $_ eq '.' || $_ eq '..' } split m{/}, $path;
     return $path;
 }
 

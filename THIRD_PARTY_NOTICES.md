@@ -1,5 +1,12 @@
 # Third-party notices
 
+## @selecto/api-console 0.1.0
+
+The files beneath `public/selecto-api-console/` are generated distribution
+artifacts from the sibling `selecto-api-console` repository. They are shipped
+under the Ofizzy License reproduced at
+`public/selecto-api-console/LICENSE`.
+
 ## htmx 4.0.0
 
 The files `public/selecto-components/htmx.min.js` and
