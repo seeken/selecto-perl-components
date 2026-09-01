@@ -76,6 +76,17 @@ is $config->field_map($curated_domain)->{product_name}{label}, 'Product',
     'canonical labels replace generated picker labels';
 is $config->query_field_map($curated_domain)->{id}{type}, 'integer',
     'internal fields remain available for governed query dependencies';
+
+my $semantic_order_contract = $domain->contract;
+$semantic_order_contract->{source}{columns}{product_name}{label} = 'Zulu semantic label';
+$semantic_order_contract->{source}{columns}{unit_price}{label} = 'Alpha semantic label';
+my $semantic_order_domain = Selecto::Domain->parse($semantic_order_contract, strict => 1);
+my $semantic_order_catalog = $config->field_catalog($semantic_order_domain);
+my %semantic_position;
+@semantic_position{map { $_->{path} } @$semantic_order_catalog} = (0 .. $#$semantic_order_catalog);
+cmp_ok $semantic_position{unit_price}, '<', $semantic_position{product_name},
+    'field catalogs sort by semantic label instead of underlying field name';
+
 my $curated_state = Selecto::Components::State->from_input(
     $config, $curated_domain,
     {

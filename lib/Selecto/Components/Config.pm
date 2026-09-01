@@ -268,6 +268,11 @@ sub field_catalog ($self, $domain, $options = undef) {
             };
         }
     }
+    @catalog = sort {
+        lc($a->{label}) cmp lc($b->{label})
+            || $a->{label} cmp $b->{label}
+            || $a->{path} cmp $b->{path}
+    } @catalog;
     return \@catalog;
 }
 

@@ -12,9 +12,9 @@ my $page = Selecto::Components::APIConsole->page(
 );
 like $page, qr{data-selecto-api-console}, 'page exposes the framework-neutral mount point';
 like $page, qr{data-api-base="/api2/load/v1"}, 'page normalizes the API base path';
-like $page, qr{/selecto-components/api-console\.css\?v=20260831-1},
+like $page, qr{/selecto-components/api-console\.css\?v=20260831-2},
     'page loads the versioned shared stylesheet';
-like $page, qr{/selecto-components/api-console\.js\?v=20260831-1},
+like $page, qr{/selecto-components/api-console\.js\?v=20260831-2},
     'page loads the versioned shared JavaScript';
 
 $page = Selecto::Components::APIConsole->page(
