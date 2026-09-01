@@ -2,6 +2,7 @@ use 5.034;
 use strict;
 use warnings;
 use Test::More;
+use Storable qw(dclone);
 use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::Config;
@@ -324,6 +325,14 @@ my %colliding_measure_by_id = map { $_->{path} => $_ }
     @{$colliding_preset_config->measure_catalog($domain)};
 ok $colliding_measure_by_id{unit_price} && $colliding_measure_by_id{'field:unit_price'},
     'a curated preset cannot hide the configurable domain column with the same id';
+
+my $restricted_contract = dclone($domain->contract);
+$restricted_contract->{source}{columns}{unit_price}{internal} = 1;
+my $restricted_domain = Selecto::Domain->parse($restricted_contract, strict => 1);
+my %restricted_measure_by_id = map { $_->{path} => $_ }
+    @{$colliding_preset_config->measure_catalog($restricted_domain)};
+ok !$restricted_measure_by_id{unit_price} && !$restricted_measure_by_id{'field:unit_price'},
+    'a curated measure cannot expose a domain field marked internal by host policy';
 
 my $column_measures = Selecto::Components::State->from_input($column_measure_config, $domain, {
     q => 1,
