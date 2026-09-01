@@ -12,8 +12,21 @@ use FindBin qw($Bin);
 use JSON::PP qw(decode_json);
 
 my $repo = File::Spec->rel2abs(File::Spec->catdir($Bin, '..'));
-my $dist = $ENV{SELECTO_API_CONSOLE_DIST}
-    // File::Spec->catdir($repo, '..', 'selecto-api-console', 'dist');
+my $sibling = $ENV{SELECTO_LIVE_SELECTO_WEB}
+    // File::Spec->catdir($repo, '..', 'selecto-api-console');
+my $installed = File::Spec->catdir(
+    $repo, 'node_modules', '@selecto', 'api-console', 'dist'
+);
+my $dist = $ENV{SELECTO_API_CONSOLE_DIST};
+if (!defined $dist) {
+    $dist = -f File::Spec->catfile($sibling, 'package.json')
+        ? File::Spec->catdir($sibling, 'dist')
+        : $installed;
+}
+if ($dist eq File::Spec->catdir($sibling, 'dist')) {
+    system('node', File::Spec->catfile($sibling, 'scripts', 'build.mjs')) == 0
+        or die "Cannot build the sibling Selecto API Console\n";
+}
 my $manifest_path = File::Spec->catfile($dist, 'manifest.json');
 open my $manifest_file, '<:raw', $manifest_path
     or die "Cannot read $manifest_path: $!\n";

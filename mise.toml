@@ -1,5 +1,6 @@
 [tools]
 perl = "5.40.2"
+node = "22"
 
 [env]
 PORT = "4128"
@@ -8,10 +9,18 @@ PORT = "4128"
 description = "Run the Selecto Components Perl test suite"
 run = "script/with-local-sibling prove -lr t"
 
+[tasks.assets]
+description = "Build and sync shared web assets and the API Console from local siblings or npm"
+run = "node script/selecto-web-assets.mjs sync --profile perl-components --target public/selecto-components && script/sync-api-console"
+
+[tasks."assets:check"]
+description = "Verify committed generated browser assets match their shared sources"
+run = "node script/selecto-web-assets.mjs sync --profile perl-components --target public/selecto-components --check"
+
 [tasks.server]
 description = "Run the Northwind Components example"
 run = "script/with-local-sibling perl -Ilib examples/northwind.pl"
 
 [tasks.verify]
 description = "Run syntax, unit, WebSocket, and distribution checks"
-run = "script/with-local-sibling sh -c 'perl -Ilib -c examples/northwind.pl && prove -lr t && perl Makefile.PL && make test'"
+run = "mise run assets:check && script/with-local-sibling sh -c 'perl -Ilib -c examples/northwind.pl && prove -lr t && perl Makefile.PL && make test'"
