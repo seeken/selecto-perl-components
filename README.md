@@ -8,6 +8,12 @@ this package owns validated browser state, HTML, WebSockets, and assets.
 
 This is alpha software. Its browser transport is pinned to htmx `4.0.0`.
 
+The Perl explorer remains the visual reference, while the shared CSS source
+now lives in the sibling `selecto-api-console` JavaScript workspace as
+`@selecto/web-assets`. `mise run assets` regenerates this distribution's CSS,
+htmx files, and API Console from local siblings; the same resolver can consume
+installed npm packages later.
+
 ## Current surface
 
 - a reusable `Selecto::Components` Mojolicious plugin;
@@ -115,9 +121,10 @@ The packaged standalone page is also available at
 `/selecto-api-console/index.html?api=/api2/orders/v1`.
 
 Maintainers refresh the vendored distribution with
-`script/sync-api-console`. The script accepts `SELECTO_API_CONSOLE_DIST` for a
-non-sibling checkout and verifies every copied file against the shared asset
-manifest before changing the Perl package.
+`script/sync-api-console`. It builds the sibling `selecto-api-console` checkout
+when present, accepts `SELECTO_API_CONSOLE_DIST` for another checkout, and
+falls back to an installed `@selecto/api-console` package. Every copied file is
+verified against the shared asset manifest before changing the Perl package.
 
 ## State and transport contract
 
