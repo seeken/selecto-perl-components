@@ -388,6 +388,8 @@ sub measures_for_domain ($self, $domain) {
             type => defined($measure->{field}) ? $fields->{$measure->{field}}{type} : 'rows',
             curated => 1,
         }
+    } grep {
+        !defined($_->{field}) || exists($fields->{$_->{field}})
     } @{$self->measures};
     my %seen = map { $_->{id} => 1 } @measures;
     unless (grep { !defined($_->{field}) && $_->{aggregate} eq 'count' } @measures) {
