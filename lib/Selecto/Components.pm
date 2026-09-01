@@ -39,6 +39,13 @@ my %EXPORT_FORMATS = (
     },
 );
 
+sub normalize_export_format ($value) {
+    return '' if !defined($value) || ref($value);
+    my $format = lc "$value";
+    $format = 'xlsx' if $format eq 'excel';
+    return exists($EXPORT_FORMATS{$format}) ? $format : '';
+}
+
 =head1 NAME
 
 Selecto::Components - htmx WebSocket exploration UI for Selecto Perl
@@ -95,8 +102,7 @@ sub _routes ($app, $explorer, $origin_check) {
     my $config = $explorer->config;
     my $routes = $app->routes;
     $routes->get($config->path)->to(cb => sub ($controller) {
-        my $format = lc($controller->param('format') // '');
-        $format = 'xlsx' if $format eq 'excel';
+        my $format = normalize_export_format($controller->param('format'));
         my $model = _decorate_model($controller, $explorer->model(
             $controller, undef, {all_rows => $EXPORT_FORMATS{$format} ? 1 : 0},
         ));
