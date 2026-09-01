@@ -12,9 +12,9 @@ my $page = Selecto::Components::APIConsole->page(
 );
 like $page, qr{data-selecto-api-console}, 'page exposes the framework-neutral mount point';
 like $page, qr{data-api-base="/api2/load/v1"}, 'page normalizes the API base path';
-like $page, qr{/selecto-components/api-console\.css\?v=20260831-2},
+like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.1\.0},
     'page loads the versioned shared stylesheet';
-like $page, qr{/selecto-components/api-console\.js\?v=20260831-2},
+like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.1\.0},
     'page loads the versioned shared JavaScript';
 
 $page = Selecto::Components::APIConsole->page(
@@ -24,7 +24,7 @@ $page = Selecto::Components::APIConsole->page(
 unlike $page, qr{<Client & API>}, 'console title is not emitted as executable markup';
 like $page, qr{&lt;Client &amp; API&gt;}, 'console title is HTML escaped';
 
-for my $invalid ('api2/load/v1', '/api2//load/v1', '/api2/load/v1?x=1') {
+for my $invalid ('api2/load/v1', '/api2//load/v1', '/api2/load/v1?x=1', '/api2/../admin') {
     eval { Selecto::Components::APIConsole->page(base_path => $invalid) };
     like "$@", qr/base_path/, "invalid base path $invalid is rejected";
 }

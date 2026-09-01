@@ -83,14 +83,18 @@ Mojolicious-native transport and lifecycle boundaries.
 
 ## API Console contract
 
-The API Console browser code is host-neutral. It does not receive a serialized
+The API Console browser code is owned by the sibling `selecto-api-console`
+repository and packaged as `@selecto/api-console`. This Perl distribution
+ships generated `0.1.0` assets so Mojolicious applications remain
+self-contained; it does not fork the JavaScript or CSS source. The console is
+host-neutral. It does not receive a serialized
 field catalog from Perl and does not contain application domain names. A host
 serves the two packaged assets and provides a mount point containing the
 canonical API base path:
 
 ```html
-<link rel="stylesheet" href="/selecto-components/api-console.css">
-<script defer src="/selecto-components/api-console.js"></script>
+<link rel="stylesheet" href="/selecto-api-console/selecto-api-console.css">
+<script defer src="/selecto-api-console/selecto-api-console.js"></script>
 <main data-selecto-api-console
       data-api-base="/api2/orders/v1"
       data-title="Orders API Console"></main>
@@ -107,6 +111,13 @@ Mojolicious hosts may render the complete shell and install its static path
 with `Selecto::Components::APIConsole->page(...)` and
 `Selecto::Components::APIConsole->install_assets($app)`. Other Selecto hosts
 can serve the same JavaScript and CSS unchanged using the HTML contract above.
+The packaged standalone page is also available at
+`/selecto-api-console/index.html?api=/api2/orders/v1`.
+
+Maintainers refresh the vendored distribution with
+`script/sync-api-console`. The script accepts `SELECTO_API_CONSOLE_DIST` for a
+non-sibling checkout and verifies every copied file against the shared asset
+manifest before changing the Perl package.
 
 ## State and transport contract
 

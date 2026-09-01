@@ -1,9 +1,50 @@
-(function () {
+(function (global) {
   "use strict";
 
   const MAX_RELATION_DEPTH = 4;
   const TEMPORAL_TYPES = new Set(["date", "datetime", "naive_datetime", "utc_datetime", "epoch_datetime"]);
   const NUMERIC_TYPES = new Set(["integer", "decimal", "float", "number"]);
+
+  function normalizeAPIBase(value, fallback) {
+    const candidate = String(value || fallback || "/api/v1/selecto").replace(/\/+$/, "");
+    const invalidSegment = candidate.split("/").some((segment) => {
+      try {
+        const decoded = decodeURIComponent(segment);
+        return decoded === "." || decoded === "..";
+      } catch (_error) {
+        return true;
+      }
+    });
+    if (!/^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]+$/.test(candidate) || candidate.includes("//") || invalidSegment) {
+      throw new Error("The API console requires an absolute same-origin API path.");
+    }
+    return candidate;
+  }
+
+  function standaloneOption(name) {
+    if (typeof global.location === "undefined") return "";
+    return new URLSearchParams(global.location.search || "").get(name) || "";
+  }
+
+  async function discoverCanonicalAPI(base, fetchJSON) {
+    const normalizedBase = normalizeAPIBase(base);
+    const manifest = await fetchJSON(`${normalizedBase}/`);
+    const routes = Array.isArray(manifest.routes) ? manifest.routes : [];
+    const route = (operation, fallback) => {
+      const match = routes.find((item) => item && item.operation_id === operation && String(item.path || "").startsWith("/"));
+      if (!match) return fallback;
+      try {
+        return normalizeAPIBase(match.path);
+      } catch (_error) {
+        return fallback;
+      }
+    };
+    const domainPath = route("getDomain", `${normalizedBase}/domain`);
+    const openapiPath = route("getOpenApi", `${normalizedBase}/openapi.json`);
+    const queryPath = route("queryDomain", `${normalizedBase}/query`);
+    const [domain, openapi] = await Promise.all([fetchJSON(domainPath), fetchJSON(openapiPath)]);
+    return {base: normalizedBase, manifest, domain, openapi, queryPath};
+  }
 
   function humanize(value) {
     return String(value || "")
@@ -131,8 +172,8 @@
   class APIConsole {
     constructor(root) {
       this.root = root;
-      this.base = String(root.dataset.apiBase || "").replace(/\/+$/, "");
-      this.title = root.dataset.title || "Selecto API Console";
+      this.base = root.dataset.apiBase || standaloneOption("api");
+      this.title = root.dataset.title || standaloneOption("title") || "Selecto API Console";
       this.domain = null;
       this.manifest = null;
       this.openapi = null;
@@ -159,25 +200,14 @@
     }
 
     async start() {
-      if (!this.base.startsWith("/")) throw new Error("The API console requires an absolute API path.");
       try {
-        const manifest = await this.fetchJSON(`${this.base}/`);
-        const routes = Array.isArray(manifest.routes) ? manifest.routes : [];
-        const route = (operation, fallback) => {
-          const match = routes.find((item) => item && item.operation_id === operation && String(item.path || "").startsWith("/"));
-          return match ? match.path : fallback;
-        };
-        const domainPath = route("getDomain", `${this.base}/domain`);
-        const openapiPath = route("getOpenApi", `${this.base}/openapi.json`);
-        this.queryPath = route("queryDomain", `${this.base}/query`);
-        const [domain, openapi] = await Promise.all([
-          this.fetchJSON(domainPath),
-          this.fetchJSON(openapiPath),
-        ]);
-        this.manifest = manifest;
-        this.domain = domain;
-        this.openapi = openapi;
-        this.fields = collectFields(domain);
+        const discovery = await discoverCanonicalAPI(this.base, (path) => this.fetchJSON(path));
+        this.base = discovery.base;
+        this.manifest = discovery.manifest;
+        this.domain = discovery.domain;
+        this.openapi = discovery.openapi;
+        this.queryPath = discovery.queryPath;
+        this.fields = collectFields(discovery.domain);
         this.fieldMap = new Map(this.fields.map((field) => [field.path, field]));
         this.seedState();
         this.render();
@@ -810,7 +840,7 @@
       } catch (_error) {
         button.textContent = "Copy failed";
       }
-      window.setTimeout(() => (button.textContent = original), 1200);
+      global.setTimeout(() => (button.textContent = original), 1200);
     }
 
     renderFatal(error) {
@@ -819,16 +849,36 @@
       panel.append(element("span", "sac-kicker", "Selecto API Console"), element("h1", "", "Could not load the API"), element("p", "", error.message || String(error)));
       const retry = element("button", "sac-button sac-primary", "Retry");
       retry.type = "button";
-      retry.addEventListener("click", () => window.location.reload());
+      retry.addEventListener("click", () => global.location.reload());
       panel.append(retry);
       this.root.append(panel);
     }
   }
 
-  window.SelectoAPIConsole = {APIConsole, collectFields, compareSemanticFields, operatorsForType, segmentParameterSpecs};
-  if (typeof document !== "undefined") {
-    window.addEventListener("DOMContentLoaded", () => {
-      document.querySelectorAll("[data-selecto-api-console]").forEach((root) => new APIConsole(root).start());
+  function mountAll(rootDocument) {
+    const currentDocument = rootDocument || global.document;
+    if (!currentDocument) return [];
+    return Array.from(currentDocument.querySelectorAll("[data-selecto-api-console]"), (root) => {
+      const consoleInstance = new APIConsole(root);
+      consoleInstance.start();
+      return consoleInstance;
     });
   }
-})();
+
+  const api = {
+    version: "0.1.0",
+    APIConsole,
+    collectFields,
+    compareSemanticFields,
+    discoverCanonicalAPI,
+    mountAll,
+    normalizeAPIBase,
+    operatorsForType,
+    segmentParameterSpecs,
+  };
+  global.SelectoAPIConsole = api;
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  if (typeof global.document !== "undefined" && global.addEventListener) {
+    global.addEventListener("DOMContentLoaded", () => mountAll(global.document));
+  }
+})(typeof globalThis !== "undefined" ? globalThis : this);
