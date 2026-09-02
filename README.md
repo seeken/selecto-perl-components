@@ -477,6 +477,17 @@ choice_sources => {
         return [{value => 'internal', label => 'Internal'}];
     },
 },
+lookup_sources => {
+    carriers => sub ($controller, $request) {
+        # Authenticate and tenant-scope this query in the host application.
+        # $request includes query, limit, action, input, and selected_ids.
+        return [{
+            value => 501,
+            label => 'Acme Transport',
+            description => 'ID 501 · Detroit, MI',
+        }];
+    },
+},
 action_authorizer => sub ($controller, $request) {
     return {status => 'enabled'};
 },
@@ -517,7 +528,9 @@ load_build => {
             {id => 'destination', label => 'Destination', field => 'destination.city'},
         ],
         group_inputs => [{
-            id => 'carrier_id', label => 'Carrier ID', type => 'number',
+            id => 'carrier_id', label => 'Carrier', type => 'lookup',
+            lookup_source => 'carriers', value_type => 'integer',
+            direct_entry => 1, minimum_query_length => 2,
             required => 1, minimum => 1,
         }],
     },
@@ -531,7 +544,13 @@ index. Each group has its trusted server-resolved `marker`, its own
 `selected_ids`, and normalized `inputs`. The browser cannot submit custom
 marker colors, shapes, or labels. `row_details` are governed hidden fields
 shown beside each selected row in the confirmation card; they are display-only
-and are not submitted to the handler.
+and are not submitted to the handler. A `lookup` input uses the authenticated
+`GET /explore/products/actions/:action_id/lookups/:input_id` route and the
+corresponding host-owned `lookup_sources` callback. Results are normalized to
+`value`, `label`, and optional `description`; the chosen value, not its label,
+is submitted to the action handler. Lookup discovery reuses action
+authorization and includes the active group's selected row IDs so the host can
+apply tenant, eligibility, and row-level rules.
 
 The plugin adds its packaged `public/` directory to Mojolicious static paths.
 The htmx runtime and WebSocket extension are served locally; the browser does

@@ -12,6 +12,7 @@ use Selecto::Engine ();
 use Selecto::Statement ();
 
 our @ACTION_REQUESTS;
+our @LOOKUP_REQUESTS;
 our @SAVED_QUERY_REQUESTS;
 our @SAVED_QUERIES = (
     {name => 'Zulu inventory', url => '/explore/products?q=1&view=detail&field=product_name&limit=25&page=1'},
@@ -181,7 +182,10 @@ sub _domain {
                         id => 'stock', label => 'Stock', field => 'units_in_stock',
                     }],
                     group_inputs => [{
-                        id => 'carrier_id', label => 'Carrier ID', type => 'number',
+                        id => 'carrier_id', label => 'Carrier', type => 'lookup',
+                        lookup_source => 'carriers', value_type => 'integer',
+                        direct_entry => 1, minimum_query_length => 2,
+                        placeholder => 'Carrier name, key, ID, city, or state',
                         required => 1, minimum => 1,
                     }],
                 },
@@ -215,6 +219,24 @@ sub config {
                 return [
                     {value => 'internal', label => 'Internal'},
                     {value => 'public', label => 'Public'},
+                ];
+            },
+        },
+        lookup_sources => {
+            carriers => sub {
+                my ($controller, $request) = @_;
+                push @LOOKUP_REQUESTS, {%$request};
+                return [
+                    {
+                        value => 501,
+                        label => 'Acme Transport',
+                        description => 'ID 501 · Key ACME · Detroit, MI',
+                    },
+                    {
+                        value => 777,
+                        label => 'Arrow Logistics',
+                        description => 'ID 777 · Chicago, IL',
+                    },
                 ];
             },
         },
