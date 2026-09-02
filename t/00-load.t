@@ -15,6 +15,7 @@ use_ok 'Selecto::Components::Renderer::Builder';
 use_ok 'Selecto::Components::Renderer::Debug';
 use_ok 'Selecto::Components::Renderer::Markup';
 use_ok 'Selecto::Components::Renderer::Results';
+use_ok 'Selecto::Components::RowActions';
 use_ok 'Selecto::Components::State';
 use_ok 'Selecto::Components::Util';
 

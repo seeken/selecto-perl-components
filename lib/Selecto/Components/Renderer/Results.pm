@@ -4,6 +4,7 @@ use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(encode_json);
 use Selecto::Components::Renderer::Markup;
 use Selecto::Components::Renderer::Debug ();
+use Selecto::Components::RowActions ();
 
 sub _results ($class, $model) {
     return '<div class="sc-empty"><h2>Query unavailable</h2><p>Correct the controls and try again.</p></div>'
@@ -166,6 +167,10 @@ sub _table ($class, $result, $model) {
     my @group_indexes = grep { !$columns[$_]{measure} && !$columns[$_]{action_id} } 0 .. $#columns;
     my %group_position = map { $group_indexes[$_] => $_ } 0 .. $#group_indexes;
     my $rows = '';
+    my $row_dialog_id = 'selecto-row-dialog-' .
+        ($model->{config} && $model->{config}->can('id') ? $model->{config}->id : 'results');
+    my $row_dialog_action;
+    my $row_dialog_count = 0;
     for my $index (0 .. $#{$result->{records}}) {
         my $record = $result->{records}[$index];
         my $level = $result->{rollup}
@@ -175,6 +180,24 @@ sub _table ($class, $result, $model) {
             : $level < @group_indexes
                 ? ' class="sc-rollup-row sc-rollup-subtotal" data-rollup-level="' . _h($level) . '"'
                 : ' class="sc-rollup-row sc-rollup-detail" data-rollup-level="' . _h($level) . '"';
+        my $row_action = Selecto::Components::RowActions->resolve(
+            $result->{row_click_action}, $record, $result->{row_click_fields},
+        );
+        if ($row_action) {
+            $row_class = ' class="sc-clickable-row" tabindex="0" data-sc-row-click ' .
+                'data-sc-row-click-type="' . _h($row_action->{type}) . '" ' .
+                'data-sc-row-click-url="' . _h($row_action->{url}) . '" ';
+            if ($row_action->{type} eq 'iframe_modal') {
+                $row_dialog_action //= $row_action;
+                $row_dialog_count++;
+                $row_class .= 'data-sc-row-dialog-id="' . _h($row_dialog_id) . '" ' .
+                    'data-sc-row-click-title="' . _h($row_action->{title}) . '" ' .
+                    'aria-label="' . _h('Preview ' . $row_action->{title}) . '"';
+            } else {
+                $row_class .= 'data-sc-row-click-target="' . _h($row_action->{target}) . '" ' .
+                    'aria-label="' . _h('Open ' . $result->{row_click_action}{name}) . '"';
+            }
+        }
         my $cells = '';
         for my $column_index (0 .. $#columns) {
             my $column = $columns[$column_index];
@@ -236,8 +259,40 @@ sub _table ($class, $result, $model) {
     }
     my $column_count = scalar(@columns);
     $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count . '">No rows matched this query.</td></tr>';
+    my $dialog = $row_dialog_action
+        ? _row_iframe_dialog($row_dialog_id, $row_dialog_action, $row_dialog_count) : '';
     return '<div class="sc-table-wrap"><table><caption class="sc-visually-hidden">Query results</caption>' .
-        '<thead><tr>' . $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>';
+        '<thead><tr>' . $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>' .
+        $dialog;
+}
+
+sub _row_iframe_dialog ($dialog_id, $action, $row_count) {
+    my $title_id = $dialog_id . '-title';
+    my $navigation = $action->{navigation_enabled} ? '' : ' hidden';
+    my $allow = defined($action->{allow})
+        ? ' allow="' . _h($action->{allow}) . '"' : '';
+    my $sandbox = defined($action->{sandbox})
+        ? ' sandbox="' . _h($action->{sandbox}) . '"' : '';
+    return '<dialog class="sc-row-dialog sc-row-dialog-' . _h($action->{size}) . '" id="' .
+        _h($dialog_id) . '" aria-labelledby="' . _h($title_id) . '" data-sc-row-dialog ' .
+        'data-sc-row-dialog-navigation="' . ($action->{navigation_enabled} ? '1' : '0') . '">' .
+        '<section class="sc-row-dialog-panel"><header><div><p class="sc-eyebrow">Result details</p>' .
+        '<h3 id="' . _h($title_id) . '" data-sc-row-dialog-title>' . _h($action->{title}) .
+        '</h3></div><button type="button" class="sc-action-close" data-sc-row-dialog-close ' .
+        'aria-label="Close detail preview">×</button></header>' .
+        '<div class="sc-row-dialog-toolbar"><div class="sc-row-dialog-navigation"' . $navigation .
+        '><button type="button" class="sc-button sc-secondary" data-sc-row-dialog-nav="previous">' .
+        'Previous</button><button type="button" class="sc-button sc-secondary" ' .
+        'data-sc-row-dialog-nav="next">Next</button></div>' .
+        '<span data-sc-row-dialog-position aria-live="polite">Row 1 of ' . _h($row_count) .
+        ' on this page</span><a class="sc-button sc-secondary" href="#" target="_blank" ' .
+        'rel="noopener" data-sc-row-dialog-open>Open full page</a></div>' .
+        '<div class="sc-row-dialog-frame-shell"><div class="sc-row-dialog-loading" ' .
+        'data-sc-row-dialog-loading role="status" hidden>Loading details…</div>' .
+        '<iframe data-sc-row-dialog-frame title="' . _h($action->{title}) . '" loading="lazy" ' .
+        'referrerpolicy="' . _h($action->{referrer_policy}) . '"' . $allow . $sandbox . '></iframe></div>' .
+        '<footer><button type="button" class="sc-button sc-secondary" ' .
+        'data-sc-row-dialog-close>Close</button></footer></section></dialog>';
 }
 
 sub _nested_table ($column, $value, $row_number = undef) {

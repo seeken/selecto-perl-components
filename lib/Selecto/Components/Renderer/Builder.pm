@@ -3,6 +3,7 @@ package Selecto::Components::Renderer::Builder;
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(encode_json);
 use Selecto::Components::QueryLibrary ();
+use Selecto::Components::RowActions ();
 use Selecto::Components::Renderer::Markup;
 
 sub _form ($class, $model, $catalog, $detail_catalog = undef) {
@@ -31,7 +32,8 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
     my $applied_filter_count = scalar(grep { !$_->{draft} } @{$state->filters})
         + scalar(@$governed_segments);
     my $query_summary = $class->_query_summary($state, $catalog, $governed_segments);
-    my $detail_controls = $class->_field_picker($state, $detail_catalog // $catalog, $config) .
+    my $detail_controls = $class->_row_click_picker($state, $model->{domain}, $config) .
+        $class->_field_picker($state, $detail_catalog // $catalog, $config) .
         $class->_order_picker($state, $catalog, $config->max_orders) .
         _measure_selection_hidden($state) .
         _selection_hidden('group', $state->groups, $state->group_configs);
@@ -39,6 +41,7 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $class->_group_picker($state, $catalog, $config) .
         $class->_measure_picker($state, $measure_catalog, $config) .
         _selection_hidden('field', $state->fields, $state->field_configs) .
+        _hidden('row_click_action', $state->row_click_action // '') .
         join('', map {
             _hidden('order', $_->{field}) . _hidden('direction', $_->{direction})
         } @{$state->orders});
@@ -93,6 +96,19 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         '<button class="sc-button sc-primary" type="submit">Run query</button>' .
         '<noscript><p class="sc-note">JavaScript is off; this form still runs as a normal GET.</p></noscript></form>' .
         $saved_queries . '</div></aside>';
+}
+
+sub _row_click_picker ($class, $state, $domain, $config) {
+    my $catalog = Selecto::Components::RowActions->catalog($domain, $config);
+    return '' unless @$catalog;
+    my $options = '<option value="">No row action</option>' . join('', map {
+        '<option value="' . _h($_->{id}) . '"' .
+            ($_->{id} eq ($state->row_click_action // '') ? ' selected' : '') . '>' .
+            _h($_->{name}) . '</option>'
+    } @$catalog);
+    return '<label class="sc-row-click-control"><span>Row click</span>' .
+        '<select name="row_click_action" aria-label="Action when a result row is clicked">' .
+        $options . '</select></label>';
 }
 
 sub _saved_queries ($class, $model, $panel_id, $tab_id) {

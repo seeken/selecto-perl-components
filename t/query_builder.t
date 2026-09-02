@@ -198,6 +198,24 @@ is_deeply $linked_detail_statement->columns, [qw(product_name __selecto_link_id)
 is $linked_detail->{columns}[0]{link_key}, '__selecto_link_id',
     'the visible linked name references its hidden object id';
 
+my $row_click_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'unit_price', measure => 'count',
+    row_click_action => 'open_product', order => 'unit_price', limit => 25, page => 1,
+});
+my $row_click_detail = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $row_click_state,
+);
+my $row_click_statement = $postgresql->compile($domain, $row_click_detail->{query});
+is_deeply $row_click_statement->columns, [
+    qw(unit_price __selecto_row_click_id __selecto_row_click_product_name),
+], 'row actions automatically fetch their missing required fields as hidden columns';
+is_deeply $row_click_detail->{row_click_fields}, [
+    {field => 'id', key => '__selecto_row_click_id'},
+    {field => 'product_name', key => '__selecto_row_click_product_name'},
+], 'row actions retain the governed field-to-result mapping used by the renderer';
+is $row_click_detail->{row_click_action}{id}, 'open_product',
+    'the selected validated row action reaches result metadata';
+
 my $library_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     query_library_view => 'low_stock_products',
