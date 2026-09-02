@@ -204,7 +204,8 @@ sub _normalize_inputs ($class, $specs, $config, $controller, $action, $domain, $
         my $type = lc(_text($spec->{type}) || 'string');
         $type = 'textarea' if $type eq 'text';
         $type = 'select' if $type eq 'choice';
-        $type = 'string' unless $type =~ /\A(?:string|textarea|select|number|date|datetime-local)\z/;
+        $type = 'lookup' if $type =~ /\A(?:autocomplete|entity_lookup)\z/;
+        $type = 'string' unless $type =~ /\A(?:string|textarea|select|lookup|number|date|datetime-local)\z/;
         my $input = {
             id => $id,
             label => $config->localize(
@@ -224,6 +225,33 @@ sub _normalize_inputs ($class, $specs, $config, $controller, $action, $domain, $
             (defined($spec->{minimum}) ? (minimum => 0 + $spec->{minimum}) : ()),
             (defined($spec->{maximum}) ? (maximum => 0 + $spec->{maximum}) : ()),
         };
+        if ($type eq 'lookup') {
+            my $source = _text($spec->{lookup_source});
+            die "lookup input $id requires a configured lookup_source\n"
+                unless $source =~ /\A[a-z][a-z0-9_-]*\z/
+                    && $config->lookup_source($source);
+            my $minimum_query_length = _text($spec->{minimum_query_length});
+            $minimum_query_length = 2
+                unless $minimum_query_length =~ /\A\d+\z/
+                    && $minimum_query_length >= 1
+                    && $minimum_query_length <= 20;
+            my $result_limit = _text($spec->{result_limit});
+            $result_limit = 20
+                unless $result_limit =~ /\A\d+\z/
+                    && $result_limit >= 1
+                    && $result_limit <= 50;
+            my $value_type = lc(_text($spec->{value_type}) || 'string');
+            $value_type = 'string' unless $value_type =~ /\A(?:string|integer)\z/;
+            $input->{lookup_source} = $source;
+            $input->{lookup_url} = $config->path . '/actions/' . $action->{id}
+                . '/lookups/' . $id;
+            $input->{minimum_query_length} = 0 + $minimum_query_length;
+            $input->{result_limit} = 0 + $result_limit;
+            $input->{value_type} = $value_type;
+            $input->{direct_entry} = $spec->{direct_entry} ? 1 : 0;
+            my $placeholder = _text($spec->{placeholder});
+            $input->{placeholder} = $placeholder if length $placeholder;
+        }
         my $options = $spec->{options};
         my $source = _text($spec->{choice_source});
         if ($source ne '') {
@@ -265,6 +293,16 @@ sub _request_inputs {
                 if defined($input->{minimum}) && $value < $input->{minimum};
             push @errors, "$input->{label} is above its maximum."
                 if defined($input->{maximum}) && $value > $input->{maximum};
+        }
+        if ($input->{type} eq 'lookup' && ($input->{value_type} // '') eq 'integer') {
+            push @errors, "$input->{label} must be a valid selection."
+                unless $value =~ /\A\d+\z/;
+            push @errors, "$input->{label} is below its minimum."
+                if $value =~ /\A\d+\z/ && defined($input->{minimum})
+                    && $value < $input->{minimum};
+            push @errors, "$input->{label} is above its maximum."
+                if $value =~ /\A\d+\z/ && defined($input->{maximum})
+                    && $value > $input->{maximum};
         }
         if (defined($input->{min_length}) && length($value) < $input->{min_length}) {
             push @errors, "$input->{label} is too short.";

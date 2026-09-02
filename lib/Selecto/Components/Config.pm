@@ -22,6 +22,7 @@ has max_action_rows => 1000;
 has show_sql       => 0;
 has action_handlers => sub { return {} };
 has choice_sources  => sub { return {} };
+has lookup_sources  => sub { return {} };
 has 'action_authorizer';
 has 'saved_query_store';
 has 'localizer';
@@ -65,6 +66,7 @@ sub new ($class, @args) {
             && $self->max_action_rows >= 1 && $self->max_action_rows <= 1000;
     die "action_handlers must be an object\n" unless ref($self->action_handlers) eq 'HASH';
     die "choice_sources must be an object\n" unless ref($self->choice_sources) eq 'HASH';
+    die "lookup_sources must be an object\n" unless ref($self->lookup_sources) eq 'HASH';
     die "localizer must be a coderef\n"
         if defined($self->localizer) && ref($self->localizer) ne 'CODE';
     die "theme_resolver must be a coderef\n"
@@ -95,6 +97,12 @@ sub new ($class, @args) {
             unless $id =~ /\A[a-z][a-z0-9_-]*\z/;
         die "choice source $id must be a coderef\n"
             unless ref($self->choice_sources->{$id}) eq 'CODE';
+    }
+    for my $id (keys %{$self->lookup_sources}) {
+        die "lookup source id must be a lowercase identifier\n"
+            unless $id =~ /\A[a-z][a-z0-9_-]*\z/;
+        die "lookup source $id must be a coderef\n"
+            unless ref($self->lookup_sources->{$id}) eq 'CODE';
     }
 
     my %known_view = map { $_ => 1 } qw(detail aggregate graph);
@@ -147,6 +155,10 @@ sub action_handler ($self, $id) {
 
 sub choice_source ($self, $id) {
     return $self->choice_sources->{$id};
+}
+
+sub lookup_source ($self, $id) {
+    return $self->lookup_sources->{$id};
 }
 
 sub saved_queries_enabled ($self, $domain) {

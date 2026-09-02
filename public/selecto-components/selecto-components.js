@@ -1407,7 +1407,15 @@
   function groupedActionState(root) {
     var key = root.dataset.scActionStateKey || actionIdFor(root);
     if (!groupedActionStates[key]) {
-      groupedActionStates[key] = {groupCount: 0, assignments: Object.create(null), inputs: Object.create(null)};
+      groupedActionStates[key] = {
+        groupCount: 0,
+        assignments: Object.create(null),
+        inputs: Object.create(null),
+        lookupLabels: Object.create(null)
+      };
+    }
+    if (!groupedActionStates[key].lookupLabels) {
+      groupedActionStates[key].lookupLabels = Object.create(null);
     }
     return groupedActionStates[key];
   }
@@ -1674,6 +1682,7 @@
     state.groupCount = 0;
     state.assignments = Object.create(null);
     state.inputs = Object.create(null);
+    state.lookupLabels = Object.create(null);
     renderGroupedActionRows(root);
   }
 
@@ -1753,9 +1762,59 @@
     window.requestAnimationFrame(restoreBulkActions);
   });
 
-  function groupInputControl(spec, value, groupIndex) {
+  function groupLookupControl(spec, value, displayValue, groupIndex) {
+    var wrapper = document.createElement("div");
+    wrapper.className = "sc-action-lookup";
+    wrapper.dataset.scActionLookup = "";
+
+    var selected = document.createElement("input");
+    selected.type = "hidden";
+    selected.dataset.scLookupValue = "";
+    selected.dataset.scGroupInput = spec.id;
+    selected.dataset.scGroupIndex = String(groupIndex);
+    selected.value = value === undefined || value === null ? "" : value;
+
+    var query = document.createElement("input");
+    query.type = "search";
+    query.autocomplete = "off";
+    query.spellcheck = false;
+    query.className = "sc-action-lookup-query";
+    query.dataset.scLookupQuery = "";
+    query.dataset.scLookupUrl = spec.lookup_url || "";
+    query.dataset.scLookupInput = spec.id;
+    query.dataset.scLookupGroupIndex = String(groupIndex);
+    query.dataset.scLookupMinimumLength = String(spec.minimum_query_length || 2);
+    query.dataset.scLookupDirectEntry = spec.direct_entry ? "1" : "0";
+    query.dataset.scLookupValueType = spec.value_type || "string";
+    query.dataset.scLookupSelectedValue = selected.value;
+    query.placeholder = spec.placeholder || "Search and choose " + String(spec.label || spec.id).toLowerCase();
+    query.setAttribute("role", "combobox");
+    query.setAttribute("aria-autocomplete", "list");
+    query.setAttribute("aria-expanded", "false");
+    query.setAttribute("aria-label", spec.label || spec.id);
+    query.required = Boolean(spec.required);
+    query.value = displayValue || selected.value;
+
+    var results = document.createElement("div");
+    results.className = "sc-action-lookup-results";
+    results.dataset.scLookupResults = "";
+    results.id = "sc-action-lookup-" + groupIndex + "-" + spec.id;
+    results.setAttribute("role", "listbox");
+    results.hidden = true;
+    query.setAttribute("aria-controls", results.id);
+
+    var hint = document.createElement("small");
+    hint.className = "sc-action-lookup-hint";
+    hint.textContent = "Search by name, key, ID, or location.";
+    wrapper.append(query, selected, results, hint);
+    return wrapper;
+  }
+
+  function groupInputControl(spec, value, displayValue, groupIndex) {
     var control;
-    if (spec.type === "select") {
+    if (spec.type === "lookup") {
+      return groupLookupControl(spec, value, displayValue, groupIndex);
+    } else if (spec.type === "select") {
       control = document.createElement("select");
       var blank = document.createElement("option");
       blank.value = "";
@@ -1785,6 +1844,221 @@
     return control;
   }
 
+  function lookupElements(query) {
+    var wrapper = query && query.closest("[data-sc-action-lookup]");
+    var resultsId = query && query.getAttribute("aria-controls");
+    return {
+      wrapper: wrapper,
+      selected: wrapper && wrapper.querySelector("[data-sc-lookup-value]"),
+      results: (wrapper && wrapper.querySelector("[data-sc-lookup-results]"))
+        || (resultsId && document.getElementById(resultsId))
+    };
+  }
+
+  function positionLookup(query) {
+    var elements = lookupElements(query);
+    if (!elements.results || elements.results.hidden || !query.isConnected) return;
+    var bounds = query.getBoundingClientRect();
+    var viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+    var viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+    var margin = 8;
+    var width = Math.min(bounds.width, viewportWidth - margin * 2);
+    var left = Math.max(margin, Math.min(bounds.left, viewportWidth - width - margin));
+    var below = viewportHeight - bounds.bottom - margin;
+    var above = bounds.top - margin;
+    var openAbove = below < 150 && above > below;
+    var available = Math.max(80, openAbove ? above : below);
+
+    elements.results.classList.add("is-portaled");
+    elements.results.style.left = left + "px";
+    elements.results.style.right = "auto";
+    elements.results.style.width = width + "px";
+    elements.results.style.maxHeight = Math.min(260, available) + "px";
+    if (openAbove) {
+      elements.results.style.top = "auto";
+      elements.results.style.bottom = (viewportHeight - bounds.top + 4) + "px";
+    } else {
+      elements.results.style.top = (bounds.bottom + 4) + "px";
+      elements.results.style.bottom = "auto";
+    }
+  }
+
+  function portalLookup(query) {
+    var elements = lookupElements(query);
+    var dialog = query && query.closest("[data-sc-action-dialog]");
+    if (!elements.results || !dialog) return;
+    if (elements.results.parentElement !== dialog) dialog.appendChild(elements.results);
+    elements.results._scLookupQuery = query;
+  }
+
+  function closeLookup(query) {
+    var elements = lookupElements(query);
+    if (!elements.results) return;
+    if (query._scLookupTimer) window.clearTimeout(query._scLookupTimer);
+    if (query._scLookupAbort) query._scLookupAbort.abort();
+    query._scLookupTimer = null;
+    query._scLookupAbort = null;
+    elements.results.hidden = true;
+    elements.results.replaceChildren();
+    elements.results.classList.remove("is-portaled");
+    elements.results.removeAttribute("style");
+    elements.results._scLookupQuery = null;
+    if (elements.wrapper && elements.results.parentElement !== elements.wrapper) {
+      elements.wrapper.appendChild(elements.results);
+    }
+    query.setAttribute("aria-expanded", "false");
+    query.removeAttribute("aria-activedescendant");
+    query._scLookupIndex = -1;
+  }
+
+  function lookupMessage(results, message) {
+    results.replaceChildren();
+    var status = document.createElement("div");
+    status.className = "sc-action-lookup-status";
+    status.setAttribute("role", "status");
+    status.textContent = message;
+    results.appendChild(status);
+    results.hidden = false;
+  }
+
+  function chooseLookupResult(query, option) {
+    var elements = lookupElements(query);
+    if (!elements.selected || !elements.results) return;
+    var value = option.dataset.scLookupValue || "";
+    var label = option.dataset.scLookupLabel || value;
+    elements.selected.value = value;
+    query.value = label + (label.indexOf("(" + value + ")") === -1 ? " (" + value + ")" : "");
+    query.dataset.scLookupSelectedValue = value;
+    query.setCustomValidity("");
+
+    var form = query.closest("[data-sc-action-form]");
+    var root = form && form.closest("[data-sc-bulk-action]");
+    var index = query.dataset.scLookupGroupIndex;
+    if (root && index !== undefined) {
+      var state = groupedActionState(root);
+      if (!state.lookupLabels[index]) state.lookupLabels[index] = Object.create(null);
+      state.lookupLabels[index][query.dataset.scLookupInput] = query.value;
+      serializeGroupedAction(root, form);
+    }
+    closeLookup(query);
+    query.focus();
+  }
+
+  function renderLookupResults(query, items) {
+    var elements = lookupElements(query);
+    if (!elements.results) return;
+    elements.results.replaceChildren();
+    if (!items.length) {
+      lookupMessage(elements.results, "No matching records.");
+      query.setAttribute("aria-expanded", "true");
+      portalLookup(query);
+      positionLookup(query);
+      return;
+    }
+    items.forEach(function (item, index) {
+      if (!item || item.value === undefined || item.label === undefined) return;
+      var option = document.createElement("button");
+      option.type = "button";
+      option.className = "sc-action-lookup-option";
+      option.id = elements.results.id + "-option-" + index;
+      option.dataset.scLookupOption = "";
+      option.dataset.scLookupValue = String(item.value);
+      option.dataset.scLookupLabel = String(item.label);
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", "false");
+      var label = document.createElement("strong");
+      label.textContent = String(item.label);
+      option.appendChild(label);
+      if (item.description) {
+        var description = document.createElement("small");
+        description.textContent = String(item.description);
+        option.appendChild(description);
+      }
+      elements.results.appendChild(option);
+    });
+    elements.results.hidden = false;
+    query.setAttribute("aria-expanded", "true");
+    query._scLookupIndex = -1;
+    portalLookup(query);
+    positionLookup(query);
+  }
+
+  function searchLookup(query) {
+    var term = query.value.trim();
+    var minimum = Number(query.dataset.scLookupMinimumLength || 2);
+    var elements = lookupElements(query);
+    if (!elements.results || term.length < minimum) {
+      closeLookup(query);
+      return;
+    }
+    if (query._scLookupAbort) query._scLookupAbort.abort();
+    var abort = typeof window.AbortController === "function" ? new AbortController() : null;
+    query._scLookupAbort = abort;
+    lookupMessage(elements.results, "Searching…");
+    query.setAttribute("aria-expanded", "true");
+    portalLookup(query);
+    positionLookup(query);
+
+    var url = new URL(query.dataset.scLookupUrl, window.location.href);
+    url.searchParams.set("q", term);
+    var form = query.closest("[data-sc-action-form]");
+    var root = form && form.closest("[data-sc-bulk-action]");
+    var rawIndex = query.dataset.scLookupGroupIndex;
+    var index = Number(rawIndex);
+    if (root && rawIndex !== undefined) {
+      var group = activeActionGroups(root).find(function (item) { return item.index === index; });
+      (group ? group.selected_ids : []).forEach(function (id) {
+        url.searchParams.append("selected_id", id);
+      });
+    } else if (form) {
+      form.querySelectorAll('input[name="selected_id"]').forEach(function (input) {
+        if (input.value) url.searchParams.append("selected_id", input.value);
+      });
+    }
+    window.fetch(url.toString(), {
+      credentials: "same-origin",
+      headers: {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+      signal: abort ? abort.signal : undefined
+    }).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (payload) {
+        if (!response.ok) throw new Error(payload.error || "Lookup failed");
+        return Array.isArray(payload.results) ? payload.results : [];
+      });
+    }).then(function (items) {
+      if (query._scLookupAbort !== abort) return;
+      renderLookupResults(query, items);
+    }).catch(function (error) {
+      if (error && error.name === "AbortError") return;
+      if (query._scLookupAbort !== abort) return;
+      lookupMessage(elements.results, "Search unavailable. Try again.");
+      query.setAttribute("aria-expanded", "true");
+    });
+  }
+
+  function stageLookupSearch(query) {
+    var elements = lookupElements(query);
+    if (!elements.selected) return;
+    var term = query.value.trim();
+    var direct = query.dataset.scLookupDirectEntry === "1";
+    var integer = query.dataset.scLookupValueType === "integer";
+    var directValue = direct && (!integer || /^\d+$/.test(term));
+    elements.selected.value = directValue ? term : "";
+    query.dataset.scLookupSelectedValue = elements.selected.value;
+    query.setCustomValidity(term && !directValue ? "Choose a result from the list." : "");
+
+    var form = query.closest("[data-sc-action-form]");
+    var root = form && form.closest("[data-sc-bulk-action]");
+    var index = query.dataset.scLookupGroupIndex;
+    if (root && index !== undefined) {
+      var state = groupedActionState(root);
+      if (!state.lookupLabels[index]) state.lookupLabels[index] = Object.create(null);
+      state.lookupLabels[index][query.dataset.scLookupInput] = directValue ? term : "";
+      serializeGroupedAction(root, form);
+    }
+    if (query._scLookupTimer) window.clearTimeout(query._scLookupTimer);
+    query._scLookupTimer = window.setTimeout(function () { searchLookup(query); }, 300);
+  }
+
   function renderGroupedActionDialog(root, form) {
     var groups = activeActionGroups(root);
     var specs = groupedActionInputSpecs(root);
@@ -1794,6 +2068,7 @@
     groups.forEach(function (group) {
       var card = document.createElement("section");
       card.className = "sc-group-action-card";
+      card.dataset.scGroupActionCard = group.marker.id;
       card.style.setProperty("--sc-marker-color", group.marker.color);
 
       var header = document.createElement("header");
@@ -1832,12 +2107,18 @@
       card.appendChild(orders);
 
       specs.forEach(function (spec) {
-        var label = document.createElement("label");
-        label.className = "sc-action-input";
+        var field = document.createElement("div");
+        field.className = "sc-action-input";
         var caption = document.createElement("span");
         caption.textContent = spec.label + (spec.required ? " *" : "");
-        label.append(caption, groupInputControl(spec, group.inputs[spec.id], group.index));
-        card.appendChild(label);
+        var state = groupedActionState(root);
+        var displayValue = state.lookupLabels[group.index]
+          && state.lookupLabels[group.index][spec.id];
+        field.append(
+          caption,
+          groupInputControl(spec, group.inputs[spec.id], displayValue, group.index)
+        );
+        card.appendChild(field);
       });
       container.appendChild(card);
     });
@@ -1883,7 +2164,72 @@
     }
   });
 
+  document.addEventListener("input", function (event) {
+    if (event.target.matches("[data-sc-lookup-query]")) stageLookupSearch(event.target);
+  });
+
+  document.addEventListener("focusin", function (event) {
+    if (!event.target.matches("[data-sc-lookup-query]")) return;
+    var query = event.target;
+    if (!query.dataset.scLookupSelectedValue) searchLookup(query);
+  });
+
+  document.addEventListener("scroll", function () {
+    document.querySelectorAll("[data-sc-lookup-results].is-portaled:not([hidden])").forEach(function (results) {
+      if (results._scLookupQuery) positionLookup(results._scLookupQuery);
+    });
+  }, true);
+
+  window.addEventListener("resize", function () {
+    document.querySelectorAll("[data-sc-lookup-results].is-portaled:not([hidden])").forEach(function (results) {
+      if (results._scLookupQuery) positionLookup(results._scLookupQuery);
+    });
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (!event.target.matches("[data-sc-lookup-query]")) return;
+    var query = event.target;
+    var elements = lookupElements(query);
+    var options = elements.results
+      ? Array.from(elements.results.querySelectorAll("[data-sc-lookup-option]")) : [];
+    if (event.key === "Escape") {
+      closeLookup(query);
+      return;
+    }
+    if (!options.length || (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter")) {
+      return;
+    }
+    event.preventDefault();
+    var index = Number.isInteger(query._scLookupIndex) ? query._scLookupIndex : -1;
+    if (event.key === "ArrowDown") index = Math.min(index + 1, options.length - 1);
+    if (event.key === "ArrowUp") index = Math.max(index - 1, 0);
+    if (event.key === "Enter" && index >= 0) {
+      chooseLookupResult(query, options[index]);
+      return;
+    }
+    query._scLookupIndex = index;
+    options.forEach(function (option, optionIndex) {
+      var active = optionIndex === index;
+      option.classList.toggle("is-active", active);
+      option.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    query.setAttribute("aria-activedescendant", options[index].id);
+    options[index].scrollIntoView({block: "nearest"});
+  });
+
   document.addEventListener("click", function (event) {
+    var lookupOption = event.target.closest("[data-sc-lookup-option]");
+    if (lookupOption) {
+      var lookupResults = lookupOption.closest("[data-sc-lookup-results]");
+      var lookup = lookupOption.closest("[data-sc-action-lookup]");
+      var lookupQuery = (lookupResults && lookupResults._scLookupQuery)
+        || (lookup && lookup.querySelector("[data-sc-lookup-query]"));
+      if (lookupQuery) chooseLookupResult(lookupQuery, lookupOption);
+      return;
+    }
+    if (!event.target.closest("[data-sc-action-lookup]")) {
+      document.querySelectorAll("[data-sc-lookup-query]").forEach(closeLookup);
+    }
     var groupMarker = event.target.closest("[data-sc-group-marker]");
     if (groupMarker) {
       var markerResults = groupMarker.closest(".sc-results");
@@ -1913,6 +2259,11 @@
       var ids = selectedRowIds(root);
       if (!form || ids.length === 0) return;
       form.reset();
+      form.querySelectorAll("[data-sc-lookup-query]").forEach(function (query) {
+        query.dataset.scLookupSelectedValue = "";
+        query.setCustomValidity("");
+        closeLookup(query);
+      });
       populateActionTargets(form, ids);
       if (actionMode(root) === "groups") renderGroupedActionDialog(root, form);
       var result = form.querySelector("[data-sc-action-result]");
@@ -1924,8 +2275,11 @@
       var submit = form.querySelector('button[type="submit"]');
       if (submit) {
         submit.disabled = false;
+        submit.hidden = false;
         submit.textContent = root.dataset.scActionSubmitLabel || "Apply to selected rows";
       }
+      var footerClose = form.querySelector("footer [data-sc-action-close]");
+      if (footerClose) footerClose.textContent = "Cancel";
       if (typeof dialog.showModal === "function") dialog.showModal();
       else dialog.setAttribute("open", "");
       return;
@@ -1939,6 +2293,147 @@
       else closeDialog.removeAttribute("open");
     }
   });
+
+  function localActionResultUrl(value) {
+    if (!value || typeof value !== "string") return "";
+    try {
+      var url = new URL(value, window.location.href);
+      if (url.origin !== window.location.origin) return "";
+      return url.pathname + url.search + url.hash;
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function appendActionResultMeta(container, content) {
+    if (!content) return;
+    if (container.childNodes.length) {
+      var separator = document.createElement("span");
+      separator.className = "sc-action-built-load-separator";
+      separator.textContent = "·";
+      container.appendChild(separator);
+    }
+    if (content instanceof window.Node) container.appendChild(content);
+    else {
+      var text = document.createElement("span");
+      text.textContent = String(content);
+      container.appendChild(text);
+    }
+  }
+
+  function builtLoadLink(load) {
+    var loadLabel = "Load " + String(load.load_id);
+    var loadUrl = localActionResultUrl(load.load_url);
+    if (loadUrl) {
+      var loadLink = document.createElement("a");
+      loadLink.className = "sc-action-built-load-link";
+      loadLink.href = loadUrl;
+      loadLink.target = "_blank";
+      loadLink.rel = "noopener noreferrer";
+      loadLink.textContent = loadLabel;
+      return loadLink;
+    }
+    var loadHeading = document.createElement("strong");
+    loadHeading.className = "sc-action-built-load-link";
+    loadHeading.textContent = loadLabel;
+    return loadHeading;
+  }
+
+  function builtLoadMeta(load) {
+    var meta = document.createElement("div");
+    meta.className = "sc-action-built-load-meta";
+    var count = Number(load.order_count);
+    if (Number.isFinite(count) && count >= 0) {
+      appendActionResultMeta(meta, count + (count === 1 ? " order" : " orders"));
+    }
+    var carrierUrl = localActionResultUrl(load.carrier_url);
+    var carrierLabel = load.carrier_name
+      ? String(load.carrier_name) + " (" + String(load.carrier_id || "") + ")"
+      : (load.carrier_id ? "Carrier " + String(load.carrier_id) : "");
+    if (carrierLabel && carrierUrl) {
+      var carrierLink = document.createElement("a");
+      carrierLink.href = carrierUrl;
+      carrierLink.textContent = carrierLabel;
+      appendActionResultMeta(meta, carrierLink);
+    } else {
+      appendActionResultMeta(meta, carrierLabel);
+    }
+    var origin = load.origin ? String(load.origin) : "";
+    var destination = load.destination ? String(load.destination) : "";
+    appendActionResultMeta(meta, origin && destination ? origin + " → " + destination : origin || destination);
+    if (Array.isArray(load.order_ids) && load.order_ids.length) {
+      appendActionResultMeta(meta, "Orders " + load.order_ids.map(String).join(", "));
+    }
+    return meta;
+  }
+
+  function renderBuiltLoadCard(card, load) {
+    card.replaceChildren();
+    card.classList.add("is-built");
+    if (load.marker && load.marker.color) {
+      card.style.setProperty("--sc-marker-color", String(load.marker.color));
+    }
+
+    var header = document.createElement("header");
+    header.className = "sc-group-action-card-header";
+    if (load.marker && typeof load.marker === "object") {
+      var marker = document.createElement("span");
+      marker.className = "sc-group-dialog-marker";
+      marker.appendChild(markerGlyph(load.marker, true));
+      header.appendChild(marker);
+    }
+    var heading = document.createElement("div");
+    var title = document.createElement("h4");
+    title.appendChild(builtLoadLink(load));
+    var summary = document.createElement("p");
+    var markerLabel = load.marker && load.marker.label ? String(load.marker.label) : "Grouped";
+    summary.textContent = markerLabel + " load built";
+    heading.append(title, summary);
+    header.appendChild(heading);
+    card.append(header, builtLoadMeta(load));
+  }
+
+  function renderActionResult(result, payload, succeeded, root) {
+    result.replaceChildren();
+    var message = document.createElement("div");
+    message.className = "sc-action-result-message";
+    message.textContent = payload.message || (succeeded ? "Action completed." : "Action failed.");
+    result.appendChild(message);
+    if (!succeeded || !Array.isArray(payload.loads) || !payload.loads.length) return;
+
+    var unmatched = [];
+    payload.loads.forEach(function (load) {
+      if (!load || !/^\d+$/.test(String(load.load_id || ""))) return;
+      var markerId = load.marker && load.marker.id ? String(load.marker.id) : "";
+      var card = root && Array.from(root.querySelectorAll("[data-sc-group-action-card]")).find(function (candidate) {
+        return candidate.dataset.scGroupActionCard === markerId;
+      });
+      if (card) renderBuiltLoadCard(card, load);
+      else unmatched.push(load);
+    });
+    if (!unmatched.length) return;
+
+    var list = document.createElement("ul");
+    list.className = "sc-action-built-loads";
+    unmatched.forEach(function (load) {
+      var item = document.createElement("li");
+      item.className = "sc-action-built-load";
+
+      if (load.marker && typeof load.marker === "object") {
+        var marker = document.createElement("span");
+        marker.className = "sc-group-dialog-marker sc-action-built-load-marker";
+        if (load.marker.color) marker.style.setProperty("--sc-marker-color", String(load.marker.color));
+        marker.appendChild(markerGlyph(load.marker, true));
+        item.appendChild(marker);
+      }
+
+      var detail = document.createElement("div");
+      detail.append(builtLoadLink(load), builtLoadMeta(load));
+      item.appendChild(detail);
+      list.appendChild(item);
+    });
+    if (list.childNodes.length) result.appendChild(list);
+  }
 
   document.addEventListener("submit", function (event) {
     var form = event.target.closest("[data-sc-action-form]");
@@ -1958,6 +2453,7 @@
     }
     if (result) {
       result.hidden = true;
+      result.replaceChildren();
       result.classList.remove("is-success", "is-error");
     }
 
@@ -1977,7 +2473,7 @@
       if (result) {
         result.hidden = false;
         result.classList.add(succeeded ? "is-success" : "is-error");
-        result.textContent = outcome.payload.message || (succeeded ? "Action completed." : "Action failed.");
+        renderActionResult(result, outcome.payload, succeeded, root);
       }
       if (succeeded) {
         if (actionMode(root) === "groups") {
@@ -1990,7 +2486,14 @@
           });
         }
         refreshBulkAction(root);
-        if (submit) submit.textContent = actionMode(root) === "groups" ? "Built" : "Applied";
+        if (submit) {
+          if (actionMode(root) === "groups") submit.hidden = true;
+          else submit.textContent = "Applied";
+        }
+        if (actionMode(root) === "groups") {
+          var footerClose = form.querySelector("footer [data-sc-action-close]");
+          if (footerClose) footerClose.textContent = "Close";
+        }
       } else if (submit) {
         submit.disabled = false;
         submit.textContent = root.dataset.scActionSubmitLabel || "Apply to selected rows";
@@ -1999,7 +2502,9 @@
       if (result) {
         result.hidden = false;
         result.classList.add("is-error");
-        result.textContent = "The action request could not reach the server.";
+        renderActionResult(result, {
+          message: "The action request could not reach the server."
+        }, false, root);
       }
       if (submit) {
         submit.disabled = false;

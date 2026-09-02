@@ -94,7 +94,7 @@ is $term{'selecto.products.domain.title'}{default}, 'Product Explorer',
 is $term{'selecto.products.fields.product_name.label'}{default}, 'Product Name',
     'term discovery includes humanized field defaults';
 is $term{'selecto.products.actions.build_shipments.selection.group_inputs.carrier_id.label'}{default},
-    'Carrier ID', 'term discovery includes nested action form labels';
+    'Carrier', 'term discovery includes nested action form labels';
 
 my $fallback = Selecto::Components::Config->new(
     %$spec,

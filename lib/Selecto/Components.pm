@@ -128,6 +128,12 @@ sub _routes ($app, $explorer, $origin_check) {
         return _run_action($controller, $explorer);
     });
 
+    $routes->get(
+        $config->path . '/actions/:selecto_action_id/lookups/:selecto_input_id'
+    )->to(cb => sub ($controller) {
+        return _run_action_lookup($controller, $explorer);
+    });
+
     $routes->post($config->path . '/saved-queries')->to(cb => sub ($controller) {
         return _save_query($controller, $explorer);
     });
@@ -445,6 +451,116 @@ sub _run_action ($controller, $explorer) {
     $result->{message} //= $result->{ok}
         ? 'The action was completed.' : 'The action was not completed.';
     return _action_response($controller, $return_to, $result);
+}
+
+sub _run_action_lookup ($controller, $explorer) {
+    my $config = $explorer->config->for_request($controller);
+    my $query = $controller->param('q');
+    $query = '' unless defined($query) && !ref($query);
+    $query = "$query";
+    $query =~ s/\A\s+|\s+\z//g;
+    return _lookup_response($controller, 422, {
+        error => 'The lookup query is too long.', results => [],
+    }) if length($query) > 100 || $query =~ /\0/;
+
+    my $selected_values = $controller->every_param('selected_id');
+    my @selected_ids = ref($selected_values) eq 'ARRAY' ? @$selected_values : ();
+    my %seen;
+    @selected_ids = grep {
+        defined($_) && !ref($_) && length("$_") <= 200 && "$_" !~ /\0/
+            && !$seen{"$_"}++
+    } @selected_ids;
+    return _lookup_response($controller, 422, {
+        error => 'Too many rows were selected for this lookup.', results => [],
+    }) if @selected_ids > $config->max_action_rows;
+
+    my $action_id = $controller->stash('selecto_action_id') // '';
+    my $input_id = $controller->stash('selecto_input_id') // '';
+    my ($domain, $resolved);
+    my $discovery_ok = eval {
+        $domain = $config->engine($controller)->domain;
+        $resolved = Selecto::Components::Actions->find(
+            $config, $domain, $controller, $action_id, 'preview',
+            @selected_ids ? {ids => \@selected_ids} : undef,
+        );
+        1;
+    };
+    unless ($discovery_ok) {
+        $controller->app->log->error("Selecto action lookup discovery failed: $@");
+        return _lookup_response($controller, 500, {
+            error => 'The lookup could not be prepared.', results => [],
+        });
+    }
+    return _lookup_response($controller, 404, {
+        error => 'That lookup is not available.', results => [],
+    }) unless $resolved && ($resolved->{decision}{status} // '') eq 'enabled';
+
+    my @inputs = (
+        @{$resolved->{action}{inputs} // []},
+        @{$resolved->{action}{selection}{group_inputs} // []},
+    );
+    my ($input) = grep {
+        ($_->{id} // '') eq $input_id && ($_->{type} // '') eq 'lookup'
+    } @inputs;
+    return _lookup_response($controller, 404, {
+        error => 'That lookup is not available.', results => [],
+    }) unless $input;
+    return _lookup_response($controller, 200, {results => []})
+        if length($query) < ($input->{minimum_query_length} // 2);
+
+    my $resolver = $config->lookup_source($input->{lookup_source});
+    my $raw;
+    my $lookup_ok = eval {
+        $raw = $resolver->($controller, {
+            query => $query,
+            limit => $input->{result_limit} // 20,
+            action => $resolved->{action},
+            input => $input,
+            selected_ids => \@selected_ids,
+        });
+        1;
+    };
+    unless ($lookup_ok) {
+        $controller->app->log->error("Selecto action lookup $input->{lookup_source} failed: $@");
+        return _lookup_response($controller, 500, {
+            error => 'The lookup could not be completed.', results => [],
+        });
+    }
+    $raw = $raw->{results} if ref($raw) eq 'HASH';
+    unless (ref($raw) eq 'ARRAY') {
+        $controller->app->log->error(
+            "Selecto action lookup $input->{lookup_source} returned an invalid result",
+        );
+        return _lookup_response($controller, 500, {
+            error => 'The lookup returned an invalid result.', results => [],
+        });
+    }
+
+    my (@results, %seen_value);
+    for my $item (@$raw) {
+        next unless ref($item) eq 'HASH';
+        my $value = $item->{value} // $item->{id};
+        my $label = $item->{label} // $item->{name};
+        next unless defined($value) && !ref($value) && defined($label) && !ref($label);
+        $value = "$value";
+        $label = "$label";
+        next if $value eq '' || $label eq '' || length($value) > 200
+            || length($label) > 200 || $value =~ /\0/ || $label =~ /\0/
+            || $seen_value{$value}++;
+        my %normalized = (value => $value, label => $label);
+        my $description = $item->{description};
+        $normalized{description} = "$description"
+            if defined($description) && !ref($description)
+                && length("$description") <= 400 && "$description" !~ /\0/;
+        push @results, \%normalized;
+        last if @results >= ($input->{result_limit} // 20);
+    }
+    return _lookup_response($controller, 200, {results => \@results});
+}
+
+sub _lookup_response ($controller, $status, $payload) {
+    $controller->res->headers->cache_control('no-store');
+    return $controller->render(json => $payload, status => $status);
 }
 
 sub _action_response ($controller, $return_to, $result) {

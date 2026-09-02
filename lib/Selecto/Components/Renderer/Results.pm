@@ -43,7 +43,7 @@ sub _bulk_actions ($class, $model) {
             _h($dialog_id) . '" data-sc-action-disabled="' . ($enabled ? '0' : '1') . '" disabled' .
             ($enabled ? '' : ' title="' . _h($action->{status_reason} // 'Action unavailable') . '"') .
             '>' . _h($action->{label}) . '</button>';
-        my $inputs = join '', map { _action_input($_) } @{$action->{inputs}};
+        my $inputs = join '', map { _action_input($_, $id) } @{$action->{inputs}};
         my $description = length($action->{description} // '')
             ? '<p class="sc-action-description">' . _h($action->{description}) . '</p>' : '';
         my $dialog = '<dialog class="sc-action-dialog" id="' . _h($dialog_id) .
@@ -113,12 +113,33 @@ sub _grouped_action_panel ($model, $action) {
         $button . $dialog . '</section>';
 }
 
-sub _action_input ($input) {
+sub _action_input ($input, $action_id = 'action') {
     my $name = 'action_input_' . $input->{id};
     my $required = $input->{required} ? ' required aria-required="true"' : '';
     my $marker = $input->{required} ? ' <span aria-hidden="true">*</span>' : '';
     my $control;
-    if ($input->{type} eq 'select') {
+    if ($input->{type} eq 'lookup') {
+        my $results_id = 'sc-action-lookup-' . $action_id . '-' . $input->{id};
+        my $placeholder = $input->{placeholder}
+            // ('Search and choose ' . lc($input->{label}));
+        my $hint = $input->{direct_entry}
+            ? 'Search and choose a result, or enter a known ID.'
+            : 'Search and choose a result.';
+        $control = '<div class="sc-action-lookup" data-sc-action-lookup>' .
+            '<input type="hidden" name="' . _h($name) . '" data-sc-lookup-value>' .
+            '<input type="search" class="sc-action-lookup-query" autocomplete="off" spellcheck="false" ' .
+            'data-sc-lookup-query data-sc-lookup-url="' . _h($input->{lookup_url}) . '" ' .
+            'data-sc-lookup-input="' . _h($input->{id}) . '" ' .
+            'data-sc-lookup-minimum-length="' . _h($input->{minimum_query_length} // 2) . '" ' .
+            'data-sc-lookup-direct-entry="' . ($input->{direct_entry} ? 1 : 0) . '" ' .
+            'data-sc-lookup-value-type="' . _h($input->{value_type} // 'string') . '" ' .
+            'data-sc-lookup-selected-value="" placeholder="' . _h($placeholder) . '" ' .
+            'role="combobox" aria-autocomplete="list" aria-expanded="false" ' .
+            'aria-controls="' . _h($results_id) . '" aria-label="' . _h($input->{label}) . '"' .
+            $required . '><div class="sc-action-lookup-results" data-sc-lookup-results id="' .
+            _h($results_id) . '" role="listbox" hidden></div>' .
+            '<small class="sc-action-lookup-hint">' . _h($hint) . '</small></div>';
+    } elsif ($input->{type} eq 'select') {
         my $options = '<option value="">Choose ' . _h(lc($input->{label})) . '</option>' .
             join('', map {
                 '<option value="' . _h($_->{value}) . '">' . _h($_->{label}) . '</option>'
@@ -141,8 +162,9 @@ sub _action_input ($input) {
         $control = '<input type="' . _h($type) . '" name="' . _h($name) . '"' .
             $maxlength . $minlength . $required . '>';
     }
-    return '<label class="sc-action-input"><span>' . _h($input->{label}) . $marker . '</span>' .
-        $control . '</label>';
+    my $element = $input->{type} eq 'lookup' ? 'div' : 'label';
+    return '<' . $element . ' class="sc-action-input"><span>' . _h($input->{label}) . $marker .
+        '</span>' . $control . '</' . $element . '>';
 }
 
 sub _table ($class, $result, $model) {

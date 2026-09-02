@@ -80,11 +80,11 @@ $t->get_ok('/explore/products')
     ->content_like(qr{>Excel</a>.*>CSV</a>.*>TSV</a>.*>JSON</a>}s)
     ->content_like(qr{hx-ws:connect="/explore/products/ws"})
     ->content_like(qr{hx-ws:send})
-    ->content_like(qr{/selecto-components/htmx\.min\.js\?v=20260902-1})
-    ->content_like(qr{/selecto-components/hx-ws\.min\.js\?v=20260902-1})
-    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260902-1})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260902-1})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260902-1})
+    ->content_like(qr{/selecto-components/htmx\.min\.js\?v=20260902-5})
+    ->content_like(qr{/selecto-components/hx-ws\.min\.js\?v=20260902-5})
+    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260902-5})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260902-5})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260902-5})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')
@@ -299,11 +299,34 @@ $t->get_ok($grouped_action_url)
     ->content_like(qr{green_clover})
     ->content_like(qr{blue_diamond})
     ->content_like(qr{purple_horseshoe})
-    ->content_like(qr{carrier_id});
+    ->content_like(qr{carrier_id})
+    ->content_like(qr{&quot;type&quot;:&quot;lookup&quot;})
+    ->content_like(qr{\\/explore\\/products\\/actions\\/build_shipments\\/lookups\\/carrier_id});
 
 my $grouped_csrf = $t->tx->res->dom
     ->at('form[action="/explore/products/actions/build_shipments"] input[name="csrf_token"]')
     ->attr('value');
+
+@TestSelectoComponents::LOOKUP_REQUESTS = ();
+$t->get_ok('/explore/products/actions/build_shipments/lookups/carrier_id' .
+        '?q=acme&selected_id=101&selected_id=102' => {Accept => 'application/json'})
+    ->status_is(200)
+    ->header_is('Cache-Control' => 'no-store')
+    ->json_is('/results/0/value' => '501')
+    ->json_is('/results/0/label' => 'Acme Transport')
+    ->json_like('/results/0/description' => qr/Detroit, MI/);
+is $TestSelectoComponents::LOOKUP_REQUESTS[-1]{query}, 'acme',
+    'action lookup passes the normalized search query to its host source';
+is_deeply $TestSelectoComponents::LOOKUP_REQUESTS[-1]{selected_ids}, ['101', '102'],
+    'action lookup passes the active group rows for host authorization and scoping';
+
+$t->get_ok('/explore/products/actions/build_shipments/lookups/carrier_id?q=a')
+    ->status_is(200)->json_is('/results' => []);
+is scalar(@TestSelectoComponents::LOOKUP_REQUESTS), 1,
+    'queries below the configured minimum do not call the host lookup source';
+$t->get_ok('/explore/products/actions/build_shipments/lookups/not_an_input?q=acme')
+    ->status_is(404)->json_is('/results' => []);
+
 my $group_payload = encode_json([
     {
         index => 0,
@@ -333,7 +356,7 @@ $t->post_ok('/explore/products/actions/build_shipments' => {Accept => 'applicati
         {index => 0, selected_ids => [101], inputs => {carrier_id => 0}},
     ]),
 })->status_is(422)->json_is('/ok' => 0)
-    ->json_like('/message' => qr/Pink heart: Carrier ID is below its minimum/);
+    ->json_like('/message' => qr/Pink heart: Carrier is below its minimum/);
 
 $t->post_ok('/explore/products/actions/build_shipments' => {Accept => 'application/json'} => form => {
     csrf_token => $grouped_csrf,
@@ -395,6 +418,12 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/cubic-bezier\(\.2,\.8,\.2,1\)/)
     ->content_like(qr/function renderGroupedActionDialog/)
     ->content_like(qr/function serializeGroupedAction/)
+    ->content_like(qr/function renderActionResult/)
+    ->content_like(qr/function renderBuiltLoadCard/)
+    ->content_like(qr/data-sc-group-action-card/)
+    ->content_like(qr/sc-action-built-load-link/)
+    ->content_like(qr/loadLink\.target\s*=\s*"_blank"/)
+    ->content_like(qr/loadLink\.rel\s*=\s*"noopener noreferrer"/)
     ->content_like(qr/function markerSvgPart/)
     ->content_like(qr/createElementNS\("http:\/\/www\.w3\.org\/2000\/svg"/)
     ->content_like(qr/window\.fetch/)
@@ -454,7 +483,10 @@ $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-view-tab input:focus-visible \+ span/)
     ->content_like(qr/\.sc-group-marker/)
     ->content_like(qr/\.sc-group-action-card/)
+    ->content_like(qr/\.sc-group-action-card\.is-built/)
     ->content_like(qr/\.sc-group-action-orders/)
+    ->content_like(qr/\.sc-action-lookup-results/)
+    ->content_like(qr/\.sc-action-built-loads/)
     ->content_like(qr/width:\s*max-content/)
     ->content_unlike(qr/\.sc-nested-table th[^}]*text-overflow/s)
     ->content_like(qr/\.sc-table-wrap\s*>\s*table\s*>\s*thead\s*>\s*tr\s*>\s*th:first-child/)
