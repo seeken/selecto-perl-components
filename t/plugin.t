@@ -431,7 +431,7 @@ $t->get_ok('/selecto-api-console/index.html')->status_is(200)
 $t->get_ok('/selecto-api-console/manifest.json')->status_is(200)
     ->content_type_like(qr{application/json})
     ->json_is('/format', 'selecto.api-console.assets.v1')
-    ->json_is('/version', '0.1.0');
+    ->json_is('/version', '0.2.0');
 $t->get_ok('/selecto-api-console/compatibility.json')->status_is(200)
     ->content_type_like(qr{application/json})
     ->json_is('/format', 'selecto.api-console.compatibility.v1')

@@ -96,7 +96,7 @@ Mojolicious-native transport and lifecycle boundaries.
 
 The API Console browser code is owned by the sibling `selecto-api-console`
 repository and packaged as `@selecto/api-console`. This Perl distribution
-ships generated `0.1.0` assets so Mojolicious applications remain
+ships generated `0.2.0` assets so Mojolicious applications remain
 self-contained; it does not fork the JavaScript or CSS source. The console is
 host-neutral. It does not receive a serialized
 field catalog from Perl and does not contain application domain names. A host
@@ -117,6 +117,11 @@ the canonical domain and query-library controls from the domain's named views,
 projections, segments, parameters, and orderings. Query execution uses the
 advertised versioned `query` route. No adapter, table name, raw SQL, or
 unpublished identifier can be selected by the UI.
+
+`Selecto::Components::APIConsole->page` also accepts semantic `theme` and
+validated `page_shell` objects. These let a host apply tenant colors and inject
+its established navigation dependencies and markup without coupling the shared
+console package to an application framework or menu implementation.
 
 Mojolicious hosts may render the complete shell and install its static path
 with `Selecto::Components::APIConsole->page(...)` and

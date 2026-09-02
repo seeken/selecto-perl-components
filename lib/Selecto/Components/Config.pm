@@ -220,11 +220,12 @@ sub page_shell ($self, $model = undef) {
         die "page shell $key must be a scalar\n" if ref($shell->{$key});
         $resolved{$key} = "$shell->{$key}";
     }
-    if (defined $shell->{body_class}) {
-        die "page shell body_class must contain CSS class names\n"
-            if ref($shell->{body_class})
-                || "$shell->{body_class}" !~ /\A[A-Za-z0-9_-]+(?:\s+[A-Za-z0-9_-]+)*\z/;
-        $resolved{body_class} = "$shell->{body_class}";
+    for my $key (qw(body_class content_class)) {
+        next unless defined $shell->{$key};
+        die "page shell $key must contain CSS class names\n"
+            if ref($shell->{$key})
+                || "$shell->{$key}" !~ /\A[A-Za-z0-9_-]+(?:\s+[A-Za-z0-9_-]+)*\z/;
+        $resolved{$key} = "$shell->{$key}";
     }
     return $self->{_resolved_page_shell} = \%resolved;
 }
