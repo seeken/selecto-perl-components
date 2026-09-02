@@ -5,6 +5,7 @@ use Test::More;
 use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::Config ();
+use Selecto::Components::Explorer ();
 use Selecto::Components::Renderer ();
 use Selecto::Components::Renderer::Results ();
 use Selecto::Components::State ();
@@ -159,6 +160,89 @@ like $table, qr/&lt;script&gt;cell\(\)&lt;\/script&gt;/,
     'table cell values are HTML-escaped';
 like $table, qr/&lt;b&gt;Name&lt;\/b&gt;/,
     'column labels are HTML-escaped';
+
+my $measure_table = Selecto::Components::Renderer->_table(
+    {
+        columns => [
+            {key => 'category', label => 'Category', type => 'string'},
+            {key => 'revenue', label => 'Revenue', type => 'decimal', measure => 1},
+            {key => 'latest_pickup', label => 'Latest pickup', type => 'datetime', measure => 1},
+        ],
+        records => [{
+            category => 'SUV', revenue => '1234.50', latest_pickup => '2026-09-02 10:30:00',
+        }],
+        drilldowns => [[]],
+    },
+    {
+        bulk_actions => [],
+        config => $config,
+        state => $state,
+        domain => $domain,
+        canonical_url => '/explore/products',
+    },
+);
+like $measure_table,
+    qr{<th scope="col" class="sc-numeric-measure">Revenue</th>},
+    'numeric measure headings receive right-alignment semantics';
+like $measure_table,
+    qr{<td class="sc-numeric-measure">1234\.50</td>},
+    'numeric measure values receive right-alignment semantics';
+like $measure_table,
+    qr{<th scope="col">Latest pickup</th>.*<td>2026-09-02 10:30:00</td>}s,
+    'non-numeric measures retain normal alignment';
+
+my $continued_result = {
+    rollup => 1,
+    group_count => 3,
+    rollup_key => '__selecto_rollup_grouping',
+    columns => [
+        {key => 'region', field => 'region', label => 'Region', type => 'string'},
+        {key => 'city', field => 'city', label => 'City', type => 'string'},
+        {key => 'status', field => 'status', label => 'Status', type => 'string'},
+        {key => 'count', label => 'Orders', type => 'integer', measure => 1},
+    ],
+    records => [{
+        region => 'East', city => 'Boston', status => 'Ready', count => 7,
+        __selecto_rollup_grouping => 0,
+        __selecto_rollup_level => 3,
+    }],
+};
+is Selecto::Components::Explorer::_prepend_continued_rollup_records(
+    $continued_result, $continued_result->{records},
+), 2, 'a page beginning at level three restores both missing parent headers';
+is_deeply [map { $_->{__selecto_rollup_level} } @{$continued_result->{records}}],
+    [1, 2, 3], 'continued parent headers preserve hierarchy order';
+$continued_result->{drilldowns} = [
+    [[view => 'detail', filter_field => 'region', filter_value => 'East']],
+    [[], [view => 'detail', filter_field => 'city', filter_value => 'Boston']],
+    [[]],
+];
+my $continued_table = Selecto::Components::Renderer->_table(
+    $continued_result,
+    {
+        bulk_actions => [],
+        config => $config,
+        state => $state,
+        domain => $domain,
+        canonical_url => '/explore/products',
+    },
+);
+is scalar(() = $continued_table =~ /data-rollup-continued="1"/g), 2,
+    'each restored parent is rendered as continuation context';
+like $continued_table,
+    qr{sc-rollup-continued-label">East <span>\(continued\)</span>},
+    'the outer parent header is visibly marked continued';
+like $continued_table,
+    qr{sc-rollup-continued-label">Boston <span>\(continued\)</span>},
+    'the inner parent header is visibly marked continued';
+like $continued_table,
+    qr{sc-rollup-continued-measure">-</span>},
+    'continued context rows do not repeat an inaccurate aggregate value';
+is scalar(() = $continued_table =~ /<form class="sc-drilldown-form"/g), 2,
+    'each continued header retains its drill-down control';
+like $continued_table,
+    qr{sc-rollup-continued[^>]*>.*?name="filter_field" value="region".*?\(continued\).*?</form>}s,
+    'continued parent links retain their governed group filters';
 
 my $graph_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

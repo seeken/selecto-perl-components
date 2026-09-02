@@ -91,8 +91,11 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             @record{@{$raw->{columns}}} = @$_;
             \%record;
         } @{$raw->{rows}};
+        my $returned_count = scalar(@records);
         _prepare_nested_records($built, \@records);
         _prepare_rollup_records($built, \@records);
+        _prepend_continued_rollup_records($built, \@records)
+            if !$all_rows && $state->page > 1;
         my $drilldowns = _drilldowns($state, $built, \@records);
         $model->{result} = {
             %$built,
@@ -101,7 +104,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             drilldowns => $drilldowns,
             rows => [map { [@$_] } @{$raw->{rows}}],
             result_columns => [@{$raw->{columns}}],
-            count => scalar(@records),
+            count => $returned_count,
             total_count => $total_count,
             total_pages => $total_pages,
             has_more => !$all_rows && $state->page < $total_pages ? 1 : 0,
@@ -125,7 +128,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
                     stats => {
                         adapter => $engine->adapter->name,
                         view => $state->view,
-                        returned_rows => scalar(@records),
+                        returned_rows => $returned_count,
                         matched_rows => $total_count,
                         page => $all_rows ? 1 : $state->page,
                         total_pages => $total_pages,
@@ -199,6 +202,40 @@ sub _prepare_rollup_records ($built, $records) {
         }
         $record->{__selecto_rollup_level} = $group_count - $rolled_up;
     }
+}
+
+sub _prepend_continued_rollup_records ($built, $records) {
+    return 0 unless $built->{rollup} && ref($records) eq 'ARRAY' && @$records;
+    my $first = $records->[0];
+    my $level = $first->{__selecto_rollup_level};
+    return 0 unless defined($level) && !ref($level) && "$level" =~ /\A\d+\z/
+        && $level > 1;
+
+    my @groups = grep { !$_->{measure} } @{$built->{columns} // []};
+    my @measures = grep { $_->{measure} } @{$built->{columns} // []};
+    my $group_count = scalar(@groups);
+    return 0 if !$group_count || $level > $group_count;
+
+    my @continued;
+    for my $parent_level (1 .. $level - 1) {
+        my %record = (
+            __selecto_rollup_level => $parent_level,
+            __selecto_rollup_continued => 1,
+        );
+        for my $group_index (0 .. $parent_level - 1) {
+            my $group = $groups[$group_index];
+            for my $key (grep { defined && length } $group->{key}, $group->{drilldown_key}) {
+                $record{$key} = $first->{$key} if exists $first->{$key};
+            }
+        }
+        $record{$_->{key}} = undef for @measures;
+        if (defined(my $rollup_key = $built->{rollup_key})) {
+            $record{$rollup_key} = (1 << ($group_count - $parent_level)) - 1;
+        }
+        push @continued, \%record;
+    }
+    unshift @$records, @continued;
+    return scalar(@continued);
 }
 
 sub _drilldowns ($state, $built, $records) {
