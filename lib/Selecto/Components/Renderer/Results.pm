@@ -161,7 +161,8 @@ sub _table ($class, $result, $model) {
                     'data-sc-action-id="' . _h($column->{action_id}) . '" aria-label="Select every row for ' .
                     _h($column->{label}) . '"><span>' . _h($column->{label}) . '</span></label></th>';
         } else {
-            '<th scope="col">' . _h($column->{label}) . '</th>';
+            '<th scope="col"' . _numeric_measure_class($column, $model) . '>' .
+                _h($column->{label}) . '</th>';
         }
     } @columns;
     my @group_indexes = grep { !$columns[$_]{measure} && !$columns[$_]{action_id} } 0 .. $#columns;
@@ -173,14 +174,18 @@ sub _table ($class, $result, $model) {
     my $row_dialog_count = 0;
     for my $index (0 .. $#{$result->{records}}) {
         my $record = $result->{records}[$index];
+        my $continued = $result->{rollup} && $record->{__selecto_rollup_continued};
         my $level = $result->{rollup}
             ? $record->{__selecto_rollup_level} : scalar(@group_indexes);
         my $row_class = !$result->{rollup} ? ''
+            : $continued
+                ? ' class="sc-rollup-row sc-rollup-continued" data-rollup-level="' .
+                    _h($level) . '" data-rollup-continued="1"'
             : $level == 0 ? ' class="sc-rollup-row sc-rollup-total" data-rollup-level="0"'
             : $level < @group_indexes
                 ? ' class="sc-rollup-row sc-rollup-subtotal" data-rollup-level="' . _h($level) . '"'
                 : ' class="sc-rollup-row sc-rollup-detail" data-rollup-level="' . _h($level) . '"';
-        my $row_action = Selecto::Components::RowActions->resolve(
+        my $row_action = $continued ? undef : Selecto::Components::RowActions->resolve(
             $result->{row_click_action}, $record, $result->{row_click_fields},
         );
         if ($row_action) {
@@ -237,7 +242,10 @@ sub _table ($class, $result, $model) {
                 next;
             }
             if ($column->{measure}) {
-                $cells .= '<td>' . _html_display($column, $record->{$column->{key}}) . '</td>';
+                $cells .= '<td' . _numeric_measure_class($column, $model) . '>' .
+                    ($continued
+                        ? '<span class="sc-rollup-continued-measure">-</span>'
+                        : _html_display($column, $record->{$column->{key}})) . '</td>';
                 next;
             }
             my $group_index = $group_position{$column_index};
@@ -247,11 +255,23 @@ sub _table ($class, $result, $model) {
             } elsif (!$result->{rollup} || $group_index == $level - 1) {
                 my $label_html = _html_display($column, $record->{$column->{key}}, 1);
                 my $pairs = $result->{drilldowns}[$index][$group_index];
-                $content = $pairs
-                    ? $class->_drilldown_control($model, $pairs, $label_html, $group_index + 1)
-                    : $column->{link}
-                        ? _object_link($column, $record, $label_html)
-                        : $label_html;
+                if ($continued) {
+                    my $continued_label = '<span class="sc-rollup-continued-label">' .
+                        $label_html . ' <span>(continued)</span></span>';
+                    $content = $pairs
+                        ? $class->_drilldown_control(
+                            $model, $pairs, $continued_label, $group_index + 1,
+                        )
+                        : $continued_label;
+                } else {
+                    $content = $pairs
+                        ? $class->_drilldown_control(
+                            $model, $pairs, $label_html, $group_index + 1,
+                        )
+                        : $column->{link}
+                            ? _object_link($column, $record, $label_html)
+                            : $label_html;
+                }
             }
             $cells .= '<td>' . $content . '</td>';
         }
@@ -264,6 +284,14 @@ sub _table ($class, $result, $model) {
     return '<div class="sc-table-wrap"><table><caption class="sc-visually-hidden">Query results</caption>' .
         '<thead><tr>' . $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>' .
         $dialog;
+}
+
+sub _numeric_measure_class ($column, $model) {
+    return '' unless $column->{measure};
+    my $config = $model->{config};
+    return '' unless $config && $config->can('numeric_type')
+        && $config->numeric_type($column->{type});
+    return ' class="sc-numeric-measure"';
 }
 
 sub _row_iframe_dialog ($dialog_id, $action, $row_count) {
