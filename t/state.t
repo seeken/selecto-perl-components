@@ -18,10 +18,29 @@ my $domain = TestSelectoComponents::domain();
 my $initial = Selecto::Components::State->from_input($config, $domain, {});
 ok $initial->valid, 'default state is valid';
 is $initial->view, 'detail', 'detail is the default view';
+is $initial->row_click_action, 'open_product',
+    'the configured row action is selected for the initial detail view';
+like join('&', @{$initial->query_pairs}), qr/row_click_action&open_product/,
+    'row-action selection is retained in canonical query state';
 is_deeply $initial->fields,
     [qw(product_name category.category_name unit_price)],
     'configured detail fields become initial state';
 is_deeply $initial->groups, ['category.category_name'], 'configured group becomes initial state';
+
+my $selected_row_action = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'product_name', measure => 'count',
+    row_click_action => 'open_product',
+});
+is $selected_row_action->row_click_action, 'open_product',
+    'a submitted governed row action survives state normalization';
+my $stale_row_action = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'product_name', measure => 'count',
+    row_click_action => 'removed_or_denied_action',
+});
+ok $stale_row_action->valid,
+    'a stale or newly denied row action does not stop the underlying query';
+is $stale_row_action->row_click_action, '',
+    'a stale or newly denied row action falls back to no row navigation';
 
 my $promoted_filter = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

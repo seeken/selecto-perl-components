@@ -3,6 +3,7 @@ package Selecto::Components::QueryBuilder;
 use Mojo::Base -base, -signatures;
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
+use Selecto::Components::RowActions ();
 use Selecto::Components::Util qw(humanize trim);
 use Selecto::Expression ();
 use Selecto::QueryLibrary ();
@@ -173,6 +174,32 @@ sub _detail ($class, $config, $domain, $state, $options) {
         }
         $column->{link_key} = $link_key;
     }
+    my $row_click_action = Selecto::Components::RowActions->find(
+        $domain, $state->row_click_action, $config,
+    );
+    my @row_click_fields;
+    if ($row_click_action) {
+        for my $field (@{$row_click_action->{required_fields} // []}) {
+            my $key = $query_key{$field};
+            unless (defined($key)) {
+                my $base_key = '__selecto_row_click_' . _field_alias($field);
+                $key = $base_key;
+                my $suffix = 1;
+                $key = $base_key . '_' . ++$suffix while $used_key{$key};
+                push @query_columns, {
+                    key => $key,
+                    field => $field,
+                    label => $field_map->{$field}{label},
+                    type => $field_map->{$field}{type},
+                    format => '',
+                    hidden => 1,
+                };
+                $query_key{$field} = $key;
+                $used_key{$key} = 1;
+            }
+            push @row_click_fields, {field => $field, key => $key};
+        }
+    }
     my $query = Selecto::Query->new->select(map {
         _column_expression($_)->as($_->{key})
     } @query_columns);
@@ -191,6 +218,8 @@ sub _detail ($class, $config, $domain, $state, $options) {
         action_key => $action_key,
         action_ids => \@action_ids,
         action_row_details => \%action_row_details,
+        row_click_action => $row_click_action,
+        row_click_fields => \@row_click_fields,
         count_selections => [Selecto::Expression->field($config->primary_key($domain))],
         graph => 0,
     };

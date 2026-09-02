@@ -112,6 +112,31 @@ sub _domain {
                 },
             },
         },
+        detail_actions => {
+            open_product => {
+                name => 'Open product maintenance',
+                description => 'Open this product in maintenance.',
+                type => 'iframe_modal',
+                required_fields => [qw(id product_name)],
+                payload => {
+                    url_template => '/products/maint?id={{id}}&name={{product_name}}',
+                    title => 'Product {{product_name}}',
+                    size => 'fullscreen',
+                    referrer_policy => 'same-origin',
+                    navigation_enabled => 1,
+                },
+            },
+            open_product_page => {
+                name => 'Open product page',
+                description => 'Leave the explorer and open product maintenance.',
+                type => 'external_link',
+                required_fields => ['id'],
+                payload => {
+                    url_template => '/products/maint?id={{id}}',
+                    target => '_self',
+                },
+            },
+        },
         actions => {
             add_product_note => {
                 label => 'Add Product Note',
@@ -179,6 +204,7 @@ sub config {
             );
         },
         default_fields => [qw(product_name category.category_name unit_price)],
+        default_row_click_action => 'open_product',
         default_group => ['category.category_name'],
         measures => [
             { id => 'count', label => 'Product count', aggregate => 'count' },

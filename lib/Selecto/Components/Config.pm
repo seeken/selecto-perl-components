@@ -9,6 +9,7 @@ use Selecto::Components::Util qw(humanize);
 has [qw(id title path engine_factory)];
 has views         => sub { return [qw(detail aggregate graph)] };
 has default_view  => 'detail';
+has default_row_click_action => '';
 has default_fields => sub { return [] };
 has default_group  => sub { return [] };
 has measures       => sub { return [] };
@@ -70,6 +71,11 @@ sub new ($class, @args) {
         if defined($self->theme_resolver) && ref($self->theme_resolver) ne 'CODE';
     die "page_shell_resolver must be a coderef\n"
         if defined($self->page_shell_resolver) && ref($self->page_shell_resolver) ne 'CODE';
+    die "default_row_click_action must be empty or a lowercase identifier\n"
+        if !defined($self->default_row_click_action)
+            || ref($self->default_row_click_action)
+            || length($self->default_row_click_action)
+                && $self->default_row_click_action !~ /\A[a-z][a-z0-9_-]*\z/;
     die "action_authorizer must be a coderef\n"
         if defined($self->action_authorizer) && ref($self->action_authorizer) ne 'CODE';
     if (defined(my $store = $self->saved_query_store)) {

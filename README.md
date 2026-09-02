@@ -69,6 +69,9 @@ installed npm packages later.
 - relationship fields, sorting, bounded limits, and offset pagination;
 - domain-declared object links for Detail HTML cells, with related IDs selected
   as hidden governed columns and no extra ID columns in exports;
+- optional domain-declared row-click actions for Detail results, with a compact
+  action selector, permalink/saved-query state, automatically selected hidden
+  dependencies, safe URL substitution, and keyboard access;
 - htmx 4 `hx-ws` updates using server-rendered HTML fragments;
 - ordinary HTTP GET fallback, permalinks, and browser-refresh recovery;
 - an optional dedicated Saved queries tab backed by a host-provided object with
@@ -174,6 +177,7 @@ domain policy, without JavaScript).
 In the default shareable mode, canonical parameters are:
 
 - `view`: `detail`, `aggregate`, or `graph`;
+- `row_click_action`: the selected portable Detail action, when one is active;
 - repeated `field` and `group` values; `field` order is the selected result-column order;
 - aligned `field_alias`/`field_format` and group alias/format/bucket/prefix values,
   so each selected column carries its own presentation configuration;
@@ -387,6 +391,42 @@ vin => {
 
 This is a presentation rule only. Excel, CSV, TSV, and JSON exports retain the
 original unformatted value.
+
+## Detail row-click actions
+
+Canonical domains can offer `external_link` and `iframe_modal` actions that
+make the unused surface of each Detail row open a governed application
+destination. Required fields are fetched as hidden query columns when they are
+not already selected; they remain absent from the displayed columns and
+exports.
+
+```perl
+detail_actions => {
+    open_product => {
+        name => 'Product maintenance',
+        type => 'external_link',
+        required_fields => ['id'],
+        payload => {
+            url_template => '/products/maint?id={{id}}',
+            target => '_self',
+        },
+    },
+},
+```
+
+Set `default_row_click_action => 'open_product'` in the Explorer configuration
+to enable it on the initial view. Users can choose another declared action or
+`No row action`; that choice participates in canonical URL and saved-query
+state. Clicking an existing link, button, checkbox, form control, or selected
+text does not trigger the row action. URL substitutions are percent encoded,
+and executable or protocol-relative URL schemes fail closed.
+
+Use `type => 'iframe_modal'` with the same URL template to keep the Explorer in
+place. The shared dialog lazily loads the selected row, offers Previous and Next
+controls in the rows' current displayed order, reports that navigation is for
+the current page, and includes an `Open full page` link. Its payload also accepts
+`title`, `size`, `referrer_policy`, `navigation_enabled`, and optional `allow`
+or `sandbox` iframe attributes.
 
 ## Selected-row actions
 

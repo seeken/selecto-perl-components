@@ -7,7 +7,7 @@ use Selecto::Components::Renderer::Builder ();
 use Selecto::Components::Renderer::Results ();
 use Selecto::Components::Renderer::Debug ();
 
-my $ASSET_REVISION = '20260901-3';
+my $ASSET_REVISION = '20260901-5';
 
 sub page ($class, $model) {
     my $config = $model->{config};

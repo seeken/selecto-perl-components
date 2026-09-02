@@ -25,6 +25,7 @@ WriteMakefile(
         'lib/Selecto/Components/Renderer/Debug.pm' => '$(INST_LIB)/Selecto/Components/Renderer/Debug.pm',
         'lib/Selecto/Components/Renderer/Markup.pm' => '$(INST_LIB)/Selecto/Components/Renderer/Markup.pm',
         'lib/Selecto/Components/Renderer/Results.pm' => '$(INST_LIB)/Selecto/Components/Renderer/Results.pm',
+        'lib/Selecto/Components/RowActions.pm' => '$(INST_LIB)/Selecto/Components/RowActions.pm',
         'lib/Selecto/Components/State.pm' => '$(INST_LIB)/Selecto/Components/State.pm',
         'lib/Selecto/Components/Util.pm' => '$(INST_LIB)/Selecto/Components/Util.pm',
         'public/selecto-components/chart.umd.min.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/chart.umd.min.js',
