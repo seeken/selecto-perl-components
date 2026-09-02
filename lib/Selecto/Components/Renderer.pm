@@ -27,6 +27,9 @@ sub page ($class, $model) {
         ? ' data-sc-color-scheme="' . _h($theme_scheme) . '"' : '';
     my $body_class = length($page_shell->{body_class} // '')
         ? ' class="' . _h($page_shell->{body_class}) . '"' : '';
+    my $main_class = 'sc-page';
+    $main_class .= ' ' . $page_shell->{content_class}
+        if length($page_shell->{content_class} // '');
     return '<!doctype html><html lang="en"' . $scheme_attribute . $theme_attribute .
         '><head><meta charset="utf-8">' .
         '<meta name="viewport" content="width=device-width,initial-scale=1">' .
@@ -39,7 +42,7 @@ sub page ($class, $model) {
         '<script defer src="/selecto-components/selecto-components.js?v=' . $ASSET_REVISION . '"></script>' .
         ($page_shell->{head_html} // '') .
         '</head><body' . $body_class . '>' . ($page_shell->{body_start_html} // '') .
-        '<main class="sc-page"><div class="sc-shell">' .
+        '<main class="' . _h($main_class) . '"><div class="sc-shell">' .
         '<section id="selecto-channel-' . _h($config->id) . '" hx-ws:connect="' . $ws_path . '" hx-swap="none">' .
         $surface . '</section></div></main></body></html>';
 }
