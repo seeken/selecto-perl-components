@@ -16,6 +16,7 @@ has measures       => sub { return [] };
 has default_limit  => 25;
 has max_limit      => 100;
 has max_filters    => 20;
+has max_grid_cells => 50;
 has max_orders     => 10;
 has max_measures   => 10;
 has max_action_rows => 1000;
@@ -61,6 +62,9 @@ sub new ($class, @args) {
         unless $self->max_limit =~ /\A\d+\z/ && $self->max_limit >= $self->default_limit;
     die "max_filters must be between 1 and 20\n"
         unless $self->max_filters =~ /\A\d+\z/ && $self->max_filters >= 1 && $self->max_filters <= 20;
+    die "max_grid_cells must be between 1 and 100\n"
+        unless $self->max_grid_cells =~ /\A\d+\z/
+            && $self->max_grid_cells >= 1 && $self->max_grid_cells <= 100;
     die "max_orders must be between 1 and 20\n"
         unless $self->max_orders =~ /\A\d+\z/ && $self->max_orders >= 1 && $self->max_orders <= 20;
     die "max_measures must be between 1 and 20\n"

@@ -345,33 +345,54 @@ sub _grid ($class, $result, $model) {
             $swatches . '</span><span>High</span></div>';
     }
 
-    my $head = '<th scope="col" class="sc-grid-corner"><span>' .
-        _h($grid->{row_axis}{label}) . '</span><small> / ' .
-        _h($grid->{column_axis}{label}) . '</small></th>' . join('', map {
+    my $method = $model->{config}->query_params_enabled($model->{domain}) ? 'get' : 'post';
+    my $hidden = '';
+    my $selection_pairs = $grid->{selection_pairs} // [];
+    for (my $index = 0; $index < @$selection_pairs; $index += 2) {
+        $hidden .= _hidden($selection_pairs->[$index], $selection_pairs->[$index + 1]);
+    }
+    my $column_index = 0;
+    my $head = '<th scope="col" class="sc-grid-corner"><label class="sc-grid-axis-toggle">' .
+        '<input class="sc-grid-axis-input" type="checkbox" data-sc-grid-toggle-all ' .
+        'aria-label="Select all grid cells">' .
+        '<span>' . _h($grid->{row_axis}{label}) . '<small> / ' .
+        _h($grid->{column_axis}{label}) . '</small></span></label></th>' . join('', map {
             my $column = $_;
-            '<th scope="col">' . $class->_drilldown_control(
-                $model,
-                $column->{drilldown},
-                _html_display($grid->{column_axis}, $column->{value}, 1),
-                1,
-                {grid => 1},
-            ) . '</th>'
+            my $index = $column_index++;
+            '<th scope="col"><label class="sc-grid-axis-toggle"><input class="sc-grid-axis-input" ' .
+                'type="checkbox" name="grid_axis" value="' .
+                _h(encode_json({axis => 1, value => $column->{selection_value}})) . '" ' .
+                'data-sc-grid-column-toggle="' . _h($index) . '" aria-label="Select column ' .
+                _h(_display_group($column->{value})) . '"><span>' .
+                _html_display($grid->{column_axis}, $column->{value}, 1) . '</span></label></th>'
         } @{$grid->{columns}});
 
     my $rows = '';
+    my $row_index = 0;
     for my $row (@{$grid->{rows}}) {
-        my $cells = '<th scope="row">' . $class->_drilldown_control(
-            $model,
-            $row->{drilldown},
-            _html_display($grid->{row_axis}, $row->{value}, 1),
-            1,
-            {grid => 1},
-        ) . '</th>';
+        my $current_row = $row_index++;
+        my $cells = '<th scope="row"><label class="sc-grid-axis-toggle"><input ' .
+            'class="sc-grid-axis-input" type="checkbox" name="grid_axis" value="' .
+            _h(encode_json({axis => 0, value => $row->{selection_value}})) . '" ' .
+            'data-sc-grid-row-toggle="' . _h($current_row) . '" aria-label="Select row ' .
+            _h(_display_group($row->{value})) . '"><span>' .
+            _html_display($grid->{row_axis}, $row->{value}, 1) . '</span></label></th>';
+        my $current_column = 0;
         for my $column (@{$grid->{columns}}) {
             my $row_cells = $grid->{cells}{$row->{key}};
             my $cell = ref($row_cells) eq 'HASH' ? $row_cells->{$column->{key}} : undef;
             unless ($cell) {
-                $cells .= '<td class="sc-grid-cell sc-grid-empty-cell">—</td>';
+                $cells .= '<td class="sc-grid-cell sc-grid-empty-cell" data-sc-grid-row="' .
+                    _h($current_row) . '" data-sc-grid-column="' .
+                    _h($current_column) . '"><label class="sc-grid-cell-toggle"><input ' .
+                    'class="sc-grid-cell-input" type="checkbox" name="grid_cell" value="' .
+                    _h(encode_json([$row->{selection_value}, $column->{selection_value}])) . '" ' .
+                    'data-sc-grid-cell data-sc-grid-row="' . _h($current_row) .
+                    '" data-sc-grid-column="' . _h($current_column) . '" aria-label="Select empty ' .
+                    _h(_display_group($row->{value}) . ', ' .
+                        _display_group($column->{value})) . '"><span class="sc-grid-cell-value">—</span>' .
+                    '<span class="sc-grid-cell-selected" aria-hidden="true">&#10003;</span></label></td>';
+                $current_column++;
                 next;
             }
             my $heat = $colorize ? _grid_heat_percentage(
@@ -384,25 +405,41 @@ sub _grid ($class, $result, $model) {
                 : '';
             $cells .= '<td class="sc-grid-cell' .
                 (_numeric_measure_class($grid->{measure}, $model) ? ' sc-numeric-measure' : '') .
-                '"' . $style . '>' . $class->_drilldown_control(
-                    $model,
-                    $cell->{drilldown},
-                    _html_display($grid->{measure}, $cell->{value}),
-                    1,
-                    {grid => 1},
-                ) . '</td>';
+                '" data-sc-grid-row="' . _h($current_row) . '" data-sc-grid-column="' .
+                _h($current_column) . '"' . $style . '><label class="sc-grid-cell-toggle"><input ' .
+                'class="sc-grid-cell-input" type="checkbox" ' .
+                'name="grid_cell" value="' . _h(encode_json($cell->{selection_values})) . '" ' .
+                'data-sc-grid-cell data-sc-grid-row="' . _h($current_row) .
+                '" data-sc-grid-column="' . _h($current_column) . '" aria-label="Select ' .
+                _h(_display_group($row->{value}) . ', ' .
+                    _display_group($column->{value})) . '"><span class="sc-grid-cell-value">' .
+                _html_display($grid->{measure}, $cell->{value}) .
+                '</span><span class="sc-grid-cell-selected" aria-hidden="true">&#10003;</span></label></td>';
+            $current_column++;
         }
         $rows .= '<tr>' . $cells . '</tr>';
     }
     my $column_count = 1 + scalar(@{$grid->{columns}});
     $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count .
         '">No rows matched this query.</td></tr>';
-    return $heading . $legend .
+    my $max_cells = $model->{config}->max_grid_cells;
+    my $selection_controls = '<div class="sc-grid-selection-actions"><span role="status" ' .
+        'aria-live="polite"><strong data-sc-grid-selection-count>0</strong> ' .
+        '<span data-sc-grid-selection-label>cells selected</span></span><span class="sc-grid-selection-buttons">' .
+        '<button class="sc-button sc-secondary" type="button" data-sc-grid-clear disabled>Clear</button>' .
+        '<button class="sc-button sc-primary" type="submit" data-sc-grid-apply>' .
+        'Show selected details</button></span></div><p class="sc-grid-selection-help" ' .
+        'data-sc-grid-selection-help>Selections may compile to at most ' .
+        _h($max_cells) . ' filter groups. Full rows and columns become one condition.</p>';
+    return '<form class="sc-grid-selection-form" action="' . _h($model->{config}->path) .
+        '" method="' . $method . '" hx-ws:send data-sc-grid-selection data-sc-grid-max="' .
+        _h($max_cells) . '">' . $hidden . $heading . $legend . $selection_controls .
         '<div class="sc-table-wrap sc-aggregate-grid-wrap"><table class="sc-aggregate-grid">' .
         '<caption class="sc-visually-hidden">Aggregate grid of ' .
         _h($grid->{measure}{label}) . ' by ' . _h($grid->{row_axis}{label}) .
         ' and ' . _h($grid->{column_axis}{label}) . '</caption><thead><tr>' .
-        $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>';
+        $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>' .
+        '<noscript><p class="sc-note">Choose cells and submit with Show selected details.</p></noscript></form>';
 }
 
 sub _grid_heat_percentage ($value, $maximum, $scale) {

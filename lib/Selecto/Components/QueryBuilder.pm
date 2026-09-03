@@ -452,6 +452,8 @@ sub _temporal_expression ($field, $type) {
 
 sub _with_filters ($query, $state, $config, $domain) {
     my @expressions;
+    my %clause_expressions;
+    my @clause_order;
     my $field_map = $config->field_map($domain);
     for my $filter (@{$state->filters}) {
         my ($field, $op, $value, $value_end) = @{$filter}{qw(field op value value_end)};
@@ -460,27 +462,44 @@ sub _with_filters ($query, $state, $config, $domain) {
         my $operand = $filter->{grouped}
             ? _group_expression({field => $field, type => $type}, $state->group_configs->{$field} // {})
             : _temporal_expression($field, $type);
-        my $expression;
-        if ($op eq 'in') {
-            my @values = grep { length } map { _trim($_) } split /,/, $value;
-            $expression = Selecto::Expression->in($operand, \@values);
-        } elsif ($op eq 'between') {
-            $expression = Selecto::Expression->between($operand, $value, $value_end);
-        } elsif ($op eq 'date_shortcut') {
-            my ($start, $end) = Selecto::Components::DateShortcut->bounds($value);
-            $expression = Selecto::Expression->all([
-                Selecto::Expression->gte($operand, $start),
-                Selecto::Expression->lt($operand, $end),
-            ]);
-        } elsif ($op eq 'is_null' || $op eq 'not_null') {
-            $expression = Selecto::Expression->can($op)->('Selecto::Expression', $operand);
+        my $expression = _filter_expression($operand, $op, $value, $value_end);
+        if (defined($filter->{clause})) {
+            push @clause_order, $filter->{clause}
+                unless exists($clause_expressions{$filter->{clause}});
+            push @{$clause_expressions{$filter->{clause}}}, $expression;
         } else {
-            $expression = Selecto::Expression->can($op)->('Selecto::Expression', $operand, $value);
+            push @expressions, $expression;
         }
-        push @expressions, $expression;
+    }
+    if (@clause_order) {
+        my @alternatives = map {
+            my $items = $clause_expressions{$_};
+            @$items == 1 ? $items->[0] : Selecto::Expression->all($items)
+        } @clause_order;
+        push @expressions, @alternatives == 1
+            ? $alternatives[0] : Selecto::Expression->any(\@alternatives);
     }
     return $query unless @expressions;
     return $query->where(@expressions == 1 ? $expressions[0] : Selecto::Expression->all(\@expressions));
+}
+
+sub _filter_expression ($operand, $op, $value, $value_end) {
+    if ($op eq 'in') {
+        my @values = grep { length } map { _trim($_) } split /,/, $value;
+        return Selecto::Expression->in($operand, \@values);
+    }
+    return Selecto::Expression->between($operand, $value, $value_end)
+        if $op eq 'between';
+    if ($op eq 'date_shortcut') {
+        my ($start, $end) = Selecto::Components::DateShortcut->bounds($value);
+        return Selecto::Expression->all([
+            Selecto::Expression->gte($operand, $start),
+            Selecto::Expression->lt($operand, $end),
+        ]);
+    }
+    return Selecto::Expression->can($op)->('Selecto::Expression', $operand)
+        if $op eq 'is_null' || $op eq 'not_null';
+    return Selecto::Expression->can($op)->('Selecto::Expression', $operand, $value);
 }
 
 sub _with_query_library ($query, $domain, $state) {

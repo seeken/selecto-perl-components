@@ -95,8 +95,7 @@
     if (pending) pending.textContent = "Pending changes";
   }
 
-  function showResultsLoading(form) {
-    var workspace = form && form.closest("[data-sc-workspace]");
+  function showWorkspaceResultsLoading(workspace) {
     var results = workspace && workspace.querySelector(".sc-results");
     if (!results) return;
     destroyChartsWithin(results);
@@ -116,6 +115,10 @@
     detail.textContent = "Loading the new result set";
     loading.append(spinner, message, detail);
     results.replaceChildren(loading);
+  }
+
+  function showResultsLoading(form) {
+    showWorkspaceResultsLoading(form && form.closest("[data-sc-workspace]"));
   }
 
   function stageResultView(root, view) {
@@ -387,12 +390,210 @@
     else dialog.removeAttribute("open");
   }
 
+  function gridCells(root, selector) {
+    var cells = Array.from(root.querySelectorAll("[data-sc-grid-cell]"));
+    return selector ? cells.filter(selector) : cells;
+  }
+
+  function clearGridAxisHover(root) {
+    if (!root) return;
+    root.querySelectorAll(".is-grid-axis-hover").forEach(function (header) {
+      header.classList.remove("is-grid-axis-hover");
+    });
+  }
+
+  function showGridAxisHover(cell) {
+    var root = cell && cell.closest("[data-sc-grid-selection]");
+    if (!root) return;
+    clearGridAxisHover(root);
+    var rowToggle = root.querySelector('[data-sc-grid-row-toggle="' + cell.dataset.scGridRow + '"]');
+    var columnToggle = root.querySelector('[data-sc-grid-column-toggle="' + cell.dataset.scGridColumn + '"]');
+    if (rowToggle && rowToggle.closest("th")) rowToggle.closest("th").classList.add("is-grid-axis-hover");
+    if (columnToggle && columnToggle.closest("th")) columnToggle.closest("th").classList.add("is-grid-axis-hover");
+  }
+
+  document.addEventListener("mouseover", function (event) {
+    var cell = event.target.closest && event.target.closest(".sc-aggregate-grid td[data-sc-grid-row][data-sc-grid-column]");
+    if (!cell || (event.relatedTarget && cell.contains(event.relatedTarget))) return;
+    showGridAxisHover(cell);
+  });
+
+  document.addEventListener("mouseout", function (event) {
+    var cell = event.target.closest && event.target.closest(".sc-aggregate-grid td[data-sc-grid-row][data-sc-grid-column]");
+    if (!cell || (event.relatedTarget && cell.contains(event.relatedTarget))) return;
+    clearGridAxisHover(cell.closest("[data-sc-grid-selection]"));
+  });
+
+  document.addEventListener("focusin", function (event) {
+    if (event.target.matches && event.target.matches("[data-sc-grid-cell]")) showGridAxisHover(event.target);
+  });
+
+  document.addEventListener("focusout", function (event) {
+    if (event.target.matches && event.target.matches("[data-sc-grid-cell]")) {
+      clearGridAxisHover(event.target.closest("[data-sc-grid-selection]"));
+    }
+  });
+
+  function gridSelectionPlan(root) {
+    var selected = gridCells(root, function (cell) { return cell.checked; });
+    var uncovered = new Set(selected);
+    var candidates = [];
+    root.querySelectorAll("[data-sc-grid-row-toggle], [data-sc-grid-column-toggle]").forEach(function (toggle) {
+      var cells = gridCells(root, function (cell) {
+        if (toggle.matches("[data-sc-grid-row-toggle]")) {
+          return cell.dataset.scGridRow === toggle.dataset.scGridRowToggle;
+        }
+        return cell.dataset.scGridColumn === toggle.dataset.scGridColumnToggle;
+      });
+      if (cells.length && cells.every(function (cell) { return cell.checked; })) {
+        candidates.push({toggle: toggle, cells: cells});
+      }
+    });
+    var axes = [];
+    while (true) {
+      var best = null;
+      var bestCoverage = 0;
+      candidates.forEach(function (candidate) {
+        var coverage = candidate.cells.filter(function (cell) { return uncovered.has(cell); }).length;
+        if (coverage > bestCoverage) {
+          best = candidate;
+          bestCoverage = coverage;
+        }
+      });
+      if (!best) break;
+      axes.push(best.toggle);
+      best.cells.forEach(function (cell) { uncovered.delete(cell); });
+      candidates = candidates.filter(function (candidate) { return candidate !== best; });
+    }
+    return {axes: axes, cells: Array.from(uncovered), clauseCount: axes.length + uncovered.size};
+  }
+
+  function setGridCells(root, cells, checked) {
+    var maximum = Number(root.dataset.scGridMax || 50);
+    var previous = cells.map(function (cell) { return cell.checked; });
+    cells.forEach(function (cell) {
+      cell.checked = !!checked;
+    });
+    var plan = gridSelectionPlan(root);
+    if (checked && plan.clauseCount > maximum) {
+      cells.forEach(function (cell, index) { cell.checked = previous[index]; });
+      root.dataset.scGridSelectionError = "That selection would create " + plan.clauseCount +
+        " filter groups; the limit is " + maximum + ". Clear some cells and try again.";
+      return false;
+    }
+    delete root.dataset.scGridSelectionError;
+    return true;
+  }
+
+  function syncGridAxisToggle(toggle, cells) {
+    var selected = cells.filter(function (cell) { return cell.checked; }).length;
+    toggle.checked = cells.length > 0 && selected === cells.length;
+    toggle.indeterminate = selected > 0 && selected < cells.length;
+  }
+
+  function updateGridSelection(root) {
+    if (!root) return;
+    var cells = gridCells(root);
+    var selected = cells.filter(function (cell) { return cell.checked; });
+    var plan = gridSelectionPlan(root);
+    var maximum = Number(root.dataset.scGridMax || 50);
+    var count = root.querySelector("[data-sc-grid-selection-count]");
+    var label = root.querySelector("[data-sc-grid-selection-label]");
+    var apply = root.querySelector("[data-sc-grid-apply]");
+    var clear = root.querySelector("[data-sc-grid-clear]");
+    var help = root.querySelector("[data-sc-grid-selection-help]");
+    if (count) count.textContent = selected.length;
+    if (label) label.textContent = selected.length === 1 ? "cell selected" : "cells selected";
+    if (apply) apply.disabled = selected.length === 0;
+    if (clear) clear.disabled = selected.length === 0;
+    if (help) {
+      var selectionError = root.dataset.scGridSelectionError || "";
+      help.textContent = selectionError || ("Selected cells compile to " + plan.clauseCount + " of " + maximum +
+        " filter groups. Full rows and columns become one condition; remaining cells use paired conditions.");
+      help.classList.toggle("is-error", !!selectionError);
+    }
+    root.querySelectorAll("[data-sc-grid-row-toggle]").forEach(function (toggle) {
+      syncGridAxisToggle(toggle, gridCells(root, function (cell) {
+        return cell.dataset.scGridRow === toggle.dataset.scGridRowToggle;
+      }));
+    });
+    root.querySelectorAll("[data-sc-grid-column-toggle]").forEach(function (toggle) {
+      syncGridAxisToggle(toggle, gridCells(root, function (cell) {
+        return cell.dataset.scGridColumn === toggle.dataset.scGridColumnToggle;
+      }));
+    });
+    var all = root.querySelector("[data-sc-grid-toggle-all]");
+    if (all) syncGridAxisToggle(all, cells);
+  }
+
+  function restoreGridSelections() {
+    document.querySelectorAll("[data-sc-grid-selection]").forEach(updateGridSelection);
+  }
+
+  document.addEventListener("change", function (event) {
+    var root = event.target.closest && event.target.closest("[data-sc-grid-selection]");
+    if (!root) return;
+    if (event.target.matches("[data-sc-grid-cell]")) {
+      var maximum = Number(root.dataset.scGridMax || 50);
+      var plan = gridSelectionPlan(root);
+      if (event.target.checked && plan.clauseCount > maximum) {
+        event.target.checked = false;
+        root.dataset.scGridSelectionError = "The limit is " + maximum +
+          " filter groups. Complete a row or column, or clear a cell before choosing another.";
+      } else {
+        delete root.dataset.scGridSelectionError;
+      }
+    } else if (event.target.matches("[data-sc-grid-row-toggle]")) {
+      setGridCells(root, gridCells(root, function (cell) {
+        return cell.dataset.scGridRow === event.target.dataset.scGridRowToggle;
+      }), event.target.checked);
+    } else if (event.target.matches("[data-sc-grid-column-toggle]")) {
+      setGridCells(root, gridCells(root, function (cell) {
+        return cell.dataset.scGridColumn === event.target.dataset.scGridColumnToggle;
+      }), event.target.checked);
+    } else if (event.target.matches("[data-sc-grid-toggle-all]")) {
+      setGridCells(root, gridCells(root), event.target.checked);
+    } else {
+      return;
+    }
+    updateGridSelection(root);
+  });
+
+  document.addEventListener("submit", function (event) {
+    var root = event.target.closest && event.target.closest("[data-sc-grid-selection]");
+    if (!root) return;
+    var plan = gridSelectionPlan(root);
+    var controls = Array.from(root.querySelectorAll("[data-sc-grid-cell], [name='grid_axis']"));
+    controls.forEach(function (control) { control.disabled = true; });
+    plan.axes.forEach(function (axis) {
+      var input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "grid_axis";
+      input.value = axis.value;
+      input.dataset.scGridCompactInput = "";
+      root.appendChild(input);
+    });
+    plan.cells.forEach(function (cell) {
+      var input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "grid_cell";
+      input.value = cell.value;
+      input.dataset.scGridCompactInput = "";
+      root.appendChild(input);
+    });
+    window.setTimeout(function () {
+      controls.forEach(function (control) { control.disabled = false; });
+      root.querySelectorAll("[data-sc-grid-compact-input]").forEach(function (input) { input.remove(); });
+    }, 0);
+  }, true);
+
   document.addEventListener("DOMContentLoaded", function () {
     renderConnectionStatus();
     restoreBuilderTabs();
     restoreBuilderTrays();
     restoreResultViews();
     restoreCharts();
+    restoreGridSelections();
   });
 
   document.addEventListener("htmx:ws:after:connection", function () {
@@ -408,6 +609,30 @@
   document.addEventListener("htmx:after:swap", renderConnectionStatus);
 
   window.addEventListener("submit", function (event) {
+    var gridForm = event.target.closest("[data-sc-grid-selection]");
+    if (gridForm) {
+      var selected = gridCells(gridForm, function (cell) { return cell.checked; });
+      if (!selected.length) {
+        event.preventDefault();
+        return;
+      }
+      var workspace = gridForm.closest("[data-sc-workspace]");
+      var shell = workspace && workspace.querySelector("[data-sc-builder-shell]");
+      if (shell) {
+        setBuilderTrayCollapsed(shell, true);
+      }
+      var connection = document.querySelector("[data-selecto-connection]");
+      if (connection && connection.classList.contains("is-live")) {
+        window.setTimeout(function () { showWorkspaceResultsLoading(workspace); }, 0);
+        return;
+      }
+      var gridButton = gridForm.querySelector('[data-sc-grid-apply]');
+      if (gridButton) {
+        gridButton.disabled = true;
+        gridButton.textContent = "Opening details…";
+      }
+      return;
+    }
     var form = event.target.closest("[data-sc-builder]");
     if (!form) return;
     showResultsLoading(form);
@@ -440,6 +665,7 @@
       restoreBuilderTrays();
       restoreResultViews();
       restoreCharts();
+      restoreGridSelections();
     });
   });
 
@@ -448,6 +674,7 @@
     restoreBuilderTrays();
     restoreResultViews();
     restoreCharts();
+    restoreGridSelections();
   });
 
   document.addEventListener("htmx:before:swap", function (event) {
@@ -483,6 +710,13 @@
     var debugCopy = event.target.closest("[data-sc-debug-copy]");
     if (debugCopy) {
       copyDebugSql(debugCopy);
+      return;
+    }
+    var gridClear = event.target.closest("[data-sc-grid-clear]");
+    if (gridClear) {
+      var gridRoot = gridClear.closest("[data-sc-grid-selection]");
+      setGridCells(gridRoot, gridCells(gridRoot), false);
+      updateGridSelection(gridRoot);
       return;
     }
     var toggle = event.target.closest("[data-sc-builder-toggle]");
@@ -1043,6 +1277,7 @@
     fieldInput.value = field;
     item.appendChild(fieldInput);
     item.appendChild(hiddenFilterValue("filter_group", "0"));
+    item.appendChild(hiddenFilterValue("filter_clause", ""));
     var heading = document.createElement("div");
     heading.className = "sc-filter-set-heading";
     appendLabel(heading, label, type);
@@ -1098,6 +1333,23 @@
     } else if (!draft && note) {
       note.remove();
     }
+    var clause = item.closest("[data-sc-filter-clause]");
+    if (clause) {
+      var clauseDraft = Array.from(clause.querySelectorAll("[data-sc-filter-condition]")).some(function (condition) {
+        return condition.classList.contains("is-draft");
+      });
+      clause.classList.toggle("is-draft", clauseDraft);
+      var clauseNote = clause.querySelector("[data-sc-filter-clause-note]");
+      if (clauseDraft && !clauseNote) {
+        clauseNote = document.createElement("p");
+        clauseNote.className = "sc-filter-draft-note";
+        clauseNote.dataset.scFilterClauseNote = "";
+        clauseNote.textContent = "Complete both conditions to apply this cell.";
+        clause.appendChild(clauseNote);
+      } else if (!clauseDraft && clauseNote) {
+        clauseNote.remove();
+      }
+    }
   }
 
   function refreshFilterPicker(root) {
@@ -1150,6 +1402,7 @@
     if (visualCount === undefined) {
       visualCount = builder.querySelectorAll("[data-sc-filter-set-item]").length;
     }
+    visualCount += builder.querySelectorAll("[data-sc-filter-clause]").length;
     var badge = builder.querySelector("[data-sc-filter-badge]");
     if (badge) badge.textContent = visualCount + queryLibrarySegmentIds(builder).size;
   }
@@ -1158,9 +1411,21 @@
     var field = control && control.dataset.filterField;
     var kind = control && control.dataset.scPromotedFilterInput;
     if (!field || !kind) return;
-    var filterItem = Array.from(document.querySelectorAll("[data-sc-filter-set-item]")).find(function (item) {
-      return item.dataset.field === field;
-    });
+    var builder = promotedFilterBuilder(control);
+    var clauseId = control.dataset.filterClause;
+    var filterItem;
+    if (clauseId) {
+      var clause = builder && Array.from(builder.querySelectorAll("[data-sc-filter-clause]")).find(function (item) {
+        return item.dataset.scFilterClause === clauseId;
+      });
+      filterItem = clause && Array.from(clause.querySelectorAll("[data-sc-filter-condition]")).find(function (item) {
+        return item.dataset.field === field;
+      });
+    } else {
+      filterItem = builder && Array.from(builder.querySelectorAll("[data-sc-filter-set-item]")).find(function (item) {
+        return item.dataset.field === field;
+      });
+    }
     if (!filterItem) return;
     var target = filterItem.querySelector('[name="filter_' + kind + '"]');
     if (target) {
@@ -1174,7 +1439,7 @@
   }
 
   function refreshPromotedFilterValues(control, filterItem) {
-    var card = control && control.closest("[data-sc-promoted-filter]");
+    var card = control && control.closest("[data-sc-promoted-filter-condition], [data-sc-promoted-filter]");
     var source = filterItem && filterItem.querySelector("[data-sc-filter-values]");
     var current = card && card.querySelector("[data-sc-promoted-filter-values]");
     if (!card || !source || !current) return;
@@ -1191,6 +1456,7 @@
         input.removeAttribute("name");
         input.dataset.scPromotedFilterInput = name === "filter_value_end" ? "value_end" : "value";
         input.dataset.filterField = control.dataset.filterField;
+        if (control.dataset.filterClause) input.dataset.filterClause = control.dataset.filterClause;
       }
     });
     current.replaceWith(replacement);
@@ -1200,6 +1466,29 @@
     var root = control && control.closest("[data-sc-promoted-filters]");
     var submit = root && root.querySelector("button[form]");
     return submit ? document.getElementById(submit.getAttribute("form")) : null;
+  }
+
+  function removeFilterClause(builder, clauseId) {
+    if (!builder || !clauseId) return;
+    var clause = Array.from(builder.querySelectorAll("[data-sc-filter-clause]")).find(function (item) {
+      return item.dataset.scFilterClause === clauseId;
+    });
+    var clauses = clause && clause.closest("[data-sc-filter-clauses]");
+    if (!clause || !clauses) return;
+    clause.remove();
+    var remaining = clauses.querySelectorAll("[data-sc-filter-clause]").length;
+    var count = clauses.querySelector("[data-sc-filter-clause-count]");
+    if (count) count.textContent = remaining;
+    if (!remaining) clauses.remove();
+    var workspace = builder.closest("[data-sc-workspace]");
+    var promoted = workspace && workspace.querySelector("[data-sc-promoted-filters]");
+    var promotedClause = promoted && Array.from(promoted.querySelectorAll("[data-sc-promoted-filter-clause]")).find(function (item) {
+      return item.dataset.scPromotedFilterClause === clauseId;
+    });
+    if (promotedClause) promotedClause.remove();
+    if (promoted && !promoted.querySelector("[data-sc-promoted-filter]")) promoted.remove();
+    refreshFilterBadge(builder);
+    markBuilderDirty(builder);
   }
 
   document.addEventListener("input", function (event) {
@@ -1226,7 +1515,7 @@
       return;
     }
     if (event.target.matches('[name="filter_value"], [name="filter_value_end"]')) {
-      updateFilterDraft(event.target.closest("[data-sc-filter-set-item]"));
+      updateFilterDraft(event.target.closest("[data-sc-filter-set-item], [data-sc-filter-condition]"));
     }
     markBuilderDirty(event.target);
   });
@@ -1242,7 +1531,7 @@
     if (event.target.matches('input[name="view"]')) {
       stageResultView(builder, event.target.value);
     } else if (event.target.matches('[name="filter_op"]')) {
-      var filterItem = event.target.closest("[data-sc-filter-set-item]");
+      var filterItem = event.target.closest("[data-sc-filter-set-item], [data-sc-filter-condition]");
       var currentValue = filterItem.querySelector('[name="filter_value"]');
       var currentEnd = filterItem.querySelector('[name="filter_value_end"]');
       rebuildFilterValues(
@@ -1252,7 +1541,7 @@
       );
       updateFilterDraft(filterItem);
     } else if (event.target.matches('[name="filter_value"], [name="filter_value_end"]')) {
-      updateFilterDraft(event.target.closest("[data-sc-filter-set-item]"));
+      updateFilterDraft(event.target.closest("[data-sc-filter-set-item], [data-sc-filter-condition]"));
     } else if (event.target.matches('[name="query_library_view"], [name="query_library_segment"]')) {
       refreshFilterBadge(builder);
     } else if (event.target.matches("[data-sc-group-format], [data-sc-measure-function]")) {
@@ -1308,6 +1597,14 @@
   });
 
   document.addEventListener("click", function (event) {
+    var clauseRemove = event.target.closest("[data-sc-filter-clause-remove], [data-sc-promoted-clause-remove]");
+    if (clauseRemove) {
+      var clause = clauseRemove.closest("[data-sc-filter-clause]");
+      var builder = clause ? clause.closest("[data-sc-builder]") : promotedFilterBuilder(clauseRemove);
+      var clauseId = clause ? clause.dataset.scFilterClause : clauseRemove.dataset.filterClause;
+      removeFilterClause(builder, clauseId);
+      return;
+    }
     var control = event.target.closest("[data-sc-filter-action]");
     if (!control || control.disabled) return;
     var root = control.closest("[data-sc-filter-root]");

@@ -320,6 +320,7 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns) {
             push @rows, {
                 key => $row_key,
                 value => $row_value,
+                selection_value => $record->{$groups[0]{drilldown_key} // $groups[0]{key}},
                 drilldown => _drilldown_for_group_indexes(
                     $state, \@groups, $record, [0],
                 ),
@@ -329,6 +330,7 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns) {
             push @columns, {
                 key => $column_key,
                 value => $column_value,
+                selection_value => $record->{$groups[1]{drilldown_key} // $groups[1]{key}},
                 drilldown => _drilldown_for_group_indexes(
                     $state, \@groups, $record, [1],
                 ),
@@ -338,6 +340,10 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns) {
         $cells{$row_key}{$column_key} = {
             value => $value,
             drilldown => $drilldowns->[$record_index][-1],
+            selection_values => [map {
+                my $value_key = $_->{drilldown_key} // $_->{key};
+                $record->{$value_key}
+            } @groups],
         };
         if (defined($value) && !ref($value) && looks_like_number($value) && $value > 0) {
             $maximum_positive = 0 + $value
@@ -355,7 +361,22 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns) {
         columns => \@columns,
         cells => \%cells,
         maximum_positive => $maximum_positive,
+        selection_pairs => _grid_selection_pairs($state),
     };
+}
+
+sub _grid_selection_pairs ($state) {
+    my $detail = Selecto::Components::State->new(
+        %{$state->as_hash},
+        view => 'detail',
+        aggregate_grid => 0,
+        aggregate_grid_colorize => 0,
+        filters => [map { { %$_ } }
+            grep { !defined($_->{clause}) } @{$state->filters}],
+        page => 1,
+        errors => [],
+    );
+    return $detail->query_pairs;
 }
 
 sub _grid_value_key ($value) {

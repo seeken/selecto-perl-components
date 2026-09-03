@@ -60,9 +60,17 @@ installed npm packages later.
   filters and auto-promote the selected group path as editable governed Detail
   predicates, including formatted dates, numeric/date buckets, and text prefixes;
 - an Aggregate Grid presentation for exactly two Group By fields and one
-  Aggregate, with sticky axes, clickable row/column/cell drilldowns, optional
-  tenant-colored linear or logarithmic heat-map shading, full-matrix rendering,
-  and grid-shaped Excel, CSV, TSV, and JSON exports;
+  Aggregate, with sticky axes, independently toggleable cells, row/column/all
+  selection controls, direct cell highlighting instead of visible per-cell
+  checkbox clutter, selectable empty intersections for defining future views,
+  and one explicit Detail submission. Header selections are
+  atomic and never silently stop at the configured limit. A complete row or
+  column becomes one axis condition; uncovered cells remain paired
+  `(row AND column)` alternatives. Selections are ORed without creating a
+  row/column Cartesian product. Submitted selections appear as compact,
+  read-only Quick Filter cards with one remove control per selection. The grid also provides
+  optional tenant-colored linear or logarithmic heat-map shading, full-matrix
+  rendering, and grid-shaped Excel, CSV, TSV, and JSON exports;
 - star-dimension Aggregate and Graph groups that display the referenced name,
   group by the stable fact key, and use that hidden key for Detail drilldowns;
 - `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `in`, `is_null`, and
@@ -195,7 +203,10 @@ In the default shareable mode, canonical parameters are:
 - aligned, repeated `filter_field`, `filter_op`, `filter_value`, and
   `filter_value_end` values; server-generated aggregate drilldowns also align
   a `filter_group` marker so the governed grouping expression is reused as the
-  Detail predicate;
+  Detail predicate. Multi-cell grid drilldowns align `filter_clause` markers:
+  conditions in one numbered clause use AND, while numbered clauses use OR.
+  The browser's repeated `grid_cell` JSON pairs are a bounded submission format
+  only and are replaced by these validated canonical filters;
   newly added filters remain URL-visible drafts and do not constrain the query
   until they have the required value or values (or a null operator). Date
   shortcuts are stored as allowlisted identifiers and resolved to bound,
@@ -258,6 +269,7 @@ plugin 'Selecto::Components' => {
             default_limit => 25,
             max_limit => 100,
             max_filters => 20,
+            max_grid_cells => 50,
             max_orders => 10,
             show_sql => 0,
             websocket_message_cleanup => sub ($controller, $config) {
@@ -671,6 +683,10 @@ measures => [
 `max_filters` defaults to 20 and may be configured from 1 through 20. Because
 the Available/Set model permits each governed field once, the domain's field
 catalog can impose a lower practical maximum.
+
+`max_grid_cells` defaults to 50 and may be configured from 1 through 100. It
+bounds the compact row, column, and cell alternatives produced by an
+interactive grid selection and accepted by server-side parsing.
 
 `max_orders` defaults to 10 and may be configured from 1 through 20. Date/time
 formats are selected from a closed catalog; Aggregate formatting is part of the
