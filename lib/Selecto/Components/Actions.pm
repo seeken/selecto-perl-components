@@ -149,9 +149,17 @@ sub _normalize_selection ($class, $spec, $config, $controller, $action, $domain)
             && $maximum <= @LUCKY_CHARMS_MARKERS;
     my @markers = map { dclone($_) } @LUCKY_CHARMS_MARKERS[0 .. $maximum - 1];
     my $eligibility_field = _text($spec->{eligibility_field});
-    die "action $action->{id} eligibility_field must be an internal field name\n"
-        if length($eligibility_field)
-            && $eligibility_field !~ /\A__[a-z][a-z0-9_]*\z/;
+    if (length($eligibility_field)
+        && $eligibility_field !~ /\A__[a-z][a-z0-9_]*\z/) {
+        die "action $action->{id} eligibility_field must be a governed field name\n"
+            unless $eligibility_field
+                =~ /\A[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\z/;
+        my $resolved = eval { $domain->resolve($eligibility_field) };
+        die "action $action->{id} eligibility_field is not available in the domain\n"
+            unless $resolved;
+        die "action $action->{id} eligibility_field must be boolean\n"
+            unless ($resolved->{type} // '') eq 'boolean';
+    }
     return {
         mode => 'groups',
         palette => $palette,

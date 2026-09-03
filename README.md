@@ -523,7 +523,7 @@ load_build => {
         mode => 'groups',
         palette => 'lucky_charms',
         max_groups => 6,
-        eligibility_field => '__load_build_eligible',
+        eligibility_field => 'load_build_eligible',
         row_details => [
             {id => 'origin', label => 'Origin', field => 'origin.city'},
             {id => 'destination', label => 'Destination', field => 'destination.city'},
@@ -545,12 +545,16 @@ index. Each group has its trusted server-resolved `marker`, its own
 `selected_ids`, and normalized `inputs`. The browser cannot submit custom
 marker colors, shapes, or labels. `row_details` are governed hidden fields
 shown beside each selected row in the confirmation card; they are display-only
-and are not submitted to the handler. When `eligibility_field` is declared,
-the host must configure an `action_eligibility_resolvers` callback for the
-action. The callback receives the governed current-page row IDs and returns a
-hash whose true-valued IDs may display selection controls; missing IDs and
-resolver failures fail closed and leave the action cell empty. This display
-hint does not replace authorization and business-rule checks during execution.
+and are not submitted to the handler. `eligibility_field` should normally name
+an internal boolean domain field. Selecto adds it to the data query as a hidden
+selection, so each row's selection control is governed without a second query
+or per-row host calls. The display hint does not replace authorization and
+business-rule checks during execution.
+
+Legacy hosts may name a synthetic `__field` and configure an
+`action_eligibility_resolvers` callback. This compatibility mode is slower and
+is intended only for rules that cannot be represented by a governed SQL-backed
+domain field.
 A `lookup` input uses the authenticated
 `GET /explore/products/actions/:action_id/lookups/:input_id` route and the
 corresponding host-owned `lookup_sources` callback. Results are normalized to
