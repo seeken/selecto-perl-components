@@ -57,8 +57,12 @@ installed npm packages later.
   Previous/Next retain explicit pagination;
 - hierarchical Aggregate rollups with clickable group values, subtotals, and a
   grand total, plus clickable Graph group values; drilldowns retain existing
-  filters and apply the selected group path as exact governed Detail predicates,
-  including formatted dates, numeric/date buckets, and text prefixes;
+  filters and auto-promote the selected group path as editable governed Detail
+  predicates, including formatted dates, numeric/date buckets, and text prefixes;
+- an Aggregate Grid presentation for exactly two Group By fields and one
+  Aggregate, with sticky axes, clickable row/column/cell drilldowns, optional
+  tenant-colored linear or logarithmic heat-map shading, full-matrix rendering,
+  and grid-shaped Excel, CSV, TSV, and JSON exports;
 - star-dimension Aggregate and Graph groups that display the referenced name,
   group by the stable fact key, and use that hidden key for Detail drilldowns;
 - `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `in`, `is_null`, and
@@ -182,6 +186,8 @@ domain policy, without JavaScript).
 In the default shareable mode, canonical parameters are:
 
 - `view`: `detail`, `aggregate`, or `graph`;
+- `aggregate_grid`, `aggregate_grid_colorize`, and
+  `aggregate_grid_color_scale` (`linear` or `log`) when Aggregate Grid is active;
 - `row_click_action`: the selected portable Detail action, when one is active;
 - repeated `field` and `group` values; `field` order is the selected result-column order;
 - aligned `field_alias`/`field_format` and group alias/format/bucket/prefix values,

@@ -48,6 +48,7 @@ $t->get_ok('/explore/products')
     ->element_exists('.sc-row-click-control select[name="row_click_action"] option[value="open_product_page"]')
     ->element_exists('[data-sc-result-view-panel="summary"][hidden][disabled]')
     ->element_exists('[data-sc-graph-options][hidden][disabled] select[name="chart_type"]')
+    ->element_exists('[data-sc-aggregate-options][hidden][disabled] input[name="aggregate_grid"]')
     ->element_exists('[data-sc-builder-pending][role="status"][aria-live="polite"][aria-atomic="true"]')
     ->element_exists('[data-sc-picker-root]')
     ->element_exists('[data-sc-picker-root][data-sc-picker-kind="field"]')
@@ -80,11 +81,11 @@ $t->get_ok('/explore/products')
     ->content_like(qr{>Excel</a>.*>CSV</a>.*>TSV</a>.*>JSON</a>}s)
     ->content_like(qr{hx-ws:connect="/explore/products/ws"})
     ->content_like(qr{hx-ws:send})
-    ->content_like(qr{/selecto-components/htmx\.min\.js\?v=20260902-5})
-    ->content_like(qr{/selecto-components/hx-ws\.min\.js\?v=20260902-5})
-    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260902-5})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260902-5})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260902-5})
+    ->content_like(qr{/selecto-components/htmx\.min\.js\?v=20260903-1})
+    ->content_like(qr{/selecto-components/hx-ws\.min\.js\?v=20260903-1})
+    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260903-1})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260903-1})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260903-1})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')
@@ -612,7 +613,9 @@ $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&group=catego
     ->element_exists('form.sc-drilldown-form input[name="page"][value="1"]')
     ->element_exists('form.sc-drilldown-form input[name="filter_field"][value="unit_price"]')
     ->element_exists('form.sc-drilldown-form input[name="filter_field"][value="category.category_name"]')
-    ->element_exists('form.sc-drilldown-form input[name="filter_group"][value="1"]')
+    ->element_exists('form.sc-drilldown-form input[name="filter_group"][value="0"]')
+    ->element_exists('form.sc-drilldown-form input[name="filter_promote_field"]' .
+        '[value="category.category_name"]')
     ->text_is('form.sc-drilldown-form button.sc-drilldown-value' => 'Value 1')
     ->element_exists('tr.sc-rollup-total[data-rollup-level="0"]')
     ->content_like(qr{<tr class="sc-rollup-row sc-rollup-total"[^>]*>.*?sc-rollup-total-label">Total</span>}s)
@@ -620,7 +623,31 @@ $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&group=catego
     ->content_unlike(qr/View details/i)
     ->content_like(qr{class="sc-drilldown-value"[^>]*>\[NULL\]</button>})
     ->element_exists('form.sc-drilldown-form input[name="filter_op"][value="is_null"]')
-    ->content_like(qr{filter_field" value="unit_price".*?filter_group" value="0".*?filter_field" value="category\.category_name".*?filter_group" value="1"}s);
+    ->content_like(qr{filter_field" value="unit_price".*?filter_group" value="0".*?filter_field" value="category\.category_name".*?filter_group" value="0".*?filter_promote_field" value="category\.category_name"}s);
+
+$t->get_ok('/explore/products?q=1&view=detail&field=product_name&group=category.category_name&measure=count&order=product_name&direction=asc&limit=25&page=1&filter_field=category.category_name&filter_op=eq&filter_value=Value+1&filter_value_end=&filter_group=0&filter_promote_field=category.category_name')
+    ->status_is(200)
+    ->element_exists('[data-sc-promoted-filter][data-field="category.category_name"]')
+    ->element_exists('[data-sc-promoted-filter][data-field="category.category_name"] ' .
+        'select[data-sc-promoted-filter-input="op"] option[value="eq"][selected]')
+    ->element_exists('[data-sc-promoted-filter][data-field="category.category_name"] ' .
+        'input[data-sc-promoted-filter-input="value"][value="Value 1"]')
+    ->element_exists('[data-sc-filter-set-item][data-field="category.category_name"] ' .
+        'input[name="filter_promote_field"][checked]')
+    ->content_unlike(qr/Aggregate value:/);
+
+$t->get_ok('/explore/products?q=1&view=detail&field=created_on&group=created_on&group_format=month&measure=count&order=created_on&direction=asc&limit=25&page=1&filter_field=created_on&filter_op=eq&filter_value=2026-08&filter_value_end=&filter_group=1&filter_promote_field=created_on')
+    ->status_is(200)
+    ->element_exists('[data-sc-promoted-filter][data-field="created_on"] ' .
+        'select[data-sc-promoted-filter-input="op"] option[value="eq"][selected]')
+    ->element_exists('[data-sc-promoted-filter][data-field="created_on"] ' .
+        'select[data-sc-promoted-filter-input="op"] option[value="is_null"]')
+    ->element_exists('[data-sc-promoted-filter][data-field="created_on"] ' .
+        'input[type="text"][data-sc-promoted-filter-input="value"][value="2026-08"]')
+    ->element_exists('[data-sc-grouped-filter][data-field="created_on"] select[name="filter_op"]')
+    ->element_exists('[data-sc-grouped-filter][data-field="created_on"] input[name="filter_value"]' .
+        '[value="2026-08"]')
+    ->content_unlike(qr/Aggregate value:/);
 
 $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&group=category.category_name&group=units_in_stock&measure=count&order=product_name&direction=asc&limit=25&page=1')
     ->status_is(200)
@@ -641,6 +668,32 @@ $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&group=catego
     ->element_exists('tr.sc-rollup-continued form.sc-drilldown-form')
     ->element_exists('tr.sc-rollup-continued button.sc-drilldown-value')
     ->element_exists('tr.sc-rollup-continued input[name="filter_field"][value="category.category_name"]');
+
+my $count_executions_before_grid =
+    $TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0;
+$t->get_ok('/explore/products?q=1&view=aggregate&aggregate_grid=1&aggregate_grid_colorize=1&aggregate_grid_color_scale=log&field=product_name&group=category.category_name&group=units_in_stock&measure=count&order=product_name&direction=asc&limit=25&page=2')
+    ->status_is(200)
+    ->element_exists('[data-sc-aggregate-options]:not([disabled]) input[name="aggregate_grid"][checked]')
+    ->element_exists('[data-sc-aggregate-options] input[name="aggregate_grid_colorize"][checked]')
+    ->element_exists('[data-sc-aggregate-options] select[name="aggregate_grid_color_scale"] option[value="log"][selected]')
+    ->text_is('.sc-grid-heading strong' => 'Aggregate Grid')
+    ->text_is('.sc-grid-heading span' => 'Log heat scale')
+    ->element_exists('.sc-aggregate-grid-wrap .sc-aggregate-grid')
+    ->element_exists('.sc-aggregate-grid td[data-sc-grid-heat] form.sc-drilldown-form')
+    ->element_exists_not('.sc-pagination');
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, undef,
+    'a valid aggregate grid fetches the full matrix without a page limit';
+is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $count_executions_before_grid,
+    'a full aggregate grid avoids a redundant count query';
+
+$t->get_ok('/explore/products?q=1&view=aggregate&aggregate_grid=1&field=product_name&group=category.category_name&measure=count&order=product_name&direction=asc&limit=25&page=2')
+    ->status_is(200)
+    ->text_is('.sc-grid-warning' =>
+        'Grid view requires exactly two Group By fields and one Aggregate.')
+    ->element_exists('.sc-table-wrap:not(.sc-aggregate-grid-wrap)')
+    ->element_exists('.sc-pagination');
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, 25,
+    'an incompatible grid shape retains normal aggregate pagination';
 
 $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&field_alias=&field_format=&group=unit_price&group_alias=Price+band&group_format=buckets&group_bucket_ranges=0-10%2C+11%2B&group_prefix_length=2&group_exclude_articles=1&measure=count&measure_alias=Products&measure_function=count&measure_bucket_ranges=&measure_ignore_nulls=0&measure=total_price&measure_alias=Price+counts&measure_function=buckets&measure_bucket_ranges=0-10%2C+11%2B&measure_ignore_nulls=0&order=product_name&direction=asc&limit=25&page=1')
     ->status_is(200)

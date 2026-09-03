@@ -131,6 +131,11 @@
       panel.hidden = !graphActive;
       panel.disabled = !graphActive;
     });
+    root.querySelectorAll("[data-sc-aggregate-options]").forEach(function (panel) {
+      var aggregateActive = view === "aggregate";
+      panel.hidden = !aggregateActive;
+      panel.disabled = !aggregateActive;
+    });
     root.querySelectorAll("[data-sc-picker-root]").forEach(refreshColumnPicker);
   }
 

@@ -30,6 +30,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     my $engine;
     my $state;
     my $all_rows = 0;
+    my $grid_all_rows = 0;
     my $model = {
         config => $config,
         input => undef,
@@ -56,6 +57,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         my $built = Selecto::Components::QueryBuilder->build(
             $config, $engine->domain, $state, {paginate => !$all_rows}
         );
+        $grid_all_rows = $built->{aggregate_grid} ? 1 : 0;
         my $started = time;
         my $compile_started = time;
         my $statement = $engine->compile($built->{query});
@@ -66,7 +68,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         _validate_result($raw);
         my $total_count;
         my ($count_statement, $count_compile_ms, $count_query_ms);
-        if ($all_rows) {
+        if ($all_rows || $grid_all_rows) {
             $total_count = scalar @{$raw->{rows}};
         } else {
             my $count_query = defined($built->{count_selections})
@@ -83,7 +85,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             $total_count = _total_count($count_raw);
         }
         my $elapsed_ms = _elapsed_ms($started);
-        my $total_pages = $all_rows ? 1
+        my $total_pages = $all_rows || $grid_all_rows ? 1
             : int(($total_count + $state->limit - 1) / $state->limit);
         $total_pages = 1 if $total_pages < 1;
         my @records = map {
@@ -95,20 +97,25 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         _prepare_nested_records($built, \@records);
         _prepare_rollup_records($built, \@records);
         _prepend_continued_rollup_records($built, \@records)
-            if !$all_rows && $state->page > 1;
+            if !$all_rows && !$grid_all_rows && $state->page > 1;
         my $drilldowns = _drilldowns($state, $built, \@records);
+        my $grid_data = _aggregate_grid_data(
+            $state, $built, \@records, $drilldowns,
+        );
         $model->{result} = {
             %$built,
             columns => $built->{columns},
             records => \@records,
             drilldowns => $drilldowns,
+            (defined($grid_data) ? (grid_data => $grid_data) : ()),
             rows => [map { [@$_] } @{$raw->{rows}}],
             result_columns => [@{$raw->{columns}}],
             count => $returned_count,
             total_count => $total_count,
             total_pages => $total_pages,
-            has_more => !$all_rows && $state->page < $total_pages ? 1 : 0,
+            has_more => !$all_rows && !$grid_all_rows && $state->page < $total_pages ? 1 : 0,
             all_rows => $all_rows,
+            grid_all_rows => $grid_all_rows,
             elapsed_ms => $elapsed_ms,
             adapter_name => $engine->adapter->name,
             ($config->show_sql ? (
@@ -130,9 +137,10 @@ sub model ($self, $controller, $input = undef, $options = undef) {
                         view => $state->view,
                         returned_rows => $returned_count,
                         matched_rows => $total_count,
-                        page => $all_rows ? 1 : $state->page,
+                        page => $all_rows || $grid_all_rows ? 1 : $state->page,
                         total_pages => $total_pages,
-                        page_size => $all_rows ? scalar(@records) : $state->limit,
+                        page_size => $all_rows || $grid_all_rows
+                            ? scalar(@records) : $state->limit,
                         compile_ms => $compile_ms + ($count_compile_ms // 0),
                         data_query_ms => $data_query_ms,
                         count_compile_ms => $count_compile_ms,
@@ -241,41 +249,130 @@ sub _prepend_continued_rollup_records ($built, $records) {
 sub _drilldowns ($state, $built, $records) {
     return [] if $state->view eq 'detail';
     my @groups = grep { !$_->{measure} } @{$built->{columns}};
-    my %group_field = map {
-        ($_->{field} => 1, (defined($_->{drilldown_field}) ? ($_->{drilldown_field} => 1) : ()))
-    } @groups;
     my @drilldowns;
     for my $record (@$records) {
         my $available_levels = $built->{rollup}
             ? $record->{__selecto_rollup_level} : scalar(@groups);
-        my @base_filters = map { { %$_ } }
-            grep { !$group_field{$_->{field}} } @{$state->filters};
-        my @group_filters;
         my @row_drilldowns;
         for my $group_index (0 .. $available_levels - 1) {
-            my $group = $groups[$group_index];
-            my $value_key = $group->{drilldown_key} // $group->{key};
-            my $value = $record->{$value_key};
-            push @group_filters, {
-                field => $group->{drilldown_field} // $group->{field},
-                op => defined($value) ? 'eq' : 'is_null',
-                value => defined($value) ? "$value" : '',
-                value_end => '',
-                grouped => exists($group->{drilldown_grouped})
-                    ? $group->{drilldown_grouped} : 1,
-            };
-            my $drilldown = Selecto::Components::State->new(
-                %{$state->as_hash},
-                view => 'detail',
-                filters => [map { { %$_ } } (@base_filters, @group_filters)],
-                page => 1,
-                errors => [],
+            push @row_drilldowns, _drilldown_for_group_indexes(
+                $state, \@groups, $record, [0 .. $group_index],
             );
-            push @row_drilldowns, $drilldown->query_pairs;
         }
         push @drilldowns, \@row_drilldowns;
     }
     return \@drilldowns;
+}
+
+sub _drilldown_for_group_indexes ($state, $groups, $record, $indexes) {
+    my %group_field = map {
+        ($_->{field} => 1,
+            (defined($_->{drilldown_field}) ? ($_->{drilldown_field} => 1) : ()))
+    } @$groups;
+    my @filters = map { { %$_ } }
+        grep { !$group_field{$_->{field}} } @{$state->filters};
+    for my $group_index (@$indexes) {
+        my $group = $groups->[$group_index];
+        next unless $group;
+        my $value_key = $group->{drilldown_key} // $group->{key};
+        my $value = $record->{$value_key};
+        push @filters, {
+            field => $group->{drilldown_field} // $group->{field},
+            op => defined($value) ? 'eq' : 'is_null',
+            value => defined($value) ? "$value" : '',
+            value_end => '',
+            grouped => exists($group->{drilldown_grouped})
+                ? $group->{drilldown_grouped}
+                : (length($group->{format} // '')
+                    && ($group->{format} // '') ne 'default' ? 1 : 0),
+            promoted => 1,
+        };
+    }
+    my $drilldown = Selecto::Components::State->new(
+        %{$state->as_hash},
+        view => 'detail',
+        filters => \@filters,
+        page => 1,
+        errors => [],
+    );
+    return $drilldown->query_pairs;
+}
+
+sub _aggregate_grid_data ($state, $built, $records, $drilldowns) {
+    return undef unless $built->{aggregate_grid};
+    my @groups = grep { !$_->{measure} } @{$built->{columns} // []};
+    my @measures = grep { $_->{measure} } @{$built->{columns} // []};
+    return undef unless @groups == 2 && @measures == 1;
+
+    my (@rows, @columns);
+    my (%seen_row, %seen_column, %cells);
+    my $maximum_positive;
+    for my $record_index (0 .. $#$records) {
+        my $record = $records->[$record_index];
+        next if $record->{__selecto_rollup_continued};
+        next unless ($record->{__selecto_rollup_level} // -1) == 2;
+
+        my $row_value = $record->{$groups[0]{key}};
+        my $column_value = $record->{$groups[1]{key}};
+        my $row_key = _grid_value_key($row_value);
+        my $column_key = _grid_value_key($column_value);
+        unless ($seen_row{$row_key}++) {
+            push @rows, {
+                key => $row_key,
+                value => $row_value,
+                drilldown => _drilldown_for_group_indexes(
+                    $state, \@groups, $record, [0],
+                ),
+            };
+        }
+        unless ($seen_column{$column_key}++) {
+            push @columns, {
+                key => $column_key,
+                value => $column_value,
+                drilldown => _drilldown_for_group_indexes(
+                    $state, \@groups, $record, [1],
+                ),
+            };
+        }
+        my $value = $record->{$measures[0]{key}};
+        $cells{$row_key}{$column_key} = {
+            value => $value,
+            drilldown => $drilldowns->[$record_index][-1],
+        };
+        if (defined($value) && !ref($value) && looks_like_number($value) && $value > 0) {
+            $maximum_positive = 0 + $value
+                if !defined($maximum_positive) || $value > $maximum_positive;
+        }
+    }
+
+    @rows = @{_sort_grid_entries(\@rows, $groups[0])};
+    @columns = @{_sort_grid_entries(\@columns, $groups[1])};
+    return {
+        row_axis => $groups[0],
+        column_axis => $groups[1],
+        measure => $measures[0],
+        rows => \@rows,
+        columns => \@columns,
+        cells => \%cells,
+        maximum_positive => $maximum_positive,
+    };
+}
+
+sub _grid_value_key ($value) {
+    return encode_json([defined($value) ? 1 : 0, defined($value) ? "$value" : '']);
+}
+
+sub _sort_grid_entries ($entries, $column) {
+    my $format = $column->{format} // '';
+    return [@$entries] unless $format =~ /\A(?:day_of_week|hour|month_of_year|day_of_month)\z/;
+    return [sort {
+        !defined($a->{value}) <=> !defined($b->{value})
+            || (defined($a->{value}) && defined($b->{value})
+                && looks_like_number($a->{value}) && looks_like_number($b->{value})
+                ? $a->{value} <=> $b->{value}
+                : (defined($a->{value}) ? "$a->{value}" : '') cmp
+                    (defined($b->{value}) ? "$b->{value}" : ''))
+    } @$entries];
 }
 
 sub _count_statement ($source) {
@@ -324,7 +421,8 @@ sub tsv ($self, $model) {
 
 sub json ($self, $model) {
     _assert_exportable($model);
-    my @columns = _export_columns($model);
+    my ($columns, $records) = _export_dataset($model);
+    my @columns = @$columns;
     my @headers = _unique_headers(map { $_->{label} } @columns);
     my @rows = map {
         my $record = $_;
@@ -334,7 +432,7 @@ sub json ($self, $model) {
                 $headers[$index] => _json_value($record->{$columns[$index]{key}})
             } 0 .. $#columns
         }
-    } @{$model->{result}{records}};
+    } @$records;
     return encode_json({
         scope => $model->{result}{all_rows} ? 'all' : 'page',
         page => $model->{result}{all_rows} ? 1 : $model->{state}->page,
@@ -349,7 +447,8 @@ sub json ($self, $model) {
 sub xlsx ($self, $model) {
     _assert_exportable($model);
     require Excel::Writer::XLSX;
-    my @columns = _export_columns($model);
+    my ($columns, $records) = _export_dataset($model);
+    my @columns = @$columns;
     my ($output_handle) = tempfile(SUFFIX => '.xlsx', UNLINK => 1);
     binmode $output_handle;
     my $workbook = Excel::Writer::XLSX->new($output_handle)
@@ -368,7 +467,7 @@ sub xlsx ($self, $model) {
         $widths[$column_index] = length($label);
     }
     my $row_index = 1;
-    for my $record (@{$model->{result}{records}}) {
+    for my $record (@$records) {
         for my $column_index (0 .. $#columns) {
             my $value = $record->{$columns[$column_index]{key}};
             if (!defined($value)) {
@@ -387,7 +486,7 @@ sub xlsx ($self, $model) {
         $row_index++;
     }
     if (@columns) {
-        $worksheet->freeze_panes(1, 0);
+        $worksheet->freeze_panes(1, $model->{result}{grid_data} ? 1 : 0);
         $worksheet->autofilter(0, 0, $row_index - 1, $#columns);
         for my $column_index (0 .. $#columns) {
             my $width = ($widths[$column_index] // 0) + 2;
@@ -409,9 +508,10 @@ sub _delimited ($self, $model, $delimiter) {
     die "cannot export an invalid query\n"
         unless $delimiter eq ',' || $delimiter eq "\t";
     my @lines;
-    my @columns = _export_columns($model);
+    my ($columns, $records) = _export_dataset($model);
+    my @columns = @$columns;
     push @lines, join($delimiter, map { _delimited_cell($_->{label}) } @columns);
-    for my $record (@{$model->{result}{records}}) {
+    for my $record (@$records) {
         push @lines, join($delimiter, map {
             _delimited_cell($record->{$_->{key}})
         } @columns);
@@ -426,6 +526,39 @@ sub _assert_exportable ($model) {
 
 sub _export_columns ($model) {
     return grep { !$_->{action_id} } @{$model->{result}{columns}};
+}
+
+sub _export_dataset ($model) {
+    my $grid = $model->{result}{grid_data};
+    return ([ _export_columns($model) ], $model->{result}{records}) unless $grid;
+
+    my @columns = ({
+        key => '__selecto_grid_row',
+        label => $grid->{row_axis}{label},
+    });
+    for my $column_index (0 .. $#{$grid->{columns}}) {
+        push @columns, {
+            key => '__selecto_grid_column_' . $column_index,
+            label => _grid_export_label($grid->{columns}[$column_index]{value}),
+        };
+    }
+    my @records;
+    for my $row (@{$grid->{rows}}) {
+        my %record = (__selecto_grid_row => _grid_export_label($row->{value}));
+        for my $column_index (0 .. $#{$grid->{columns}}) {
+            my $column = $grid->{columns}[$column_index];
+            my $row_cells = $grid->{cells}{$row->{key}};
+            my $cell = ref($row_cells) eq 'HASH' ? $row_cells->{$column->{key}} : undef;
+            $record{'__selecto_grid_column_' . $column_index} = $cell
+                ? $cell->{value} : undef;
+        }
+        push @records, \%record;
+    }
+    return (\@columns, \@records);
+}
+
+sub _grid_export_label ($value) {
+    return defined($value) && !ref($value) ? "$value" : '[NULL]';
 }
 
 sub _unique_headers (@labels) {

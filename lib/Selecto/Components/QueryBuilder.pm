@@ -272,13 +272,14 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                 : $column_config->{format} ? 'string' : $field_map->{$field}{type},
             source_type => $field_map->{$field}{type},
             format => $column_config->{format} // '',
+            drilldown_grouped => length($column_config->{format} // '')
+                && ($column_config->{format} // '') ne 'default' ? 1 : 0,
             (defined($field_map->{$field}{html_format})
                 ? (html_format => $field_map->{$field}{html_format}) : ()),
             ($dimension ? (
                 dimension => {%$dimension},
                 drilldown_field => $dimension->{key_field},
                 drilldown_key => '__selecto_dimension_key_' . _field_alias($field),
-                drilldown_grouped => 0,
             ) : ()),
         }
     } @{$state->groups};
@@ -347,6 +348,10 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         push @selections, $expression->as($measure_key);
     }
     my @columns = (@group_columns, @measure_columns);
+    my $aggregate_grid = $state->view eq 'aggregate'
+        && $state->aggregate_grid
+        && @group_columns == 2
+        && @measure_columns == 1 ? 1 : 0;
     push @selections, @dimension_key_selections;
     my $rollup_key = '__selecto_rollup_grouping';
     push @selections, Selecto::Expression->grouping(\@groups)->as($rollup_key) if $rollup;
@@ -356,12 +361,13 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
     $query = $query->order_by($_, 'asc') for @group_orders;
     $query = $query->limit($state->limit)
         ->offset(($state->page - 1) * $state->limit)
-        if !exists($options->{paginate}) || $options->{paginate};
+        if (!$aggregate_grid && (!exists($options->{paginate}) || $options->{paginate}));
     $query = _with_query_library($query, $domain, $state);
     return {
         query => $query,
         columns => \@columns,
         graph => $state->view eq 'graph' ? 1 : 0,
+        aggregate_grid => $aggregate_grid,
         rollup => $rollup,
         rollup_key => $rollup ? $rollup_key : undef,
         group_count => scalar(@groups),

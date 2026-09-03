@@ -335,6 +335,8 @@ is $star_drilldown{filter_value}, 7,
     'the star drill-down submits the hidden ID rather than the displayed name';
 is $star_drilldown{filter_group}, 0,
     'the ID drill-down is a direct field predicate, not a formatted-label predicate';
+is $star_drilldown{filter_promote_field}, 'category_id',
+    'star-dimension drill-down filters are automatically promoted';
 
 my $duplicate_star_state = Selecto::Components::State->from_input(
     $config, $star_domain, {
@@ -358,6 +360,50 @@ unlike $export_aggregate_statement->sql, qr/\b(?:LIMIT|OFFSET)\b/,
     'an all-row aggregate export preserves grouping without pagination';
 like $export_aggregate_statement->sql, qr/WHERE "s0"\."unit_price" >= \$1/,
     'an all-row aggregate export retains the configured filters';
+
+my $grid_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'aggregate',
+    aggregate_grid => 1,
+    aggregate_grid_colorize => 1,
+    aggregate_grid_color_scale => 'linear',
+    field => 'product_name',
+    group => ['category.category_name', 'units_in_stock'],
+    measure => 'count',
+    order => 'product_name',
+    limit => 25,
+    page => 3,
+});
+my $grid_result = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $grid_state,
+);
+my $grid_statement = $postgresql->compile($domain, $grid_result->{query});
+ok $grid_result->{aggregate_grid},
+    'two groups and one resulting measure enable aggregate grid rendering';
+unlike $grid_statement->sql, qr/\b(?:LIMIT|OFFSET)\b/,
+    'aggregate grid queries return the full matrix instead of one incomplete page';
+
+my $incompatible_grid_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'aggregate',
+    aggregate_grid => 1,
+    field => 'product_name',
+    group => 'category.category_name',
+    measure => 'count',
+    order => 'product_name',
+    limit => 25,
+    page => 2,
+});
+my $incompatible_grid_result = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $incompatible_grid_state,
+);
+my $incompatible_grid_statement = $postgresql->compile(
+    $domain, $incompatible_grid_result->{query},
+);
+ok !$incompatible_grid_result->{aggregate_grid},
+    'an incompatible aggregate shape falls back to the rollup table';
+like $incompatible_grid_statement->sql, qr/LIMIT 25 OFFSET 25\z/,
+    'an incompatible grid request retains ordinary aggregate pagination';
 
 my $multi_measure_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
@@ -487,6 +533,16 @@ like $formatted_aggregate_statement->sql,
     'aggregate date configuration defines the SQL rollup bucket';
 is $formatted_aggregate->{columns}[0]{label}, 'Month',
     'aggregate group label uses its independent configuration';
+my $formatted_drilldowns = Selecto::Components::Explorer::_drilldowns(
+    $formatted_aggregate_state,
+    $formatted_aggregate,
+    [{created_on => '2026-08', __selecto_rollup_level => 1}],
+);
+my %formatted_drilldown = @{$formatted_drilldowns->[0][0]};
+is $formatted_drilldown{filter_group}, 1,
+    'formatted aggregate drill-downs retain their governed grouping expression';
+is $formatted_drilldown{filter_promote_field}, 'created_on',
+    'formatted aggregate drill-down filters are automatically promoted';
 
 my $drilldown_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

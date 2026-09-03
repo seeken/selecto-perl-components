@@ -2,6 +2,7 @@ package Selecto::Components::Renderer::Results;
 
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(encode_json);
+use POSIX qw(ceil);
 use Selecto::Components::Renderer::Markup;
 use Selecto::Components::Renderer::Debug ();
 use Selecto::Components::RowActions ();
@@ -20,10 +21,17 @@ sub _results ($class, $model) {
         ' · <strong>' . _h($result->{elapsed_ms}) . ' ms</strong> query time</div></div>';
     my $actions = $model->{state}->view eq 'detail'
         ? $class->_bulk_actions($model) : '';
-    my $body = $result->{graph} ? $class->_graph($result, $model) : $class->_table($result, $model);
+    my $grid_warning = $model->{state}->view eq 'aggregate'
+        && $model->{state}->aggregate_grid
+        && !$result->{grid_data}
+        ? '<div class="sc-grid-warning" role="status">Grid view requires exactly two Group By fields and one Aggregate.</div>'
+        : '';
+    my $body = $result->{graph} ? $class->_graph($result, $model)
+        : $result->{grid_data} ? $class->_grid($result, $model)
+        : $class->_table($result, $model);
     my $pagination = $class->_pagination($model);
     my $debug = Selecto::Components::Renderer::Debug->_debug_panel($result, $model);
-    return $meta . $actions . $body . $pagination . $debug;
+    return $meta . $actions . $grid_warning . $body . $pagination . $debug;
 }
 sub _bulk_actions ($class, $model) {
     my $actions = $model->{bulk_actions} // [];
@@ -318,6 +326,97 @@ sub _table ($class, $result, $model) {
         $dialog;
 }
 
+sub _grid ($class, $result, $model) {
+    my $grid = $result->{grid_data};
+    my $state = $model->{state};
+    my $colorize = $state->aggregate_grid_colorize ? 1 : 0;
+    my $scale = $state->aggregate_grid_color_scale;
+    my $heading = '<div class="sc-grid-heading"><strong>Aggregate Grid</strong>' .
+        ($colorize ? '<span>' . _h(_humanize($scale)) . ' heat scale</span>' : '') .
+        '</div>';
+    my $legend = '';
+    if ($colorize) {
+        my $swatches = join '', map {
+            '<span style="background:color-mix(in srgb, var(--sc-accent) ' . $_ .
+                '%, var(--sc-panel))"></span>'
+        } (10, 16, 22, 28, 34, 40, 46, 52, 58, 64);
+        $legend = '<div class="sc-grid-legend"><strong>Color legend</strong><span>Low</span>' .
+            '<span class="sc-grid-legend-scale" aria-label="Grid color legend">' .
+            $swatches . '</span><span>High</span></div>';
+    }
+
+    my $head = '<th scope="col" class="sc-grid-corner"><span>' .
+        _h($grid->{row_axis}{label}) . '</span><small> / ' .
+        _h($grid->{column_axis}{label}) . '</small></th>' . join('', map {
+            my $column = $_;
+            '<th scope="col">' . $class->_drilldown_control(
+                $model,
+                $column->{drilldown},
+                _html_display($grid->{column_axis}, $column->{value}, 1),
+                1,
+                {grid => 1},
+            ) . '</th>'
+        } @{$grid->{columns}});
+
+    my $rows = '';
+    for my $row (@{$grid->{rows}}) {
+        my $cells = '<th scope="row">' . $class->_drilldown_control(
+            $model,
+            $row->{drilldown},
+            _html_display($grid->{row_axis}, $row->{value}, 1),
+            1,
+            {grid => 1},
+        ) . '</th>';
+        for my $column (@{$grid->{columns}}) {
+            my $row_cells = $grid->{cells}{$row->{key}};
+            my $cell = ref($row_cells) eq 'HASH' ? $row_cells->{$column->{key}} : undef;
+            unless ($cell) {
+                $cells .= '<td class="sc-grid-cell sc-grid-empty-cell">—</td>';
+                next;
+            }
+            my $heat = $colorize ? _grid_heat_percentage(
+                $cell->{value}, $grid->{maximum_positive}, $scale,
+            ) : undef;
+            my $style = defined($heat)
+                ? ' style="background:color-mix(in srgb, var(--sc-accent) ' .
+                    _h($heat) . '%, var(--sc-panel))" data-sc-grid-heat="' .
+                    _h($heat) . '"'
+                : '';
+            $cells .= '<td class="sc-grid-cell' .
+                (_numeric_measure_class($grid->{measure}, $model) ? ' sc-numeric-measure' : '') .
+                '"' . $style . '>' . $class->_drilldown_control(
+                    $model,
+                    $cell->{drilldown},
+                    _html_display($grid->{measure}, $cell->{value}),
+                    1,
+                    {grid => 1},
+                ) . '</td>';
+        }
+        $rows .= '<tr>' . $cells . '</tr>';
+    }
+    my $column_count = 1 + scalar(@{$grid->{columns}});
+    $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count .
+        '">No rows matched this query.</td></tr>';
+    return $heading . $legend .
+        '<div class="sc-table-wrap sc-aggregate-grid-wrap"><table class="sc-aggregate-grid">' .
+        '<caption class="sc-visually-hidden">Aggregate grid of ' .
+        _h($grid->{measure}{label}) . ' by ' . _h($grid->{row_axis}{label}) .
+        ' and ' . _h($grid->{column_axis}{label}) . '</caption><thead><tr>' .
+        $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>';
+}
+
+sub _grid_heat_percentage ($value, $maximum, $scale) {
+    return undef unless defined($value) && !ref($value) && _numeric($value)
+        && $value > 0 && defined($maximum) && $maximum > 0;
+    my $ratio = $scale eq 'log'
+        ? log($value + 1) / log($maximum + 1)
+        : $value / $maximum;
+    my $bucket = ceil($ratio * 10);
+    $bucket = 1 if $bucket < 1;
+    $bucket = 10 if $bucket > 10;
+    return 10 + (($bucket - 1) * 6);
+}
+
 sub _numeric_measure_class ($column, $model) {
     return '' unless $column->{measure};
     my $config = $model->{config};
@@ -465,20 +564,26 @@ sub _graph ($class, $result, $model) {
         $class->_table($result, $model);
 }
 
-sub _drilldown_control ($class, $model, $pairs, $label_html, $level) {
+sub _drilldown_control ($class, $model, $pairs, $label_html, $level, $options = undef) {
+    $options = {} unless ref($options) eq 'HASH';
     my $method = $model->{config}->query_params_enabled($model->{domain}) ? 'get' : 'post';
     my $hidden = '';
     for (my $index = 0; $index < @$pairs; $index += 2) {
         $hidden .= _hidden($pairs->[$index], $pairs->[$index + 1]);
     }
+    my $button_class = $options->{grid}
+        ? 'sc-drilldown-value sc-grid-drilldown-value' : 'sc-drilldown-value';
+    my $style = $options->{grid} ? ''
+        : ' style="--sc-rollup-level:' . _h($level) . '"';
     return '<form class="sc-drilldown-form" action="' . _h($model->{config}->path) . '" method="' .
         $method . '" hx-ws:send>' . $hidden .
-        '<button class="sc-drilldown-value" style="--sc-rollup-level:' . _h($level) .
-        '" type="submit">' . $label_html . '</button></form>';
+        '<button class="' . $button_class . '"' . $style .
+        ' type="submit">' . $label_html . '</button></form>';
 }
 
 sub _pagination ($class, $model) {
     my $state = $model->{state};
+    return '' if $model->{result}{grid_data};
     my @buttons;
     if ($state->page > 1) {
         push @buttons, '<button class="sc-button sc-secondary" type="submit" name="page" value="' .

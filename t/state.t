@@ -162,6 +162,50 @@ is_deeply $configured->filters, [
     { field => 'category.category_name', op => 'in', value => 'Tools, Produce', value_end => '' },
 ], 'filters retain governed field, operator, and bound value intent';
 
+my $aggregate_grid = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'aggregate',
+    aggregate_grid => 1,
+    aggregate_grid_colorize => 1,
+    aggregate_grid_color_scale => 'log',
+    field => 'product_name',
+    group => ['category.category_name', 'units_in_stock'],
+    measure => 'count',
+    order => 'product_name',
+});
+ok $aggregate_grid->aggregate_grid, 'aggregate grid mode survives state normalization';
+ok $aggregate_grid->aggregate_grid_colorize, 'aggregate heat-map colors survive state normalization';
+is $aggregate_grid->aggregate_grid_color_scale, 'log',
+    'the selected logarithmic heat scale survives state normalization';
+like join('&', @{$aggregate_grid->query_pairs}),
+    qr/aggregate_grid&1&aggregate_grid_colorize&1&aggregate_grid_color_scale&log/,
+    'canonical query state retains aggregate grid presentation options';
+
+my $normalized_grid_scale = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'aggregate',
+    aggregate_grid => 1,
+    aggregate_grid_color_scale => 'not-a-scale',
+    field => 'product_name',
+    group => ['category.category_name', 'units_in_stock'],
+    measure => 'count',
+    order => 'product_name',
+});
+is $normalized_grid_scale->aggregate_grid_color_scale, 'linear',
+    'unknown heat-map scales normalize to the governed linear default';
+
+my $detail_with_grid_input = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    aggregate_grid => 1,
+    aggregate_grid_colorize => 1,
+    field => 'product_name',
+    measure => 'count',
+    order => 'product_name',
+});
+ok !$detail_with_grid_input->aggregate_grid,
+    'aggregate grid parameters cannot alter a Detail result';
+
 for my $chart_type (qw(bar horizontal_bar stacked_bar line area pie doughnut scatter)) {
     my $chart = Selecto::Components::State->from_input($config, $domain, {
         q => 1,
@@ -264,14 +308,16 @@ my $drilldown = Selecto::Components::State->from_input($config, $domain, {
     filter_op => 'eq',
     filter_value => '2026-08',
     filter_group => 1,
+    filter_promote_field => 'created_on',
     order => 'created_on',
     limit => 25,
     page => 1,
 });
 ok $drilldown->valid, 'an aggregate group value is valid detail drilldown state';
 is_deeply $drilldown->filters->[0], {
-    field => 'created_on', op => 'eq', value => '2026-08', value_end => '', grouped => 1,
-}, 'drilldown state marks the filter as a governed grouping expression';
+    field => 'created_on', op => 'eq', value => '2026-08', value_end => '',
+    grouped => 1, promoted => 1,
+}, 'drilldown state retains its grouping expression and automatic promotion';
 my $drilldown_pairs = $drilldown->query_pairs;
 my @filter_groups;
 for (my $index = 0; $index < @$drilldown_pairs; $index += 2) {
@@ -279,6 +325,8 @@ for (my $index = 0; $index < @$drilldown_pairs; $index += 2) {
         if $drilldown_pairs->[$index] eq 'filter_group';
 }
 is_deeply \@filter_groups, [1], 'canonical state preserves the aligned drilldown marker';
+like join('&', @$drilldown_pairs), qr/filter_promote_field&created_on/,
+    'canonical state preserves promotion for a grouped aggregate drilldown';
 
 my $bad_drilldown = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

@@ -37,7 +37,8 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $class->_order_picker($state, $catalog, $config->max_orders) .
         _measure_selection_hidden($state) .
         _selection_hidden('group', $state->groups, $state->group_configs);
-    my $summary_controls = $class->_chart_type_picker($state) .
+    my $summary_controls = $class->_aggregate_grid_picker($state) .
+        $class->_chart_type_picker($state) .
         $class->_group_picker($state, $catalog, $config) .
         $class->_measure_picker($state, $measure_catalog, $config) .
         _selection_hidden('field', $state->fields, $state->field_configs) .
@@ -263,7 +264,7 @@ sub _promoted_filter_header ($class, $model, $catalog) {
     my $state = $model->{state};
     my $config = $model->{config};
     my %by_path = map { $_->{path} => $_ } @$catalog;
-    my @promoted = grep { $_->{promoted} && !$_->{grouped} } @{$state->filters};
+    my @promoted = grep { $_->{promoted} } @{$state->filters};
     return '' unless @promoted;
     my $form_id = 'selecto-query-' . $config->id;
     my $cards = join '', map {
@@ -289,7 +290,7 @@ sub _promoted_filter_mode_control ($class, $config, $field, $filter) {
     my $options = join '', map {
         '<option value="' . _h($_->[0]) . '"' . ($_->[0] eq $operator ? ' selected' : '') . '>' .
             _h($_->[1]) . '</option>'
-    } @{$config->filter_operators($field->{type})};
+    } @{_filter_operators_for_filter($config, $field, $filter)};
     return '<label class="sc-promoted-filter-mode">Match<select data-sc-promoted-filter-input="op" data-filter-field="' .
         _h($field->{path}) . '" aria-label="Match mode for ' . _h($field->{label}) . '">' .
         $options . '</select></label>';
@@ -303,6 +304,12 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter) {
     my $label = $field->{label};
     my $type = $field->{type};
     return '<p class="sc-promoted-filter-note">No value needed.</p>' if $operator =~ /_null\z/;
+    if ($filter->{grouped}) {
+        return '<label>Value<input type="text" value="' . _h($value) .
+            '" placeholder="Enter an aggregate value" data-sc-promoted-filter-input="value" ' .
+            'data-filter-field="' . _h($field_name) . '" aria-label="Value for ' .
+            _h($label) . '"></label>';
+    }
     if ($operator eq 'date_shortcut') {
         my $options = join '', map {
             '<option value="' . _h($_->{id}) . '"' . ($_->{id} eq $value ? ' selected' : '') . '>' .
@@ -373,6 +380,25 @@ sub _chart_type_picker ($class, $state) {
         '<legend>Chart</legend><label>Chart type<select name="chart_type" ' .
         'data-sc-chart-type-picker>' . $options . '</select></label>' .
         '<p>Choose a dashboard visualization for the selected groups and measures.</p></fieldset>';
+}
+
+sub _aggregate_grid_picker ($class, $state) {
+    my $inactive = $state->view eq 'aggregate' ? '' : ' hidden disabled';
+    my $enabled = $state->aggregate_grid ? ' checked' : '';
+    my $colorize = $state->aggregate_grid_colorize ? ' checked' : '';
+    my $scale = $state->aggregate_grid_color_scale;
+    my $scales = join '', map {
+        '<option value="' . $_ . '"' . ($_ eq $scale ? ' selected' : '') . '>' .
+            _h(_humanize($_)) . '</option>'
+    } qw(linear log);
+    return '<fieldset class="sc-aggregate-grid-options" data-sc-aggregate-options' .
+        $inactive . '><legend>Grid display</legend><label class="sc-option-check">' .
+        '<input type="checkbox" name="aggregate_grid" value="1"' . $enabled .
+        '><span>Grid view <small>2 Group By fields + 1 Aggregate</small></span></label>' .
+        '<label class="sc-option-check"><input type="checkbox" ' .
+        'name="aggregate_grid_colorize" value="1"' . $colorize .
+        '><span>Heat map colors</span></label><label>Color scale<select ' .
+        'name="aggregate_grid_color_scale">' . $scales . '</select></label></fieldset>';
 }
 
 sub _field_picker ($class, $state, $catalog, $config) {
@@ -626,22 +652,19 @@ sub _filter_picker ($class, $state, $catalog, $config) {
         my $ops = join '', map {
             '<option value="' . $_->[0] . '"' . ($_->[0] eq $filter->{op} ? ' selected' : '') . '>' .
             _h($_->[1]) . '</option>'
-        } @{$filter->{grouped} ? [[eq => 'is grouped as']] : $config->filter_operators($field->{type})};
-        my $filter_controls = $filter->{grouped}
-            ? _hidden('filter_op', $filter->{op}) . _hidden('filter_value', $filter->{value}) .
-              _hidden('filter_value_end', '') . '<p class="sc-filter-value-note">Aggregate value: <strong>' .
-            _h(defined($filter->{value}) && length($filter->{value}) ? $filter->{value} : '(empty)') .
-            '</strong></p>'
-            : '<label>Operator<select name="filter_op" aria-label="Operator for ' .
-              _h($field->{label}) . '">' . $ops . '</select></label>' .
-              $class->_filter_value_controls($config, $field, $filter) .
-              '<label class="sc-filter-promote"><input type="checkbox" name="filter_promote_field" value="' .
-              _h($filter->{field}) . '"' . ($filter->{promoted} ? ' checked' : '') .
-              '> Promote to View Controller</label>';
+        } @{_filter_operators_for_filter($config, $field, $filter)};
+        my $input_field = $filter->{grouped} ? {%$field, type => 'string'} : $field;
+        my $filter_controls = '<label>Operator<select name="filter_op" aria-label="Operator for ' .
+            _h($field->{label}) . '">' . $ops . '</select></label>' .
+            $class->_filter_value_controls($config, $input_field, $filter) .
+            '<label class="sc-filter-promote"><input type="checkbox" name="filter_promote_field" value="' .
+            _h($filter->{field}) . '"' . ($filter->{promoted} ? ' checked' : '') .
+            '> Promote to View Controller</label>';
         '<article class="sc-filter-set-item' . ($filter->{draft} ? ' is-draft' : '') .
         '" data-sc-filter-set-item' . ($filter->{grouped} ? ' data-sc-grouped-filter' : '') .
         ' data-field="' . _h($filter->{field}) . '" data-label="' .
-        _h($field->{label}) . '" data-type="' . _h($field->{type}) . '">' .
+        _h($field->{label}) . '" data-type="' .
+        _h($filter->{grouped} ? 'string' : $field->{type}) . '">' .
         '<input type="hidden" name="filter_field" value="' . _h($filter->{field}) . '">' .
         _hidden('filter_group', $filter->{grouped} ? 1 : 0) .
         '<div class="sc-filter-set-heading"><span><strong>' . _h($field->{label}) . '</strong><small>' .
@@ -667,6 +690,11 @@ sub _filter_picker ($class, $state, $catalog, $config) {
         '<p class="sc-picker-hint">Set filters are combined with AND.</p>' .
         '<div class="sc-picker-list sc-filter-set" data-sc-filter-set aria-label="Set filters">' .
         $set_items . '</div></section></div></fieldset>';
+}
+
+sub _filter_operators_for_filter ($config, $field, $filter) {
+    return [[eq => 'equals'], [is_null => 'is empty']] if $filter->{grouped};
+    return $config->filter_operators($field->{type});
 }
 
 sub _filter_value_controls ($class, $config, $field, $filter) {
