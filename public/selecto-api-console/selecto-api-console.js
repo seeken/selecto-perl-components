@@ -874,6 +874,7 @@
     mountAll,
     normalizeAPIBase,
     operatorsForType,
+    renderValue,
     segmentParameterSpecs,
   };
   global.SelectoAPIConsole = api;
