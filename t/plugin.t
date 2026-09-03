@@ -8,6 +8,7 @@ use Mojo::URL ();
 use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::DateShortcut ();
+use Selecto::Components::AssetManifest qw(asset_revision);
 
 is Selecto::Components::normalize_export_format('Excel'), 'xlsx',
     'Excel aliases normalize case-insensitively to the governed xlsx format';
@@ -81,11 +82,11 @@ $t->get_ok('/explore/products')
     ->content_like(qr{>Excel</a>.*>CSV</a>.*>TSV</a>.*>JSON</a>}s)
     ->content_like(qr{hx-ws:connect="/explore/products/ws"})
     ->content_like(qr{hx-ws:send})
-    ->content_like(qr{/selecto-components/htmx\.min\.js\?v=20260903-10})
-    ->content_like(qr{/selecto-components/hx-ws\.min\.js\?v=20260903-10})
-    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260903-10})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260903-10})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260903-10})
+    ->content_like(qr{/selecto-components/htmx\.min\.js\?v=\Q@{[asset_revision()]}\E})
+    ->content_like(qr{/selecto-components/hx-ws\.min\.js\?v=\Q@{[asset_revision()]}\E})
+    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=\Q@{[asset_revision()]}\E})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=\Q@{[asset_revision()]}\E})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=\Q@{[asset_revision()]}\E})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')

@@ -5,5 +5,8 @@
 /pm_to_blib
 /.prove
 /local/
+/node_modules/
+/test-results/
+/playwright-report/
 /Selecto-Components-*.tar.gz
 /Selecto-Components-*/

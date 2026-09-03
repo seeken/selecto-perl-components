@@ -1,6 +1,7 @@
 (function () {
   "use strict";
 
+  // Source: shared.js
   var activeBuilderTabs = Object.create(null);
   var collapsedBuilderTrays = Object.create(null);
   var connectionStatus = "Connecting";
@@ -12,6 +13,7 @@
     ["day_of_week", "Day of Week"], ["hour", "Hour of Day"]
   ];
 
+  // Source: shell.js
   function activateBuilderTab(root, name, remember) {
     if (!root) return;
     var key = root.dataset.scBuilderShell;
@@ -149,6 +151,7 @@
     });
   }
 
+  // Source: charts.js
   function chartJsType(type) {
     if (type === "area") return "line";
     if (type === "horizontal_bar" || type === "stacked_bar") return "bar";
@@ -285,6 +288,7 @@
     fallback.remove();
   }
 
+  // Source: row-dialog.js
   function rowClickIsInteractive(target) {
     return !!target.closest(
       "a,button,input,select,textarea,label,summary,[role=button],[contenteditable=true]"
@@ -390,6 +394,7 @@
     else dialog.removeAttribute("open");
   }
 
+  // Source: grid.js
   function gridCells(root, selector) {
     var cells = Array.from(root.querySelectorAll("[data-sc-grid-cell]"));
     return selector ? cells.filter(selector) : cells;
@@ -587,6 +592,7 @@
     }, 0);
   }, true);
 
+  // Source: lifecycle.js
   document.addEventListener("DOMContentLoaded", function () {
     renderConnectionStatus();
     restoreBuilderTabs();
@@ -775,6 +781,7 @@
     }
   }, true);
 
+  // Source: picker.js
   function setItems(root) {
     return Array.from(root.querySelectorAll("[data-sc-picker-set-item]"));
   }
@@ -1122,6 +1129,7 @@
     ["Relative periods", "next_30_days", "Next 30 Days"]
   ];
 
+  // Source: filters.js
   function temporalFilterType(type) {
     return /(?:date|time)/i.test(type || "");
   }
@@ -1678,6 +1686,7 @@
     if (item) item.classList.remove("is-dragging");
   });
 
+  // Source: actions.js
   function bulkActionResults(root) {
     return root && root.closest(".sc-results");
   }
@@ -2064,6 +2073,7 @@
     window.requestAnimationFrame(restoreBulkActions);
   });
 
+  // Source: lookups.js
   function groupLookupControl(spec, value, displayValue, groupIndex) {
     var wrapper = document.createElement("div");
     wrapper.className = "sc-action-lookup";
@@ -2596,6 +2606,7 @@
     }
   });
 
+  // Source: action-results.js
   function localActionResultUrl(value) {
     if (!value || typeof value !== "string") return "";
     try {
