@@ -23,6 +23,9 @@ has show_sql       => 0;
 has action_handlers => sub { return {} };
 has choice_sources  => sub { return {} };
 has lookup_sources  => sub { return {} };
+has co_domain_engines => sub { return {} };
+has co_domain_scopes  => sub { return {} };
+has action_eligibility_resolvers => sub { return {} };
 has 'action_authorizer';
 has 'saved_query_store';
 has 'localizer';
@@ -67,6 +70,12 @@ sub new ($class, @args) {
     die "action_handlers must be an object\n" unless ref($self->action_handlers) eq 'HASH';
     die "choice_sources must be an object\n" unless ref($self->choice_sources) eq 'HASH';
     die "lookup_sources must be an object\n" unless ref($self->lookup_sources) eq 'HASH';
+    die "co_domain_engines must be an object\n"
+        unless ref($self->co_domain_engines) eq 'HASH';
+    die "co_domain_scopes must be an object\n"
+        unless ref($self->co_domain_scopes) eq 'HASH';
+    die "action_eligibility_resolvers must be an object\n"
+        unless ref($self->action_eligibility_resolvers) eq 'HASH';
     die "localizer must be a coderef\n"
         if defined($self->localizer) && ref($self->localizer) ne 'CODE';
     die "theme_resolver must be a coderef\n"
@@ -103,6 +112,24 @@ sub new ($class, @args) {
             unless $id =~ /\A[a-z][a-z0-9_-]*\z/;
         die "lookup source $id must be a coderef\n"
             unless ref($self->lookup_sources->{$id}) eq 'CODE';
+    }
+    for my $id (keys %{$self->co_domain_engines}) {
+        die "co-domain engine id must be a lowercase identifier\n"
+            unless $id =~ /\A[a-z][a-z0-9_]*\z/;
+        die "co-domain engine $id must be a coderef\n"
+            unless ref($self->co_domain_engines->{$id}) eq 'CODE';
+    }
+    for my $id (keys %{$self->co_domain_scopes}) {
+        die "co-domain scope id must be a lowercase identifier\n"
+            unless $id =~ /\A[a-z][a-z0-9_]*\z/;
+        die "co-domain scope $id must be a coderef\n"
+            unless ref($self->co_domain_scopes->{$id}) eq 'CODE';
+    }
+    for my $id (keys %{$self->action_eligibility_resolvers}) {
+        die "action eligibility resolver id must be a lowercase identifier\n"
+            unless $id =~ /\A[a-z][a-z0-9_-]*\z/;
+        die "action eligibility resolver $id must be a coderef\n"
+            unless ref($self->action_eligibility_resolvers->{$id}) eq 'CODE';
     }
 
     my %known_view = map { $_ => 1 } qw(detail aggregate graph);
@@ -159,6 +186,23 @@ sub choice_source ($self, $id) {
 
 sub lookup_source ($self, $id) {
     return $self->lookup_sources->{$id};
+}
+
+sub co_domain_engine ($self, $id, $controller, $request = undef) {
+    my $factory = $self->co_domain_engines->{$id};
+    return undef unless $factory;
+    my $engine = $factory->($controller);
+    die "co-domain engine $id did not return a Selecto::Engine\n"
+        unless blessed($engine) && $engine->isa('Selecto::Engine');
+    return $engine;
+}
+
+sub co_domain_scope ($self, $id) {
+    return $self->co_domain_scopes->{$id};
+}
+
+sub action_eligibility_resolver ($self, $id) {
+    return $self->action_eligibility_resolvers->{$id};
 }
 
 sub saved_queries_enabled ($self, $domain) {

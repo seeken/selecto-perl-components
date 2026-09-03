@@ -13,6 +13,7 @@ use Selecto::Statement ();
 
 our @ACTION_REQUESTS;
 our @LOOKUP_REQUESTS;
+our @ELIGIBILITY_REQUESTS;
 our @SAVED_QUERY_REQUESTS;
 our @SAVED_QUERIES = (
     {name => 'Zulu inventory', url => '/explore/products?q=1&view=detail&field=product_name&limit=25&page=1'},
@@ -26,6 +27,44 @@ sub domain {
 
 sub private_domain {
     return _domain({ query_params => 0 });
+}
+
+sub carrier_domain {
+    return Selecto::Domain->parse({
+        schema_version => 1,
+        name => 'Clients',
+        source => {
+            source_table => 'client_profile', primary_key => 'id',
+            fields => [qw(id co_name cl_key city state status)],
+            columns => {
+                id => {type => 'integer', label => 'Client ID'},
+                co_name => {type => 'string', label => 'Company'},
+                cl_key => {type => 'string', label => 'Key'},
+                city => {type => 'string', label => 'City'},
+                state => {type => 'string', label => 'State'},
+                status => {type => 'string'},
+            },
+            associations => {},
+        },
+        schemas => {}, joins => {},
+        query_library => {
+            segments => {
+                carriers => {filters => [['eq', 'status', 'A']]},
+            },
+            projections => {
+                carrier_lookup => {fields => [qw(id co_name cl_key city state)]},
+            },
+            orderings => {
+                company_name => {order_by => [['co_name', 'asc'], ['id', 'asc']]},
+            },
+            views => {
+                carrier_lookup => {
+                    segments => ['carriers'], projection => 'carrier_lookup',
+                    ordering => 'company_name',
+                },
+            },
+        },
+    }, strict => 1);
 }
 
 sub _domain {
@@ -113,6 +152,19 @@ sub _domain {
                 },
             },
         },
+        co_domains => {
+            carriers => {
+                domain => 'client', view => 'carrier_lookup',
+                search => {
+                    fields => [qw(id co_name cl_key city state)],
+                    mode => 'prefix', rank => 1,
+                },
+                result => {
+                    value_field => 'id', label_field => 'co_name',
+                    description_fields => [qw(id cl_key city state)],
+                },
+            },
+        },
         detail_actions => {
             open_product => {
                 name => 'Open product maintenance',
@@ -178,12 +230,13 @@ sub _domain {
                     mode => 'groups',
                     palette => 'lucky_charms',
                     max_groups => 6,
+                    eligibility_field => '__build_shipments_eligible',
                     row_details => [{
                         id => 'stock', label => 'Stock', field => 'units_in_stock',
                     }],
                     group_inputs => [{
                         id => 'carrier_id', label => 'Carrier', type => 'lookup',
-                        lookup_source => 'carriers', value_type => 'integer',
+                        co_domain => 'carriers', value_type => 'integer',
                         direct_entry => 1, minimum_query_length => 2,
                         placeholder => 'Carrier name, key, ID, city, or state',
                         required => 1, minimum => 1,
@@ -238,6 +291,30 @@ sub config {
                         description => 'ID 777 · Chicago, IL',
                     },
                 ];
+            },
+        },
+        co_domain_engines => {
+            client => sub {
+                return Selecto::Engine->new(
+                    domain => carrier_domain(),
+                    adapter => TestSelectoComponents::CarrierAdapter->new(
+                        dbh => bless({}, 'TestSelectoComponents::DBH'),
+                    ),
+                );
+            },
+        },
+        co_domain_scopes => {
+            carriers => sub {
+                my ($controller, $request) = @_;
+                push @LOOKUP_REQUESTS, {%$request};
+                return Selecto::Expression->in('id', [501, 777]);
+            },
+        },
+        action_eligibility_resolvers => {
+            build_shipments => sub {
+                my ($controller, $request) = @_;
+                push @ELIGIBILITY_REQUESTS, {%$request};
+                return {101 => 1};
             },
         },
         action_handlers => {
@@ -413,6 +490,24 @@ sub _walk ($expression, $values) {
             _walk($argument, $values);
         }
     }
+}
+
+package TestSelectoComponents::CarrierAdapter;
+
+use Mojo::Base 'Selecto::PostgreSQL', -signatures;
+
+sub execute_query ($self, $statement) {
+    my %values = (
+        id => 501,
+        co_name => 'Acme Transport',
+        cl_key => 'ACME',
+        city => 'Detroit',
+        state => 'MI',
+    );
+    return {
+        columns => $statement->columns,
+        rows => [[map { $values{$_} } @{$statement->columns}]],
+    };
 }
 
 1;
