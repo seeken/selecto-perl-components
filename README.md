@@ -14,9 +14,20 @@ now lives in the sibling `selecto-api-console` JavaScript workspace as
 htmx files, and API Console from local siblings; the same resolver can consume
 installed npm packages later.
 
+The Components-specific browser behavior lives in focused modules under
+`src/browser/` (shell, charts, row dialog, grid, picker, filters, actions,
+lookups, and action results). `npm run build` produces the single dependency-
+free `public/selecto-components/selecto-components.js` file shipped to Perl
+hosts. `npm run build:check` verifies that the committed distribution matches
+those sources, and `npm run test:browser` exercises the compiled asset in
+Chromium with Playwright.
+
 ## Current surface
 
 - a reusable `Selecto::Components` Mojolicious plugin;
+- an optional Mojolicious route bridge that mounts every explorer endpoint
+  beneath a host-owned `under(...)` route, so authentication and request setup
+  are applied by normal route dispatch rather than application-wide path hooks;
 - a dependency-free Selecto API Console that discovers a canonical API's
   manifest, domain, OpenAPI document, public fields, types, query-library
   views/projections/segments, and orderings at runtime, then builds, runs, and
@@ -103,6 +114,25 @@ installed npm packages later.
 The package is a behavioral workalike, not a source or API port of Phoenix
 LiveView. It preserves the recognizable Explorer flow while using
 Mojolicious-native transport and lifecycle boundaries.
+
+The plugin entry point is intentionally small. Request behavior is separated
+under `Selecto::Components::Controller` into explorer presentation, actions,
+lookups, and saved queries. Hosts may mount routes beneath an authenticated
+bridge while retaining canonical public paths:
+
+```perl
+my $protected = $app->routes->under('/reports')->to(cb => \&authenticate);
+$app->plugin('Selecto::Components' => {
+    route_bridge => {routes => $protected, prefix => '/reports'},
+    explorers => {
+        orders => {path => '/reports/orders', %order_explorer_config},
+    },
+});
+```
+
+The bridge owns authorization; Components only registers relative child routes
+under it. The configured explorer path remains the public canonical URL used
+by forms, WebSockets, exports, actions, and saved queries.
 
 ## API Console contract
 

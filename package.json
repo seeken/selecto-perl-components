@@ -1,0 +1,14 @@
+{
+  "name": "@selecto/perl-components-browser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node script/build-browser.mjs",
+    "build:check": "node script/build-browser.mjs --check",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
+  }
+}

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Components
+        uses: actions/checkout@v6
+        with:
+          path: selecto-perl-components
+      - name: Checkout Selecto Perl
+        uses: actions/checkout@v6
+        with:
+          repository: seeken/selecto-perl
+          path: selecto-perl
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: selecto-perl-components/package-lock.json
+      - name: Install Perl dependencies
+        working-directory: selecto-perl-components
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes cpanminus
+          sudo cpanm --installdeps ../selecto-perl
+          sudo cpanm --notest ../selecto-perl
+          sudo cpanm --installdeps .
+      - name: Install browser dependencies
+        working-directory: selecto-perl-components
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Verify generated browser bundle
+        working-directory: selecto-perl-components
+        run: npm run build:check
+      - name: Run browser interaction tests
+        working-directory: selecto-perl-components
+        run: npm run test:browser
+      - name: Verify Perl distribution
+        working-directory: selecto-perl-components
+        run: script/with-local-sibling sh -c 'perl -Ilib -c examples/northwind.pl && prove -lr t && perl Makefile.PL && make test'

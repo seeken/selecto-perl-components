@@ -1,0 +1,12 @@
+^\.git/
+^\.github/
+^node_modules/
+^test-results/
+^playwright-report/
+^blib/
+^local/
+^Makefile$
+^MANIFEST\.bak$
+^MYMETA\.
+^pm_to_blib$
+^Selecto-Components-

@@ -1,13 +1,12 @@
 package Selecto::Components::Renderer;
 
 use Mojo::Base -base, -signatures;
+use Selecto::Components::AssetManifest qw(asset_revision);
 use Selecto::Components::Util qw(humanize html_escape);
 use Selecto::Components::Renderer::Markup qw(_format_url _html_display);
 use Selecto::Components::Renderer::Builder ();
 use Selecto::Components::Renderer::Results ();
 use Selecto::Components::Renderer::Debug ();
-
-my $ASSET_REVISION = '20260903-10';
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -35,11 +34,11 @@ sub page ($class, $model) {
         '<meta name="viewport" content="width=device-width,initial-scale=1">' .
         '<title>' . $title . '</title>' .
         ($page_shell->{head_start_html} // '') .
-        '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' . $ASSET_REVISION . '">' .
-        '<script defer src="/selecto-components/htmx.min.js?v=' . $ASSET_REVISION . '"></script>' .
-        '<script defer src="/selecto-components/hx-ws.min.js?v=' . $ASSET_REVISION . '"></script>' .
-        '<script defer src="/selecto-components/chart.umd.min.js?v=' . $ASSET_REVISION . '"></script>' .
-        '<script defer src="/selecto-components/selecto-components.js?v=' . $ASSET_REVISION . '"></script>' .
+        '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' . asset_revision() . '">' .
+        '<script defer src="/selecto-components/htmx.min.js?v=' . asset_revision() . '"></script>' .
+        '<script defer src="/selecto-components/hx-ws.min.js?v=' . asset_revision() . '"></script>' .
+        '<script defer src="/selecto-components/chart.umd.min.js?v=' . asset_revision() . '"></script>' .
+        '<script defer src="/selecto-components/selecto-components.js?v=' . asset_revision() . '"></script>' .
         ($page_shell->{head_html} // '') .
         '</head><body' . $body_class . '>' . ($page_shell->{body_start_html} // '') .
         '<main class="' . _h($main_class) . '"><div class="sc-shell">' .

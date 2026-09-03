@@ -11,11 +11,15 @@ run = "script/with-local-sibling prove -lr t"
 
 [tasks.assets]
 description = "Build and sync shared web assets and the API Console from local siblings or npm"
-run = "node script/selecto-web-assets.mjs sync --profile perl-components --target public/selecto-components && script/sync-api-console"
+run = "node script/selecto-web-assets.mjs sync --profile perl-components --target public/selecto-components && script/sync-api-console && npm run build"
 
 [tasks."assets:check"]
 description = "Verify committed generated browser assets match their shared sources"
-run = "node script/selecto-web-assets.mjs sync --profile perl-components --target public/selecto-components --check"
+run = "node script/selecto-web-assets.mjs sync --profile perl-components --target public/selecto-components --check && npm run build:check"
+
+[tasks."test:browser"]
+description = "Run browser interaction tests for the Components asset"
+run = "npm run test:browser"
 
 [tasks.server]
 description = "Run the Northwind Components example"
@@ -23,4 +27,4 @@ run = "script/with-local-sibling perl -Ilib examples/northwind.pl"
 
 [tasks.verify]
 description = "Run syntax, unit, WebSocket, and distribution checks"
-run = "mise run assets:check && script/with-local-sibling sh -c 'perl -Ilib -c examples/northwind.pl && prove -lr t && perl Makefile.PL && make test'"
+run = "mise run assets:check && mise run test:browser && script/with-local-sibling sh -c 'if perl -MSelecto::Perl::Northwind::Database -e 1 >/dev/null 2>&1; then perl -Ilib -c examples/northwind.pl; else echo \"Skipping optional Northwind example compile (fixture not checked out)\"; fi; prove -lr t && perl Makefile.PL && make test'"
