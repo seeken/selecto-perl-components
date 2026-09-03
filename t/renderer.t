@@ -311,6 +311,8 @@ is scalar(@{$grid_data->{columns}}), 2,
     'aggregate grid derives unique column-axis values from detail-level rollups';
 is $grid_data->{maximum_positive}, 20,
     'aggregate grid records the maximum positive measure for heat scaling';
+is_deeply $grid_data->{cells}{$grid_data->{rows}[0]{key}}{$grid_data->{columns}[0]{key}}{selection_values},
+    ['East', 1], 'grid cells retain both axis values for submitted selection filters';
 my $grid_result = {
     %$grid_built,
     grid_data => $grid_data,
@@ -339,15 +341,38 @@ like $grid_html, qr/data-sc-grid-heat="10"/,
     'the smallest positive grid value uses the low heat color';
 like $grid_html, qr/data-sc-grid-heat="64"/,
     'the maximum grid value uses the high heat color';
+like $grid_html, qr/<form class="sc-grid-selection-form"[^>]*data-sc-grid-selection/,
+    'the aggregate matrix is one explicit multi-cell selection form';
+is scalar(() = $grid_html =~ /data-sc-grid-cell/g), 4,
+    'every grid intersection has an independently toggleable checkbox';
+like $grid_html, qr/data-sc-grid-toggle-all/,
+    'the grid corner can select every grid cell';
+like $grid_html, qr/class="sc-grid-axis-input"[^>]*data-sc-grid-toggle-all/,
+    'header selection uses the compact custom axis control';
+like $grid_html, qr/data-sc-grid-row-toggle="0"/,
+    'each row header can select its populated cells';
+like $grid_html, qr/data-sc-grid-column-toggle="0"/,
+    'each column header can select its populated cells';
+like $grid_html, qr/name="grid_axis" value="\{&quot;axis&quot;:0,&quot;value&quot;:&quot;East&quot;\}"/,
+    'row headers submit their stable axis value for compact filtering';
+like $grid_html, qr/name="grid_axis" value="\{&quot;axis&quot;:1,&quot;value&quot;:1\}"/,
+    'column headers submit their stable axis value for compact filtering';
+like $grid_html, qr/name="grid_cell" value="\[&quot;East&quot;,1\]"/,
+    'cell submissions carry the stable row and column filter values together';
+like $grid_html, qr/class="sc-grid-cell-input"[^>]*name="grid_cell"/,
+    'cell selection keeps the native checkbox accessible without displaying checkbox clutter';
+like $grid_html, qr/class="sc-grid-cell-selected" aria-hidden="true">&#10003;<\/span>/,
+    'selected cells have a restrained visual marker';
 like $grid_html,
-    qr{<th scope="row">.*?filter_field" value="unit_price".*?filter_field" value="category\.category_name".*?>East</button>}s,
-    'row-axis labels drill down with the row group and existing filters';
+    qr/name="view" value="detail".*?name="filter_field" value="unit_price".*?name="filter_clause" value=""/s,
+    'selection submission targets Detail while preserving ordinary filters and alignment';
+like $grid_html, qr/data-sc-grid-apply>Show selected details/,
+    'the grid provides an explicit Detail submission control';
 like $grid_html,
-    qr{<th scope="col">.*?filter_field" value="unit_price".*?filter_field" value="units_in_stock".*?>1</button>}s,
-    'column-axis labels drill down with the column group and existing filters';
-like $grid_html,
-    qr{class="sc-grid-cell sc-grid-empty-cell"},
-    'missing row-column combinations remain visibly empty and non-clickable';
+    qr{class="sc-grid-cell sc-grid-empty-cell"[^>]*><label class="sc-grid-cell-toggle"><input [^>]*name="grid_cell"[^>]*aria-label="Select empty West, 2"},
+    'missing row-column combinations remain visible and can define a future view filter';
+like $grid_html, qr{name="grid_cell" value="\[&quot;West&quot;,2\]"},
+    'empty cells submit the stable row and column values together';
 is(
     Selecto::Components::Renderer::Results->_pagination($grid_model),
     '',

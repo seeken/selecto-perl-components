@@ -29,7 +29,7 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $state->query_library_segments // [],
         $config,
     );
-    my $applied_filter_count = scalar(grep { !$_->{draft} } @{$state->filters})
+    my $applied_filter_count = _logical_filter_count($state->filters)
         + scalar(@$governed_segments);
     my $query_summary = $class->_query_summary($state, $catalog, $governed_segments);
     my $detail_controls = $class->_row_click_picker($state, $model->{domain}, $config) .
@@ -239,18 +239,25 @@ sub _query_library_picker ($class, $state, $domain, $config = undef) {
 
 sub _query_summary ($class, $state, $catalog, $governed_segments) {
     my %by_path = map { $_->{path} => $_ } @$catalog;
-    my @filters = grep { !$_->{draft} } @{$state->filters};
+    my @filters = grep { !$_->{draft} && !defined($_->{clause}) } @{$state->filters};
     my @chips = map {
         my $filter = $_;
         my $field = $by_path{$filter->{field}};
         my $label = $field ? $field->{label} : _humanize($filter->{field});
         '<span data-sc-filter-summary>' . _h(_filter_summary_text($label, $filter)) . '</span>'
     } @filters;
+    my %clause;
+    $clause{$_->{clause}} = 1
+        for grep { !$_->{draft} && defined($_->{clause}) } @{$state->filters};
+    my $clause_count = scalar(keys %clause);
+    push @chips, '<span data-sc-filter-clause-summary>Grid selection: ' .
+        $clause_count . ($clause_count == 1 ? ' area' : ' areas') . '</span>'
+        if $clause_count;
     push @chips, map {
         '<span data-sc-query-library-segment-summary="' . _h($_->{id}) . '">' .
             _h('Segment: ' . $_->{label}) . '</span>'
     } @$governed_segments;
-    my $count = @filters + @$governed_segments;
+    my $count = @filters + $clause_count + @$governed_segments;
     my $filter_label = $count == 1 ? 'applied filter' : 'applied filters';
     my $chips = @chips ? '<div class="sc-query-summary-chips">' . join('', @chips) . '</div>'
         : '<p>No filters applied</p>';
@@ -260,14 +267,29 @@ sub _query_summary ($class, $state, $catalog, $governed_segments) {
         $chips . '</section>';
 }
 
+sub _logical_filter_count ($filters) {
+    my $ordinary = scalar(grep { !$_->{draft} && !defined($_->{clause}) } @$filters);
+    my %clauses;
+    $clauses{$_->{clause}} = 1
+        for grep { !$_->{draft} && defined($_->{clause}) } @$filters;
+    return $ordinary + scalar(keys %clauses);
+}
+
 sub _promoted_filter_header ($class, $model, $catalog) {
     my $state = $model->{state};
     my $config = $model->{config};
     my %by_path = map { $_->{path} => $_ } @$catalog;
-    my @promoted = grep { $_->{promoted} } @{$state->filters};
-    return '' unless @promoted;
+    my @promoted = grep { $_->{promoted} && !defined($_->{clause}) } @{$state->filters};
+    my %by_clause;
+    my @clause_order;
+    for my $filter (@{$state->filters}) {
+        next unless defined($filter->{clause});
+        push @clause_order, $filter->{clause} unless exists($by_clause{$filter->{clause}});
+        push @{$by_clause{$filter->{clause}}}, $filter;
+    }
+    return '' unless @promoted || @clause_order;
     my $form_id = 'selecto-query-' . $config->id;
-    my $cards = join '', map {
+    my $filter_cards = join '', map {
         my $filter = $_;
         my $field = $by_path{$filter->{field}};
         return '' unless $field;
@@ -278,6 +300,26 @@ sub _promoted_filter_header ($class, $model, $catalog) {
             '<div data-sc-promoted-filter-values>' .
             $class->_promoted_filter_value_controls($config, $field, $filter) . '</div></article>'
     } @promoted;
+    my $clause_cards = join '', map {
+        my $clause = $_;
+        my $conditions = join '<span class="sc-promoted-filter-and">AND</span>', map {
+            my $filter = $_;
+            my $field = $by_path{$filter->{field}};
+            return '' unless $field;
+            '<section class="sc-promoted-filter-pair-condition" data-sc-promoted-filter-condition ' .
+                'data-field="' . _h($filter->{field}) . '"><strong>' .
+                _h($field->{label}) . '</strong><span class="sc-promoted-filter-pair-value">' .
+                _h(_filter_value_text($filter)) . '</span></section>'
+        } @{$by_clause{$clause}};
+        my $kind = @{$by_clause{$clause}} == 1 ? 'row or column' : 'cell';
+        '<article class="sc-promoted-filter sc-promoted-filter-pair" data-sc-promoted-filter ' .
+            'data-sc-promoted-filter-clause="' . _h($clause) . '"><header><strong>Selected ' .
+            _h($kind) . ' ' . _h($clause) . '</strong><button type="button" data-sc-promoted-clause-remove ' .
+            'data-filter-clause="' . _h($clause) . '" aria-label="Remove grid selection ' .
+            _h($clause) . '" title="Remove grid selection">×</button></header>' .
+            '<div class="sc-promoted-filter-pair-body">' . $conditions . '</div></article>'
+    } @clause_order;
+    my $cards = $filter_cards . $clause_cards;
     return '' unless length($cards);
     return '<section class="sc-promoted-filters" data-sc-promoted-filters><div class="sc-promoted-filters-heading">' .
         '<div><small>View filters</small><strong>Quick filters</strong></div>' .
@@ -285,18 +327,19 @@ sub _promoted_filter_header ($class, $model, $catalog) {
         '">Run query</button></div><div class="sc-promoted-filter-grid">' . $cards . '</div></section>';
 }
 
-sub _promoted_filter_mode_control ($class, $config, $field, $filter) {
+sub _promoted_filter_mode_control ($class, $config, $field, $filter, $clause = undef) {
     my $operator = $filter->{op};
     my $options = join '', map {
         '<option value="' . _h($_->[0]) . '"' . ($_->[0] eq $operator ? ' selected' : '') . '>' .
             _h($_->[1]) . '</option>'
     } @{_filter_operators_for_filter($config, $field, $filter)};
-    return '<label class="sc-promoted-filter-mode">Match<select data-sc-promoted-filter-input="op" data-filter-field="' .
-        _h($field->{path}) . '" aria-label="Match mode for ' . _h($field->{label}) . '">' .
+    return '<label class="sc-promoted-filter-mode">Match<select' .
+        _promoted_filter_input_attributes('op', $field->{path}, $clause) .
+        ' aria-label="Match mode for ' . _h($field->{label}) . '">' .
         $options . '</select></label>';
 }
 
-sub _promoted_filter_value_controls ($class, $config, $field, $filter) {
+sub _promoted_filter_value_controls ($class, $config, $field, $filter, $clause = undef) {
     my $operator = $filter->{op};
     my $value = $filter->{value} // '';
     my $value_end = $filter->{value_end} // '';
@@ -306,8 +349,9 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter) {
     return '<p class="sc-promoted-filter-note">No value needed.</p>' if $operator =~ /_null\z/;
     if ($filter->{grouped}) {
         return '<label>Value<input type="text" value="' . _h($value) .
-            '" placeholder="Enter an aggregate value" data-sc-promoted-filter-input="value" ' .
-            'data-filter-field="' . _h($field_name) . '" aria-label="Value for ' .
+            '" placeholder="Enter an aggregate value"' .
+            _promoted_filter_input_attributes('value', $field_name, $clause) .
+            ' aria-label="Value for ' .
             _h($label) . '"></label>';
     }
     if ($operator eq 'date_shortcut') {
@@ -315,8 +359,9 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter) {
             '<option value="' . _h($_->{id}) . '"' . ($_->{id} eq $value ? ' selected' : '') . '>' .
                 _h($_->{label}) . '</option>'
         } @{$config->date_shortcuts};
-        return '<label>Period<select data-sc-promoted-filter-input="value" data-filter-field="' .
-            _h($field_name) . '" aria-label="Period for ' . _h($label) . '">' . $options . '</select></label>';
+        return '<label>Period<select' .
+            _promoted_filter_input_attributes('value', $field_name, $clause) .
+            ' aria-label="Period for ' . _h($label) . '">' . $options . '</select></label>';
     }
     if ($operator eq 'between') {
         my $input_type = $config->temporal_type($type)
@@ -324,15 +369,17 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter) {
             : ($config->numeric_type($type) ? 'number' : 'text');
         my $step = $input_type eq 'number' ? ' step="any"' : '';
         return '<div class="sc-promoted-filter-range"><label>Start<input type="' . $input_type . '"' . $step .
-            ' value="' . _h($value) . '" data-sc-promoted-filter-input="value" data-filter-field="' .
-            _h($field_name) . '" aria-label="Start value for ' . _h($label) . '"></label>' .
+            ' value="' . _h($value) . '"' .
+            _promoted_filter_input_attributes('value', $field_name, $clause) .
+            ' aria-label="Start value for ' . _h($label) . '"></label>' .
             '<label>End<input type="' . $input_type . '"' . $step . ' value="' . _h($value_end) .
-            '" data-sc-promoted-filter-input="value_end" data-filter-field="' . _h($field_name) .
-            '" aria-label="End value for ' . _h($label) . '"></label></div>';
+            '"' . _promoted_filter_input_attributes('value_end', $field_name, $clause) .
+            ' aria-label="End value for ' . _h($label) . '"></label></div>';
     }
     if ($config->boolean_type($type)) {
-        return '<label>Value<select data-sc-promoted-filter-input="value" data-filter-field="' .
-            _h($field_name) . '" aria-label="Value for ' . _h($label) . '"><option value=""' .
+        return '<label>Value<select' .
+            _promoted_filter_input_attributes('value', $field_name, $clause) .
+            ' aria-label="Value for ' . _h($label) . '"><option value=""' .
             (!length($value) ? ' selected' : '') . '>Choose true or false</option><option value="true"' .
             (lc($value) eq 'true' || $value eq '1' ? ' selected' : '') . '>True</option><option value="false"' .
             (lc($value) eq 'false' || $value eq '0' ? ' selected' : '') . '>False</option></select></label>';
@@ -344,19 +391,30 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter) {
     my $placeholder = $operator eq 'in' ? 'Comma-separated values'
         : ($config->temporal_type($type) ? 'Choose a date' : 'Enter a value');
     return '<label>Value<input type="' . $input_type . '"' . $step . ' value="' . _h($value) .
-        '" placeholder="' . _h($placeholder) . '" data-sc-promoted-filter-input="value" data-filter-field="' .
-        _h($field_name) . '" aria-label="Value for ' . _h($label) . '"></label>';
+        '" placeholder="' . _h($placeholder) . '"' .
+        _promoted_filter_input_attributes('value', $field_name, $clause) .
+        ' aria-label="Value for ' . _h($label) . '"></label>';
+}
+
+sub _promoted_filter_input_attributes ($kind, $field, $clause = undef) {
+    return ' data-sc-promoted-filter-input="' . _h($kind) . '" data-filter-field="' .
+        _h($field) . '"' . (defined($clause)
+            ? ' data-filter-clause="' . _h($clause) . '"' : '');
 }
 
 sub _filter_summary_text ($label, $filter) {
+    return "$label " . _filter_value_text($filter);
+}
+
+sub _filter_value_text ($filter) {
     my $operator = $filter->{op} // 'eq';
-    return "$label " . ($operator eq 'is_null' ? 'is empty' : 'is not empty')
+    return $operator eq 'is_null' ? 'is empty' : 'is not empty'
         if $operator eq 'is_null' || $operator eq 'not_null';
-    return "$label between " . ($filter->{value} // '') . ' and ' . ($filter->{value_end} // '')
+    return 'between ' . ($filter->{value} // '') . ' and ' . ($filter->{value_end} // '')
         if $operator eq 'between';
     my %symbols = (eq => '=', ne => '!=', gt => '>', gte => '>=', lt => '<', lte => '<=');
     my $display_operator = $symbols{$operator} // _humanize($operator);
-    return "$label $display_operator " . ($filter->{value} // '');
+    return "$display_operator " . ($filter->{value} // '');
 }
 
 sub _chart_type_picker ($class, $state) {
@@ -632,9 +690,10 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
 sub _filter_picker ($class, $state, $catalog, $config) {
     my $max_filters = $config->max_filters;
     my %by_path = map { $_->{path} => $_ } @$catalog;
-    my %selected = map { $_->{field} => 1 } @{$state->filters};
+    my @ordinary_filters = grep { !defined($_->{clause}) } @{$state->filters};
+    my %selected = map { $_->{field} => 1 } @ordinary_filters;
     my @available = grep { !$selected{$_->{path}} } @$catalog;
-    my $at_limit = @{$state->filters} >= $max_filters;
+    my $at_limit = @ordinary_filters >= $max_filters;
     my $available_items = $at_limit ? '' : join '', map {
         '<button class="sc-picker-choice" type="button" data-sc-filter-action="add" ' .
         'data-sc-filter-available-item data-field="' . _h($_->{path}) . '" data-label="' .
@@ -667,6 +726,7 @@ sub _filter_picker ($class, $state, $catalog, $config) {
         _h($filter->{grouped} ? 'string' : $field->{type}) . '">' .
         '<input type="hidden" name="filter_field" value="' . _h($filter->{field}) . '">' .
         _hidden('filter_group', $filter->{grouped} ? 1 : 0) .
+        _hidden('filter_clause', '') .
         '<div class="sc-filter-set-heading"><span><strong>' . _h($field->{label}) . '</strong><small>' .
         _h($field->{type}) . '</small></span><button type="button" data-sc-filter-action="remove" ' .
         'aria-label="Remove ' . _h($field->{label}) . ' filter" title="Remove filter">×</button></div>' .
@@ -675,10 +735,10 @@ sub _filter_picker ($class, $state, $catalog, $config) {
             _h($filter->{op} eq 'between' ? 'Enter both values to apply this filter.'
                 : 'Enter a value to apply this filter.') . '</p>' : '') .
         '</article>'
-    } @{$state->filters};
+    } @ordinary_filters;
     $set_items ||= '<p class="sc-picker-empty">Choose fields from Available to build filters.</p>';
 
-    return '<fieldset class="sc-picker-fieldset"><legend>Filters <small>up to ' . _h($max_filters) .
+    my $ordinary_picker = '<fieldset class="sc-picker-fieldset"><legend>Filters <small>up to ' . _h($max_filters) .
         '</small></legend><div class="sc-list-picker sc-filter-picker" data-sc-filter-root data-sc-filter-max="' .
         _h($max_filters) . '"><section class="sc-picker-pane"><div class="sc-picker-heading">' .
         '<span>Available</span><span data-sc-filter-available-count>' .
@@ -686,10 +746,61 @@ sub _filter_picker ($class, $state, $catalog, $config) {
         'data-sc-filter-search placeholder="Filter available filters" aria-label="Filter available filters">' .
         '<div class="sc-picker-list" data-sc-filter-available>' . $available_items . '</div></section>' .
         '<section class="sc-picker-pane sc-picker-set-pane"><div class="sc-picker-heading"><span>Set</span>' .
-        '<span data-sc-filter-set-count>' . scalar(@{$state->filters}) . '</span></div>' .
+        '<span data-sc-filter-set-count>' . scalar(@ordinary_filters) . '</span></div>' .
         '<p class="sc-picker-hint">Set filters are combined with AND.</p>' .
         '<div class="sc-picker-list sc-filter-set" data-sc-filter-set aria-label="Set filters">' .
         $set_items . '</div></section></div></fieldset>';
+    return $class->_filter_clause_picker($state, \%by_path, $config) . $ordinary_picker;
+}
+
+sub _filter_clause_picker ($class, $state, $by_path, $config) {
+    my %by_clause;
+    my @order;
+    for my $filter (@{$state->filters}) {
+        next unless defined($filter->{clause});
+        push @order, $filter->{clause} unless exists($by_clause{$filter->{clause}});
+        push @{$by_clause{$filter->{clause}}}, $filter;
+    }
+    return '' unless @order;
+    my $cards = join '', map {
+        my $clause = $_;
+        my $conditions = join '', map {
+            my $filter = $_;
+            my $field = $by_path->{$filter->{field}};
+            return '' unless $field;
+            '<section class="sc-filter-clause-condition' . ($filter->{draft} ? ' is-draft' : '') .
+                '" data-sc-filter-condition data-field="' . _h($filter->{field}) .
+                '" data-label="' . _h($field->{label}) . '" data-type="' .
+                _h($filter->{grouped} ? 'string' : $field->{type}) . '">' .
+                _hidden('filter_field', $filter->{field}) .
+                _hidden('filter_group', $filter->{grouped} ? 1 : 0) .
+                _hidden('filter_clause', $clause) .
+                _hidden('filter_op', $filter->{op}) .
+                _hidden('filter_value', $filter->{value}) .
+                _hidden('filter_value_end', $filter->{value_end} // '') .
+                '<strong>' . _h(_filter_summary_text($field->{label}, $filter)) .
+                '</strong></section>'
+        } @{$by_clause{$clause}};
+        my $kind = @{$by_clause{$clause}} == 1 ? 'row or column' : 'cell';
+        '<article class="sc-filter-clause' .
+            ($by_clause{$clause}[0]{draft} ? ' is-draft' : '') .
+            '" data-sc-filter-clause="' . _h($clause) . '"><header><div><small>Alternative</small>' .
+            '<strong>Selected ' . _h($kind) . ' ' . _h($clause) . '</strong></div>' .
+            '<button type="button" data-sc-filter-clause-remove aria-label="Remove grid selection ' .
+            _h($clause) . '" title="Remove grid selection">×</button></header>' .
+            '<div class="sc-filter-clause-conditions">' . $conditions . '</div>' .
+            ($by_clause{$clause}[0]{draft}
+                ? '<p class="sc-filter-draft-note" data-sc-filter-clause-note>' .
+                    'Complete all conditions to apply this selection.</p>' : '') .
+            '</article>'
+    } @order;
+    return '<fieldset class="sc-picker-fieldset sc-filter-clauses" data-sc-filter-clauses>' .
+        '<legend>Selected grid areas <small><span data-sc-filter-clause-count>' .
+        scalar(@order) . '</span> of ' .
+        _h($config->max_grid_cells) . '</small></legend>' .
+        '<p class="sc-picker-hint">Full rows and columns use one condition. Within a cell, ' .
+        'row and column conditions use AND; selections use OR.</p><div class="sc-filter-clause-list">' .
+        $cards . '</div></fieldset>';
 }
 
 sub _filter_operators_for_filter ($config, $field, $filter) {

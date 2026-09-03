@@ -1,6 +1,7 @@
 package Selecto::Components::State;
 
 use Mojo::Base -base, -signatures;
+use Mojo::JSON qw(decode_json);
 use Digest::SHA qw(sha256_hex);
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
@@ -13,7 +14,7 @@ has [qw(view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_co
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_promote_field
+        q query_signature view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_clause filter_promote_field grid_cell grid_axis
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
@@ -50,7 +51,7 @@ sub from_input ($class, $config, $domain, $input) {
     );
     my ($limit, $page) = _parse_pagination($config, $input, \@errors);
     my $filters = _parse_filters(
-        $config, $input, $field_map, $valid_groups, \@errors,
+        $config, $input, $field_map, $valid_groups, $group_configs, \@errors,
     );
 
     my $state = $class->new(
@@ -122,7 +123,8 @@ sub query_pairs ($self) {
             filter_op => $filter->{op},
             filter_value => $filter->{value},
             filter_value_end => $filter->{value_end} // '',
-            filter_group => $filter->{grouped} ? 1 : 0;
+            filter_group => $filter->{grouped} ? 1 : 0,
+            filter_clause => $filter->{clause} // '';
         push @pairs, filter_promote_field => $filter->{field} if $filter->{promoted};
     }
     for my $group (@{$self->groups}) {
@@ -496,12 +498,30 @@ sub _parse_pagination ($config, $input, $errors) {
     return ($limit, $page);
 }
 
-sub _parse_filters ($config, $input, $field_map, $valid_groups, $errors) {
+sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, $errors) {
     my $filter_fields = _values($input, 'filter_field');
     my $filter_ops = _values($input, 'filter_op');
     my $filter_values = _values($input, 'filter_value');
     my $filter_end_values = _values($input, 'filter_value_end');
     my $filter_groups = _values($input, 'filter_group');
+    my $filter_clauses = _values($input, 'filter_clause');
+    my $grid_cells = _values($input, 'grid_cell');
+    my $grid_axes = _values($input, 'grid_axis');
+    if ((@$grid_cells || @$grid_axes) && grep { length(_scalar($_)) } @$filter_clauses) {
+        push @$errors, 'A grid selection cannot be combined with existing alternative filters.';
+        $grid_cells = [];
+        $grid_axes = [];
+    }
+    for my $filter (@{_grid_cell_filter_inputs(
+        $config, $grid_cells, $grid_axes, $field_map, $valid_groups, $group_configs, $errors,
+    )}) {
+        push @$filter_fields, $filter->{field};
+        push @$filter_ops, $filter->{op};
+        push @$filter_values, $filter->{value};
+        push @$filter_end_values, '';
+        push @$filter_groups, $filter->{grouped};
+        push @$filter_clauses, $filter->{clause};
+    }
     my %promoted_filter_field = map { $_ => 1 } grep { length } map { _scalar($_) }
         @{_values($input, 'filter_promote_field')};
     my $filter_count = @$filter_fields;
@@ -509,18 +529,35 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $errors) {
     $filter_count = @$filter_values if @$filter_values > $filter_count;
     $filter_count = @$filter_end_values if @$filter_end_values > $filter_count;
     $filter_count = @$filter_groups if @$filter_groups > $filter_count;
+    $filter_count = @$filter_clauses if @$filter_clauses > $filter_count;
     my @filters;
     my %seen_filter_field;
+    my %seen_clause;
     my %valid_group_field = map { $_ => 1 } @$valid_groups;
     my $regular_filter_count = 0;
+    my $clause_condition_count = 0;
     for my $index (0 .. $filter_count - 1) {
         my $field = _scalar($filter_fields->[$index]);
         my $op = lc(_scalar($filter_ops->[$index]) || 'eq');
         my $value = _scalar($filter_values->[$index]);
         my $value_end = _scalar($filter_end_values->[$index]);
         my $group_filter = _truthy($filter_groups->[$index], 0);
+        my $clause = _scalar($filter_clauses->[$index]);
         next unless length($field) || length($value) || length($value_end);
-        if (!$group_filter && $regular_filter_count >= $config->max_filters) {
+        if (length($clause) && ($clause !~ /\A[1-9]\d*\z/
+            || $clause > $config->max_grid_cells)) {
+            push @$errors, 'An alternative filter clause is outside the supported range.';
+            next;
+        }
+        if (length($clause)) {
+            $seen_clause{$clause} = 1;
+            $clause_condition_count++;
+            if (keys(%seen_clause) > $config->max_grid_cells
+                || $clause_condition_count > $config->max_grid_cells * 2) {
+                push @$errors, 'Too many alternative filter clauses were submitted.';
+                last;
+            }
+        } elsif (!$group_filter && $regular_filter_count >= $config->max_filters) {
             push @$errors, 'Too many filters were submitted.';
             last;
         }
@@ -528,7 +565,8 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $errors) {
             push @$errors, 'A filter field is not available.';
             next;
         }
-        if ($seen_filter_field{$field}++) {
+        my $filter_identity = (length($clause) ? "clause:$clause" : 'ordinary') . "\0$field";
+        if ($seen_filter_field{$filter_identity}++) {
             push @$errors, 'A filter field can be set only once.';
             next;
         }
@@ -541,7 +579,7 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $errors) {
             push @$errors, 'An aggregate drilldown filter is not available.';
             next;
         }
-        $regular_filter_count++ unless $group_filter;
+        $regular_filter_count++ unless $group_filter || length($clause);
         ($value, $value_end) = ('', '') if $op =~ /_null\z/;
         if ($op eq 'in' && length($value)
             && !grep { length } map { _trim($_) } split /,/, $value, -1) {
@@ -576,12 +614,113 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $errors) {
             value_end => $value_end,
         };
         $filter->{grouped} = 1 if $group_filter;
-        $filter->{promoted} = 1 if $promoted_filter_field{$field};
+        $filter->{clause} = 0 + $clause if length($clause);
+        $filter->{promoted} = 1 if !length($clause) && $promoted_filter_field{$field};
         $filter->{draft} = 1 if $op !~ /_null\z/
             && (!length($value) || ($op eq 'between' && !length($value_end)));
         push @filters, $filter;
     }
+    my %draft_clause = map { $_->{clause} => 1 }
+        grep { $_->{draft} && defined($_->{clause}) } @filters;
+    for my $filter (@filters) {
+        $filter->{draft} = 1
+            if defined($filter->{clause}) && $draft_clause{$filter->{clause}};
+    }
+    if (keys %seen_clause) {
+        if (@$valid_groups != 2) {
+            push @$errors, 'Alternative filter clauses require the two grid group fields.';
+        } else {
+            my @expected = @{_grid_group_filters($field_map, $valid_groups, $group_configs)};
+            my %expected = map { $_->{field} => $_->{grouped} ? 1 : 0 } @expected;
+            for my $clause (keys %seen_clause) {
+                my @conditions = grep {
+                    defined($_->{clause}) && $_->{clause} == $clause
+                } @filters;
+                my %found = map { $_->{field} => $_->{grouped} ? 1 : 0 } @conditions;
+                if (!@conditions || @conditions > 2 || keys(%found) != @conditions
+                    || grep { !exists($expected{$_}) || $found{$_} != $expected{$_} }
+                        keys %found) {
+                    push @$errors, 'Each alternative filter clause must contain a grid row, column, or paired cell condition.';
+                    last;
+                }
+            }
+        }
+    }
     return \@filters;
+}
+
+sub _grid_cell_filter_inputs ($config, $grid_cells, $grid_axes, $field_map, $valid_groups, $group_configs, $errors) {
+    return [] unless @$grid_cells || @$grid_axes;
+    if (@$valid_groups != 2) {
+        push @$errors, 'Grid cell filters require exactly two selected groups.';
+        return [];
+    }
+    if (@$grid_cells + @$grid_axes > $config->max_grid_cells * 2) {
+        push @$errors, 'Too many grid selections were submitted.';
+        return [];
+    }
+    my @group_filters = @{_grid_group_filters($field_map, $valid_groups, $group_configs)};
+    my @filters;
+    my $clause = 0;
+    my %selected_axis;
+    for my $encoded (@$grid_axes) {
+        my $axis = eval { decode_json($encoded) };
+        if ($@ || ref($axis) ne 'HASH' || !exists($axis->{axis}) || !exists($axis->{value})
+            || $axis->{axis} !~ /\A[01]\z/ || ref($axis->{value})
+            || (defined($axis->{value}) && length("$axis->{value}") > 1_000)) {
+            push @$errors, 'A selected grid axis is invalid.';
+            next;
+        }
+        my $key = $axis->{axis} . "\0" . (defined($axis->{value}) ? "v$axis->{value}" : 'n');
+        next if $selected_axis{$key}++;
+        push @filters, {
+            %{$group_filters[$axis->{axis}]},
+            op => defined($axis->{value}) ? 'eq' : 'is_null',
+            value => defined($axis->{value}) ? "$axis->{value}" : '',
+            clause => ++$clause,
+        };
+    }
+    for my $encoded (@$grid_cells) {
+        my $values = eval { decode_json($encoded) };
+        if ($@ || ref($values) ne 'ARRAY' || @$values != 2
+            || grep { defined($_) && ref($_) } @$values
+            || grep { defined($_) && length("$_") > 1_000 } @$values) {
+            push @$errors, 'A selected grid cell is invalid.';
+            next;
+        }
+        next if grep {
+            my $value = $values->[$_];
+            my $key = $_ . "\0" . (defined($value) ? "v$value" : 'n');
+            $selected_axis{$key}
+        } (0, 1);
+        ++$clause;
+        for my $group_index (0, 1) {
+            my $value = $values->[$group_index];
+            push @filters, {
+                %{$group_filters[$group_index]},
+                op => defined($value) ? 'eq' : 'is_null',
+                value => defined($value) ? "$value" : '',
+                clause => $clause,
+            };
+        }
+    }
+    if ($clause > $config->max_grid_cells) {
+        push @$errors, 'Too many grid filter alternatives were selected.';
+        return [];
+    }
+    return \@filters;
+}
+
+sub _grid_group_filters ($field_map, $valid_groups, $group_configs) {
+    return [map {
+        my $group = $_;
+        my $dimension = $field_map->{$group}{dimension};
+        my $format = $group_configs->{$group}{format} // '';
+        {
+            field => $dimension ? $dimension->{key_field} : $group,
+            grouped => !$dimension && length($format) && $format ne 'default' ? 1 : 0,
+        }
+    } @$valid_groups];
 }
 
 sub _values ($input, $key) {

@@ -338,6 +338,51 @@ is $star_drilldown{filter_group}, 0,
 is $star_drilldown{filter_promote_field}, 'category_id',
     'star-dimension drill-down filters are automatically promoted';
 
+my $star_grid_state = Selecto::Components::State->from_input($config, $star_domain, {
+    q => 1,
+    view => 'aggregate',
+    aggregate_grid => 1,
+    field => 'product_name',
+    group => ['category_id', 'units_in_stock'],
+    measure => 'count',
+    order => 'product_name',
+});
+my $star_grid_built = Selecto::Components::QueryBuilder->build(
+    $config, $star_domain, $star_grid_state,
+);
+my $star_grid_records = [{
+    category_id => 'Tools',
+    __selecto_dimension_key_category_id => 7,
+    units_in_stock => 1,
+    count => 3,
+    __selecto_rollup_level => 2,
+}];
+my $star_grid_data = Selecto::Components::Explorer::_aggregate_grid_data(
+    $star_grid_state,
+    $star_grid_built,
+    $star_grid_records,
+    Selecto::Components::Explorer::_drilldowns(
+        $star_grid_state, $star_grid_built, $star_grid_records,
+    ),
+);
+my ($star_grid_cell) = values %{$star_grid_data->{cells}{$star_grid_data->{rows}[0]{key}}};
+is_deeply $star_grid_cell->{selection_values}, [7, 1],
+    'grid selection carries a star dimension key instead of its display label';
+my $star_grid_detail = Selecto::Components::State->from_input($config, $star_domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => ['category_id', 'units_in_stock'],
+    measure => 'count',
+    grid_cell => '[7,1]',
+    order => 'product_name',
+});
+ok $star_grid_detail->valid,
+    'a selected star-dimension grid cell becomes valid detail state';
+is_deeply [map { $_->{field} } @{$star_grid_detail->filters}],
+    ['category_id', 'units_in_stock'],
+    'star-dimension grid filters target the stable fact key and second axis';
+
 my $duplicate_star_state = Selecto::Components::State->from_input(
     $config, $star_domain, {
         q => 1, view => 'aggregate', field => 'product_name',
@@ -570,6 +615,62 @@ like $drilldown_statement->sql,
     'aggregate drilldown filters by the exact governed grouping expression';
 is_deeply $drilldown_statement->params, ['10', '2026-08'],
     'original and grouped drilldown values remain aligned bound parameters';
+
+my $grid_selection_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => ['category.category_name', 'units_in_stock'],
+    measure => 'count',
+    filter_field => [qw(unit_price category.category_name units_in_stock category.category_name units_in_stock)],
+    filter_op => [qw(gte eq eq eq eq)],
+    filter_value => ['10', 'East', '1', 'West', '2'],
+    filter_value_end => ['', '', '', '', ''],
+    filter_group => [0, 0, 0, 0, 0],
+    filter_clause => ['', 1, 1, 2, 2],
+    order => 'product_name',
+});
+ok $grid_selection_state->valid,
+    'canonical multi-cell grid filters pass governed state validation';
+my $grid_selection_statement = $postgresql->compile(
+    $domain,
+    Selecto::Components::QueryBuilder->build(
+        $config, $domain, $grid_selection_state,
+    )->{query},
+);
+like $grid_selection_statement->sql,
+    qr/\("s0"\."unit_price" >= \$1\) AND \(\(\("j_category"\."category_name" = \$2\) AND \("s0"\."units_in_stock" = \$3\)\) OR \(\("j_category"\."category_name" = \$4\) AND \("s0"\."units_in_stock" = \$5\)\)\)/,
+    'ordinary filters are ANDed with an OR of independently paired grid cells';
+is_deeply $grid_selection_statement->params, ['10', 'East', '1', 'West', '2'],
+    'multi-cell grid values remain ordered bound parameters';
+
+my $grid_axis_selection_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => ['category.category_name', 'units_in_stock'],
+    measure => 'count',
+    filter_field => [qw(category.category_name category.category_name units_in_stock)],
+    filter_op => [qw(eq eq eq)],
+    filter_value => ['East', 'West', '2'],
+    filter_value_end => ['', '', ''],
+    filter_group => [0, 0, 0],
+    filter_clause => [1, 2, 2],
+    order => 'product_name',
+});
+ok $grid_axis_selection_state->valid,
+    'a full grid axis can coexist with an independently paired cell';
+my $grid_axis_selection_statement = $postgresql->compile(
+    $domain,
+    Selecto::Components::QueryBuilder->build(
+        $config, $domain, $grid_axis_selection_state,
+    )->{query},
+);
+like $grid_axis_selection_statement->sql,
+    qr/\("j_category"\."category_name" = \$1\) OR \(\("j_category"\."category_name" = \$2\) AND \("s0"\."units_in_stock" = \$3\)\)/,
+    'a full row remains one SQL condition while a remaining cell stays paired';
+is_deeply $grid_axis_selection_statement->params, ['East', 'West', '2'],
+    'compact grid-axis and cell parameters remain aligned';
 
 my $between_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

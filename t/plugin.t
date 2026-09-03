@@ -81,11 +81,11 @@ $t->get_ok('/explore/products')
     ->content_like(qr{>Excel</a>.*>CSV</a>.*>TSV</a>.*>JSON</a>}s)
     ->content_like(qr{hx-ws:connect="/explore/products/ws"})
     ->content_like(qr{hx-ws:send})
-    ->content_like(qr{/selecto-components/htmx\.min\.js\?v=20260903-1})
-    ->content_like(qr{/selecto-components/hx-ws\.min\.js\?v=20260903-1})
-    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260903-1})
-    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260903-1})
-    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260903-1})
+    ->content_like(qr{/selecto-components/htmx\.min\.js\?v=20260903-10})
+    ->content_like(qr{/selecto-components/hx-ws\.min\.js\?v=20260903-10})
+    ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=20260903-10})
+    ->content_like(qr{/selecto-components/selecto-components\.css\?v=20260903-10})
+    ->content_like(qr{/selecto-components/selecto-components\.js\?v=20260903-10})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->text_is('.sc-pagination > span' => 'Page 1 of 2')
@@ -404,6 +404,19 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/Running query/)
     ->content_like(qr/stageResultView/)
     ->content_like(qr/hiddenFilterValue\("filter_group", "0"\)/)
+    ->content_like(qr/hiddenFilterValue\("filter_clause", ""\)/)
+    ->content_like(qr/function updateGridSelection/)
+    ->content_like(qr/function gridSelectionPlan/)
+    ->content_like(qr/function showGridAxisHover/)
+    ->content_like(qr/\.sc-aggregate-grid td\[data-sc-grid-row\]\[data-sc-grid-column\]/)
+    ->content_like(qr/is-grid-axis-hover/)
+    ->content_like(qr/plan\.clauseCount > maximum/)
+    ->content_like(qr/That selection would create/)
+    ->content_like(qr/data-sc-grid-compact-input/)
+    ->content_like(qr/data-sc-grid-row-toggle/)
+    ->content_like(qr/data-sc-grid-column-toggle/)
+    ->content_like(qr/setBuilderTrayCollapsed\(shell, true\)/)
+    ->content_like(qr/data-sc-filter-clause-remove/)
     ->content_like(qr/dateFormats/)
     ->content_like(qr/dateShortcuts/)
     ->content_like(qr/rebuildFilterValues/)
@@ -679,12 +692,84 @@ $t->get_ok('/explore/products?q=1&view=aggregate&aggregate_grid=1&aggregate_grid
     ->text_is('.sc-grid-heading strong' => 'Aggregate Grid')
     ->text_is('.sc-grid-heading span' => 'Log heat scale')
     ->element_exists('.sc-aggregate-grid-wrap .sc-aggregate-grid')
-    ->element_exists('.sc-aggregate-grid td[data-sc-grid-heat] form.sc-drilldown-form')
+    ->element_exists('form[data-sc-grid-selection][data-sc-grid-max="50"]')
+    ->element_exists('.sc-aggregate-grid input[data-sc-grid-toggle-all]')
+    ->element_exists('.sc-aggregate-grid input[data-sc-grid-row-toggle="0"]')
+    ->element_exists('.sc-aggregate-grid input[data-sc-grid-column-toggle="0"]')
+    ->element_exists('.sc-aggregate-grid td[data-sc-grid-heat] input[name="grid_cell"][data-sc-grid-cell]')
+    ->element_exists('.sc-aggregate-grid td.sc-grid-empty-cell input[name="grid_cell"][data-sc-grid-cell]')
+    ->element_exists('button[data-sc-grid-apply]')
     ->element_exists_not('.sc-pagination');
 is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, undef,
     'a valid aggregate grid fetches the full matrix without a page limit';
 is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $count_executions_before_grid,
     'a full aggregate grid avoids a redundant count query';
+
+my $grid_selection_url = Mojo::URL->new('/explore/products');
+$grid_selection_url->query([
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => 'category.category_name',
+    group => 'units_in_stock',
+    measure => 'count',
+    grid_cell => encode_json(['Value 1', 'Value 1']),
+    grid_cell => encode_json(['Value 2', 'Value 2']),
+    order => 'product_name',
+    direction => 'asc',
+    limit => 25,
+    page => 1,
+]);
+$t->get_ok($grid_selection_url)->status_is(200)
+    ->text_is('[data-sc-filter-clause-summary]' => 'Grid selection: 2 areas')
+    ->element_exists('[data-sc-filter-clauses]')
+    ->element_exists('[data-sc-filter-clause="1"]')
+    ->element_exists('[data-sc-filter-clause="2"]')
+    ->element_exists('[data-sc-promoted-filter-clause="1"]')
+    ->element_exists('[data-sc-promoted-filter-clause="2"]')
+    ->element_exists('[data-sc-promoted-filter-clause="1"] [data-sc-promoted-clause-remove][data-filter-clause="1"]')
+    ->element_exists('[data-sc-promoted-filter-clause="1"] [data-sc-promoted-filter-condition][data-field="category.category_name"]')
+    ->element_exists_not('[data-sc-promoted-filter-clause="1"] [data-sc-promoted-filter-input]')
+    ->text_is('[data-sc-promoted-filter-clause="1"] [data-field="category.category_name"] .sc-promoted-filter-pair-value' => '= Value 1')
+    ->element_exists('[data-sc-filter-clause="1"] [name="filter_field"][value="category.category_name"]')
+    ->element_exists('[data-sc-filter-clause="1"] [name="filter_field"][value="units_in_stock"]')
+    ->element_exists('[data-sc-filter-clause="1"] [name="filter_clause"][value="1"]')
+    ->element_exists('[data-sc-filter-clause="2"] [name="filter_clause"][value="2"]')
+    ->element_exists('[data-sc-filter-clause] input[type="hidden"][name="filter_op"][value="eq"]')
+    ->element_exists('[data-sc-filter-condition][data-field="category.category_name"] input[type="hidden"][name="filter_value"][value="Value 1"]')
+    ->element_exists_not('[data-sc-filter-clause] select')
+    ->content_like(qr/Full rows and columns use one condition/)
+    ->content_like(qr/selections use OR/);
+is $t->tx->res->dom->find('[data-sc-filter-clause]')->size, 2,
+    'two selected grid cells render as two compact alternative cards';
+is $t->tx->res->dom->find('[data-sc-filter-condition]')->size, 4,
+    'each selected cell displays its governed row and column condition';
+is $t->tx->res->dom->find('[data-sc-promoted-filter-clause="1"] [data-sc-promoted-clause-remove]')->size, 1,
+    'each compact promoted pair has one remove control for the complete cell';
+is $t->tx->res->dom->find('[data-sc-promoted-filter-clause="1"] [data-sc-promoted-filter-condition]')->size, 2,
+    'each compact promoted pair keeps both read-only conditions together';
+
+my $grid_axis_selection_url = $t->ua->server->url->clone->path('/explore/products')->query([
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => ['category.category_name', 'units_in_stock'],
+    measure => 'count',
+    grid_axis => encode_json({axis => 0, value => 'Value 1'}),
+    grid_cell => encode_json(['Value 1', 'Value 1']),
+    grid_cell => encode_json(['Value 2', 'Value 2']),
+    order => 'product_name',
+    direction => 'asc',
+    limit => 25,
+    page => 1,
+]);
+$t->get_ok($grid_axis_selection_url)->status_is(200)
+    ->element_exists('[data-sc-filter-clause="1"] [name="filter_field"][value="category.category_name"]')
+    ->element_exists_not('[data-sc-filter-clause="1"] [name="filter_field"][value="units_in_stock"]')
+    ->element_exists('[data-sc-filter-clause="2"] [name="filter_field"][value="units_in_stock"]')
+    ->element_exists('[data-sc-promoted-filter-clause="1"] [data-sc-promoted-filter-condition][data-field="category.category_name"]');
+is $t->tx->res->dom->find('[data-sc-filter-clause="1"] [data-sc-filter-condition]')->size, 1,
+    'a selected full row renders as one compact read-only condition';
 
 $t->get_ok('/explore/products?q=1&view=aggregate&aggregate_grid=1&field=product_name&group=category.category_name&measure=count&order=product_name&direction=asc&limit=25&page=2')
     ->status_is(200)

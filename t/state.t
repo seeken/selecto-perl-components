@@ -206,6 +206,90 @@ my $detail_with_grid_input = Selecto::Components::State->from_input($config, $do
 ok !$detail_with_grid_input->aggregate_grid,
     'aggregate grid parameters cannot alter a Detail result';
 
+my $grid_cell_selection = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => ['category.category_name', 'units_in_stock'],
+    measure => 'count',
+    filter_field => 'unit_price',
+    filter_op => 'gte',
+    filter_value => '10',
+    filter_value_end => '',
+    filter_group => 0,
+    filter_clause => '',
+    grid_cell => ['["East",1]', '["West",2]'],
+    order => 'product_name',
+});
+ok $grid_cell_selection->valid,
+    'multiple aggregate grid cells become valid governed detail filter clauses';
+is_deeply $grid_cell_selection->filters, [
+    {field => 'unit_price', op => 'gte', value => '10', value_end => ''},
+    {field => 'category.category_name', op => 'eq', value => 'East', value_end => '', clause => 1},
+    {field => 'units_in_stock', op => 'eq', value => '1', value_end => '', clause => 1},
+    {field => 'category.category_name', op => 'eq', value => 'West', value_end => '', clause => 2},
+    {field => 'units_in_stock', op => 'eq', value => '2', value_end => '', clause => 2},
+], 'each selected cell retains its row and column as one aligned alternative';
+my @grid_filter_clauses;
+my $grid_cell_pairs = $grid_cell_selection->query_pairs;
+for (my $index = 0; $index < @$grid_cell_pairs; $index += 2) {
+    push @grid_filter_clauses, $grid_cell_pairs->[$index + 1]
+        if $grid_cell_pairs->[$index] eq 'filter_clause';
+}
+is_deeply \@grid_filter_clauses, ['', 1, 1, 2, 2],
+    'canonical state aligns ordinary and alternative filter clause markers';
+unlike join('&', @$grid_cell_pairs), qr/(?:^|&)grid_cell&/,
+    'raw grid cell payloads are replaced by validated canonical filters';
+
+my $single_axis_grid_clause = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => ['category.category_name', 'units_in_stock'],
+    measure => 'count',
+    filter_field => 'category.category_name',
+    filter_op => 'eq',
+    filter_value => '7',
+    filter_clause => 1,
+    order => 'product_name',
+});
+ok $single_axis_grid_clause->valid,
+    'a governed alternative clause may represent one complete grid row or column';
+is_deeply $single_axis_grid_clause->filters, [{
+    field => 'category.category_name', op => 'eq', value => '7', value_end => '', clause => 1,
+}], 'a complete axis remains one condition instead of expanding into cell pairs';
+
+my $compacted_grid_selection = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => ['category.category_name', 'units_in_stock'],
+    measure => 'count',
+    grid_axis => '{"axis":0,"value":"East"}',
+    grid_cell => ['["East",1]', '["East",2]', '["West",3]'],
+    order => 'product_name',
+});
+ok $compacted_grid_selection->valid,
+    'a complete axis and remaining grid cells become valid compact filter state';
+is_deeply $compacted_grid_selection->filters, [
+    {field => 'category.category_name', op => 'eq', value => 'East', value_end => '', clause => 1},
+    {field => 'category.category_name', op => 'eq', value => 'West', value_end => '', clause => 2},
+    {field => 'units_in_stock', op => 'eq', value => '3', value_end => '', clause => 2},
+], 'cells covered by a complete row are omitted while uncovered cells remain paired';
+
+my $malformed_grid_cell = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    group => ['category.category_name', 'units_in_stock'],
+    measure => 'count',
+    grid_cell => '{not json}',
+    order => 'product_name',
+});
+ok !$malformed_grid_cell->valid, 'malformed grid cell state is rejected';
+like join(' ', @{$malformed_grid_cell->errors}), qr/selected grid cell is invalid/,
+    'malformed grid cell state produces an actionable validation error';
+
 for my $chart_type (qw(bar horizontal_bar stacked_bar line area pie doughnut scatter)) {
     my $chart = Selecto::Components::State->from_input($config, $domain, {
         q => 1,
