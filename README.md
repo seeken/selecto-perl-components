@@ -523,6 +523,7 @@ load_build => {
         mode => 'groups',
         palette => 'lucky_charms',
         max_groups => 6,
+        eligibility_field => '__load_build_eligible',
         row_details => [
             {id => 'origin', label => 'Origin', field => 'origin.city'},
             {id => 'destination', label => 'Destination', field => 'destination.city'},
@@ -544,13 +545,77 @@ index. Each group has its trusted server-resolved `marker`, its own
 `selected_ids`, and normalized `inputs`. The browser cannot submit custom
 marker colors, shapes, or labels. `row_details` are governed hidden fields
 shown beside each selected row in the confirmation card; they are display-only
-and are not submitted to the handler. A `lookup` input uses the authenticated
+and are not submitted to the handler. When `eligibility_field` is declared,
+the host must configure an `action_eligibility_resolvers` callback for the
+action. The callback receives the governed current-page row IDs and returns a
+hash whose true-valued IDs may display selection controls; missing IDs and
+resolver failures fail closed and leave the action cell empty. This display
+hint does not replace authorization and business-rule checks during execution.
+A `lookup` input uses the authenticated
 `GET /explore/products/actions/:action_id/lookups/:input_id` route and the
 corresponding host-owned `lookup_sources` callback. Results are normalized to
 `value`, `label`, and optional `description`; the chosen value, not its label,
 is submitted to the action handler. Lookup discovery reuses action
 authorization and includes the active group's selected row IDs so the host can
 apply tenant, eligibility, and row-level rules.
+
+```perl
+action_eligibility_resolvers => {
+    load_build => sub ($controller, $request) {
+        # $request->{row_ids} contains the governed result-page targets.
+        return {map { $_ => can_build_load($_) ? 1 : 0 } @{$request->{row_ids}}};
+    },
+},
+```
+
+For reusable object lookups, prefer a domain-declared co-domain over a
+host-rendered result query. The source domain names the target domain's
+governed query-library pieces and result mapping:
+
+```perl
+co_domains => {
+    carriers => {
+        domain => 'client',
+        segments => [qw(carriers available_for_dispatch)],
+        projection => 'carrier_lookup',
+        ordering => 'company_name',
+        search => {
+            fields => [qw(id co_name cl_key city state)],
+            mode => 'prefix', rank => 1,
+        },
+        result => {
+            value_field => 'id', label_field => 'co_name',
+            description_fields => [qw(id cl_key city state)],
+        },
+    },
+},
+
+# In the action input:
+{ id => 'carrier_id', type => 'lookup', co_domain => 'carriers' }
+```
+
+The Components host resolves only trusted server-side engines and any
+selection-derived narrowing predicate:
+
+```perl
+co_domain_engines => {
+    client => sub ($controller) {
+        return tenant_scoped_client_engine($controller);
+    },
+},
+co_domain_scopes => {
+    carriers => sub ($controller, $request, $engine) {
+        return Selecto::Expression->in(
+            'id', carrier_ids_allowed_for($request->{selected_ids}),
+        );
+    },
+},
+```
+
+The target engine's required tenant predicate remains in force, the callback
+predicate can only narrow the query, and the action handler remains responsible
+for revalidating the submitted object before executing a write. Host
+`lookup_sources` remain supported for inherently application-specific choices.
 
 The plugin adds its packaged `public/` directory to Mojolicious static paths.
 The htmx runtime and WebSocket extension are served locally; the browser does

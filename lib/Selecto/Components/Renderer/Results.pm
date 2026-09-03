@@ -231,6 +231,15 @@ sub _table ($class, $result, $model) {
             if ($column->{action_id}) {
                 my $target = $record->{$result->{action_key}};
                 my $action = $actions{$column->{action_id}};
+                my $eligibility_field = $action->{selection}{eligibility_field};
+                my $eligible = !defined($eligibility_field)
+                    || $record->{$eligibility_field} ? 1 : 0;
+                unless ($eligible && defined($target) && "$target" ne '') {
+                    $cells .= '<td class="sc-select-column sc-action-ineligible" ' .
+                        'data-sc-action-column="' . _h($column->{action_id}) . '" ' .
+                        'data-sc-action-eligible="0"></td>';
+                    next;
+                }
                 if (($action->{selection}{mode} // 'rows') eq 'groups') {
                     my $detail_specs = $result->{action_row_details}{$column->{action_id}} // [];
                     my @row_details = map {
@@ -247,14 +256,14 @@ sub _table ($class, $result, $model) {
                         'data-sc-action-column="' . _h($column->{action_id}) . '"><div ' .
                         'class="sc-group-markers" data-sc-group-markers data-sc-action-id="' .
                         _h($column->{action_id}) . '" data-sc-row-id="' .
-                        _h(defined($target) ? $target : '') . '"' . $row_details . '></div></td>';
+                        _h($target) . '"' . $row_details . '></div></td>';
                 } else {
                     $cells .= '<td class="sc-select-column" data-sc-action-column="' .
                         _h($column->{action_id}) . '"><input type="checkbox" data-sc-row-select ' .
                         'data-sc-action-id="' . _h($column->{action_id}) . '" value="' .
-                        _h(defined($target) ? $target : '') . '" aria-label="Select row ' .
+                        _h($target) . '" aria-label="Select row ' .
                         _h($index + 1) . ' for ' . _h($column->{label}) . '"' .
-                        (defined($target) && "$target" ne '' ? '' : ' disabled') . '></td>';
+                        '></td>';
                 }
                 next;
             }

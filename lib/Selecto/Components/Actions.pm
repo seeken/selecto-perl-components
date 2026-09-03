@@ -6,6 +6,7 @@ use warnings;
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(decode_json);
 use Selecto::Components::Util qw(humanize);
+use Selecto::CoDomain ();
 use Storable qw(dclone);
 
 my @LUCKY_CHARMS_MARKERS = (
@@ -147,6 +148,10 @@ sub _normalize_selection ($class, $spec, $config, $controller, $action, $domain)
         unless $maximum =~ /\A\d+\z/ && $maximum >= 1
             && $maximum <= @LUCKY_CHARMS_MARKERS;
     my @markers = map { dclone($_) } @LUCKY_CHARMS_MARKERS[0 .. $maximum - 1];
+    my $eligibility_field = _text($spec->{eligibility_field});
+    die "action $action->{id} eligibility_field must be an internal field name\n"
+        if length($eligibility_field)
+            && $eligibility_field !~ /\A__[a-z][a-z0-9_]*\z/;
     return {
         mode => 'groups',
         palette => $palette,
@@ -159,6 +164,7 @@ sub _normalize_selection ($class, $spec, $config, $controller, $action, $domain)
         row_details => $class->_normalize_row_details(
             $spec->{row_details}, $config, $domain, $action,
         ),
+        (length($eligibility_field) ? (eligibility_field => $eligibility_field) : ()),
     };
 }
 
@@ -227,9 +233,22 @@ sub _normalize_inputs ($class, $specs, $config, $controller, $action, $domain, $
         };
         if ($type eq 'lookup') {
             my $source = _text($spec->{lookup_source});
-            die "lookup input $id requires a configured lookup_source\n"
-                unless $source =~ /\A[a-z][a-z0-9_-]*\z/
-                    && $config->lookup_source($source);
+            my $co_domain = _text($spec->{co_domain});
+            die "lookup input $id must declare exactly one lookup source\n"
+                unless ($source ne '' ? 1 : 0) + ($co_domain ne '' ? 1 : 0) == 1;
+            if ($co_domain ne '') {
+                die "lookup input $id has an invalid co-domain\n"
+                    unless $co_domain =~ /\A[a-z][a-z0-9_]*\z/;
+                my $definition = Selecto::CoDomain->definition($domain, $co_domain);
+                die "lookup input $id requires co-domain engine $definition->{domain}\n"
+                    unless $config->co_domain_engines->{$definition->{domain}};
+                $input->{co_domain} = $co_domain;
+            } else {
+                die "lookup input $id requires a configured lookup_source\n"
+                    unless $source =~ /\A[a-z][a-z0-9_-]*\z/
+                        && $config->lookup_source($source);
+                $input->{lookup_source} = $source;
+            }
             my $minimum_query_length = _text($spec->{minimum_query_length});
             $minimum_query_length = 2
                 unless $minimum_query_length =~ /\A\d+\z/
@@ -242,7 +261,6 @@ sub _normalize_inputs ($class, $specs, $config, $controller, $action, $domain, $
                     && $result_limit <= 50;
             my $value_type = lc(_text($spec->{value_type}) || 'string');
             $value_type = 'string' unless $value_type =~ /\A(?:string|integer)\z/;
-            $input->{lookup_source} = $source;
             $input->{lookup_url} = $config->path . '/actions/' . $action->{id}
                 . '/lookups/' . $id;
             $input->{minimum_query_length} = 0 + $minimum_query_length;

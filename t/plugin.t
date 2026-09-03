@@ -286,7 +286,8 @@ $t->get_ok($grouped_action_url)
     ->element_exists('th.sc-group-select-column[data-sc-action-column="build_shipments"]')
     ->element_exists_not('th[data-sc-action-column="build_shipments"] input[data-sc-select-page]')
     ->element_exists('[data-sc-group-markers][data-sc-action-id="build_shipments"][data-sc-row-id="101"]')
-    ->element_exists('[data-sc-group-markers][data-sc-action-id="build_shipments"][data-sc-row-id="102"]')
+    ->element_exists_not('[data-sc-group-markers][data-sc-action-id="build_shipments"][data-sc-row-id="102"]')
+    ->element_exists('td[data-sc-action-column="build_shipments"][data-sc-action-eligible="0"]')
     ->attr_like('[data-sc-group-markers][data-sc-action-id="build_shipments"][data-sc-row-id="101"]' =>
         'data-sc-row-details' => qr/Stock.*21/)
     ->element_exists('input[name="action_groups"][data-sc-action-groups]')
@@ -302,6 +303,8 @@ $t->get_ok($grouped_action_url)
     ->content_like(qr{carrier_id})
     ->content_like(qr{&quot;type&quot;:&quot;lookup&quot;})
     ->content_like(qr{\\/explore\\/products\\/actions\\/build_shipments\\/lookups\\/carrier_id});
+is_deeply $TestSelectoComponents::ELIGIBILITY_REQUESTS[-1]{row_ids}, ['101', '102'],
+    'grouped action eligibility receives every governed result row target';
 
 my $grouped_csrf = $t->tx->res->dom
     ->at('form[action="/explore/products/actions/build_shipments"] input[name="csrf_token"]')
@@ -314,11 +317,11 @@ $t->get_ok('/explore/products/actions/build_shipments/lookups/carrier_id' .
     ->header_is('Cache-Control' => 'no-store')
     ->json_is('/results/0/value' => '501')
     ->json_is('/results/0/label' => 'Acme Transport')
-    ->json_like('/results/0/description' => qr/Detroit, MI/);
+    ->json_like('/results/0/description' => qr/Detroit.*MI/);
 is $TestSelectoComponents::LOOKUP_REQUESTS[-1]{query}, 'acme',
-    'action lookup passes the normalized search query to its host source';
+    'co-domain scope receives the normalized action lookup query';
 is_deeply $TestSelectoComponents::LOOKUP_REQUESTS[-1]{selected_ids}, ['101', '102'],
-    'action lookup passes the active group rows for host authorization and scoping';
+    'co-domain scope receives active group rows for host authorization and scoping';
 
 $t->get_ok('/explore/products/actions/build_shipments/lookups/carrier_id?q=a')
     ->status_is(200)->json_is('/results' => []);

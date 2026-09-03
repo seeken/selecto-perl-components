@@ -13,6 +13,7 @@ use Selecto::Components::Explorer ();
 use Selecto::Components::Renderer ();
 use Selecto::Components::State ();
 use Selecto::Components::Util qw(humanize);
+use Selecto::CoDomain ();
 
 our $VERSION = '0.1.0';
 
@@ -199,6 +200,7 @@ sub _decorate_model ($controller, $model) {
             $model->{bulk_actions} = [grep {
                 $selected{$_->{id}}
             } @{$model->{available_actions}}];
+            _apply_action_row_eligibility($controller, $model);
             1;
         };
         unless ($ok) {
@@ -208,6 +210,60 @@ sub _decorate_model ($controller, $model) {
         }
     }
     return $model;
+}
+
+sub _apply_action_row_eligibility ($controller, $model) {
+    my $result = $model->{result};
+    return unless ref($result) eq 'HASH' && ref($result->{records}) eq 'ARRAY';
+    return if $result->{all_rows};
+    my $target_key = $result->{action_key};
+    return unless defined($target_key) && !ref($target_key) && length($target_key);
+
+    for my $action (@{$model->{bulk_actions} // []}) {
+        next unless ref($action) eq 'HASH' && ref($action->{selection}) eq 'HASH';
+        my $field = $action->{selection}{eligibility_field};
+        next unless defined($field) && !ref($field)
+            && "$field" =~ /\A__[a-z][a-z0-9_]*\z/;
+
+        $_->{$field} = 0 for @{$result->{records}};
+        my $resolver = $model->{config}->action_eligibility_resolver($action->{id});
+        unless ($resolver) {
+            $controller->app->log->error(
+                "Selecto action $action->{id} declares $field without an eligibility resolver",
+            );
+            next;
+        }
+
+        my (%seen, @row_ids);
+        for my $record (@{$result->{records}}) {
+            next unless ref($record) eq 'HASH';
+            my $id = $record->{$target_key};
+            next unless defined($id) && !ref($id) && "$id" ne '' && !$seen{"$id"}++;
+            push @row_ids, "$id";
+        }
+        next unless @row_ids;
+
+        my $eligible;
+        my $ok = eval {
+            $eligible = $resolver->($controller, {
+                phase => 'display', action => $action, row_ids => \@row_ids,
+            });
+            die "eligibility resolver returned an invalid result\n"
+                unless ref($eligible) eq 'HASH';
+            1;
+        };
+        unless ($ok) {
+            $controller->app->log->error(
+                "Selecto action $action->{id} eligibility failed: $@",
+            );
+            next;
+        }
+        for my $record (@{$result->{records}}) {
+            next unless ref($record) eq 'HASH';
+            my $id = $record->{$target_key};
+            $record->{$field} = defined($id) && !ref($id) && $eligible->{"$id"} ? 1 : 0;
+        }
+    }
 }
 
 sub _save_query ($controller, $explorer) {
@@ -508,20 +564,53 @@ sub _run_action_lookup ($controller, $explorer) {
     return _lookup_response($controller, 200, {results => []})
         if length($query) < ($input->{minimum_query_length} // 2);
 
-    my $resolver = $config->lookup_source($input->{lookup_source});
+    my $lookup_request = {
+        query => $query,
+        limit => $input->{result_limit} // 20,
+        action => $resolved->{action},
+        input => $input,
+        selected_ids => \@selected_ids,
+    };
     my $raw;
     my $lookup_ok = eval {
-        $raw = $resolver->($controller, {
-            query => $query,
-            limit => $input->{result_limit} // 20,
-            action => $resolved->{action},
-            input => $input,
-            selected_ids => \@selected_ids,
-        });
+        my $co_domain_id = $input->{co_domain};
+        my $lookup_source = $input->{lookup_source};
+        die "lookup input must declare exactly one lookup source\n"
+            if (defined($co_domain_id) ? 1 : 0) + (defined($lookup_source) ? 1 : 0) != 1;
+        if (defined $co_domain_id) {
+            my $definition = Selecto::CoDomain->definition($domain, $co_domain_id);
+            my $co_engine = $config->co_domain_engine(
+                $definition->{domain}, $controller, $lookup_request,
+            ) or die "co-domain engine $definition->{domain} is not configured\n";
+            my %lookup_args = (
+                source_domain => $domain,
+                co_domain => $co_domain_id,
+                engine => $co_engine,
+                query => $query,
+                limit => $lookup_request->{limit},
+            );
+            if (my $scope_resolver = $config->co_domain_scope($co_domain_id)) {
+                my $scope = $scope_resolver->($controller, $lookup_request, $co_engine);
+                if (ref($scope) eq 'HASH') {
+                    $lookup_args{predicate} = $scope->{predicate}
+                        if exists $scope->{predicate};
+                    $lookup_args{parameters} = $scope->{parameters}
+                        if exists $scope->{parameters};
+                } elsif (defined $scope) {
+                    $lookup_args{predicate} = $scope;
+                }
+            }
+            $raw = Selecto::CoDomain->lookup(%lookup_args);
+        } else {
+            my $resolver = $config->lookup_source($lookup_source)
+                or die "lookup source $lookup_source is not configured\n";
+            $raw = $resolver->($controller, $lookup_request);
+        }
         1;
     };
     unless ($lookup_ok) {
-        $controller->app->log->error("Selecto action lookup $input->{lookup_source} failed: $@");
+        my $lookup_id = $input->{co_domain} // $input->{lookup_source} // 'unknown';
+        $controller->app->log->error("Selecto action lookup $lookup_id failed: $@");
         return _lookup_response($controller, 500, {
             error => 'The lookup could not be completed.', results => [],
         });
@@ -529,7 +618,7 @@ sub _run_action_lookup ($controller, $explorer) {
     $raw = $raw->{results} if ref($raw) eq 'HASH';
     unless (ref($raw) eq 'ARRAY') {
         $controller->app->log->error(
-            "Selecto action lookup $input->{lookup_source} returned an invalid result",
+            'Selecto action lookup returned an invalid result',
         );
         return _lookup_response($controller, 500, {
             error => 'The lookup returned an invalid result.', results => [],
