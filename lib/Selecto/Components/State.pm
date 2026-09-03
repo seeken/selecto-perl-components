@@ -9,11 +9,11 @@ use Selecto::Components::Util qw(trim);
 use Selecto::Error ();
 use Selecto::QueryLibrary ();
 
-has [qw(view chart_type row_click_action fields field_configs filters groups group_configs measures measure_configs measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs filters groups group_configs measures measure_configs measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature view chart_type row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_promote_field
+        q query_signature view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_promote_field
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
@@ -31,6 +31,8 @@ sub from_input ($class, $config, $domain, $input) {
     my $query_library = _query_library_state($domain, $input, \@errors);
     my $view = _parse_view($config, $input, $query_library, \@errors);
     my $chart_type = _parse_chart_type($input, \@errors);
+    my ($aggregate_grid, $aggregate_grid_colorize, $aggregate_grid_color_scale) =
+        _parse_aggregate_grid($view, $input);
     my $row_click_action = _parse_row_click_action(
         $config, $domain, $input, $configured,
     );
@@ -54,6 +56,9 @@ sub from_input ($class, $config, $domain, $input) {
     my $state = $class->new(
         view => $view,
         chart_type => $chart_type,
+        aggregate_grid => $aggregate_grid,
+        aggregate_grid_colorize => $aggregate_grid_colorize,
+        aggregate_grid_color_scale => $aggregate_grid_color_scale,
         row_click_action => $row_click_action,
         fields => $valid_fields,
         field_configs => $field_configs,
@@ -97,6 +102,11 @@ sub query_pairs ($self) {
             query_library_param_value => $self->query_library_parameters->{$name};
     }
     push @pairs, chart_type => $self->chart_type if $self->view eq 'graph';
+    if ($self->view eq 'aggregate' && $self->aggregate_grid) {
+        push @pairs, aggregate_grid => 1;
+        push @pairs, aggregate_grid_colorize => 1 if $self->aggregate_grid_colorize;
+        push @pairs, aggregate_grid_color_scale => $self->aggregate_grid_color_scale;
+    }
     push @pairs, row_click_action => $self->row_click_action
         if defined($self->row_click_action) && length($self->row_click_action);
     for my $field (@{$self->fields}) {
@@ -159,6 +169,9 @@ sub as_hash ($self) {
     return {
         view => $self->view,
         chart_type => $self->chart_type,
+        aggregate_grid => $self->aggregate_grid,
+        aggregate_grid_colorize => $self->aggregate_grid_colorize,
+        aggregate_grid_color_scale => $self->aggregate_grid_color_scale,
         row_click_action => $self->row_click_action,
         fields => [@{$self->fields}],
         field_configs => { map { $_ => { %{$self->field_configs->{$_}} } } keys %{$self->field_configs} },
@@ -205,6 +218,15 @@ sub _parse_chart_type ($input, $errors) {
         $chart_type = 'bar';
     }
     return $chart_type;
+}
+
+sub _parse_aggregate_grid ($view, $input) {
+    return (0, 0, 'linear') unless $view eq 'aggregate';
+    my $enabled = _truthy(_first($input, 'aggregate_grid'), 0);
+    my $colorize = _truthy(_first($input, 'aggregate_grid_colorize'), 0);
+    my $scale = lc(_scalar(_first($input, 'aggregate_grid_color_scale')) || 'linear');
+    $scale = 'linear' unless $scale eq 'linear' || $scale eq 'log';
+    return ($enabled, $colorize, $scale);
 }
 
 sub _parse_row_click_action ($config, $domain, $input, $configured) {
@@ -554,8 +576,8 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $errors) {
             value_end => $value_end,
         };
         $filter->{grouped} = 1 if $group_filter;
-        $filter->{promoted} = 1 if !$group_filter && $promoted_filter_field{$field};
-        $filter->{draft} = 1 if !$group_filter && $op !~ /_null\z/
+        $filter->{promoted} = 1 if $promoted_filter_field{$field};
+        $filter->{draft} = 1 if $op !~ /_null\z/
             && (!length($value) || ($op eq 'between' && !length($value_end)));
         push @filters, $filter;
     }

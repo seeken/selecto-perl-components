@@ -2,6 +2,7 @@ use 5.034;
 use strict;
 use warnings;
 use Test::More;
+use Mojo::JSON qw(decode_json);
 use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::Config ();
@@ -243,6 +244,129 @@ is scalar(() = $continued_table =~ /<form class="sc-drilldown-form"/g), 2,
 like $continued_table,
     qr{sc-rollup-continued[^>]*>.*?name="filter_field" value="region".*?\(continued\).*?</form>}s,
     'continued parent links retain their governed group filters';
+
+my $grid_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'aggregate',
+    aggregate_grid => 1,
+    aggregate_grid_colorize => 1,
+    aggregate_grid_color_scale => 'linear',
+    field => 'product_name',
+    group => ['category.category_name', 'units_in_stock'],
+    measure => 'count',
+    filter_field => 'unit_price',
+    filter_op => 'gte',
+    filter_value => '10',
+    order => 'product_name',
+    limit => 25,
+    page => 1,
+});
+my $grid_built = {
+    aggregate_grid => 1,
+    rollup => 1,
+    group_count => 2,
+    columns => [
+        {
+            key => 'category__category_name', field => 'category.category_name',
+            label => 'Category', type => 'string',
+        },
+        {
+            key => 'units_in_stock', field => 'units_in_stock',
+            label => 'Stock', type => 'integer',
+        },
+        {key => 'count', label => 'Products', type => 'integer', measure => 1},
+    ],
+};
+my $grid_records = [
+    {
+        category__category_name => 'East', units_in_stock => 1, count => 2,
+        __selecto_rollup_level => 2,
+    },
+    {
+        category__category_name => 'East', units_in_stock => 2, count => 20,
+        __selecto_rollup_level => 2,
+    },
+    {
+        category__category_name => 'West', units_in_stock => 1, count => 5,
+        __selecto_rollup_level => 2,
+    },
+    {
+        category__category_name => 'East', units_in_stock => undef, count => 22,
+        __selecto_rollup_level => 1,
+    },
+    {
+        category__category_name => undef, units_in_stock => undef, count => 27,
+        __selecto_rollup_level => 0,
+    },
+];
+my $grid_drilldowns = Selecto::Components::Explorer::_drilldowns(
+    $grid_state, $grid_built, $grid_records,
+);
+my $grid_data = Selecto::Components::Explorer::_aggregate_grid_data(
+    $grid_state, $grid_built, $grid_records, $grid_drilldowns,
+);
+is scalar(@{$grid_data->{rows}}), 2,
+    'aggregate grid derives unique row-axis values from detail-level rollups';
+is scalar(@{$grid_data->{columns}}), 2,
+    'aggregate grid derives unique column-axis values from detail-level rollups';
+is $grid_data->{maximum_positive}, 20,
+    'aggregate grid records the maximum positive measure for heat scaling';
+my $grid_result = {
+    %$grid_built,
+    grid_data => $grid_data,
+    records => $grid_records,
+    drilldowns => $grid_drilldowns,
+    total_count => 5,
+    total_pages => 1,
+    elapsed_ms => 3,
+};
+my $grid_model = {
+    bulk_actions => [],
+    config => $config,
+    state => $grid_state,
+    domain => $domain,
+    canonical_url => '/explore/products',
+    result => $grid_result,
+};
+my $grid_html = Selecto::Components::Renderer::Results->_grid(
+    $grid_result, $grid_model,
+);
+like $grid_html, qr/<strong>Aggregate Grid<\/strong><span>Linear heat scale<\/span>/,
+    'aggregate grid identifies its active heat scale';
+like $grid_html, qr/class="sc-table-wrap sc-aggregate-grid-wrap"/,
+    'aggregate grid renders in its sticky scroll viewport';
+like $grid_html, qr/data-sc-grid-heat="10"/,
+    'the smallest positive grid value uses the low heat color';
+like $grid_html, qr/data-sc-grid-heat="64"/,
+    'the maximum grid value uses the high heat color';
+like $grid_html,
+    qr{<th scope="row">.*?filter_field" value="unit_price".*?filter_field" value="category\.category_name".*?>East</button>}s,
+    'row-axis labels drill down with the row group and existing filters';
+like $grid_html,
+    qr{<th scope="col">.*?filter_field" value="unit_price".*?filter_field" value="units_in_stock".*?>1</button>}s,
+    'column-axis labels drill down with the column group and existing filters';
+like $grid_html,
+    qr{class="sc-grid-cell sc-grid-empty-cell"},
+    'missing row-column combinations remain visibly empty and non-clickable';
+is(
+    Selecto::Components::Renderer::Results->_pagination($grid_model),
+    '',
+    'a full aggregate grid does not render misleading page controls',
+);
+
+my $grid_export = decode_json(
+    Selecto::Components::Explorer->new(config => $config)->json($grid_model)
+);
+is_deeply $grid_export->{columns}, ['Category', '1', '2'],
+    'grid JSON export preserves the rendered matrix columns';
+is $grid_export->{row_count}, 2,
+    'grid JSON export writes one row per rendered row-axis value';
+is $grid_export->{rows}[0]{Category}, 'East',
+    'grid JSON export preserves the row-axis label';
+is $grid_export->{rows}[0]{2}, 20,
+    'grid JSON export places measures under their column-axis value';
+ok !defined($grid_export->{rows}[1]{2}),
+    'grid JSON export preserves an empty matrix cell as null';
 
 my $graph_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
