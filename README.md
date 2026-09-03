@@ -254,10 +254,32 @@ plugin 'Selecto::Components' => {
             max_filters => 20,
             max_orders => 10,
             show_sql => 0,
+            websocket_message_cleanup => sub ($controller, $config) {
+                MyApp::Database->release_request_resources($controller);
+            },
         },
     },
+    websocket_inactivity_timeout => 3600,
+    websocket_heartbeat_interval => 30,
 };
 ```
+
+`websocket_message_cleanup` runs after each valid WebSocket message, including
+messages whose query or rendering fails. Hosts that lease database connections
+or other request-scoped resources through the controller should release them
+there; a WebSocket controller otherwise lives far longer than an ordinary HTTP
+controller. Cleanup failure closes the socket with a generic server-error
+message rather than leaving partially released resources attached to it.
+
+`websocket_inactivity_timeout` applies to every explorer registered by the
+plugin and defaults to one hour. It may be set from 30 seconds through 24 hours.
+Choose it together with the reverse proxy's WebSocket idle timeout and client
+reconnection policy.
+
+`websocket_heartbeat_interval` defaults to 30 seconds and sends protocol-level
+ping frames so idle browser sessions remain visible to intervening proxies.
+Browsers answer with pong frames without exposing heartbeat messages to the
+application. Set it to `0` to disable it, or to 15–300 seconds to tune it.
 
 This registers:
 

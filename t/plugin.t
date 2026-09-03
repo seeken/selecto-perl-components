@@ -751,6 +751,8 @@ $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({
     limit => 25,
     page => 1,
 })})->message_ok;
+is_deeply \@TestSelectoComponents::WEBSOCKET_MESSAGE_CLEANUPS, ['products'],
+    'host resource cleanup runs after a WebSocket query completes';
 my $message = decode_json($t->message->[1]);
 ok !exists($message->{'HX-Request-ID'}), 'WebSocket response uses the htmx 4 final message contract';
 is $message->{target}, '#selecto-surface-products', 'WebSocket response targets the explorer surface';
@@ -778,6 +780,9 @@ $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({
     limit => 25,
     page => 1,
 })})->message_ok;
+is_deeply \@TestSelectoComponents::WEBSOCKET_MESSAGE_CLEANUPS,
+    [qw(products products)],
+    'host resource cleanup runs independently for the next WebSocket query';
 my $reordered = decode_json($t->message->[1]);
 like $reordered->{content}, qr{<th scope="col">Unit Price</th><th scope="col">Product Name</th>}s,
     'server-rendered table follows the submitted Set order';
