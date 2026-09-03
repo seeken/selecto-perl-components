@@ -179,8 +179,15 @@ my $grouped_action_only_statement = $postgresql->compile(
     $domain, $grouped_action_only->{query},
 );
 is_deeply $grouped_action_only_statement->columns, [
-    qw(__selecto_action_target __selecto_action_build_shipments_stock),
-], 'a grouped action fetches its declared hidden row detail';
+    qw(
+        __selecto_action_target
+        build_shipments_eligible
+        __selecto_action_build_shipments_stock
+    ),
+], 'a grouped action fetches its SQL eligibility and declared hidden row detail';
+is $grouped_action_only->{action_eligibility_fields}{build_shipments},
+    'build_shipments_eligible',
+    'grouped action eligibility retains its renderer mapping';
 is_deeply $grouped_action_only->{action_row_details}{build_shipments}, [{
     id => 'stock', label => 'Stock', key => '__selecto_action_build_shipments_stock',
 }], 'grouped action row details retain their renderer mapping';

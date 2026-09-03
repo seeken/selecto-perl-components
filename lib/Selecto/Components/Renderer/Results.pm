@@ -231,7 +231,8 @@ sub _table ($class, $result, $model) {
             if ($column->{action_id}) {
                 my $target = $record->{$result->{action_key}};
                 my $action = $actions{$column->{action_id}};
-                my $eligibility_field = $action->{selection}{eligibility_field};
+                my $eligibility_field = $result->{action_eligibility_fields}{$column->{action_id}}
+                    // $action->{selection}{eligibility_field};
                 my $eligible = !defined($eligibility_field)
                     || $record->{$eligibility_field} ? 1 : 0;
                 unless ($eligible && defined($target) && "$target" ne '') {

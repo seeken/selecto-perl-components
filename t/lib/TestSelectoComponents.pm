@@ -76,7 +76,10 @@ sub _domain {
         source => {
             source_table => 'products',
             primary_key => 'id',
-            fields => [qw(id product_name category_id unit_price units_in_stock created_on)],
+            fields => [qw(
+                id product_name category_id unit_price units_in_stock created_on
+                build_shipments_eligible
+            )],
             columns => {
                 id => { type => 'integer' },
                 product_name => {
@@ -90,6 +93,14 @@ sub _domain {
                 unit_price => { type => 'decimal' },
                 units_in_stock => { type => 'integer' },
                 created_on => { type => 'date' },
+                build_shipments_eligible => {
+                    type => 'boolean',
+                    internal => 1,
+                    computed => {
+                        kind => 'predicate',
+                        expression => ['gt', 'units_in_stock', 0],
+                    },
+                },
             },
             associations => {
                 category => {
@@ -230,7 +241,7 @@ sub _domain {
                     mode => 'groups',
                     palette => 'lucky_charms',
                     max_groups => 6,
-                    eligibility_field => '__build_shipments_eligible',
+                    eligibility_field => 'build_shipments_eligible',
                     row_details => [{
                         id => 'stock', label => 'Stock', field => 'units_in_stock',
                     }],
@@ -308,13 +319,6 @@ sub config {
                 my ($controller, $request) = @_;
                 push @LOOKUP_REQUESTS, {%$request};
                 return Selecto::Expression->in('id', [501, 777]);
-            },
-        },
-        action_eligibility_resolvers => {
-            build_shipments => sub {
-                my ($controller, $request) = @_;
-                push @ELIGIBILITY_REQUESTS, {%$request};
-                return {101 => 1};
             },
         },
         action_handlers => {
@@ -441,6 +445,8 @@ sub execute_query ($self, $statement) {
         my $row = [map {
                 $_ eq '__selecto_rollup_grouping' ? 0
                 : $_ eq '__selecto_action_target' ? 100 + $row_index
+                : $_ eq 'build_shipments_eligible'
+                    ? ($row_index == 1 ? 1 : 0)
                 : $_ eq '__selecto_action_build_shipments_stock' ? 20 + $row_index
                 : /\A__selecto_link_/ ? 100 + $row_index
                 : $_ eq 'product_name' && $row_index == 1 ? '=2+2'

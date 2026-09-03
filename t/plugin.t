@@ -303,8 +303,13 @@ $t->get_ok($grouped_action_url)
     ->content_like(qr{carrier_id})
     ->content_like(qr{&quot;type&quot;:&quot;lookup&quot;})
     ->content_like(qr{\\/explore\\/products\\/actions\\/build_shipments\\/lookups\\/carrier_id});
-is_deeply $TestSelectoComponents::ELIGIBILITY_REQUESTS[-1]{row_ids}, ['101', '102'],
-    'grouped action eligibility receives every governed result row target';
+ok((grep {
+        defined($_->alias_name)
+            && $_->alias_name eq 'build_shipments_eligible'
+    } @{$TestSelectoComponents::Adapter::LAST_DATA_QUERY->selections}),
+    'grouped action eligibility is selected as part of the governed data query');
+is scalar(@TestSelectoComponents::ELIGIBILITY_REQUESTS), 0,
+    'SQL-backed action eligibility does not invoke a per-row host resolver';
 
 my $grouped_csrf = $t->tx->res->dom
     ->at('form[action="/explore/products/actions/build_shipments"] input[name="csrf_token"]')

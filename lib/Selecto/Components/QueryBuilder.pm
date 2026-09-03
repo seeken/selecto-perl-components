@@ -108,8 +108,39 @@ sub _detail ($class, $config, $domain, $state, $options) {
         (!$_->{format} && !$_->{nested} ? ($_->{field} => $_->{key}) : ())
     } @query_columns;
     my %used_key = map { $_->{key} => 1 } @query_columns;
-    my %action_row_details;
+    my %action_eligibility_fields;
     my $action_specs = $domain->actions;
+    for my $action_id (@action_ids) {
+        my $selection = ref($action_specs) eq 'HASH'
+            && ref($action_specs->{$action_id}) eq 'HASH'
+            ? $action_specs->{$action_id}{selection} : undef;
+        next unless ref($selection) eq 'HASH';
+        my $field = $selection->{eligibility_field};
+        next unless defined($field) && !ref($field) && length("$field");
+        if ("$field" =~ /\A__/) {
+            $action_eligibility_fields{$action_id} = "$field";
+            next;
+        }
+        my $key = $query_key{$field};
+        unless (defined($key)) {
+            my $base_key = _field_alias($field);
+            $key = $base_key;
+            my $suffix = 1;
+            $key = $base_key . '_' . ++$suffix while $used_key{$key};
+            push @query_columns, {
+                key => $key,
+                field => "$field",
+                label => $field_map->{$field}{label},
+                type => $field_map->{$field}{type},
+                format => '',
+                hidden => 1,
+            };
+            $query_key{$field} = $key;
+            $used_key{$key} = 1;
+        }
+        $action_eligibility_fields{$action_id} = $key;
+    }
+    my %action_row_details;
     for my $action_id (@action_ids) {
         my $selection = ref($action_specs) eq 'HASH' && ref($action_specs->{$action_id}) eq 'HASH'
             ? $action_specs->{$action_id}{selection} : undef;
@@ -217,6 +248,7 @@ sub _detail ($class, $config, $domain, $state, $options) {
         query_columns => \@query_columns,
         action_key => $action_key,
         action_ids => \@action_ids,
+        action_eligibility_fields => \%action_eligibility_fields,
         action_row_details => \%action_row_details,
         row_click_action => $row_click_action,
         row_click_fields => \@row_click_fields,
