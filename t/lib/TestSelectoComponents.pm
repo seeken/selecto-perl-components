@@ -15,6 +15,7 @@ our @ACTION_REQUESTS;
 our @LOOKUP_REQUESTS;
 our @ELIGIBILITY_REQUESTS;
 our @SAVED_QUERY_REQUESTS;
+our @WEBSOCKET_MESSAGE_CLEANUPS;
 our @SAVED_QUERIES = (
     {name => 'Zulu inventory', url => '/explore/products?q=1&view=detail&field=product_name&limit=25&page=1'},
     {name => 'alpha inventory', url => '/explore/products?q=1&view=detail&field=product_name&limit=25&page=1'},
@@ -352,6 +353,10 @@ sub config {
             },
         },
         saved_query_store => TestSelectoComponents::SavedQueryStore->new,
+        websocket_message_cleanup => sub {
+            my ($controller, $config) = @_;
+            push @WEBSOCKET_MESSAGE_CLEANUPS, $config->id;
+        },
         show_sql => 1,
     };
 }

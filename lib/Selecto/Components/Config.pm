@@ -31,6 +31,7 @@ has 'saved_query_store';
 has 'localizer';
 has 'theme_resolver';
 has 'page_shell_resolver';
+has 'websocket_message_cleanup';
 
 my @DATE_FORMATS = (
     { id => 'day', label => 'Day' },
@@ -82,6 +83,9 @@ sub new ($class, @args) {
         if defined($self->theme_resolver) && ref($self->theme_resolver) ne 'CODE';
     die "page_shell_resolver must be a coderef\n"
         if defined($self->page_shell_resolver) && ref($self->page_shell_resolver) ne 'CODE';
+    die "websocket_message_cleanup must be a coderef\n"
+        if defined($self->websocket_message_cleanup)
+            && ref($self->websocket_message_cleanup) ne 'CODE';
     die "default_row_click_action must be empty or a lowercase identifier\n"
         if !defined($self->default_row_click_action)
             || ref($self->default_row_click_action)

@@ -4,9 +4,11 @@ use Digest::SHA qw(sha256_hex);
 use Mojo::Base 'Mojolicious::Plugin', -signatures;
 use Encode qw(encode);
 use Mojo::File qw(path);
+use Mojo::IOLoop ();
 use Mojo::JSON qw(decode_json encode_json);
 use Mojo::URL ();
 use Mojo::Util qw(secure_compare);
+use Mojo::WebSocket qw(WS_PING);
 use Selecto::Components::Actions ();
 use Selecto::Components::Config ();
 use Selecto::Components::Explorer ();
@@ -69,6 +71,26 @@ sub register ($self, $app, $plugin_config) {
         unless ref($specs) eq 'HASH' && keys %$specs;
     my $origin_check = $plugin_config->{origin_check} // \&_same_origin;
     die "origin_check must be a coderef\n" unless ref($origin_check) eq 'CODE';
+    my $websocket_inactivity_timeout
+        = $plugin_config->{websocket_inactivity_timeout} // 3600;
+    die "websocket_inactivity_timeout must be an integer between 30 and 86400 seconds\n"
+        unless defined($websocket_inactivity_timeout)
+            && !ref($websocket_inactivity_timeout)
+            && "$websocket_inactivity_timeout" =~ /\A\d+\z/
+            && $websocket_inactivity_timeout >= 30
+            && $websocket_inactivity_timeout <= 86_400;
+    my $websocket_heartbeat_interval
+        = $plugin_config->{websocket_heartbeat_interval} // 30;
+    die "websocket_heartbeat_interval must be 0 or an integer between 15 and 300 seconds\n"
+        unless defined($websocket_heartbeat_interval)
+            && !ref($websocket_heartbeat_interval)
+            && "$websocket_heartbeat_interval" =~ /\A\d+\z/
+            && ($websocket_heartbeat_interval == 0
+                || $websocket_heartbeat_interval >= 15
+                    && $websocket_heartbeat_interval <= 300);
+    die "websocket_heartbeat_interval must be less than websocket_inactivity_timeout\n"
+        if $websocket_heartbeat_interval
+            && $websocket_heartbeat_interval >= $websocket_inactivity_timeout;
 
     my $module_lib = path(__FILE__)->to_abs->dirname->dirname;
     my @public_candidates = (
@@ -90,7 +112,11 @@ sub register ($self, $app, $plugin_config) {
         );
         my $explorer = Selecto::Components::Explorer->new(config => $config);
         $explorers{$id} = $explorer;
-        _routes($app, $explorer, $origin_check);
+        _routes(
+            $app, $explorer, $origin_check,
+            0 + $websocket_inactivity_timeout,
+            0 + $websocket_heartbeat_interval,
+        );
     }
     $app->helper(selecto_components_explorer => sub ($controller, $id) {
         die "unknown Selecto Components explorer $id\n" unless $explorers{$id};
@@ -99,7 +125,10 @@ sub register ($self, $app, $plugin_config) {
     return $self;
 }
 
-sub _routes ($app, $explorer, $origin_check) {
+sub _routes (
+    $app, $explorer, $origin_check,
+    $websocket_inactivity_timeout, $websocket_heartbeat_interval,
+) {
     my $config = $explorer->config;
     my $routes = $app->routes;
     $routes->get($config->path)->to(cb => sub ($controller) {
@@ -147,7 +176,21 @@ sub _routes ($app, $explorer, $origin_check) {
         unless ($origin_check->($controller)) {
             return $controller->finish(1008 => 'WebSocket origin is not allowed');
         }
-        $controller->inactivity_timeout(300);
+        $controller->inactivity_timeout($websocket_inactivity_timeout);
+        if ($websocket_heartbeat_interval) {
+            my $heartbeat_id;
+            $heartbeat_id = Mojo::IOLoop->recurring(
+                $websocket_heartbeat_interval => sub {
+                    my $tx = $controller->tx;
+                    return Mojo::IOLoop->remove($heartbeat_id)
+                        unless $tx && $tx->is_websocket && $tx->established;
+                    $controller->send([1, 0, 0, 0, WS_PING, '']);
+                },
+            );
+            $controller->on(finish => sub {
+                Mojo::IOLoop->remove($heartbeat_id) if defined $heartbeat_id;
+            });
+        }
         $controller->on(message => sub ($socket, $message) {
             return $socket->finish(1009 => 'WebSocket message is too large')
                 if !defined($message) || length($message) > 131_072;
@@ -155,10 +198,28 @@ sub _routes ($app, $explorer, $origin_check) {
             my $ok = eval { $envelope = decode_json($message); 1 };
             return $socket->finish(1003 => 'Expected a JSON message')
                 unless $ok && ref($envelope) eq 'HASH' && ref($envelope->{headers}) eq 'HASH';
-            my %input = %$envelope;
-            delete $input{headers};
-            my $model = _decorate_model($socket, $explorer->model($socket, \%input));
-            my $response = Selecto::Components::Renderer->websocket_message($model);
+            my ($response, $processing_error);
+            my $processed = eval {
+                my %input = %$envelope;
+                delete $input{headers};
+                my $model = _decorate_model($socket, $explorer->model($socket, \%input));
+                $response = Selecto::Components::Renderer->websocket_message($model);
+                1;
+            };
+            $processing_error = $@ unless $processed;
+
+            my $cleanup_error;
+            if (my $cleanup = $config->websocket_message_cleanup) {
+                my $cleaned = eval { $cleanup->($socket, $config); 1 };
+                $cleanup_error = $@ unless $cleaned;
+            }
+
+            if (!$processed || $cleanup_error) {
+                my $error = $processing_error || $cleanup_error || 'unknown WebSocket error';
+                $error =~ s/\s+\z//;
+                $socket->app->log->error("Selecto WebSocket message failed: $error");
+                return $socket->finish(1011 => 'Explorer request could not be completed');
+            }
             return $socket->send({text => encode_json($response)});
         });
     });
