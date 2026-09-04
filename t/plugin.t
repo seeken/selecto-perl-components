@@ -122,7 +122,7 @@ $t->get_ok('/explore/products')
     ->text_is('dialog#selecto-row-dialog-products [data-sc-row-dialog-position]' =>
         'Row 1 of 2 on this page')
     ->text_is('a.sc-object-link[href="/products/view?id=101"]' => '=2+2')
-    ->element_exists('details.sc-debug-panel[data-sc-debug-panel][open]')
+    ->element_exists('details.sc-debug-panel[data-sc-debug-panel]:not([open])')
     ->text_is('.sc-debug-panel > summary strong' => 'Query Debug')
     ->text_is('.sc-debug-stat:nth-child(10) span' => 'Rows returned')
     ->text_is('.sc-debug-stat:nth-child(10) strong' => '2')

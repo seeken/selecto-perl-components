@@ -44,7 +44,7 @@ sub _debug_panel ($class, $result, $model) {
         'Generated count query',
         $debug->{count_query},
     ) if ref($debug->{count_query}) eq 'HASH';
-    return '<details class="sc-debug-panel" data-sc-debug-panel open><summary>' .
+    return '<details class="sc-debug-panel" data-sc-debug-panel><summary>' .
         '<span><small>Sandbox tooling</small><strong>Query Debug</strong></span>' .
         '<span>' . _h(_debug_ms($stats->{total_ms})) . ' total</span></summary>' .
         '<div class="sc-debug-body"><div class="sc-debug-stats">' . $cards . '</div>' .
