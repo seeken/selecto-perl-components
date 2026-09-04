@@ -21,7 +21,9 @@ sub _detail ($class, $config, $domain, $state, $options) {
     my $field_map = $config->query_field_map($domain);
     my $detail_map = $config->detail_column_map($domain);
     my (@columns, %nested_column);
-    for my $field (@{$state->fields}) {
+    my %field_key_count;
+    for my $field_index (0 .. $#{$state->fields}) {
+        my $field = $state->fields->[$field_index];
         my $catalog = $detail_map->{$field};
         if ($catalog->{action_id}) {
             push @columns, {
@@ -54,7 +56,8 @@ sub _detail ($class, $config, $domain, $state, $options) {
                 $nested_column{$name} = $nested;
                 push @columns, $nested;
             }
-            my $column_config = $state->field_configs->{$field} // {};
+            my $column_config = $state->field_config_list->[$field_index]
+                // $state->field_configs->{$field} // {};
             push @{$nested->{nested_fields}}, {
                 field => $resolved->{field},
                 path => $field,
@@ -68,9 +71,12 @@ sub _detail ($class, $config, $domain, $state, $options) {
             };
             next;
         }
-        my $column_config = $state->field_configs->{$field} // {};
+        my $column_config = $state->field_config_list->[$field_index]
+            // $state->field_configs->{$field} // {};
+        my $base_key = _field_alias($field);
+        my $occurrence = ++$field_key_count{$base_key};
         push @columns, {
-            key => _field_alias($field),
+            key => $occurrence == 1 ? $base_key : $base_key . '__' . $occurrence,
             field => $field,
             label => $column_config->{alias} || $field_map->{$field}{label},
             type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
@@ -267,7 +273,8 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         {
             key => _field_alias($field),
             field => $field,
-            label => $column_config->{alias} || $field_map->{$field}{label},
+            label => $column_config->{alias}
+                || ($dimension ? $dimension->{label} : $field_map->{$field}{label}),
             type => $dimension ? $dimension->{display_type}
                 : $column_config->{format} ? 'string' : $field_map->{$field}{type},
             source_type => $field_map->{$field}{type},
@@ -496,11 +503,7 @@ sub _filter_expression ($operand, $op, $value, $value_end) {
     return Selecto::Expression->between($operand, $value, $value_end)
         if $op eq 'between';
     if ($op eq 'date_shortcut') {
-        my ($start, $end) = Selecto::Components::DateShortcut->bounds($value);
-        return Selecto::Expression->all([
-            Selecto::Expression->gte($operand, $start),
-            Selecto::Expression->lt($operand, $end),
-        ]);
+        return Selecto::Components::DateShortcut->expression($operand, $value);
     }
     return Selecto::Expression->can($op)->('Selecto::Expression', $operand)
         if $op eq 'is_null' || $op eq 'not_null';

@@ -4,6 +4,34 @@
   const MAX_RELATION_DEPTH = 4;
   const TEMPORAL_TYPES = new Set(["date", "datetime", "naive_datetime", "utc_datetime", "epoch_datetime"]);
   const NUMERIC_TYPES = new Set(["integer", "decimal", "float", "number"]);
+  const DATE_SHORTCUTS = [
+    ["Days", "today", "Today"],
+    ["Days", "yesterday", "Yesterday"],
+    ["Days", "tomorrow", "Tomorrow"],
+    ["Weeks", "this_week", "This Week"],
+    ["Weeks", "last_week", "Last Week"],
+    ["Weeks", "next_week", "Next Week"],
+    ["Months", "this_month", "This Month"],
+    ["Months", "last_month", "Last Month"],
+    ["Months", "next_month", "Next Month"],
+    ["Months", "mtd", "Month to Date"],
+    ["Months", "mtd_all_years", "Month to Date (All Years)"],
+    ["Quarters", "this_quarter", "This Quarter"],
+    ["Quarters", "last_quarter", "Last Quarter"],
+    ["Quarters", "next_quarter", "Next Quarter"],
+    ["Quarters", "qtd", "Quarter to Date"],
+    ["Quarters", "qtd_all_years", "Quarter to Date (All Years)"],
+    ["Years", "this_year", "This Year"],
+    ["Years", "last_year", "Last Year"],
+    ["Years", "next_year", "Next Year"],
+    ["Years", "ytd", "Year to Date"],
+    ["Years", "ytd_all_years", "Year to Date (All Years)"],
+    ["Relative periods", "last_7_days", "Last 7 Days"],
+    ["Relative periods", "last_30_days", "Last 30 Days"],
+    ["Relative periods", "last_90_days", "Last 90 Days"],
+    ["Relative periods", "next_7_days", "Next 7 Days"],
+    ["Relative periods", "next_30_days", "Next 30 Days"],
+  ];
 
   function normalizeAPIBase(value, fallback) {
     const candidate = String(value || fallback || "/api/v1/selecto").replace(/\/+$/, "");
@@ -101,7 +129,10 @@
 
   function operatorsForType(type) {
     const common = ["eq", "ne", "in", "is_null", "not_null"];
-    if (TEMPORAL_TYPES.has(type) || NUMERIC_TYPES.has(type)) {
+    if (TEMPORAL_TYPES.has(type)) {
+      return ["eq", "ne", "gt", "gte", "lt", "lte", "between", "date_shortcut", "in", "is_null", "not_null"];
+    }
+    if (NUMERIC_TYPES.has(type)) {
       return ["eq", "ne", "gt", "gte", "lt", "lte", "between", "in", "is_null", "not_null"];
     }
     if (type === "boolean") return ["eq", "ne", "is_null", "not_null"];
@@ -117,6 +148,7 @@
       lt: "less than / before",
       lte: "at most / on or before",
       between: "between",
+      date_shortcut: "quick select",
       in: "one of",
       is_null: "is empty",
       not_null: "is not empty",
@@ -296,12 +328,15 @@
                 </div>
               </section>
               <section class="sac-card">
-                <div class="sac-card-heading"><div><span class="sac-step">2</span><h2>Constrain</h2></div><button type="button" class="sac-text-button" data-sac-add-filter>+ Filter</button></div>
+                <div class="sac-card-heading"><div><span class="sac-step">2</span><h2>Constrain</h2></div></div>
                 <label class="sac-label" for="sac-segments">Named segments</label>
                 <select id="sac-segments" multiple size="4" data-sac-segments></select>
                 <p class="sac-help">Use Ctrl/⌘ to choose more than one reusable segment.</p>
                 <div class="sac-parameters" data-sac-parameters></div>
                 <div class="sac-filter-list" data-sac-filters></div>
+                <label class="sac-label" for="sac-filter-search">Available filters</label>
+                <input id="sac-filter-search" type="search" placeholder="Search filter fields" data-sac-filter-search>
+                <div class="sac-field-list sac-filter-field-list" data-sac-filter-field-list></div>
               </section>
               <section class="sac-card">
                 <div class="sac-card-heading"><div><span class="sac-step">3</span><h2>Order & page</h2></div><button type="button" class="sac-text-button" data-sac-add-order>+ Sort</button></div>
@@ -394,6 +429,7 @@
       this.renderViewHelp();
       this.renderParameters();
       this.renderFilters();
+      this.renderFilterFieldList();
       this.renderOrders();
       this.syncRequest();
     }
@@ -493,32 +529,77 @@
       this.state.filters.forEach((filter) => {
         const field = this.fieldMap.get(filter.field) || this.fields[0];
         if (!field) return;
-        const row = element("div", "sac-filter-row");
+        const row = element("article", "sac-filter-row");
         row.dataset.filterId = filter.id;
-        const fieldSelect = element("select", "");
-        fieldSelect.dataset.sacFilterField = "";
-        appendOptions(fieldSelect, this.fields.map((item) => ({value: item.path, label: `${item.label} — ${item.path}`})), field.path);
-        const operator = element("select", "");
-        operator.dataset.sacFilterOp = "";
-        appendOptions(operator, operatorsForType(field.type).map((op) => ({value: op, label: optionLabel(op)})), filter.op);
-        row.append(fieldSelect, operator);
-        if (!/^(is_null|not_null)$/.test(filter.op)) {
-          row.append(this.filterValueControl(filter, field, false));
-          if (filter.op === "between") row.append(this.filterValueControl(filter, field, true));
-        }
+        const heading = element("div", "sac-filter-heading");
+        const copy = element("span", "sac-selected-copy");
+        copy.append(element("strong", "", field.label), element("code", "", field.path));
         const remove = element("button", "sac-icon-button", "×");
         remove.type = "button";
         remove.dataset.sacRemoveFilter = filter.id;
-        remove.setAttribute("aria-label", "Remove filter");
-        row.append(remove);
+        remove.setAttribute("aria-label", `Remove ${field.label} filter`);
+        heading.append(copy, element("small", "", field.type), remove);
+        const controls = element("div", "sac-filter-controls");
+        const operator = element("select", "");
+        operator.dataset.sacFilterOp = "";
+        operator.setAttribute("aria-label", `Filter mode for ${field.label}`);
+        appendOptions(operator, operatorsForType(field.type).map((op) => ({value: op, label: optionLabel(op)})), filter.op);
+        controls.append(operator);
+        if (!/^(is_null|not_null)$/.test(filter.op)) {
+          controls.append(this.filterValueControl(filter, field, false));
+          if (filter.op === "between") controls.append(this.filterValueControl(filter, field, true));
+        }
+        row.append(heading, controls);
         container.append(row);
       });
-      if (!this.state.filters.length) container.append(element("p", "sac-muted", "No ad hoc filters."));
+      if (!this.state.filters.length) container.append(element("p", "sac-muted", "Choose a field below to add a filter."));
+    }
+
+    dateShortcuts() {
+      const schema = this.openapi && this.openapi.components && this.openapi.components.schemas
+        && this.openapi.components.schemas.SelectoFilter;
+      const advertised = schema && schema["x-selecto-date-shortcuts"];
+      if (!Array.isArray(advertised)) return DATE_SHORTCUTS;
+      const choices = advertised.filter((choice) => choice && typeof choice.id === "string")
+        .map((choice) => [choice.group || "Periods", choice.id, choice.label || humanize(choice.id)]);
+      return choices.length ? choices : DATE_SHORTCUTS;
+    }
+
+    renderFilterFieldList() {
+      const search = this.root.querySelector("[data-sac-filter-search]");
+      const query = (search.value || "").trim().toLowerCase();
+      const selected = new Set(this.state.filters.map((filter) => filter.field));
+      const container = this.root.querySelector("[data-sac-filter-field-list]");
+      container.replaceChildren();
+      const matches = this.fields.filter((field) => !selected.has(field.path)
+        && (!query || `${field.path} ${field.label} ${field.type}`.toLowerCase().includes(query)));
+      matches.slice(0, 150).forEach((field) => {
+        const button = element("button", "sac-available-field");
+        button.type = "button";
+        button.dataset.sacAddFilter = field.path;
+        const copy = element("span", "");
+        copy.append(element("strong", "", field.label), element("code", "", field.path));
+        button.append(copy, element("small", "", field.type), element("b", "", "+"));
+        container.append(button);
+      });
+      if (!matches.length) container.append(element("p", "sac-muted", "No matching available filters."));
     }
 
     filterValueControl(filter, field, end) {
       let input;
-      if (field.type === "boolean" && filter.op !== "in") {
+      if (filter.op === "date_shortcut") {
+        input = element("select", "");
+        const groups = new Map();
+        this.dateShortcuts().forEach(([group, value, label]) => {
+          if (!groups.has(group)) {
+            const optionGroup = document.createElement("optgroup");
+            optionGroup.label = group;
+            groups.set(group, optionGroup);
+            input.append(optionGroup);
+          }
+          groups.get(group).append(new Option(label, value, false, value === filter.value));
+        });
+      } else if (field.type === "boolean" && filter.op !== "in") {
         input = element("select", "");
         appendOptions(input, [{value: "true", label: "True"}, {value: "false", label: "False"}], end ? filter.end : filter.value);
       } else {
@@ -533,7 +614,7 @@
         input.placeholder = filter.op === "in" ? "comma-separated values" : (end ? "End" : "Value");
       }
       input.dataset[end ? "sacFilterEnd" : "sacFilterValue"] = "";
-      input.setAttribute("aria-label", end ? "Filter end value" : "Filter value");
+      input.setAttribute("aria-label", filter.op === "date_shortcut" ? `Quick period for ${field.label}` : (end ? "Filter end value" : "Filter value"));
       return input;
     }
 
@@ -564,10 +645,14 @@
       else if (!this.state.orders.length) container.append(element("p", "sac-muted", "No explicit ordering."));
     }
 
-    filterPayload(filter) {
+    filterPayloads(filter) {
       const field = this.fieldMap.get(filter.field);
       const payload = {field: filter.field, op: filter.op};
-      if (/^(is_null|not_null)$/.test(filter.op)) return payload;
+      if (filter.op === "date_shortcut") {
+        payload.value = filter.value;
+        return [payload];
+      }
+      if (/^(is_null|not_null)$/.test(filter.op)) return [payload];
       if (filter.op === "in") {
         payload.value = String(filter.value).split(",").map((value) => value.trim()).filter(Boolean);
       } else if (field && field.type === "boolean") {
@@ -576,7 +661,7 @@
         payload.value = filter.value;
       }
       if (filter.op === "between") payload.end = filter.end;
-      return payload;
+      return [payload];
     }
 
     buildPayload() {
@@ -592,7 +677,7 @@
         if (value !== undefined && value !== "") parameters[name] = value;
       });
       if (Object.keys(parameters).length) payload.parameters = parameters;
-      if (this.state.filters.length) payload.filters = this.state.filters.map((filter) => this.filterPayload(filter));
+      if (this.state.filters.length) payload.filters = this.state.filters.flatMap((filter) => this.filterPayloads(filter));
       if (this.state.ordering) payload.ordering = this.state.ordering;
       else if (this.state.orders.length) payload.order_by = this.state.orders.map((order) => ({field: order.field, direction: order.direction}));
       payload.limit = Number.parseInt(this.state.limit, 10) || 0;
@@ -630,9 +715,10 @@
       }
       const fieldAction = event.target.closest("[data-sac-field-action]");
       if (fieldAction) return this.moveField(fieldAction.closest("[data-field]").dataset.field, fieldAction.dataset.sacFieldAction);
-      if (event.target.closest("[data-sac-add-filter]")) {
-        if (!this.fields.length) return;
-        const initialField = this.fields[0];
+      const addFilter = event.target.closest("[data-sac-add-filter]");
+      if (addFilter) {
+        const initialField = this.fieldMap.get(addFilter.dataset.sacAddFilter);
+        if (!initialField || this.state.filters.some((filter) => filter.field === initialField.path)) return;
         this.state.filters.push({
           id: String(this.nextFilterId++),
           field: initialField.path,
@@ -677,14 +763,14 @@
       else if (target.matches("[data-sac-view]")) this.state.view = target.value;
       else if (target.matches("[data-sac-segments]")) this.state.segments = Array.from(target.selectedOptions).map((option) => option.value);
       else if (target.matches("[data-sac-ordering]")) this.state.ordering = target.value;
-      else if (target.matches("[data-sac-filter-field]")) {
+      else if (target.matches("[data-sac-filter-op]")) {
         const filter = this.filterFor(target);
-        filter.field = target.value;
-        filter.op = "eq";
-        filter.value = (this.fieldMap.get(target.value) || {}).type === "boolean" ? "true" : "";
+        filter.op = target.value;
+        const field = this.fieldMap.get(filter.field);
+        if (filter.op === "date_shortcut") filter.value = "this_week";
+        else if (field && field.type === "boolean") filter.value = "true";
+        else filter.value = "";
         filter.end = "";
-      } else if (target.matches("[data-sac-filter-op]")) {
-        this.filterFor(target).op = target.value;
       } else if (target.matches("[data-sac-order-field]")) this.orderFor(target).field = target.value;
       else if (target.matches("[data-sac-order-direction]")) this.orderFor(target).direction = target.value;
       else return;
@@ -694,6 +780,7 @@
     onInput(event) {
       const target = event.target;
       if (target.matches("[data-sac-field-search]")) return this.renderFieldList();
+      if (target.matches("[data-sac-filter-search]")) return this.renderFilterFieldList();
       if (target.matches("[data-sac-request]")) {
         this.state.rawDirty = true;
         this.root.querySelector("[data-sac-edited]").hidden = false;
@@ -866,8 +953,9 @@
   }
 
   const api = {
-    version: "0.2.0",
+    version: "0.3.2",
     APIConsole,
+    DATE_SHORTCUTS,
     collectFields,
     compareSemanticFields,
     discoverCanonicalAPI,

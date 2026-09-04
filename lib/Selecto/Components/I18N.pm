@@ -122,7 +122,7 @@ sub _star_dimension_labels ($domain) {
         next unless $association->can('join_mode') && $association->join_mode eq 'star_dimension';
         my $label = $association->display_name;
         $label = humanize($name) unless defined($label) && length("$label");
-        $by_key{$association->dimension_key} = "$label";
+        $by_key{$association->dimension_key} = "$label ID";
         $by_display{$name . '.' . $association->display_field} = "$label";
     }
     return (\%by_key, \%by_display);

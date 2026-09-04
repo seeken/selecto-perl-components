@@ -1,4 +1,5 @@
   document.addEventListener("DOMContentLoaded", function () {
+    rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
     renderConnectionStatus();
     restoreBuilderTabs();
     restoreBuilderTrays();
@@ -6,6 +7,78 @@
     restoreCharts();
     restoreGridSelections();
   });
+
+  window.addEventListener("pageshow", function (event) {
+    if (!event.persisted) return;
+    reconnectRestoredWebSocketChannels();
+  });
+
+  window.addEventListener("pagehide", function () {
+    rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
+  });
+
+  window.addEventListener("popstate", function (event) {
+    restoreSelectoHistory(event.state);
+  });
+
+  function rememberSelectoHistory(url, push) {
+    var surface = document.querySelector('[id^="selecto-surface-"]');
+    if (!surface || !window.history) return;
+    var state = window.history.state && typeof window.history.state === "object"
+      ? Object.assign({}, window.history.state) : {};
+    var key = push ? null : state.selectoSnapshot;
+    if (!key) key = "selecto-" + Date.now() + "-" + (++selectoHistoryCounter);
+    selectoHistorySnapshots.delete(key);
+    selectoHistorySnapshots.set(key, surface.outerHTML);
+    while (selectoHistorySnapshots.size > 24) {
+      selectoHistorySnapshots.delete(selectoHistorySnapshots.keys().next().value);
+    }
+    state.selecto = true;
+    state.selectoSnapshot = key;
+    try {
+      if (push) window.history.pushState(state, "", url);
+      else window.history.replaceState(state, "", url);
+    } catch (_error) {}
+  }
+
+  function restoreSelectoHistory(state) {
+    var key = state && state.selectoSnapshot;
+    var snapshot = key && selectoHistorySnapshots.get(key);
+    if (!snapshot) return;
+    var current = document.querySelector('[id^="selecto-surface-"]');
+    if (!current) return;
+    var template = document.createElement("template");
+    template.innerHTML = snapshot.trim();
+    var restored = template.content.firstElementChild;
+    if (!restored) return;
+    destroyChartsWithin(current);
+    current.replaceWith(restored);
+    selectoPerformance = null;
+    selectoSwapStarted = 0;
+    if (window.htmx && typeof window.htmx.process === "function") {
+      window.htmx.process(restored);
+    }
+    renderConnectionStatus();
+    restoreBuilderTabs();
+    restoreBuilderTrays();
+    restoreResultViews();
+    restoreCharts();
+    restoreGridSelections();
+    restoreBulkActions();
+  }
+
+  function reconnectRestoredWebSocketChannels() {
+    connectionStatus = "Connecting";
+    document.querySelectorAll('[id^="selecto-channel-"][hx-ws\\:connect]').forEach(function (channel) {
+      var replacement = channel.cloneNode(false);
+      while (channel.firstChild) replacement.appendChild(channel.firstChild);
+      channel.replaceWith(replacement);
+      if (window.htmx && typeof window.htmx.process === "function") {
+        window.htmx.process(replacement);
+      }
+    });
+    renderConnectionStatus();
+  }
 
   document.addEventListener("htmx:ws:after:connection", function () {
     connectionStatus = "Live";
@@ -27,6 +100,7 @@
         event.preventDefault();
         return;
       }
+      rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
       var workspace = gridForm.closest("[data-sc-workspace]");
       var shell = workspace && workspace.querySelector("[data-sc-builder-shell]");
       if (shell) {
@@ -47,6 +121,7 @@
     if (!form) {
       var websocketForm = event.target.closest("form");
       if (!websocketForm || !websocketForm.hasAttribute("hx-ws:send")) return;
+      rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
       var websocketConnection = document.querySelector("[data-selecto-connection]");
       if (websocketConnection && websocketConnection.classList.contains("is-live")) return;
       event.preventDefault();
@@ -54,6 +129,7 @@
       submitWithoutWebSocket(websocketForm);
       return;
     }
+    rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
     var pageInput = form.querySelector('[name="page"]');
     if (form.classList.contains("is-dirty") && pageInput) pageInput.value = "1";
     var activeLibraryView = form.querySelector(
@@ -94,9 +170,6 @@
     if (incoming && typeof incoming.json === "function") {
       incoming.json().then(function (message) {
         var nextUrl = message && message.selecto && message.selecto.url;
-        if (typeof nextUrl === "string" && nextUrl.charAt(0) === "/") {
-          window.history.replaceState({selecto: true}, "", nextUrl);
-        }
         if (message && message.selecto && message.selecto.performance) {
           selectoPerformance = message.selecto.performance;
           if (typeof message.selecto.query_summary === "string") {
@@ -105,6 +178,10 @@
             });
           }
           renderSelectoPerformance();
+        }
+        if (typeof nextUrl === "string" && nextUrl.charAt(0) === "/") {
+          var currentUrl = window.location.pathname + window.location.search + window.location.hash;
+          rememberSelectoHistory(nextUrl, nextUrl !== currentUrl);
         }
       }).catch(function () {});
     }

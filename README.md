@@ -139,7 +139,7 @@ by forms, WebSockets, exports, actions, and saved queries.
 
 The API Console browser code is owned by the sibling `selecto-api-console`
 repository and packaged as `@selecto/api-console`. This Perl distribution
-ships generated `0.2.0` assets so Mojolicious applications remain
+ships generated `0.3.2` assets so Mojolicious applications remain
 self-contained; it does not fork the JavaScript or CSS source. The console is
 host-neutral. It does not receive a serialized
 field catalog from Perl and does not contain application domain names. A host

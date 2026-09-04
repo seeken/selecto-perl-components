@@ -10,11 +10,11 @@ use Selecto::Components::Util qw(trim);
 use Selecto::Error ();
 use Selecto::QueryLibrary ();
 
-has [qw(view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs filters groups group_configs measures measure_configs measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_clause filter_promote_field grid_cell grid_axis
+        q query_signature view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
@@ -37,7 +37,7 @@ sub from_input ($class, $config, $domain, $input) {
     my $row_click_action = _parse_row_click_action(
         $config, $domain, $input, $configured,
     );
-    my ($valid_fields, $field_configs) = _parse_fields(
+    my ($valid_fields, $field_configs, $field_config_list) = _parse_fields(
         $config, $domain, $input, $detail_map, $field_map, $query_library, $configured, \@errors,
     );
     my ($valid_groups, $group_configs) = _parse_groups(
@@ -63,6 +63,7 @@ sub from_input ($class, $config, $domain, $input) {
         row_click_action => $row_click_action,
         fields => $valid_fields,
         field_configs => $field_configs,
+        field_config_list => $field_config_list,
         filters => $filters,
         groups => $valid_groups,
         group_configs => $group_configs,
@@ -110,14 +111,19 @@ sub query_pairs ($self) {
     }
     push @pairs, row_click_action => $self->row_click_action
         if defined($self->row_click_action) && length($self->row_click_action);
-    for my $field (@{$self->fields}) {
-        my $column = $self->field_configs->{$field} // {};
+    for my $index (0 .. $#{$self->fields}) {
+        my $field = $self->fields->[$index];
+        my $column = $self->field_config_list->[$index]
+            // $self->field_configs->{$field} // {};
         push @pairs,
             field => $field,
             field_alias => $column->{alias} // '',
             field_format => $column->{format} // '';
     }
-    for my $filter (@{$self->filters}) {
+    my %filter_field_count;
+    $filter_field_count{$_->{field}}++ for @{$self->filters};
+    for my $filter_index (0 .. $#{$self->filters}) {
+        my $filter = $self->filters->[$filter_index];
         push @pairs,
             filter_field => $filter->{field},
             filter_op => $filter->{op},
@@ -125,7 +131,11 @@ sub query_pairs ($self) {
             filter_value_end => $filter->{value_end} // '',
             filter_group => $filter->{grouped} ? 1 : 0,
             filter_clause => $filter->{clause} // '';
-        push @pairs, filter_promote_field => $filter->{field} if $filter->{promoted};
+        if ($filter->{promoted}) {
+            push @pairs, $filter_field_count{$filter->{field}} == 1
+                ? (filter_promote_field => $filter->{field})
+                : (filter_promote_index => $filter_index + 1);
+        }
     }
     for my $group (@{$self->groups}) {
         my $column = $self->group_configs->{$group} // {};
@@ -177,6 +187,7 @@ sub as_hash ($self) {
         row_click_action => $self->row_click_action,
         fields => [@{$self->fields}],
         field_configs => { map { $_ => { %{$self->field_configs->{$_}} } } keys %{$self->field_configs} },
+        field_config_list => [map { {%$_} } @{$self->field_config_list // []}],
         filters => [map { { %$_ } } @{$self->filters}],
         groups => [@{$self->groups}],
         group_configs => { map { $_ => { %{$self->group_configs->{$_}} } } keys %{$self->group_configs} },
@@ -252,17 +263,20 @@ sub _parse_fields ($config, $domain, $input, $detail_map, $field_map, $query_lib
         if !$configured && !grep { length(_scalar($_)) } @$field_values;
     my @valid_fields;
     my %field_configs;
-    my %seen_field;
+    my @field_config_list;
+    my %seen_action;
     for my $index (0 .. $#$field_values) {
         my $field = _scalar($field_values->[$index]);
-        next unless length($field) && !$seen_field{$field}++;
+        next unless length($field);
         unless ($detail_map->{$field}) {
             push @$errors, 'A selected detail column is not available.';
             next;
         }
         if ($detail_map->{$field}{action_id}) {
+            next if $seen_action{$field}++;
             push @valid_fields, $field;
             $field_configs{$field} = {alias => '', format => ''};
+            push @field_config_list, $field_configs{$field};
             next;
         }
         my $alias = _trim($field_aliases->[$index]);
@@ -277,14 +291,17 @@ sub _parse_fields ($config, $domain, $input, $detail_map, $field_map, $query_lib
             $format = '';
         }
         push @valid_fields, $field;
-        $field_configs{$field} = { alias => $alias, format => $format };
+        my $field_config = { alias => $alias, format => $format };
+        $field_configs{$field} //= $field_config;
+        push @field_config_list, $field_config;
     }
     push @$errors, 'Choose at least one detail column.' unless @valid_fields;
     unless (@valid_fields) {
         @valid_fields = @{$config->resolved_default_fields($domain)};
         %field_configs = map { $_ => { alias => '', format => '' } } @valid_fields;
+        @field_config_list = map { $field_configs{$_} } @valid_fields;
     }
-    return (\@valid_fields, \%field_configs);
+    return (\@valid_fields, \%field_configs, \@field_config_list);
 }
 
 sub _parse_groups ($config, $domain, $input, $field_map, $view, $configured, $errors) {
@@ -524,6 +541,9 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
     }
     my %promoted_filter_field = map { $_ => 1 } grep { length } map { _scalar($_) }
         @{_values($input, 'filter_promote_field')};
+    my %promoted_filter_index = map { $_ => 1 }
+        grep { /\A[1-9]\d*\z/ } map { _scalar($_) }
+        @{_values($input, 'filter_promote_index')};
     my $filter_count = @$filter_fields;
     $filter_count = @$filter_ops if @$filter_ops > $filter_count;
     $filter_count = @$filter_values if @$filter_values > $filter_count;
@@ -565,8 +585,8 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
             push @$errors, 'A filter field is not available.';
             next;
         }
-        my $filter_identity = (length($clause) ? "clause:$clause" : 'ordinary') . "\0$field";
-        if ($seen_filter_field{$filter_identity}++) {
+        my $filter_identity = "clause:$clause\0$field";
+        if (length($clause) && $seen_filter_field{$filter_identity}++) {
             push @$errors, 'A filter field can be set only once.';
             next;
         }
@@ -615,7 +635,8 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
         };
         $filter->{grouped} = 1 if $group_filter;
         $filter->{clause} = 0 + $clause if length($clause);
-        $filter->{promoted} = 1 if !length($clause) && $promoted_filter_field{$field};
+        $filter->{promoted} = 1 if !length($clause)
+            && ($promoted_filter_index{$index + 1} || $promoted_filter_field{$field});
         $filter->{draft} = 1 if $op !~ /_null\z/
             && (!length($value) || ($op eq 'between' && !length($value_end)));
         push @filters, $filter;

@@ -54,10 +54,12 @@ sub _numeric ($value) {
     return defined($value) && !ref($value) &&
         "$value" =~ /\A-?(?:\d+(?:\.\d*)?|\.\d+)\z/ ? 1 : 0;
 }
-sub _selection_hidden ($kind, $values, $configs) {
+sub _selection_hidden ($kind, $values, $configs, $config_list = undef) {
     return join '', map {
-        my $field = $_;
-        my $config = $configs->{$field} // {};
+        my $index = $_;
+        my $field = $values->[$index];
+        my $config = ref($config_list) eq 'ARRAY' ? ($config_list->[$index] // {})
+            : ($configs->{$field} // {});
         _hidden($kind, $field) .
             _hidden($kind . '_alias', $config->{alias} // '') .
             _hidden($kind . '_format', $config->{format} // '') .
@@ -66,7 +68,7 @@ sub _selection_hidden ($kind, $values, $configs) {
                   _hidden('group_prefix_length', $config->{prefix_length} // 2) .
                   _hidden('group_exclude_articles', $config->{exclude_articles} ? 1 : 0)
                 : '')
-    } @$values;
+    } 0 .. $#$values;
 }
 
 sub _measure_selection_hidden ($state) {

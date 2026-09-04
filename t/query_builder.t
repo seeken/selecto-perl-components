@@ -279,6 +279,10 @@ $star_contract->{joins}{category} = {
 };
 my $star_domain = Selecto::Domain->parse($star_contract, strict => 1);
 my $star_map = $config->field_map($star_domain);
+is $star_map->{category_id}{label}, 'Category ID',
+    'a star dimension clearly labels its raw key as an ID';
+is $star_map->{'category.category_name'}{label}, 'Category',
+    'a star dimension keeps its display value semantic label concise';
 is $star_map->{category_id}{dimension}{display_field}, 'category.category_name',
     'a star join decorates its fact key with the dimension display field';
 is $star_map->{'category.category_name'}{dimension}{key_field}, 'category_id',
@@ -556,6 +560,37 @@ like $formatted_detail_statement->sql,
 is $formatted_detail->{columns}[0]{label}, 'Created month',
     'configured detail label is presentation metadata';
 
+my $repeated_detail_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => ['created_on', 'created_on'],
+    field_alias => ['Created date', 'Created time'],
+    field_format => ['day', 'time'],
+    filter_field => ['created_on', 'created_on'],
+    filter_op => ['gte', 'lt'],
+    filter_value => ['2026-08-01', '2026-09-01'],
+    order => 'created_on',
+    limit => 25,
+    page => 1,
+});
+ok $repeated_detail_state->valid,
+    'repeated detail columns and repeated field predicates form valid state';
+my $repeated_detail = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $repeated_detail_state,
+);
+my $repeated_detail_statement = $postgresql->compile($domain, $repeated_detail->{query});
+like $repeated_detail_statement->sql,
+    qr/TO_CHAR\("s0"\."created_on", 'YYYY-MM-DD'\) AS "created_on".*TO_CHAR\("s0"\."created_on", 'HH24:MI:SS'\) AS "created_on__2"/s,
+    'repeated formatted columns compile with unique result aliases';
+like $repeated_detail_statement->sql,
+    qr/\("s0"\."created_on" >= \$1\) AND \("s0"\."created_on" < \$2\)/,
+    'repeated filters compile as independent AND predicates';
+is_deeply $repeated_detail_statement->params, ['2026-08-01', '2026-09-01'],
+    'repeated filters preserve their independently bound values';
+is_deeply [map { $_->{label} } @{$repeated_detail->{columns}}],
+    ['Created date', 'Created time'],
+    'repeated columns retain independent labels';
+
 my $formatted_aggregate_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'aggregate',
@@ -741,6 +776,27 @@ like $shortcut_statement->sql,
     'date shortcut compiles to a half-open governed range';
 is_deeply $shortcut_statement->params, \@this_year,
     'date shortcut bounds remain bound parameters';
+
+my $recurring_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'created_on',
+    filter_field => 'created_on',
+    filter_op => 'date_shortcut',
+    filter_value => 'mtd_all_years',
+    order => 'created_on',
+});
+my $recurring_statement = $postgresql->compile(
+    $domain,
+    Selecto::Components::QueryBuilder->build($config, $domain, $recurring_state)->{query},
+);
+my $recurring_plan = Selecto::Components::DateShortcut->plan('mtd_all_years');
+like $recurring_statement->sql,
+    qr/TO_CHAR\("s0"\."created_on", 'MM-DD'\) >= \$1\).*TO_CHAR\("s0"\."created_on", 'MM-DD'\) <= \$2/,
+    'all-years date shortcut compiles as a recurring month/day range';
+is_deeply $recurring_statement->params,
+    [$recurring_plan->{start}, $recurring_plan->{end}],
+    'recurring shortcut boundaries remain bound parameters';
 
 my $collection_contract = $domain->contract;
 $collection_contract->{source}{associations}{variants} = {

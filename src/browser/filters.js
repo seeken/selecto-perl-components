@@ -85,11 +85,12 @@
       var shortcut = document.createElement("select");
       shortcut.name = "filter_value";
       shortcut.setAttribute("aria-label", "Period for " + label);
-      var selectedShortcut = dateShortcuts.some(function (entry) {
+      var availableShortcuts = dateShortcutsFor(item);
+      var selectedShortcut = availableShortcuts.some(function (entry) {
         return entry[1] === previousValue;
       }) ? previousValue : "today";
       var groups = {};
-      dateShortcuts.forEach(function (entry) {
+      availableShortcuts.forEach(function (entry) {
         if (!groups[entry[0]]) {
           groups[entry[0]] = document.createElement("optgroup");
           groups[entry[0]].label = entry[0];
@@ -289,6 +290,7 @@
     if (!field || !kind) return;
     var builder = promotedFilterBuilder(control);
     var clauseId = control.dataset.filterClause;
+    var filterInstance = control.dataset.filterInstance;
     var filterItem;
     if (clauseId) {
       var clause = builder && Array.from(builder.querySelectorAll("[data-sc-filter-clause]")).find(function (item) {
@@ -299,7 +301,8 @@
       });
     } else {
       filterItem = builder && Array.from(builder.querySelectorAll("[data-sc-filter-set-item]")).find(function (item) {
-        return item.dataset.field === field;
+        return item.dataset.field === field &&
+          (!filterInstance || item.dataset.filterInstance === filterInstance);
       });
     }
     if (!filterItem) return;
@@ -332,6 +335,9 @@
         input.removeAttribute("name");
         input.dataset.scPromotedFilterInput = name === "filter_value_end" ? "value_end" : "value";
         input.dataset.filterField = control.dataset.filterField;
+        if (control.dataset.filterInstance) {
+          input.dataset.filterInstance = control.dataset.filterInstance;
+        }
         if (control.dataset.filterClause) input.dataset.filterClause = control.dataset.filterClause;
       }
     });
@@ -438,7 +444,7 @@
       var empty = set.querySelector(".sc-picker-empty");
       if (empty) empty.remove();
       set.appendChild(createColumnSetItem(control, root));
-      control.remove();
+      if (!control.hasAttribute("data-sc-picker-repeatable")) control.remove();
       refreshColumnPicker(root);
       markBuilderDirty(root);
       return;
@@ -452,7 +458,7 @@
       var available = root.querySelector("[data-sc-picker-available]");
       var availableEmpty = available && available.querySelector(".sc-picker-empty");
       if (availableEmpty) availableEmpty.remove();
-      if (available) {
+      if (available && !item.hasAttribute("data-sc-picker-repeatable")) {
         available.appendChild(createAvailableChoice(
           "column", item.dataset.field, item.dataset.label, item.dataset.type, {
             defaultFunction: item.dataset.defaultFunction,
@@ -491,7 +497,6 @@
       var empty = set.querySelector(".sc-picker-empty");
       if (empty) empty.remove();
       set.appendChild(createFilterSetItem(control));
-      control.remove();
       refreshFilterPicker(root);
       markBuilderDirty(root);
       return;
@@ -500,14 +505,6 @@
     if (control.dataset.scFilterAction === "remove") {
       var item = control.closest("[data-sc-filter-set-item]");
       if (!item) return;
-      var available = root.querySelector("[data-sc-filter-available]");
-      var availableEmpty = available && available.querySelector(".sc-picker-empty");
-      if (availableEmpty) availableEmpty.remove();
-      if (available) {
-        available.appendChild(createAvailableChoice(
-          "filter", item.dataset.field, item.dataset.label, item.dataset.type
-        ));
-      }
       item.remove();
       refreshFilterPicker(root);
       markBuilderDirty(root);
@@ -518,6 +515,7 @@
     var item = event.target.closest("[data-sc-picker-set-item]");
     if (!item) return;
     item.classList.add("is-dragging");
+    activeDraggedItem = item;
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", item.dataset.field);
   });
@@ -535,8 +533,7 @@
     var root = target.closest("[data-sc-picker-root]");
     var set = root && root.querySelector("[data-sc-picker-set]");
     if (!root || !set) return;
-    var field = event.dataTransfer.getData("text/plain");
-    var dragged = setItems(root).find(function (item) { return item.dataset.field === field; });
+    var dragged = activeDraggedItem;
     if (!dragged || dragged === target) return;
     var bounds = target.getBoundingClientRect();
     if (event.clientY > bounds.top + bounds.height / 2) {
@@ -552,4 +549,5 @@
   document.addEventListener("dragend", function (event) {
     var item = event.target.closest("[data-sc-picker-set-item]");
     if (item) item.classList.remove("is-dragging");
+    activeDraggedItem = null;
   });

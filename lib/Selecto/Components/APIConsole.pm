@@ -8,7 +8,7 @@ use Mojo::Base -base, -signatures;
 use Mojo::File qw(path);
 use Selecto::Components::Util qw(html_escape);
 
-my $ASSET_REVISION = '0.2.0';
+my $ASSET_REVISION = '0.3.2';
 
 sub install_assets ($class, $app) {
     die "install_assets requires a Mojolicious application\n"

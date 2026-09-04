@@ -37,6 +37,7 @@ has 'websocket_message_cleanup';
 
 my @DATE_FORMATS = (
     { id => 'day', label => 'Day' },
+    { id => 'time', label => 'Time' },
     { id => 'day_hour', label => 'Day + Hour' },
     { id => 'week', label => 'Week' },
     { id => 'month', label => 'Month' },
@@ -395,7 +396,7 @@ sub field_catalog ($self, $domain, $options = undef) {
         my $html_format = _field_html_format($path, $source->{columns}{$path});
         my $label = _field_label($path, $source->{columns}{$path});
         my $dimension = $dimensions_by_key->{$path};
-        $label = $dimension ? $dimension->{label} : $label;
+        $label = $dimension ? $dimension->{key_label} : $label;
         $label = $self->localize(
             $domain, "fields.$path.label", $label,
             {kind => 'field', path => $path, attribute => 'label'},
@@ -487,6 +488,7 @@ sub _star_dimensions ($domain) {
             display_field => $display_field,
             display_type => $display_type,
             label => $label,
+            key_label => $label . ' ID',
         };
         die "more than one star dimension uses key $key_field\n" if $by_key{$key_field};
         $by_key{$key_field} = $dimension;

@@ -8,6 +8,8 @@
   var chartInstances = new WeakMap();
   var selectoPerformance = null;
   var selectoSwapStarted = 0;
+  var selectoHistorySnapshots = new Map();
+  var selectoHistoryCounter = 0;
   var dateFormats = [
     ["day", "Day"], ["day_hour", "Day + Hour"], ["week", "Week"],
     ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"],
@@ -274,7 +276,9 @@
   }
 
   function copyDebugSql(button) {
-    var target = document.getElementById(button.dataset.scDebugCopy || "");
+    var target = document.getElementById(
+      button.dataset.scDebugCopySource || button.dataset.scDebugCopy || ""
+    );
     if (!target) return;
     var text = target.textContent || "";
     var copied = function () {
@@ -635,6 +639,7 @@
 
   // Source: lifecycle.js
   document.addEventListener("DOMContentLoaded", function () {
+    rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
     renderConnectionStatus();
     restoreBuilderTabs();
     restoreBuilderTrays();
@@ -642,6 +647,78 @@
     restoreCharts();
     restoreGridSelections();
   });
+
+  window.addEventListener("pageshow", function (event) {
+    if (!event.persisted) return;
+    reconnectRestoredWebSocketChannels();
+  });
+
+  window.addEventListener("pagehide", function () {
+    rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
+  });
+
+  window.addEventListener("popstate", function (event) {
+    restoreSelectoHistory(event.state);
+  });
+
+  function rememberSelectoHistory(url, push) {
+    var surface = document.querySelector('[id^="selecto-surface-"]');
+    if (!surface || !window.history) return;
+    var state = window.history.state && typeof window.history.state === "object"
+      ? Object.assign({}, window.history.state) : {};
+    var key = push ? null : state.selectoSnapshot;
+    if (!key) key = "selecto-" + Date.now() + "-" + (++selectoHistoryCounter);
+    selectoHistorySnapshots.delete(key);
+    selectoHistorySnapshots.set(key, surface.outerHTML);
+    while (selectoHistorySnapshots.size > 24) {
+      selectoHistorySnapshots.delete(selectoHistorySnapshots.keys().next().value);
+    }
+    state.selecto = true;
+    state.selectoSnapshot = key;
+    try {
+      if (push) window.history.pushState(state, "", url);
+      else window.history.replaceState(state, "", url);
+    } catch (_error) {}
+  }
+
+  function restoreSelectoHistory(state) {
+    var key = state && state.selectoSnapshot;
+    var snapshot = key && selectoHistorySnapshots.get(key);
+    if (!snapshot) return;
+    var current = document.querySelector('[id^="selecto-surface-"]');
+    if (!current) return;
+    var template = document.createElement("template");
+    template.innerHTML = snapshot.trim();
+    var restored = template.content.firstElementChild;
+    if (!restored) return;
+    destroyChartsWithin(current);
+    current.replaceWith(restored);
+    selectoPerformance = null;
+    selectoSwapStarted = 0;
+    if (window.htmx && typeof window.htmx.process === "function") {
+      window.htmx.process(restored);
+    }
+    renderConnectionStatus();
+    restoreBuilderTabs();
+    restoreBuilderTrays();
+    restoreResultViews();
+    restoreCharts();
+    restoreGridSelections();
+    restoreBulkActions();
+  }
+
+  function reconnectRestoredWebSocketChannels() {
+    connectionStatus = "Connecting";
+    document.querySelectorAll('[id^="selecto-channel-"][hx-ws\\:connect]').forEach(function (channel) {
+      var replacement = channel.cloneNode(false);
+      while (channel.firstChild) replacement.appendChild(channel.firstChild);
+      channel.replaceWith(replacement);
+      if (window.htmx && typeof window.htmx.process === "function") {
+        window.htmx.process(replacement);
+      }
+    });
+    renderConnectionStatus();
+  }
 
   document.addEventListener("htmx:ws:after:connection", function () {
     connectionStatus = "Live";
@@ -663,6 +740,7 @@
         event.preventDefault();
         return;
       }
+      rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
       var workspace = gridForm.closest("[data-sc-workspace]");
       var shell = workspace && workspace.querySelector("[data-sc-builder-shell]");
       if (shell) {
@@ -683,6 +761,7 @@
     if (!form) {
       var websocketForm = event.target.closest("form");
       if (!websocketForm || !websocketForm.hasAttribute("hx-ws:send")) return;
+      rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
       var websocketConnection = document.querySelector("[data-selecto-connection]");
       if (websocketConnection && websocketConnection.classList.contains("is-live")) return;
       event.preventDefault();
@@ -690,6 +769,7 @@
       submitWithoutWebSocket(websocketForm);
       return;
     }
+    rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
     var pageInput = form.querySelector('[name="page"]');
     if (form.classList.contains("is-dirty") && pageInput) pageInput.value = "1";
     var activeLibraryView = form.querySelector(
@@ -730,9 +810,6 @@
     if (incoming && typeof incoming.json === "function") {
       incoming.json().then(function (message) {
         var nextUrl = message && message.selecto && message.selecto.url;
-        if (typeof nextUrl === "string" && nextUrl.charAt(0) === "/") {
-          window.history.replaceState({selecto: true}, "", nextUrl);
-        }
         if (message && message.selecto && message.selecto.performance) {
           selectoPerformance = message.selecto.performance;
           if (typeof message.selecto.query_summary === "string") {
@@ -741,6 +818,10 @@
             });
           }
           renderSelectoPerformance();
+        }
+        if (typeof nextUrl === "string" && nextUrl.charAt(0) === "/") {
+          var currentUrl = window.location.pathname + window.location.search + window.location.hash;
+          rememberSelectoHistory(nextUrl, nextUrl !== currentUrl);
         }
       }).catch(function () {});
     }
@@ -896,6 +977,8 @@
     return Array.from(root.querySelectorAll("[data-sc-picker-set-item]"));
   }
 
+  var activeDraggedItem = null;
+
   function appendLabel(parent, label, type, className) {
     var wrapper = document.createElement("span");
     if (className) wrapper.className = className;
@@ -961,6 +1044,9 @@
     item.dataset.type = type;
     item.dataset.defaultFunction = choice.dataset.defaultFunction || "";
     item.dataset.measureField = choice.dataset.measureField || "";
+    if (choice.hasAttribute("data-sc-picker-repeatable")) {
+      item.setAttribute("data-sc-picker-repeatable", "");
+    }
     var input = document.createElement("input");
     input.type = "hidden";
     input.name = kind;
@@ -1224,20 +1310,34 @@
     ["Months", "last_month", "Last Month"],
     ["Months", "next_month", "Next Month"],
     ["Months", "mtd", "Month to Date"],
+    ["Months", "mtd_all_years", "Month to Date (All Years)"],
     ["Quarters", "this_quarter", "This Quarter"],
     ["Quarters", "last_quarter", "Last Quarter"],
     ["Quarters", "next_quarter", "Next Quarter"],
     ["Quarters", "qtd", "Quarter to Date"],
+    ["Quarters", "qtd_all_years", "Quarter to Date (All Years)"],
     ["Years", "this_year", "This Year"],
     ["Years", "last_year", "Last Year"],
     ["Years", "next_year", "Next Year"],
     ["Years", "ytd", "Year to Date"],
+    ["Years", "ytd_all_years", "Year to Date (All Years)"],
     ["Relative periods", "last_7_days", "Last 7 Days"],
     ["Relative periods", "last_30_days", "Last 30 Days"],
     ["Relative periods", "last_90_days", "Last 90 Days"],
     ["Relative periods", "next_7_days", "Next 7 Days"],
     ["Relative periods", "next_30_days", "Next 30 Days"]
   ];
+
+  function dateShortcutsFor(node) {
+    var builder = node && node.closest("[data-sc-date-shortcuts]");
+    if (!builder) return dateShortcuts;
+    try {
+      var configured = JSON.parse(builder.dataset.scDateShortcuts || "[]");
+      return Array.isArray(configured) && configured.length ? configured : dateShortcuts;
+    } catch (_error) {
+      return dateShortcuts;
+    }
+  }
 
   // Source: filters.js
   function temporalFilterType(type) {
@@ -1327,11 +1427,12 @@
       var shortcut = document.createElement("select");
       shortcut.name = "filter_value";
       shortcut.setAttribute("aria-label", "Period for " + label);
-      var selectedShortcut = dateShortcuts.some(function (entry) {
+      var availableShortcuts = dateShortcutsFor(item);
+      var selectedShortcut = availableShortcuts.some(function (entry) {
         return entry[1] === previousValue;
       }) ? previousValue : "today";
       var groups = {};
-      dateShortcuts.forEach(function (entry) {
+      availableShortcuts.forEach(function (entry) {
         if (!groups[entry[0]]) {
           groups[entry[0]] = document.createElement("optgroup");
           groups[entry[0]].label = entry[0];
@@ -1531,6 +1632,7 @@
     if (!field || !kind) return;
     var builder = promotedFilterBuilder(control);
     var clauseId = control.dataset.filterClause;
+    var filterInstance = control.dataset.filterInstance;
     var filterItem;
     if (clauseId) {
       var clause = builder && Array.from(builder.querySelectorAll("[data-sc-filter-clause]")).find(function (item) {
@@ -1541,7 +1643,8 @@
       });
     } else {
       filterItem = builder && Array.from(builder.querySelectorAll("[data-sc-filter-set-item]")).find(function (item) {
-        return item.dataset.field === field;
+        return item.dataset.field === field &&
+          (!filterInstance || item.dataset.filterInstance === filterInstance);
       });
     }
     if (!filterItem) return;
@@ -1574,6 +1677,9 @@
         input.removeAttribute("name");
         input.dataset.scPromotedFilterInput = name === "filter_value_end" ? "value_end" : "value";
         input.dataset.filterField = control.dataset.filterField;
+        if (control.dataset.filterInstance) {
+          input.dataset.filterInstance = control.dataset.filterInstance;
+        }
         if (control.dataset.filterClause) input.dataset.filterClause = control.dataset.filterClause;
       }
     });
@@ -1680,7 +1786,7 @@
       var empty = set.querySelector(".sc-picker-empty");
       if (empty) empty.remove();
       set.appendChild(createColumnSetItem(control, root));
-      control.remove();
+      if (!control.hasAttribute("data-sc-picker-repeatable")) control.remove();
       refreshColumnPicker(root);
       markBuilderDirty(root);
       return;
@@ -1694,7 +1800,7 @@
       var available = root.querySelector("[data-sc-picker-available]");
       var availableEmpty = available && available.querySelector(".sc-picker-empty");
       if (availableEmpty) availableEmpty.remove();
-      if (available) {
+      if (available && !item.hasAttribute("data-sc-picker-repeatable")) {
         available.appendChild(createAvailableChoice(
           "column", item.dataset.field, item.dataset.label, item.dataset.type, {
             defaultFunction: item.dataset.defaultFunction,
@@ -1733,7 +1839,6 @@
       var empty = set.querySelector(".sc-picker-empty");
       if (empty) empty.remove();
       set.appendChild(createFilterSetItem(control));
-      control.remove();
       refreshFilterPicker(root);
       markBuilderDirty(root);
       return;
@@ -1742,14 +1847,6 @@
     if (control.dataset.scFilterAction === "remove") {
       var item = control.closest("[data-sc-filter-set-item]");
       if (!item) return;
-      var available = root.querySelector("[data-sc-filter-available]");
-      var availableEmpty = available && available.querySelector(".sc-picker-empty");
-      if (availableEmpty) availableEmpty.remove();
-      if (available) {
-        available.appendChild(createAvailableChoice(
-          "filter", item.dataset.field, item.dataset.label, item.dataset.type
-        ));
-      }
       item.remove();
       refreshFilterPicker(root);
       markBuilderDirty(root);
@@ -1760,6 +1857,7 @@
     var item = event.target.closest("[data-sc-picker-set-item]");
     if (!item) return;
     item.classList.add("is-dragging");
+    activeDraggedItem = item;
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", item.dataset.field);
   });
@@ -1777,8 +1875,7 @@
     var root = target.closest("[data-sc-picker-root]");
     var set = root && root.querySelector("[data-sc-picker-set]");
     if (!root || !set) return;
-    var field = event.dataTransfer.getData("text/plain");
-    var dragged = setItems(root).find(function (item) { return item.dataset.field === field; });
+    var dragged = activeDraggedItem;
     if (!dragged || dragged === target) return;
     var bounds = target.getBoundingClientRect();
     if (event.clientY > bounds.top + bounds.height / 2) {
@@ -1794,6 +1891,7 @@
   document.addEventListener("dragend", function (event) {
     var item = event.target.closest("[data-sc-picker-set-item]");
     if (item) item.classList.remove("is-dragging");
+    activeDraggedItem = null;
   });
 
   // Source: actions.js

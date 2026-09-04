@@ -41,7 +41,9 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $class->_chart_type_picker($state) .
         $class->_group_picker($state, $catalog, $config) .
         $class->_measure_picker($state, $measure_catalog, $config) .
-        _selection_hidden('field', $state->fields, $state->field_configs) .
+        _selection_hidden(
+            'field', $state->fields, $state->field_configs, $state->field_config_list
+        ) .
         _hidden('row_click_action', $state->row_click_action // '') .
         join('', map {
             _hidden('order', $_->{field}) . _hidden('direction', $_->{direction})
@@ -87,7 +89,9 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         '" data-sc-builder-content>' .
         $builder_tabs . '<form id="selecto-query-' . _h($config->id) . '" action="' .
         _h($config->path) . '" method="' . $method . '" hx-ws:send hx-trigger="submit" data-sc-builder="' .
-        $builder_id . '" data-sc-builder-query>' . _hidden('q', 1) .
+        $builder_id . '" data-sc-builder-query data-sc-date-shortcuts="' .
+        _h(encode_json([map { [$_->{group}, $_->{id}, $_->{label}] } @{$config->date_shortcuts}])) . '">' .
+        _hidden('q', 1) .
         _hidden('query_signature', $state->query_signature) .
         $query_summary . $view_panel . $filter_panel .
         '<div class="sc-builder-apply-note"><span>Changes apply only when you run the query.</span>' .
@@ -289,7 +293,11 @@ sub _promoted_filter_header ($class, $model, $catalog) {
     my $state = $model->{state};
     my $config = $model->{config};
     my %by_path = map { $_->{path} => $_ } @$catalog;
-    my @promoted = grep { $_->{promoted} && !defined($_->{clause}) } @{$state->filters};
+    my @promoted = map {
+        my $filter = $state->filters->[$_];
+        $filter->{promoted} && !defined($filter->{clause})
+            ? ({%$filter, instance => $_ + 1}) : ()
+    } (@{$state->filters} ? (0 .. $#{$state->filters}) : ());
     my %by_clause;
     my @clause_order;
     for my $filter (@{$state->filters}) {
@@ -304,7 +312,8 @@ sub _promoted_filter_header ($class, $model, $catalog) {
         my $field = $by_path{$filter->{field}};
         return '' unless $field;
         '<article class="sc-promoted-filter" data-sc-promoted-filter data-field="' .
-            _h($filter->{field}) . '"><header><strong>' . _h($field->{label}) .
+            _h($filter->{field}) . '" data-filter-instance="' .
+            _h($filter->{instance} // '') . '"><header><strong>' . _h($field->{label}) .
             '</strong></header>' .
             $class->_promoted_filter_mode_control($config, $field, $filter) .
             '<div data-sc-promoted-filter-values>' .
@@ -344,7 +353,7 @@ sub _promoted_filter_mode_control ($class, $config, $field, $filter, $clause = u
             _h($_->[1]) . '</option>'
     } @{_filter_operators_for_filter($config, $field, $filter)};
     return '<label class="sc-promoted-filter-mode">Match<select' .
-        _promoted_filter_input_attributes('op', $field->{path}, $clause) .
+        _promoted_filter_input_attributes('op', $field->{path}, $clause, $filter->{instance}) .
         ' aria-label="Match mode for ' . _h($field->{label}) . '">' .
         $options . '</select></label>';
 }
@@ -360,7 +369,7 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter, $clause =
     if ($filter->{grouped}) {
         return '<label>Value<input type="text" value="' . _h($value) .
             '" placeholder="Enter an aggregate value"' .
-            _promoted_filter_input_attributes('value', $field_name, $clause) .
+            _promoted_filter_input_attributes('value', $field_name, $clause, $filter->{instance}) .
             ' aria-label="Value for ' .
             _h($label) . '"></label>';
     }
@@ -370,7 +379,7 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter, $clause =
                 _h($_->{label}) . '</option>'
         } @{$config->date_shortcuts};
         return '<label>Period<select' .
-            _promoted_filter_input_attributes('value', $field_name, $clause) .
+            _promoted_filter_input_attributes('value', $field_name, $clause, $filter->{instance}) .
             ' aria-label="Period for ' . _h($label) . '">' . $options . '</select></label>';
     }
     if ($operator eq 'between') {
@@ -380,15 +389,15 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter, $clause =
         my $step = $input_type eq 'number' ? ' step="any"' : '';
         return '<div class="sc-promoted-filter-range"><label>Start<input type="' . $input_type . '"' . $step .
             ' value="' . _h($value) . '"' .
-            _promoted_filter_input_attributes('value', $field_name, $clause) .
+            _promoted_filter_input_attributes('value', $field_name, $clause, $filter->{instance}) .
             ' aria-label="Start value for ' . _h($label) . '"></label>' .
             '<label>End<input type="' . $input_type . '"' . $step . ' value="' . _h($value_end) .
-            '"' . _promoted_filter_input_attributes('value_end', $field_name, $clause) .
+            '"' . _promoted_filter_input_attributes('value_end', $field_name, $clause, $filter->{instance}) .
             ' aria-label="End value for ' . _h($label) . '"></label></div>';
     }
     if ($config->boolean_type($type)) {
         return '<label>Value<select' .
-            _promoted_filter_input_attributes('value', $field_name, $clause) .
+            _promoted_filter_input_attributes('value', $field_name, $clause, $filter->{instance}) .
             ' aria-label="Value for ' . _h($label) . '"><option value=""' .
             (!length($value) ? ' selected' : '') . '>Choose true or false</option><option value="true"' .
             (lc($value) eq 'true' || $value eq '1' ? ' selected' : '') . '>True</option><option value="false"' .
@@ -402,14 +411,15 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter, $clause =
         : ($config->temporal_type($type) ? 'Choose a date' : 'Enter a value');
     return '<label>Value<input type="' . $input_type . '"' . $step . ' value="' . _h($value) .
         '" placeholder="' . _h($placeholder) . '"' .
-        _promoted_filter_input_attributes('value', $field_name, $clause) .
+        _promoted_filter_input_attributes('value', $field_name, $clause, $filter->{instance}) .
         ' aria-label="Value for ' . _h($label) . '"></label>';
 }
 
-sub _promoted_filter_input_attributes ($kind, $field, $clause = undef) {
+sub _promoted_filter_input_attributes ($kind, $field, $clause = undef, $instance = undef) {
     return ' data-sc-promoted-filter-input="' . _h($kind) . '" data-filter-field="' .
         _h($field) . '"' . (defined($clause)
-            ? ' data-filter-clause="' . _h($clause) . '"' : '');
+            ? ' data-filter-clause="' . _h($clause) . '"' : '') .
+        (defined($instance) ? ' data-filter-instance="' . _h($instance) . '"' : '');
 }
 
 sub _filter_summary_text ($label, $filter) {
@@ -477,6 +487,7 @@ sub _field_picker ($class, $state, $catalog, $config) {
         legend => 'Columns',
         selected => $state->fields,
         configs => $state->field_configs,
+        config_list => $state->field_config_list,
         maximum => scalar(@$catalog),
         search_label => 'Filter available fields',
         hint => 'Drag or use arrows to reorder columns. Configure labels and date formats per column.',
@@ -541,7 +552,9 @@ sub _selection_picker ($class, $state, $catalog, %options) {
     my $selected_values = $options{selected};
     my $configs = $options{configs};
     my %selected = map { $_ => 1 } @$selected_values;
-    my @available = grep { !$selected{$_->{path}} } @$catalog;
+    my @available = $kind eq 'field'
+        ? grep { ($_->{type} // '') ne 'action' || !$selected{$_->{path}} } @$catalog
+        : grep { !$selected{$_->{path}} } @$catalog;
     my $at_limit = @$selected_values >= $options{maximum};
     my $available_items = join '', map {
         '<button class="sc-picker-choice" type="button" data-sc-picker-action="add"' .
@@ -550,7 +563,9 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         _h($_->{label}) . '" data-type="' . _h($_->{type}) . '" data-search="' .
         _h(lc($_->{label} . ' ' . $_->{type})) . '" data-default-function="' .
         _h($_->{default_function} // '') . '" data-measure-field="' .
-        _h($_->{field} // '') . '"><span><strong>' . _h($_->{label}) .
+        _h($_->{field} // '') . '"' .
+        ($kind eq 'field' && ($_->{type} // '') ne 'action' ? ' data-sc-picker-repeatable' : '') .
+        '><span><strong>' . _h($_->{label}) .
         '</strong><small>' . _h($_->{type}) . '</small></span><span aria-hidden="true">+</span></button>'
     } @available;
     $available_items ||= '<p class="sc-picker-empty">Every available field is set.</p>';
@@ -564,7 +579,8 @@ sub _selection_picker ($class, $state, $catalog, %options) {
             label => 'Unavailable action',
             type => 'action',
         };
-        my $item_config = $configs->{$path} // {};
+        my $item_config = ref($options{config_list}) eq 'ARRAY'
+            ? ($options{config_list}->[$index] // {}) : ($configs->{$path} // {});
         my $up_disabled = $index == 0 ? ' disabled' : '';
         my $down_disabled = $index == $selected_count - 1 ? ' disabled' : '';
         my $remove_disabled = $selected_count == 1 ? ' disabled' : '';
@@ -584,7 +600,9 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         _h($path) . '" data-label="' . _h($field->{label}) . '" data-type="' . _h($field->{type}) .
         '" data-default-function="' . _h($field->{default_function} // '') .
         '" data-measure-field="' . _h($field->{field} // '') .
-        '"><input type="hidden" name="' . _h($kind) . '" value="' . _h($path) . '">' .
+        '"' . ($kind eq 'field' && ($field->{type} // '') ne 'action'
+            ? ' data-sc-picker-repeatable' : '') .
+        '><input type="hidden" name="' . _h($kind) . '" value="' . _h($path) . '">' .
         '<button class="sc-picker-grip" type="button" title="Drag to reorder" aria-label="Drag ' .
         _h($field->{label}) . ' to reorder">⠿</button><span class="sc-picker-set-label"><strong>' .
         _h($field->{label}) . '</strong><small>' . _h($field->{type}) . '</small></span>' .
@@ -700,9 +718,11 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
 sub _filter_picker ($class, $state, $catalog, $config) {
     my $max_filters = $config->max_filters;
     my %by_path = map { $_->{path} => $_ } @$catalog;
-    my @ordinary_filters = grep { !defined($_->{clause}) } @{$state->filters};
-    my %selected = map { $_->{field} => 1 } @ordinary_filters;
-    my @available = grep { !$selected{$_->{path}} } @$catalog;
+    my @ordinary_filters = map {
+        my $filter = $state->filters->[$_];
+        !defined($filter->{clause}) ? ({%$filter, instance => $_ + 1}) : ()
+    } (@{$state->filters} ? (0 .. $#{$state->filters}) : ());
+    my @available = @$catalog;
     my $at_limit = @ordinary_filters >= $max_filters;
     my $available_items = $at_limit ? '' : join '', map {
         '<button class="sc-picker-choice" type="button" data-sc-filter-action="add" ' .
@@ -726,12 +746,13 @@ sub _filter_picker ($class, $state, $catalog, $config) {
         my $filter_controls = '<label>Operator<select name="filter_op" aria-label="Operator for ' .
             _h($field->{label}) . '">' . $ops . '</select></label>' .
             $class->_filter_value_controls($config, $input_field, $filter) .
-            '<label class="sc-filter-promote"><input type="checkbox" name="filter_promote_field" value="' .
-            _h($filter->{field}) . '"' . ($filter->{promoted} ? ' checked' : '') .
+            '<label class="sc-filter-promote"><input type="checkbox" name="filter_promote_index" value="' .
+            _h($filter->{instance}) . '"' . ($filter->{promoted} ? ' checked' : '') .
             '> Promote to View Controller</label>';
         '<article class="sc-filter-set-item' . ($filter->{draft} ? ' is-draft' : '') .
         '" data-sc-filter-set-item' . ($filter->{grouped} ? ' data-sc-grouped-filter' : '') .
-        ' data-field="' . _h($filter->{field}) . '" data-label="' .
+        ' data-field="' . _h($filter->{field}) . '" data-filter-instance="' .
+        _h($filter->{instance}) . '" data-label="' .
         _h($field->{label}) . '" data-type="' .
         _h($filter->{grouped} ? 'string' : $field->{type}) . '">' .
         '<input type="hidden" name="filter_field" value="' . _h($filter->{field}) . '">' .
