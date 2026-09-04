@@ -2,6 +2,8 @@
     return Array.from(root.querySelectorAll("[data-sc-picker-set-item]"));
   }
 
+  var activeDraggedItem = null;
+
   function appendLabel(parent, label, type, className) {
     var wrapper = document.createElement("span");
     if (className) wrapper.className = className;
@@ -67,6 +69,9 @@
     item.dataset.type = type;
     item.dataset.defaultFunction = choice.dataset.defaultFunction || "";
     item.dataset.measureField = choice.dataset.measureField || "";
+    if (choice.hasAttribute("data-sc-picker-repeatable")) {
+      item.setAttribute("data-sc-picker-repeatable", "");
+    }
     var input = document.createElement("input");
     input.type = "hidden";
     input.name = kind;
@@ -330,17 +335,31 @@
     ["Months", "last_month", "Last Month"],
     ["Months", "next_month", "Next Month"],
     ["Months", "mtd", "Month to Date"],
+    ["Months", "mtd_all_years", "Month to Date (All Years)"],
     ["Quarters", "this_quarter", "This Quarter"],
     ["Quarters", "last_quarter", "Last Quarter"],
     ["Quarters", "next_quarter", "Next Quarter"],
     ["Quarters", "qtd", "Quarter to Date"],
+    ["Quarters", "qtd_all_years", "Quarter to Date (All Years)"],
     ["Years", "this_year", "This Year"],
     ["Years", "last_year", "Last Year"],
     ["Years", "next_year", "Next Year"],
     ["Years", "ytd", "Year to Date"],
+    ["Years", "ytd_all_years", "Year to Date (All Years)"],
     ["Relative periods", "last_7_days", "Last 7 Days"],
     ["Relative periods", "last_30_days", "Last 30 Days"],
     ["Relative periods", "last_90_days", "Last 90 Days"],
     ["Relative periods", "next_7_days", "Next 7 Days"],
     ["Relative periods", "next_30_days", "Next 30 Days"]
   ];
+
+  function dateShortcutsFor(node) {
+    var builder = node && node.closest("[data-sc-date-shortcuts]");
+    if (!builder) return dateShortcuts;
+    try {
+      var configured = JSON.parse(builder.dataset.scDateShortcuts || "[]");
+      return Array.isArray(configured) && configured.length ? configured : dateShortcuts;
+    } catch (_error) {
+      return dateShortcuts;
+    }
+  }

@@ -14,9 +14,9 @@ like $page, qr{data-selecto-api-console}, 'page exposes the framework-neutral mo
 like $page, qr{data-api-base="/api2/load/v1"}, 'page normalizes the API base path';
 like $page, qr{<html lang="en" data-sac-color-scheme="light">},
     'console pages use the shared light operational palette by default';
-like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.2\.0},
+like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.3\.2},
     'page loads the versioned shared stylesheet';
-like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.2\.0},
+like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.3\.2},
     'page loads the versioned shared JavaScript';
 
 $page = Selecto::Components::APIConsole->page(

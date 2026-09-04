@@ -118,7 +118,9 @@
   }
 
   function copyDebugSql(button) {
-    var target = document.getElementById(button.dataset.scDebugCopy || "");
+    var target = document.getElementById(
+      button.dataset.scDebugCopySource || button.dataset.scDebugCopy || ""
+    );
     if (!target) return;
     var text = target.textContent || "";
     var copied = function () {

@@ -548,6 +548,23 @@ ok $configured_columns->valid, 'column configuration and multiple sort fields ar
 is_deeply $configured_columns->field_configs->{created_on},
     { alias => 'Created month', format => 'month' },
     'detail column retains its governed format and presentation label';
+
+my $repeated_columns = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => ['created_on', 'created_on'],
+    field_alias => ['Created date', 'Created time'],
+    field_format => ['day', 'time'],
+    order => 'created_on',
+});
+ok $repeated_columns->valid, 'the same detail field can be selected more than once';
+is_deeply $repeated_columns->field_config_list, [
+    {alias => 'Created date', format => 'day'},
+    {alias => 'Created time', format => 'time'},
+], 'each repeated detail field retains independent presentation configuration';
+my @repeated_column_pairs = @{$repeated_columns->query_pairs};
+is scalar(grep { $_ eq 'created_on' } @repeated_column_pairs), 3,
+    'repeated detail fields survive canonical URL serialization alongside ordering';
 is_deeply $configured_columns->group_configs->{created_on},
     {
         alias => 'Month', format => 'month', bucket_ranges => '',
@@ -676,9 +693,24 @@ my $duplicate_filter = Selecto::Components::State->from_input($config, $domain, 
     limit => 25,
     page => 1,
 });
-ok !$duplicate_filter->valid, 'the same field cannot be added as two filters';
-like join(' ', @{$duplicate_filter->errors}), qr/can be set only once/,
-    'duplicate filter has an actionable error';
+ok $duplicate_filter->valid, 'the same field can be used by independent filters';
+is_deeply [map { [$_->{op}, $_->{value}] } @{$duplicate_filter->filters}],
+    [['gte', '10'], ['eq', '20']],
+    'repeated filters retain their independent operators and values';
+
+my $independently_promoted_filter = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    filter_field => ['unit_price', 'unit_price'],
+    filter_op => ['gte', 'lte'],
+    filter_value => ['10', '20'],
+    filter_promote_index => 2,
+    order => 'product_name',
+});
+ok !$independently_promoted_filter->filters->[0]{promoted}
+    && $independently_promoted_filter->filters->[1]{promoted},
+    'promotion targets one repeated filter instance rather than every filter on its field';
 
 my $six_filters = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

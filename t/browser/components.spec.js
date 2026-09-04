@@ -30,6 +30,125 @@ test("the builder tray collapses and expands in place", async ({page}) => {
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
 });
 
+test("columns and filters can add the same field more than once", async ({page}) => {
+  await load(page, `
+    <form data-sc-builder>
+      <div data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
+        <div data-sc-picker-available>
+          <button type="button" data-sc-picker-action="add" data-sc-picker-available-item
+            data-sc-picker-repeatable data-field="created_on" data-label="Created"
+            data-type="datetime" data-search="created datetime">Add Created</button>
+        </div>
+        <span data-sc-picker-available-count></span><span data-sc-picker-set-count></span>
+        <div data-sc-picker-set><p class="sc-picker-empty">Choose fields.</p></div>
+      </div>
+      <div data-sc-filter-root data-sc-filter-max="10">
+        <div data-sc-filter-available>
+          <button type="button" data-sc-filter-action="add" data-sc-filter-available-item
+            data-field="created_on" data-label="Created" data-type="datetime"
+            data-search="created datetime">Add Created filter</button>
+        </div>
+        <span data-sc-filter-available-count></span><span data-sc-filter-set-count></span>
+        <div data-sc-filter-set><p class="sc-picker-empty">Choose filters.</p></div>
+      </div>
+    </form>
+  `);
+
+  const addColumn = page.locator('[data-sc-picker-action="add"]');
+  await addColumn.click();
+  await addColumn.click();
+  await expect(page.locator('[data-sc-picker-set-item][data-field="created_on"]')).toHaveCount(2);
+  await expect(addColumn).toBeVisible();
+
+  const addFilter = page.locator('[data-sc-filter-action="add"]');
+  await addFilter.click();
+  await addFilter.click();
+  await expect(page.locator('[data-sc-filter-set-item][data-field="created_on"]')).toHaveCount(2);
+  await expect(addFilter).toBeVisible();
+});
+
+test("a back-forward cache restore preserves results and reconnects without a query", async ({page}) => {
+  await load(page, `
+    <section id="selecto-channel-orders" hx-ws:connect="/explore/orders/ws">
+      <span data-selecto-connection class="is-live">Live</span>
+      <form><input name="query_library_view" value="late-orders"></form>
+      <div data-saved-results>Previously loaded rows</div>
+    </section>
+  `);
+
+  const restored = await page.evaluate(() => {
+    const originalChannel = document.querySelector("#selecto-channel-orders");
+    const originalResults = document.querySelector("[data-saved-results]");
+    let processCalls = 0;
+    window.htmx = {process() { processCalls += 1; }};
+    const event = new Event("pageshow");
+    Object.defineProperty(event, "persisted", {value: true});
+    window.dispatchEvent(event);
+    return {
+      channelReplaced: originalChannel !== document.querySelector("#selecto-channel-orders"),
+      resultsPreserved: originalResults === document.querySelector("[data-saved-results]"),
+      processCalls,
+      savedView: document.querySelector('[name="query_library_view"]').value,
+      resultsText: document.querySelector("[data-saved-results]").textContent,
+    };
+  });
+
+  expect(restored).toEqual({
+    channelReplaced: true,
+    resultsPreserved: true,
+    processCalls: 1,
+    savedView: "late-orders",
+    resultsText: "Previously loaded rows",
+  });
+  await expect(page.locator("[data-selecto-connection]")).toHaveText("Connecting");
+});
+
+test("Back restores the previous applied query without rerunning it", async ({page}) => {
+  let documentRequests = 0;
+  await page.route("http://selecto.test/**", async route => {
+    documentRequests += 1;
+    await route.fulfill({contentType: "text/html", body: `
+      <section id="selecto-channel-orders" hx-ws:connect="/explore/orders/ws">
+        <span data-selecto-connection class="is-live">Live</span>
+        <section id="selecto-surface-orders">
+          <div data-sc-workspace>
+            <form data-sc-grid-selection data-sc-grid-max="10">
+              <input type="checkbox" checked data-sc-grid-cell data-sc-grid-row="late" data-sc-grid-column="east">
+            </form>
+            <section class="sc-results"><div data-grid-results>Saved grid results</div></section>
+          </div>
+        </section>
+      </section>
+    `});
+  });
+  await page.goto("http://selecto.test/explore/orders?query_library_view=test-grid");
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => {
+    window.htmx = {process() {}};
+    document.dispatchEvent(new Event("DOMContentLoaded"));
+    window.dispatchEvent(new Event("pagehide"));
+    document.querySelector("#selecto-surface-orders").outerHTML = `
+      <section id="selecto-surface-orders">
+        <div data-sc-workspace><section class="sc-results">
+          <div data-detail-results>Selected-cell details</div>
+        </section></div>
+      </section>`;
+    document.dispatchEvent(new CustomEvent("htmx:ws:after:message:incoming", {
+      detail: {message: {json: () => Promise.resolve({
+        selecto: {url: "/explore/orders?view=detail&grid_cell=late-east"}
+      })}}
+    }));
+  });
+
+  await expect.poll(() => page.url()).toContain("view=detail");
+  await expect(page.locator("[data-detail-results]")).toHaveText("Selected-cell details");
+  await page.goBack();
+  await expect(page.locator("[data-grid-results]")).toHaveText("Saved grid results");
+  await expect(page.locator("[data-sc-grid-cell]")).toBeChecked();
+  expect(page.url()).toContain("query_library_view=test-grid");
+  expect(documentRequests).toBe(1);
+});
+
 test("grid cells, axes, hover, and compact submission stay synchronized", async ({page}) => {
   await load(page, `
     <span data-selecto-connection class="is-live"></span>
@@ -110,4 +229,25 @@ test("choosing an autocomplete result writes both label and stable value", async
   await expect(page.locator("[data-sc-lookup-value]")).toHaveValue("42");
   await expect(page.locator("[data-sc-lookup-query]")).toHaveValue("Acme Carrier (42)");
   await expect(page.locator("[data-sc-lookup-results]")).toBeHidden();
+});
+
+test("Copy SQL copies the standalone interpolated statement", async ({page}) => {
+  await load(page, `
+    <button type="button" data-sc-debug-copy="parameterized"
+      data-sc-debug-copy-source="standalone">Copy SQL</button>
+    <pre id="parameterized">SELECT * FROM load WHERE id = $1</pre>
+    <pre id="standalone" hidden>SELECT * FROM load WHERE id = E'42'</pre>
+  `);
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {writeText(text) { window.copiedDebugSql = text; return Promise.resolve(); }},
+    });
+  });
+
+  await page.locator("[data-sc-debug-copy]").click();
+  await expect.poll(() => page.evaluate(() => window.copiedDebugSql)).toBe(
+    "SELECT * FROM load WHERE id = E'42'"
+  );
+  await expect(page.locator("[data-sc-debug-copy]")).toHaveText("Copied");
 });

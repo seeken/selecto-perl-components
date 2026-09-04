@@ -490,7 +490,7 @@ $t->get_ok('/selecto-api-console/index.html')->status_is(200)
 $t->get_ok('/selecto-api-console/manifest.json')->status_is(200)
     ->content_type_like(qr{application/json})
     ->json_is('/format', 'selecto.api-console.assets.v1')
-    ->json_is('/version', '0.2.0');
+    ->json_is('/version', '0.3.2');
 $t->get_ok('/selecto-api-console/compatibility.json')->status_is(200)
     ->content_type_like(qr{application/json})
     ->json_is('/format', 'selecto.api-console.compatibility.v1')
@@ -529,6 +529,7 @@ $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-table-wrap\s*>\s*table\s*\{[^}]*width:\s*max-content/s)
     ->content_like(qr/\.sc-sql-keyword/)
     ->content_like(qr/\.sc-sql-parameter/)
+    ->content_like(qr/\.sc-sql-relation-8/)
     ->content_unlike(qr/\.sc-group-marker-glyph[^}]*font-family/s)
     ->content_like(qr/\.sc-workspace\.is-builder-collapsed/)
     ->content_like(qr/\.sc-builder\.is-collapsed/)
@@ -553,9 +554,54 @@ like $formatted_membership_sql, qr/IN \(\$1, \$2, \$3\)/,
 unlike $formatted_membership_sql, qr/IN \(\$1,\n/,
     'debug SQL does not put every membership parameter on its own line';
 
+my $formatted_subquery_sql = Selecto::Components::Renderer::_format_sql(
+    'SELECT s0.id FROM load AS s0 WHERE EXISTS (SELECT e1.id FROM load_event AS e1 ' .
+    'WHERE e1.load_id = s0.id AND e1.status = $1) ORDER BY s0.id',
+);
+like $formatted_subquery_sql,
+    qr/WHERE EXISTS \(\n  SELECT e1\.id\n  FROM load_event AS e1\n  WHERE e1\.load_id = s0\.id\n    AND e1\.status = \$1\n\)\nORDER BY s0\.id/,
+    'debug SQL indents subqueries and their clauses beneath the parent query';
+my $colored_subquery_sql = Selecto::Components::Renderer::Debug::_highlight_sql(
+    $formatted_subquery_sql,
+);
+like $colored_subquery_sql,
+    qr/sc-sql-relation-1">load<\/span>.*sc-sql-relation-1">s0<\/span>/s,
+    'a table and its alias share one stable debug color';
+like $colored_subquery_sql,
+    qr/sc-sql-relation-2">load_event<\/span>.*sc-sql-relation-2">e1<\/span>/s,
+    'a nested table receives a distinct debug color';
+like $colored_subquery_sql,
+    qr/sc-sql-relation-2">e1\.load_id<\/span>.*sc-sql-relation-1">s0\.id<\/span>/s,
+    'qualified column references retain their table alias color';
+my $repeated_table_sql = Selecto::Components::Renderer::Debug::_highlight_sql(
+    'SELECT c1.id, c2.id FROM client_profile AS c1 ' .
+    'LEFT JOIN client_profile AS c2 ON c1.parent_id = c2.id',
+);
+like $repeated_table_sql,
+    qr/sc-sql-relation-1">client_profile<\/span>.*sc-sql-relation-1">c1<\/span>.*sc-sql-relation-2">client_profile<\/span>.*sc-sql-relation-2">c2<\/span>/s,
+    'repeated joins color each table occurrence with its specific alias';
+
+my $readable_membership_sql = Selecto::Components::Renderer::Debug::_readable_sql(
+    'SELECT "s0"."id", "s0"."order" FROM "load" AS "s0" WHERE "s0"."id" = $1',
+    'postgresql',
+);
+is $readable_membership_sql,
+    'SELECT s0.id, s0."order" FROM load AS s0 WHERE s0.id = $1',
+    'debug SQL removes only unnecessary PostgreSQL identifier quotes';
+my $standalone_sql = Selecto::Components::Renderer::Debug::_interpolate_sql(
+    q{SELECT "s0"."name" FROM "load" AS "s0" WHERE "s0"."name" = $1 AND "s0"."id" = $2 AND "s0"."note" = $3},
+    ["x'; DROP TABLE load; --\\haul\nnext", '12.50', undef],
+    'postgresql',
+);
+is $standalone_sql,
+    q{SELECT "s0"."name" FROM "load" AS "s0" WHERE "s0"."name" = E'x''; DROP TABLE load; --\\\\haul\nnext' AND "s0"."id" = E'12.50' AND "s0"."note" = NULL},
+    'standalone PostgreSQL debug SQL safely quotes and interpolates every parameter';
+
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
     ->status_is(200)
     ->element_exists('.sc-debug-query:nth-of-type(1) code.sc-sql .sc-sql-keyword')
+    ->element_exists('.sc-debug-query:nth-of-type(1) button[data-sc-debug-copy-source]')
+    ->element_exists('.sc-debug-query:nth-of-type(1) pre[hidden][aria-hidden="true"]')
     ->content_like(qr/12\.50/)
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>5</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->element_count_is('.sc-pagination', 2)
@@ -577,7 +623,7 @@ $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_pric
     ->element_exists('[data-sc-promoted-filters]')
     ->element_exists('[data-sc-promoted-filter][data-field="unit_price"] select[data-sc-promoted-filter-input="op"] option[value="gte"][selected]')
     ->element_exists('[data-sc-promoted-filter][data-field="unit_price"] input[data-sc-promoted-filter-input="value"][value="12.50"]')
-    ->element_exists('[data-sc-filter-set-item][data-field="unit_price"] input[name="filter_promote_field"][value="unit_price"][checked]')
+    ->element_exists('[data-sc-filter-set-item][data-field="unit_price"] input[name="filter_promote_index"][value="1"][checked]')
     ->element_exists('button[form="selecto-query-products"][type="submit"]');
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=between&filter_value=12.50&filter_value_end=19.50&filter_promote_field=unit_price')
@@ -597,6 +643,17 @@ is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->orders->[0][1], 'desc',
 is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->orders->[1][1], 'asc',
     'second configured sort direction reaches query intent';
 
+$t->get_ok('/explore/products?q=1&view=detail&field=created_on&field_alias=Created+date&field_format=day&field=created_on&field_alias=Created+time&field_format=time&filter_field=created_on&filter_op=gte&filter_value=2026-08-01&filter_field=created_on&filter_op=lt&filter_value=2026-09-01&order=created_on')
+    ->status_is(200)
+    ->element_count_is('[data-sc-picker-kind="field"] [data-sc-picker-set-item][data-field="created_on"]', 2)
+    ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-set-item]:nth-child(1) input[name="field_alias"][value="Created date"]')
+    ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-set-item]:nth-child(1) select[name="field_format"] option[value="day"][selected]')
+    ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-set-item]:nth-child(2) input[name="field_alias"][value="Created time"]')
+    ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-set-item]:nth-child(2) select[name="field_format"] option[value="time"][selected]')
+    ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available-item][data-field="created_on"][data-sc-picker-repeatable]')
+    ->element_count_is('[data-sc-filter-set-item][data-field="created_on"]', 2)
+    ->element_exists('[data-sc-filter-available-item][data-field="created_on"]');
+
 $t->get_ok('/explore/products?q=1&view=detail&field=created_on&filter_field=created_on&filter_op=eq&filter_value=2026-08-15&filter_value_end=&order=created_on')
     ->status_is(200)
     ->element_exists('[data-field="created_on"] select[name="filter_op"] option[value="eq"][selected]')
@@ -615,6 +672,10 @@ is_deeply TestSelectoComponents::Adapter::_predicate_values(
 $t->get_ok('/explore/products?q=1&view=detail&field=created_on&filter_field=created_on&filter_op=date_shortcut&filter_value=this_year&filter_value_end=&order=created_on')
     ->status_is(200)
     ->element_exists('[data-field="created_on"] select[name="filter_op"] option[value="date_shortcut"][selected]')
+    ->element_exists('form[data-sc-date-shortcuts]')
+    ->content_like(qr/mtd_all_years/)
+    ->content_like(qr/qtd_all_years/)
+    ->content_like(qr/ytd_all_years/)
     ->element_exists('[data-field="created_on"] select[name="filter_value"] option[value="this_year"][selected]')
     ->text_is('[data-field="created_on"] select[name="filter_value"] option[value="this_year"]' => 'This Year');
 my @this_year = Selecto::Components::DateShortcut->bounds('this_year');
@@ -656,7 +717,7 @@ $t->get_ok('/explore/products?q=1&view=detail&field=product_name&group=category.
     ->element_exists('[data-sc-promoted-filter][data-field="category.category_name"] ' .
         'input[data-sc-promoted-filter-input="value"][value="Value 1"]')
     ->element_exists('[data-sc-filter-set-item][data-field="category.category_name"] ' .
-        'input[name="filter_promote_field"][checked]')
+        'input[name="filter_promote_index"][value="1"][checked]')
     ->content_unlike(qr/Aggregate value:/);
 
 $t->get_ok('/explore/products?q=1&view=detail&field=created_on&group=created_on&group_format=month&measure=count&order=created_on&direction=asc&limit=25&page=1&filter_field=created_on&filter_op=eq&filter_value=2026-08&filter_value_end=&filter_group=1&filter_promote_field=created_on')

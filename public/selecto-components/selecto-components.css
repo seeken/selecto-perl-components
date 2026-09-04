@@ -419,6 +419,15 @@ a { color: inherit; }
 .sc-sql-number { color: #ffd28a; }
 .sc-sql-parameter { color: #ffadad; font-weight: 700; }
 .sc-sql-comment { color: #72878b; font-style: italic; }
+.sc-sql-relation { color: var(--sc-sql-relation-color, #d7b8ff); font-weight: 750; }
+.sc-sql-relation-1 { color: #ffb86c; }
+.sc-sql-relation-2 { color: #50fa7b; }
+.sc-sql-relation-3 { color: #ff79c6; }
+.sc-sql-relation-4 { color: #bd93f9; }
+.sc-sql-relation-5 { color: #f1fa8c; }
+.sc-sql-relation-6 { color: #80cbc4; }
+.sc-sql-relation-7 { color: #ff8a80; }
+.sc-sql-relation-8 { color: #82aaff; }
 .sc-debug-parameter-block { border-top: 1px solid var(--sc-debug-border); display: grid; gap: 7px; padding: 10px 12px; }
 .sc-debug-params { display: grid; gap: 5px; list-style: none; margin: 0; padding: 0; }
 .sc-debug-params li { align-items: baseline; display: grid; font-size: .73rem; gap: 8px; grid-template-columns: 34px minmax(0, 1fr); }
