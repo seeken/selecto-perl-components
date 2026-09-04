@@ -306,6 +306,7 @@ a { color: inherit; }
 .sc-table-wrap { border-top: 1px solid var(--sc-border); overflow: visible; position: relative; }
 .sc-table-wrap > table { border-collapse: collapse; min-width: 100%; white-space: nowrap; width: max-content; }
 .sc-table-wrap th, .sc-table-wrap td { border-bottom: 1px solid var(--sc-table-line); padding: 11px 14px; text-align: left; }
+.sc-table-wrap td { font-size: .9rem; }
 .sc-table-wrap .sc-numeric-measure { font-variant-numeric: tabular-nums; text-align: right; }
 .sc-table-wrap th { background: var(--sc-table-fixed-bg); color: var(--sc-muted); font-size: .72rem; letter-spacing: .05em; position: sticky; text-transform: uppercase; top: 0; }
 .sc-table-wrap > table > thead > tr > th { z-index: 4; }
@@ -381,8 +382,14 @@ a { color: inherit; }
 .sc-chart-fallback strong { text-align: right; }
 .sc-chart-hint { color: var(--sc-muted); font-size: .72rem; margin: 12px 0 0; text-align: right; }
 .sc-graph-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sc-pagination { align-items: center; display: flex; justify-content: space-between; padding: 14px 18px; }
-.sc-pagination form { display: flex; gap: 8px; }
+.sc-pagination { align-items: center; display: flex; gap: 14px; justify-content: space-between; padding: 11px 18px; }
+.sc-pagination-top { border-top: 1px solid var(--sc-border); }
+.sc-pagination form { align-items: center; display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+.sc-pagination .sc-page-number, .sc-pagination .sc-page-current { align-items: center; border-radius: 7px; display: inline-flex; font-size: .78rem; font-weight: 800; height: 32px; justify-content: center; min-width: 32px; padding: 0 7px; }
+.sc-pagination .sc-page-number { min-height: 32px; }
+.sc-pagination .sc-page-current { background: var(--sc-accent); color: var(--sc-panel); }
+.sc-pagination .sc-page-direction { font-size: .78rem; min-height: 32px; padding: 5px 10px; }
+.sc-page-gap { color: var(--sc-muted); min-width: 18px; text-align: center; }
 .sc-drilldown-form { margin: 0; }
 .sc-drilldown-value { appearance: none; background: transparent; border: 0; color: var(--sc-accent); cursor: pointer; font: inherit; margin: 0; padding: 0 0 0 calc((var(--sc-rollup-level, 1) - 1) * 16px); text-align: left; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; white-space: nowrap; }
 .sc-drilldown-value:hover, .sc-drilldown-value:focus-visible { text-decoration-color: currentColor; }

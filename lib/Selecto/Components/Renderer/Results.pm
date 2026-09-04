@@ -33,9 +33,11 @@ sub _results ($class, $model) {
         : $result->{graph} ? $class->_graph($result, $model)
         : $result->{grid_data} ? $class->_grid($result, $model)
         : $class->_table($result, $model);
-    my $pagination = $class->_pagination($model);
+    my $top_pagination = $class->_pagination($model, 'top');
+    my $bottom_pagination = $class->_pagination($model, 'bottom');
     my $debug = Selecto::Components::Renderer::Debug->_debug_panel($result, $model);
-    return $meta . $actions . $grid_warning . $body . $pagination . $debug;
+    return $meta . $actions . $grid_warning . $top_pagination . $body .
+        $bottom_pagination . $debug;
 }
 sub _bulk_actions ($class, $model) {
     my $actions = $model->{bulk_actions} // [];
@@ -622,17 +624,27 @@ sub _drilldown_control ($class, $model, $pairs, $label_html, $level, $options = 
         ' type="submit">' . $label_html . '</button></form>';
 }
 
-sub _pagination ($class, $model) {
+sub _pagination ($class, $model, $position = 'bottom') {
     my $state = $model->{state};
     return '' if $model->{result}{grid_data};
+    my $current_page = $state->page;
+    my $total_pages = $model->{result}{total_pages};
     my @buttons;
-    if ($state->page > 1) {
-        push @buttons, '<button class="sc-button sc-secondary" type="submit" name="page" value="' .
-            _h($state->page - 1) . '">Previous</button>';
+    if ($current_page > 1) {
+        push @buttons, _page_button($current_page - 1, 'Previous', 'sc-page-direction');
     }
-    if ($state->page < $model->{result}{total_pages}) {
-        push @buttons, '<button class="sc-button sc-secondary" type="submit" name="page" value="' .
-            _h($state->page + 1) . '">Next</button>';
+    my $previous_page;
+    for my $page (@{_pagination_pages($current_page, $total_pages)}) {
+        push @buttons, '<span class="sc-page-gap" aria-hidden="true">…</span>'
+            if defined($previous_page) && $page > $previous_page + 1;
+        push @buttons, $page == $current_page
+            ? '<span class="sc-page-current" aria-current="page" aria-label="Page ' .
+                _h($page) . ', current page">' . _h($page) . '</span>'
+            : _page_button($page, $page, 'sc-page-number');
+        $previous_page = $page;
+    }
+    if ($current_page < $total_pages) {
+        push @buttons, _page_button($current_page + 1, 'Next', 'sc-page-direction');
     }
     my $hidden = '';
     my $pairs = $state->query_pairs;
@@ -641,13 +653,30 @@ sub _pagination ($class, $model) {
         $hidden .= _hidden($pairs->[$index], $pairs->[$index + 1]);
     }
     my $method = $model->{config}->query_params_enabled($model->{domain}) ? 'get' : 'post';
-    my $controls = @buttons
+    my $controls = $total_pages > 1
         ? '<form action="' . _h($model->{config}->path) . '" method="' . $method . '" hx-ws:send>' .
           _hidden('render_scope', 'results') . _hidden('reuse_count', 1) .
           $hidden . join('', @buttons) . '</form>'
         : '<span></span>';
-    return '<nav class="sc-pagination" aria-label="Results pages"><span>Page ' . _h($state->page) .
-        ' of ' . _h($model->{result}{total_pages}) . '</span>' . $controls . '</nav>';
+    return '<nav class="sc-pagination sc-pagination-' . _h($position) .
+        '" data-sc-pagination-position="' . _h($position) .
+        '" aria-label="Results pages, ' . _h($position) . '"><span>Page ' . _h($current_page) .
+        ' of ' . _h($total_pages) . '</span>' . $controls . '</nav>';
+}
+
+sub _pagination_pages ($current_page, $total_pages) {
+    return [1 .. $total_pages] if $total_pages <= 7;
+    my %pages = (1 => 1, $total_pages => 1);
+    for my $page ($current_page - 2 .. $current_page + 2) {
+        $pages{$page} = 1 if $page > 1 && $page < $total_pages;
+    }
+    return [sort { $a <=> $b } keys %pages];
+}
+
+sub _page_button ($page, $label, $kind) {
+    return '<button class="sc-button sc-secondary ' . _h($kind) .
+        '" type="submit" name="page" value="' . _h($page) .
+        '" aria-label="Page ' . _h($page) . '">' . _h($label) . '</button>';
 }
 
 1;

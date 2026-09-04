@@ -92,7 +92,11 @@ $t->get_ok('/explore/products')
     ->content_like(qr{/selecto-components/selecto-components\.js\?v=\Q@{[asset_revision()]}\E})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
-    ->text_is('.sc-pagination > span' => 'Page 1 of 2')
+    ->element_count_is('.sc-pagination', 2)
+    ->text_is('.sc-pagination-top > span' => 'Page 1 of 2')
+    ->element_exists('.sc-pagination-top [aria-current="page"]')
+    ->element_exists('.sc-pagination-top button[name="page"][value="2"].sc-page-number')
+    ->element_exists('.sc-pagination-top button[name="page"][value="2"].sc-page-direction')
     ->text_is('.sc-table-wrap > table > caption' => 'Query results')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:add_product_note"][data-type="action"]')
     ->text_is('[data-sc-picker-kind="field"] button[data-field="action:add_product_note"] strong' => 'Action: Add Product Note')
@@ -554,7 +558,9 @@ $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_pric
     ->element_exists('.sc-debug-query:nth-of-type(1) code.sc-sql .sc-sql-keyword')
     ->content_like(qr/12\.50/)
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>5</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
-    ->text_is('.sc-pagination > span' => 'Page 1 of 5')
+    ->element_count_is('.sc-pagination', 2)
+    ->text_is('.sc-pagination-top > span' => 'Page 1 of 5')
+    ->element_count_is('.sc-pagination-top .sc-page-number', 4)
     ->element_exists('table tbody tr');
 is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->limit_value, 10, 'GET runs the normalized query';
 is_deeply $TestSelectoComponents::Adapter::LAST_COUNT_STATEMENT->params, ['12.50'],
@@ -1044,5 +1050,11 @@ unlike $private_message->{selecto}{url}, qr/secret-medical-value|[?&]/,
 like $private_message->{content}, qr/value="secret-medical-value"/,
     'private query state remains editable in the server-rendered surface';
 $t->finish_ok;
+
+is_deeply(
+    Selecto::Components::Renderer::Results::_pagination_pages(20, 42),
+    [1, 18, 19, 20, 21, 22, 42],
+    'pagination keeps first, last, and neighboring pages for a large result set',
+);
 
 done_testing;
