@@ -11,8 +11,14 @@ sub _debug_panel ($class, $result, $model) {
     my @cards = (
         ['Total query time', _debug_ms($stats->{total_ms})],
         ['Data execution', _debug_ms($stats->{data_query_ms})],
-        ['Count execution', _debug_ms($stats->{count_query_ms})],
+        ['Count execution', $stats->{count_cache_hit}
+            ? 'cached' : _debug_ms($stats->{count_query_ms})],
         ['Compilation', _debug_ms($stats->{compile_ms})],
+        ['Domain and state', _debug_ms($stats->{setup_ms})],
+        ['Query construction', _debug_ms($stats->{build_ms})],
+        ['Result processing', _debug_ms($stats->{transform_ms})],
+        ['Action and saved-query setup', _debug_ms($stats->{decorate_ms})],
+        ['Server model total', _debug_ms($stats->{model_ms})],
         ['Rows returned', _debug_number($stats->{returned_rows})],
         ['Rows matched', _debug_number($stats->{matched_rows})],
     );
@@ -42,7 +48,9 @@ sub _debug_panel ($class, $result, $model) {
         '<span><small>Sandbox tooling</small><strong>Query Debug</strong></span>' .
         '<span>' . _h(_debug_ms($stats->{total_ms})) . ' total</span></summary>' .
         '<div class="sc-debug-body"><div class="sc-debug-stats">' . $cards . '</div>' .
-        '<p class="sc-debug-metadata">' . _h($metadata) . '</p>' . $queries . '</div></details>';
+        '<p class="sc-debug-metadata">' . _h($metadata) . '</p>' .
+        '<p class="sc-debug-metadata" data-sc-client-performance></p>' .
+        $queries . '</div></details>';
 }
 
 sub _debug_query ($id, $title, $query) {

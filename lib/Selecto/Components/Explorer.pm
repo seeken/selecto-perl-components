@@ -4,6 +4,7 @@ use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(decode_json encode_json);
 use Mojo::URL ();
 use File::Temp qw(tempfile);
+use Digest::SHA qw(sha256_hex);
 use Scalar::Util qw(blessed looks_like_number);
 use Time::HiRes qw(time);
 use Selecto::Components::QueryBuilder ();
@@ -23,6 +24,7 @@ sub input_from_controller ($self, $controller) {
 }
 
 sub model ($self, $controller, $input = undef, $options = undef) {
+    my $model_started = time;
     $options //= {};
     die "explorer model options must be an object\n" unless ref($options) eq 'HASH';
     my $input_supplied = defined $input;
@@ -38,6 +40,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         runtime_error => undef,
     };
     my $ok = eval {
+        my $setup_started = time;
         $engine = $config->engine($controller);
         $all_rows = $options->{all_rows}
             && $config->query_params_enabled($engine->domain) ? 1 : 0;
@@ -52,11 +55,14 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         $model->{domain} = $engine->domain;
         $model->{state} = $state;
         $model->{canonical_url} = $self->canonical_url($state, $engine->domain);
+        my $setup_ms = _elapsed_ms($setup_started);
         return 1 unless $state->valid;
 
+        my $build_started = time;
         my $built = Selecto::Components::QueryBuilder->build(
             $config, $engine->domain, $state, {paginate => !$all_rows}
         );
+        my $build_ms = _elapsed_ms($build_started);
         $grid_all_rows = $built->{aggregate_grid} ? 1 : 0;
         my $started = time;
         my $compile_started = time;
@@ -66,8 +72,10 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         my $raw = $engine->adapter->execute_query($statement);
         my $data_query_ms = _elapsed_ms($data_started);
         _validate_result($raw);
+        my $grid_limit_exceeded = $grid_all_rows
+            && @{$raw->{rows}} > $config->max_grid_result_cells ? 1 : 0;
         my $total_count;
-        my ($count_statement, $count_compile_ms, $count_query_ms);
+        my ($count_statement, $count_compile_ms, $count_query_ms, $count_cache_hit);
         if ($all_rows || $grid_all_rows) {
             $total_count = scalar @{$raw->{rows}};
         } else {
@@ -78,21 +86,33 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             my $count_source = $engine->compile($count_query);
             $count_statement = _count_statement($count_source);
             $count_compile_ms = _elapsed_ms($count_compile_started);
-            my $count_started = time;
-            my $count_raw = $engine->adapter->execute_query($count_statement);
-            $count_query_ms = _elapsed_ms($count_started);
-            _validate_result($count_raw);
-            $total_count = _total_count($count_raw);
+            my $count_key = _count_cache_key($count_statement);
+            $total_count = _wants_cached_count($input)
+                ? _cached_count($controller, $count_key) : undef;
+            if (defined($total_count)) {
+                $count_cache_hit = 1;
+                $count_query_ms = 0;
+            } else {
+                my $count_started = time;
+                my $count_raw = $engine->adapter->execute_query($count_statement);
+                $count_query_ms = _elapsed_ms($count_started);
+                _validate_result($count_raw);
+                $total_count = _total_count($count_raw);
+                _store_count($controller, $count_key, $total_count);
+                $count_cache_hit = 0;
+            }
         }
         my $elapsed_ms = _elapsed_ms($started);
         my $total_pages = $all_rows || $grid_all_rows ? 1
             : int(($total_count + $state->limit - 1) / $state->limit);
         $total_pages = 1 if $total_pages < 1;
+        my $transform_started = time;
         my @records = map {
             my %record;
             @record{@{$raw->{columns}}} = @$_;
             \%record;
         } @{$raw->{rows}};
+        @records = () if $grid_limit_exceeded;
         my $returned_count = scalar(@records);
         _prepare_nested_records($built, \@records);
         _prepare_rollup_records($built, \@records);
@@ -101,15 +121,20 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         my $drilldowns = _drilldowns($state, $built, \@records);
         my $grid_data = _aggregate_grid_data(
             $state, $built, \@records, $drilldowns,
+            $config->max_grid_result_cells,
         );
+        if (ref($grid_data) eq 'HASH' && $grid_data->{limit_exceeded}) {
+            $grid_limit_exceeded = 1;
+            $grid_data = undef;
+        }
+        my $transform_ms = _elapsed_ms($transform_started);
         $model->{result} = {
             %$built,
             columns => $built->{columns},
             records => \@records,
             drilldowns => $drilldowns,
             (defined($grid_data) ? (grid_data => $grid_data) : ()),
-            rows => [map { [@$_] } @{$raw->{rows}}],
-            result_columns => [@{$raw->{columns}}],
+            grid_limit_exceeded => $grid_limit_exceeded,
             count => $returned_count,
             total_count => $total_count,
             total_pages => $total_pages,
@@ -145,7 +170,12 @@ sub model ($self, $controller, $input = undef, $options = undef) {
                         data_query_ms => $data_query_ms,
                         count_compile_ms => $count_compile_ms,
                         count_query_ms => $count_query_ms,
+                        count_cache_hit => $count_cache_hit,
                         total_ms => $elapsed_ms,
+                        setup_ms => $setup_ms,
+                        build_ms => $build_ms,
+                        transform_ms => $transform_ms,
+                        model_ms => _elapsed_ms($model_started),
                     },
                 },
             ) : ()),
@@ -169,6 +199,57 @@ sub model ($self, $controller, $input = undef, $options = undef) {
 
 sub _elapsed_ms ($started) {
     return int((time - $started) * 1000 + 0.5);
+}
+
+sub _count_cache_key ($statement) {
+    return sha256_hex(encode_json([
+        $statement->adapter_name,
+        $statement->sql,
+        @{$statement->params},
+    ]));
+}
+
+sub _wants_cached_count ($input) {
+    return 0 unless ref($input) eq 'HASH';
+    my $value = $input->{reuse_count};
+    $value = $value->[0] if ref($value) eq 'ARRAY';
+    return defined($value) && !ref($value) && "$value" eq '1' ? 1 : 0;
+}
+
+sub _cached_count ($controller, $key) {
+    my $cache = $controller->stash('selecto_count_cache');
+    return undef unless ref($cache) eq 'HASH';
+    my $entry = $cache->{$key};
+    return undef unless ref($entry) eq 'HASH';
+    if (($entry->{expires_at} // 0) <= time) {
+        delete $cache->{$key};
+        return undef;
+    }
+    return $entry->{count};
+}
+
+sub _store_count ($controller, $key, $count) {
+    my $cache = $controller->stash('selecto_count_cache');
+    unless (ref($cache) eq 'HASH') {
+        $cache = {};
+        $controller->stash(selecto_count_cache => $cache);
+    }
+    my $now = time;
+    delete @{$cache}{grep {
+        ref($cache->{$_}) ne 'HASH' || ($cache->{$_}{expires_at} // 0) <= $now
+    } keys %$cache};
+    if (keys(%$cache) >= 32) {
+        my ($oldest) = sort {
+            ($cache->{$a}{created_at} // 0) <=> ($cache->{$b}{created_at} // 0)
+        } keys %$cache;
+        delete $cache->{$oldest} if defined $oldest;
+    }
+    $cache->{$key} = {
+        count => $count,
+        created_at => $now,
+        expires_at => $now + 30,
+    };
+    return $count;
 }
 
 sub _prepare_nested_records ($built, $records) {
@@ -298,7 +379,7 @@ sub _drilldown_for_group_indexes ($state, $groups, $record, $indexes) {
     return $drilldown->query_pairs;
 }
 
-sub _aggregate_grid_data ($state, $built, $records, $drilldowns) {
+sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells = undef) {
     return undef unless $built->{aggregate_grid};
     my @groups = grep { !$_->{measure} } @{$built->{columns} // []};
     my @measures = grep { $_->{measure} } @{$built->{columns} // []};
@@ -353,6 +434,8 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns) {
 
     @rows = @{_sort_grid_entries(\@rows, $groups[0])};
     @columns = @{_sort_grid_entries(\@columns, $groups[1])};
+    return {limit_exceeded => 1}
+        if defined($maximum_cells) && @rows * @columns > $maximum_cells;
     return {
         row_axis => $groups[0],
         column_axis => $groups[1],
@@ -422,6 +505,194 @@ sub canonical_url ($self, $state, $domain = undef) {
     my $url = Mojo::URL->new($self->config->path);
     $url->query($state->query_pairs);
     return $url->to_string;
+}
+
+sub stream_export ($self, $controller, $format) {
+    return undef unless $format eq 'csv' || $format eq 'tsv' || $format eq 'json';
+    my $config = $self->config->for_request($controller);
+    my $engine = $config->engine($controller);
+    return undef unless $config->query_params_enabled($engine->domain);
+    return undef unless $engine->adapter->supports('stream')
+        && $engine->adapter->can('stream_query');
+    my $input = $self->input_from_controller($controller);
+    my $state = Selecto::Components::State->from_input(
+        $config, $engine->domain, $input,
+    );
+    die join('; ', @{$state->errors}) . "\n" unless $state->valid;
+    my $built = Selecto::Components::QueryBuilder->build(
+        $config, $engine->domain, $state, {paginate => 0},
+    );
+    # Grids need the bounded matrix transformation; their fallback export is
+    # deliberately capped by max_grid_result_cells.
+    return undef if $built->{aggregate_grid};
+    my $stream = $engine->stream($built->{query}, fetch_size => 500);
+    my @result_columns = @{$stream->columns};
+    my @columns = grep { !$_->{action_id} } @{$built->{columns}};
+    my @headers = _unique_headers(map { $_->{label} } @columns);
+    my $delimiter = $format eq 'csv' ? ',' : "\t";
+    my $started = 0;
+    my $finished = 0;
+    my $closed = 0;
+    my $first_json_row = 1;
+    my $row_count = 0;
+    my $next_record = sub {
+        my $row = $stream->next;
+        return undef unless $row;
+        my %record;
+        @record{@result_columns} = @$row;
+        my @record = (\%record);
+        _prepare_nested_records($built, \@record);
+        _prepare_rollup_records($built, \@record);
+        $row_count++;
+        return \%record;
+    };
+    my $next_chunk = sub {
+        return undef if $finished;
+        my $chunk = '';
+        unless ($started) {
+            $started = 1;
+            if ($format eq 'json') {
+                $chunk = '{"scope":"all","page":1,"total_pages":1,"columns":' .
+                    encode_json(\@headers) . ',"rows":[';
+            } else {
+                $chunk = join($delimiter, map { _delimited_cell($_) } @headers) . "\r\n";
+            }
+        }
+        my $batch_count = 0;
+        while ($batch_count < 250) {
+            my $record = $next_record->();
+            unless ($record) {
+                $finished = 1;
+                $chunk .= $format eq 'json'
+                    ? '],"row_count":' . $row_count . ',"total_count":' . $row_count . "}\n"
+                    : '';
+                last;
+            }
+            if ($format eq 'json') {
+                my %row = map {
+                    my $index = $_;
+                    $headers[$index] => _json_value($record->{$columns[$index]{key}})
+                } 0 .. $#columns;
+                $chunk .= ',' unless $first_json_row;
+                $chunk .= encode_json(\%row);
+                $first_json_row = 0;
+            } else {
+                $chunk .= join($delimiter, map {
+                    _delimited_cell($record->{$_->{key}})
+                } @columns) . "\r\n";
+            }
+            $batch_count++;
+        }
+        return length($chunk) ? $chunk : undef;
+    };
+    return {
+        config => $config,
+        next_chunk => $next_chunk,
+        close => sub {
+            return if $closed++;
+            $stream->close;
+        },
+    };
+}
+
+sub xlsx_file_export ($self, $controller) {
+    my $config = $self->config->for_request($controller);
+    my $engine = $config->engine($controller);
+    return undef unless $config->query_params_enabled($engine->domain);
+    return undef unless $engine->adapter->supports('stream')
+        && $engine->adapter->can('stream_query');
+    my $input = $self->input_from_controller($controller);
+    my $state = Selecto::Components::State->from_input(
+        $config, $engine->domain, $input,
+    );
+    die join('; ', @{$state->errors}) . "\n" unless $state->valid;
+    my $built = Selecto::Components::QueryBuilder->build(
+        $config, $engine->domain, $state, {paginate => 0},
+    );
+    return undef if $built->{aggregate_grid};
+    my ($output_handle, $output_path) = tempfile(SUFFIX => '.xlsx', UNLINK => 0);
+    close $output_handle or die "could not prepare Excel export file\n";
+    my ($stream, $workbook);
+    my $ok = eval {
+        $stream = $engine->stream($built->{query}, fetch_size => 500);
+        my @result_columns = @{$stream->columns};
+        my @columns = grep { !$_->{action_id} } @{$built->{columns}};
+        require Excel::Writer::XLSX;
+        $workbook = Excel::Writer::XLSX->new($output_path)
+            or die "could not create Excel export\n";
+        $workbook->set_optimization if $workbook->can('set_optimization');
+        my $header_format = $workbook->add_format(
+            bold => 1, bg_color => '#DCE6F1', bottom => 1,
+        );
+        my ($worksheet, $sheet_index, $row_index, @widths);
+        my $start_sheet = sub {
+            $sheet_index++;
+            $worksheet = $workbook->add_worksheet(
+                $sheet_index == 1 ? 'Export' : "Export $sheet_index",
+            );
+            @widths = ();
+            for my $column_index (0 .. $#columns) {
+                my $label = defined($columns[$column_index]{label})
+                    ? "$columns[$column_index]{label}" : '';
+                $worksheet->write_string(0, $column_index, $label, $header_format);
+                $widths[$column_index] = length($label);
+            }
+            $worksheet->freeze_panes(1, 0);
+            $row_index = 1;
+        };
+        my $finish_sheet = sub {
+            return unless $worksheet;
+            $worksheet->autofilter(0, 0, $row_index - 1, $#columns) if @columns;
+            for my $column_index (0 .. $#columns) {
+                my $width = ($widths[$column_index] // 0) + 2;
+                $width = 10 if $width < 10;
+                $width = 60 if $width > 60;
+                $worksheet->set_column($column_index, $column_index, $width);
+            }
+        };
+        $start_sheet->();
+        while (my $row = $stream->next) {
+            if ($row_index >= 1_048_576) {
+                $finish_sheet->();
+                $start_sheet->();
+            }
+            my %record;
+            @record{@result_columns} = @$row;
+            my @record = (\%record);
+            _prepare_nested_records($built, \@record);
+            _prepare_rollup_records($built, \@record);
+            for my $column_index (0 .. $#columns) {
+                my $value = $record{$columns[$column_index]{key}};
+                if (!defined($value)) {
+                    $worksheet->write_blank($row_index, $column_index, undef);
+                    next;
+                }
+                my $text = _flat_value($value);
+                if (!ref($value) && looks_like_number($value) && $text !~ /\A[+-]?0\d/) {
+                    $worksheet->write_number($row_index, $column_index, 0 + $value);
+                } else {
+                    $worksheet->write_string($row_index, $column_index, $text);
+                }
+                $widths[$column_index] = length($text)
+                    if length($text) > ($widths[$column_index] // 0);
+            }
+            $row_index++;
+        }
+        $stream->close;
+        undef $stream;
+        $finish_sheet->();
+        $workbook->close or die "could not finish Excel export\n";
+        undef $workbook;
+        1;
+    };
+    unless ($ok) {
+        my $error = $@ || 'could not create Excel export';
+        eval { $stream->close } if $stream;
+        eval { $workbook->close } if $workbook;
+        unlink $output_path if -f $output_path;
+        die $error;
+    }
+    return {config => $config, path => $output_path};
 }
 
 sub export ($self, $model, $format) {

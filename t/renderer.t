@@ -23,6 +23,43 @@ my $config = Selecto::Components::Config->new(
     id => 'products',
     title => q{<img src=x onerror="alert(1)">},
 );
+my $export_controller = TestSelectoComponents::Controller->new(params => {
+    q => 1,
+    view => 'detail',
+    field => ['product_name', 'unit_price'],
+});
+my $export_explorer = Selecto::Components::Explorer->new(config => $config);
+my $stream_export = $export_explorer->stream_export($export_controller, 'json');
+ok $stream_export, 'a streaming adapter prepares an incremental JSON export';
+my $streamed_json = '';
+while (defined(my $chunk = $stream_export->{next_chunk}->())) {
+    $streamed_json .= $chunk;
+}
+$stream_export->{close}->();
+my $streamed_export = decode_json($streamed_json);
+is $streamed_export->{row_count}, 42,
+    'the streaming export includes every matching row without materializing a page';
+is scalar(@{$streamed_export->{rows}}), 42,
+    'incremental JSON chunks form one valid export document';
+is_deeply $streamed_export->{columns}, ['Product Name', 'Unit Price'],
+    'streaming exports retain semantic column labels';
+
+my $count_cache_controller = TestSelectoComponents::Controller->new;
+my $count_executions = $TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0;
+my $first_count_model = $export_explorer->model($count_cache_controller, {
+    q => 1, view => 'detail', field => ['product_name'], limit => 25, page => 1,
+});
+my $second_count_model = $export_explorer->model($count_cache_controller, {
+    q => 1, view => 'detail', field => ['product_name'], limit => 25, page => 2,
+    reuse_count => 1,
+});
+is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $count_executions + 1,
+    'explicit same-query pagination reuses the exact count on one connection';
+is $second_count_model->{result}{debug}{stats}{count_cache_hit}, 1,
+    'debug statistics distinguish a cached exact count';
+is $first_count_model->{result}{total_count}, $second_count_model->{result}{total_count},
+    'cached pagination preserves the exact matched-row total';
+
 my $domain = TestSelectoComponents::domain();
 my $state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

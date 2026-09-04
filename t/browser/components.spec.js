@@ -32,6 +32,7 @@ test("the builder tray collapses and expands in place", async ({page}) => {
 
 test("grid cells, axes, hover, and compact submission stay synchronized", async ({page}) => {
   await load(page, `
+    <span data-selecto-connection class="is-live"></span>
     <form data-sc-grid-selection data-sc-grid-max="10">
       <table class="sc-aggregate-grid">
         <thead><tr><th></th><th><input type="checkbox" data-sc-grid-column-toggle="c1"></th><th><input type="checkbox" data-sc-grid-column-toggle="c2"></th></tr></thead>

@@ -2,6 +2,8 @@
   var collapsedBuilderTrays = Object.create(null);
   var connectionStatus = "Connecting";
   var chartInstances = new WeakMap();
+  var selectoPerformance = null;
+  var selectoSwapStarted = 0;
   var dateFormats = [
     ["day", "Day"], ["day_hour", "Day + Hour"], ["week", "Week"],
     ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"],

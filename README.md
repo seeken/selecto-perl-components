@@ -103,8 +103,9 @@ Chromium with Playwright.
 - a domain-selected private URL mode with WebSocket/POST body state and no
   query-state history, permalink, or query-string export link;
 - Excel, CSV, TSV, and JSON exports for every row matched by the active query,
-  independent of the current page, with spreadsheet-formula neutralization for
-  delimited formats;
+  independent of the current page, with incremental database/HTTP streaming
+  for flat CSV, TSV, and JSON exports, disk-backed Excel generation, and
+  spreadsheet-formula neutralization for delimited formats;
 - an optional collapsible Query Debug panel with generated data/count SQL,
   bound parameters, execution timings, pagination, adapter, and row statistics;
   and
@@ -300,6 +301,7 @@ plugin 'Selecto::Components' => {
             max_limit => 100,
             max_filters => 20,
             max_grid_cells => 50,
+            max_grid_result_cells => 10_000,
             max_orders => 10,
             show_sql => 0,
             websocket_message_cleanup => sub ($controller, $config) {
@@ -717,6 +719,20 @@ catalog can impose a lower practical maximum.
 `max_grid_cells` defaults to 50 and may be configured from 1 through 100. It
 bounds the compact row, column, and cell alternatives produced by an
 interactive grid selection and accepted by server-side parsing.
+
+`max_grid_result_cells` defaults to 10,000 and may be configured from 100
+through 100,000. The aggregate query reads at most one sentinel row beyond
+that ceiling, and the renderer also checks the dense row-by-column matrix.
+Oversized grids are rejected with guidance to add filters or choose
+lower-cardinality groups instead of exhausting the application worker or
+browser.
+
+Adapters that advertise `stream` support use `stream_query` for flat exports.
+CSV, TSV, and JSON are emitted incrementally with backpressure from the HTTP
+connection. Excel is written to a temporary file with the writer's optimized
+memory mode and split at Excel's worksheet row limit before Mojolicious serves
+the completed file. Aggregate grids retain their bounded materialized export
+because their output depends on the complete two-dimensional matrix.
 
 `max_orders` defaults to 10 and may be configured from 1 through 20. Date/time
 formats are selected from a closed catalog; Aggregate formatting is part of the

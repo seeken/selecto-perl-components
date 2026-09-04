@@ -6,6 +6,8 @@
   var collapsedBuilderTrays = Object.create(null);
   var connectionStatus = "Connecting";
   var chartInstances = new WeakMap();
+  var selectoPerformance = null;
+  var selectoSwapStarted = 0;
   var dateFormats = [
     ["day", "Day"], ["day_hour", "Day + Hour"], ["week", "Week"],
     ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"],
@@ -249,7 +251,15 @@
   }
 
   function restoreCharts() {
-    document.querySelectorAll("[data-sc-chart]").forEach(initializeChart);
+    var roots = Array.from(document.querySelectorAll("[data-sc-chart]"));
+    if (!roots.length) return;
+    if (window.Chart) {
+      roots.forEach(initializeChart);
+      return;
+    }
+    loadChartLibrary(roots[0]).then(function () {
+      roots.filter(function (root) { return root.isConnected; }).forEach(initializeChart);
+    }).catch(function () {});
   }
 
   function destroyChartsWithin(node) {
@@ -286,6 +296,27 @@
     fallback.select();
     try { if (document.execCommand("copy")) copied(); } catch (_error) {}
     fallback.remove();
+  }
+  var chartLoadPromise;
+
+  function loadChartLibrary(root) {
+    if (window.Chart) return Promise.resolve();
+    if (chartLoadPromise) return chartLoadPromise;
+    var surface = root && root.closest("[data-sc-chart-src]");
+    var source = surface && surface.dataset.scChartSrc;
+    if (!source) return Promise.reject(new Error("Chart library URL is unavailable"));
+    chartLoadPromise = new Promise(function (resolve, reject) {
+      var script = document.createElement("script");
+      script.src = source;
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = function () {
+        chartLoadPromise = null;
+        reject(new Error("Chart library could not be loaded"));
+      };
+      document.head.appendChild(script);
+    });
+    return chartLoadPromise;
   }
 
   // Source: row-dialog.js
@@ -400,6 +431,21 @@
     return selector ? cells.filter(selector) : cells;
   }
 
+  function gridIndex(root) {
+    var cells = gridCells(root);
+    var rows = new Map();
+    var columns = new Map();
+    cells.forEach(function (cell) {
+      var row = cell.dataset.scGridRow;
+      var column = cell.dataset.scGridColumn;
+      if (!rows.has(row)) rows.set(row, []);
+      if (!columns.has(column)) columns.set(column, []);
+      rows.get(row).push(cell);
+      columns.get(column).push(cell);
+    });
+    return {cells: cells, rows: rows, columns: columns};
+  }
+
   function clearGridAxisHover(root) {
     if (!root) return;
     root.querySelectorAll(".is-grid-axis-hover").forEach(function (header) {
@@ -439,17 +485,15 @@
     }
   });
 
-  function gridSelectionPlan(root) {
-    var selected = gridCells(root, function (cell) { return cell.checked; });
+  function gridSelectionPlan(root, index) {
+    index = index || gridIndex(root);
+    var selected = index.cells.filter(function (cell) { return cell.checked; });
     var uncovered = new Set(selected);
     var candidates = [];
     root.querySelectorAll("[data-sc-grid-row-toggle], [data-sc-grid-column-toggle]").forEach(function (toggle) {
-      var cells = gridCells(root, function (cell) {
-        if (toggle.matches("[data-sc-grid-row-toggle]")) {
-          return cell.dataset.scGridRow === toggle.dataset.scGridRowToggle;
-        }
-        return cell.dataset.scGridColumn === toggle.dataset.scGridColumnToggle;
-      });
+      var cells = toggle.matches("[data-sc-grid-row-toggle]")
+        ? (index.rows.get(toggle.dataset.scGridRowToggle) || [])
+        : (index.columns.get(toggle.dataset.scGridColumnToggle) || []);
       if (cells.length && cells.every(function (cell) { return cell.checked; })) {
         candidates.push({toggle: toggle, cells: cells});
       }
@@ -498,9 +542,10 @@
 
   function updateGridSelection(root) {
     if (!root) return;
-    var cells = gridCells(root);
+    var index = gridIndex(root);
+    var cells = index.cells;
     var selected = cells.filter(function (cell) { return cell.checked; });
-    var plan = gridSelectionPlan(root);
+    var plan = gridSelectionPlan(root, index);
     var maximum = Number(root.dataset.scGridMax || 50);
     var count = root.querySelector("[data-sc-grid-selection-count]");
     var label = root.querySelector("[data-sc-grid-selection-label]");
@@ -518,14 +563,10 @@
       help.classList.toggle("is-error", !!selectionError);
     }
     root.querySelectorAll("[data-sc-grid-row-toggle]").forEach(function (toggle) {
-      syncGridAxisToggle(toggle, gridCells(root, function (cell) {
-        return cell.dataset.scGridRow === toggle.dataset.scGridRowToggle;
-      }));
+      syncGridAxisToggle(toggle, index.rows.get(toggle.dataset.scGridRowToggle) || []);
     });
     root.querySelectorAll("[data-sc-grid-column-toggle]").forEach(function (toggle) {
-      syncGridAxisToggle(toggle, gridCells(root, function (cell) {
-        return cell.dataset.scGridColumn === toggle.dataset.scGridColumnToggle;
-      }));
+      syncGridAxisToggle(toggle, index.columns.get(toggle.dataset.scGridColumnToggle) || []);
     });
     var all = root.querySelector("[data-sc-grid-toggle-all]");
     if (all) syncGridAxisToggle(all, cells);
@@ -549,13 +590,13 @@
         delete root.dataset.scGridSelectionError;
       }
     } else if (event.target.matches("[data-sc-grid-row-toggle]")) {
-      setGridCells(root, gridCells(root, function (cell) {
-        return cell.dataset.scGridRow === event.target.dataset.scGridRowToggle;
-      }), event.target.checked);
+      setGridCells(root,
+        gridIndex(root).rows.get(event.target.dataset.scGridRowToggle) || [],
+        event.target.checked);
     } else if (event.target.matches("[data-sc-grid-column-toggle]")) {
-      setGridCells(root, gridCells(root, function (cell) {
-        return cell.dataset.scGridColumn === event.target.dataset.scGridColumnToggle;
-      }), event.target.checked);
+      setGridCells(root,
+        gridIndex(root).columns.get(event.target.dataset.scGridColumnToggle) || [],
+        event.target.checked);
     } else if (event.target.matches("[data-sc-grid-toggle-all]")) {
       setGridCells(root, gridCells(root), event.target.checked);
     } else {
@@ -632,28 +673,57 @@
         window.setTimeout(function () { showWorkspaceResultsLoading(workspace); }, 0);
         return;
       }
-      var gridButton = gridForm.querySelector('[data-sc-grid-apply]');
-      if (gridButton) {
-        gridButton.disabled = true;
-        gridButton.textContent = "Opening details…";
-      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      showWorkspaceResultsLoading(workspace);
+      submitWithoutWebSocket(gridForm, "Opening details…");
       return;
     }
     var form = event.target.closest("[data-sc-builder]");
-    if (!form) return;
+    if (!form) {
+      var websocketForm = event.target.closest("form");
+      if (!websocketForm || !websocketForm.hasAttribute("hx-ws:send")) return;
+      var websocketConnection = document.querySelector("[data-selecto-connection]");
+      if (websocketConnection && websocketConnection.classList.contains("is-live")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      submitWithoutWebSocket(websocketForm);
+      return;
+    }
+    var pageInput = form.querySelector('[name="page"]');
+    if (form.classList.contains("is-dirty") && pageInput) pageInput.value = "1";
+    var activeLibraryView = form.querySelector(
+      '[name="query_library_view"]:checked, select[name="query_library_view"]'
+    );
+    if (!activeLibraryView || !activeLibraryView.value) {
+      var renderScope = form.querySelector('[name="render_scope"]');
+      if (!renderScope) {
+        renderScope = document.createElement("input");
+        renderScope.type = "hidden";
+        renderScope.name = "render_scope";
+        form.appendChild(renderScope);
+      }
+      renderScope.value = "results";
+    }
     showResultsLoading(form);
     setBuilderTrayCollapsed(form.closest("[data-sc-builder-shell]"), true);
     var connection = document.querySelector("[data-selecto-connection]");
     if (connection && connection.classList.contains("is-live")) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    submitWithoutWebSocket(form, "Running…");
+  }, true);
+
+  function submitWithoutWebSocket(form, buttonLabel) {
+    if (!form || form.dataset.scHttpSubmitting === "true") return;
+    form.dataset.scHttpSubmitting = "true";
     var button = form.querySelector('button[type="submit"]');
     if (button) {
       button.disabled = true;
-      button.textContent = "Running…";
+      if (buttonLabel) button.textContent = buttonLabel;
     }
     HTMLFormElement.prototype.submit.call(form);
-  }, true);
+  }
 
   document.addEventListener("htmx:ws:after:message:incoming", function (event) {
     var incoming = event.detail && event.detail.message;
@@ -663,16 +733,19 @@
         if (typeof nextUrl === "string" && nextUrl.charAt(0) === "/") {
           window.history.replaceState({selecto: true}, "", nextUrl);
         }
+        if (message && message.selecto && message.selecto.performance) {
+          selectoPerformance = message.selecto.performance;
+          if (typeof message.selecto.query_summary === "string") {
+            document.querySelectorAll("[data-sc-query-summary]").forEach(function (summary) {
+              summary.outerHTML = message.selecto.query_summary;
+            });
+          }
+          renderSelectoPerformance();
+        }
       }).catch(function () {});
     }
-    window.requestAnimationFrame(function () {
-      renderConnectionStatus();
-      restoreBuilderTabs();
-      restoreBuilderTrays();
-      restoreResultViews();
-      restoreCharts();
-      restoreGridSelections();
-    });
+    // htmx:after:swap below owns DOM initialization. Running it here as well
+    // traversed the freshly inserted surface twice for every WebSocket reply.
   });
 
   document.addEventListener("htmx:after:swap", function () {
@@ -681,11 +754,48 @@
     restoreResultViews();
     restoreCharts();
     restoreGridSelections();
+    if (selectoPerformance && selectoSwapStarted) {
+      selectoPerformance.swap_ms = Math.round(performance.now() - selectoSwapStarted);
+      selectoSwapStarted = 0;
+    }
+    renderSelectoPerformance();
   });
 
   document.addEventListener("htmx:before:swap", function (event) {
+    selectoSwapStarted = performance.now();
     destroyChartsWithin(event.detail && event.detail.target);
   });
+
+  function renderSelectoPerformance() {
+    if (!selectoPerformance) return;
+    var parts = [
+      "HTML render: " + selectoPerformance.render_ms + " ms",
+      "response: " + Number(selectoPerformance.response_chars || 0).toLocaleString() + " characters"
+    ];
+    if (selectoPerformance.swap_ms !== undefined) {
+      parts.push("browser swap: " + selectoPerformance.swap_ms + " ms");
+    }
+    if (selectoPerformance.results_only) parts.push("results-only update");
+    if (selectoPerformance.results_only) {
+      document.querySelectorAll("[data-sc-builder]").forEach(function (builder) {
+        builder.classList.remove("is-dirty");
+        var pending = builder.querySelector("[data-sc-builder-pending]");
+        if (pending) pending.textContent = "";
+        var signature = builder.querySelector('[name="query_signature"]');
+        if (signature && selectoPerformance.query_signature) {
+          signature.value = selectoPerformance.query_signature;
+        }
+        var page = builder.querySelector('[name="page"]');
+        if (page && selectoPerformance.page) page.value = selectoPerformance.page;
+      });
+    }
+    document.querySelectorAll("[data-sc-client-performance]").forEach(function (node) {
+      node.textContent = parts.join(" · ");
+    });
+    document.dispatchEvent(new CustomEvent("selecto:performance", {
+      detail: Object.assign({}, selectoPerformance)
+    }));
+  }
 
   document.addEventListener("click", function (event) {
     var rowDialogClose = event.target.closest("[data-sc-row-dialog-close]");

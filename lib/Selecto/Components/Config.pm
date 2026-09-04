@@ -17,6 +17,7 @@ has default_limit  => 25;
 has max_limit      => 100;
 has max_filters    => 20;
 has max_grid_cells => 50;
+has max_grid_result_cells => 10_000;
 has max_orders     => 10;
 has max_measures   => 10;
 has max_action_rows => 1000;
@@ -65,6 +66,10 @@ sub new ($class, @args) {
     die "max_grid_cells must be between 1 and 100\n"
         unless $self->max_grid_cells =~ /\A\d+\z/
             && $self->max_grid_cells >= 1 && $self->max_grid_cells <= 100;
+    die "max_grid_result_cells must be between 100 and 100000\n"
+        unless $self->max_grid_result_cells =~ /\A\d+\z/
+            && $self->max_grid_result_cells >= 100
+            && $self->max_grid_result_cells <= 100_000;
     die "max_orders must be between 1 and 20\n"
         unless $self->max_orders =~ /\A\d+\z/ && $self->max_orders >= 1 && $self->max_orders <= 20;
     die "max_measures must be between 1 and 20\n"
@@ -231,6 +236,10 @@ sub for_request ($self, $controller) {
     $copy->{_localization_controller} = $controller;
     delete $copy->{_resolved_theme};
     delete $copy->{_resolved_page_shell};
+    # Catalog construction walks the complete domain and localizes every label.
+    # A single model/render cycle asks for the same catalogs through several
+    # convenience methods, so keep those immutable results on the request copy.
+    $copy->{_catalog_cache} = {};
     return $copy;
 }
 
@@ -370,6 +379,10 @@ sub field_catalog ($self, $domain, $options = undef) {
     $options //= {};
     die "field catalog options must be an object\n" unless ref($options) eq 'HASH';
     my $include_internal = $options->{include_internal} ? 1 : 0;
+    my $cache_key = join "\x1f", 'fields', $domain->fingerprint,
+        $include_internal ? 'internal' : 'public';
+    my $cache = $self->{_catalog_cache};
+    return $cache->{$cache_key} if ref($cache) eq 'HASH' && exists $cache->{$cache_key};
     my @catalog;
     my $fields = $domain->fields;
     my ($dimensions_by_key, $dimensions_by_display) = _star_dimensions($domain);
@@ -451,7 +464,9 @@ sub field_catalog ($self, $domain, $options = undef) {
             || $a->{label} cmp $b->{label}
             || $a->{path} cmp $b->{path}
     } @catalog;
-    return \@catalog;
+    my $catalog = \@catalog;
+    $cache->{$cache_key} = $catalog if ref($cache) eq 'HASH';
+    return $catalog;
 }
 
 sub _star_dimensions ($domain) {
@@ -522,21 +537,32 @@ sub _field_label ($path, $column, $fallback = undef) {
 }
 
 sub field_map ($self, $domain) {
-    return { map { $_->{path} => { %$_ } } @{$self->field_catalog($domain)} };
+    my $cache_key = join "\x1f", 'field-map', $domain->fingerprint;
+    my $cache = $self->{_catalog_cache};
+    return $cache->{$cache_key} if ref($cache) eq 'HASH' && exists $cache->{$cache_key};
+    my $map = { map { $_->{path} => { %$_ } } @{$self->field_catalog($domain)} };
+    $cache->{$cache_key} = $map if ref($cache) eq 'HASH';
+    return $map;
 }
 
 sub query_field_map ($self, $domain) {
-    return {
+    my $cache_key = join "\x1f", 'query-field-map', $domain->fingerprint;
+    my $cache = $self->{_catalog_cache};
+    return $cache->{$cache_key} if ref($cache) eq 'HASH' && exists $cache->{$cache_key};
+    my $map = {
         map { $_->{path} => { %$_ } }
         @{$self->field_catalog($domain, {include_internal => 1})}
     };
+    $cache->{$cache_key} = $map if ref($cache) eq 'HASH';
+    return $map;
 }
 
 sub resolved_default_fields ($self, $domain) {
     my $map = $self->detail_column_map($domain);
     my @configured = grep { $map->{$_} } @{$self->default_fields // []};
     return \@configured if @configured;
-    return [map { $_->{path} } @{$self->field_catalog($domain)}[0 .. _last_index($self->field_catalog($domain), 6)]];
+    my $catalog = $self->field_catalog($domain);
+    return [map { $_->{path} } @{$catalog}[0 .. _last_index($catalog, 6)]];
 }
 
 sub resolved_default_group ($self, $domain) {
@@ -558,6 +584,9 @@ sub measure ($self, $id, $domain = undef) {
 }
 
 sub measures_for_domain ($self, $domain) {
+    my $cache_key = join "\x1f", 'measures', $domain->fingerprint;
+    my $cache = $self->{_catalog_cache};
+    return $cache->{$cache_key} if ref($cache) eq 'HASH' && exists $cache->{$cache_key};
     my $fields = $self->field_map($domain);
     my @measures = map {
         my $measure = $_;
@@ -598,7 +627,9 @@ sub measures_for_domain ($self, $domain) {
         };
         $seen{$id} = 1;
     }
-    return \@measures;
+    my $measures = \@measures;
+    $cache->{$cache_key} = $measures if ref($cache) eq 'HASH';
+    return $measures;
 }
 
 sub default_measure ($self, $domain) {

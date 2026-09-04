@@ -99,6 +99,16 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $saved_queries . '</div></aside>';
 }
 
+sub _query_summary_for_model ($class, $model, $catalog) {
+    my $segments = Selecto::Components::QueryLibrary->active_segment_entries(
+        $model->{domain},
+        $model->{state}->query_library_view,
+        $model->{state}->query_library_segments // [],
+        $model->{config},
+    );
+    return $class->_query_summary($model->{state}, $catalog, $segments);
+}
+
 sub _row_click_picker ($class, $state, $domain, $config) {
     my $catalog = Selecto::Components::RowActions->catalog($domain, $config);
     return '' unless @$catalog;

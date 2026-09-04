@@ -420,6 +420,7 @@ our (
 
 sub name { return 'test'; }
 sub dialect { return __PACKAGE__; }
+sub supports ($self, $feature) { return $feature eq 'stream' ? 1 : 0; }
 sub compile ($self, $domain, $query) {
     $LAST_COMPILED_QUERY = $query;
     if (defined $query->limit_value) {
@@ -445,7 +446,8 @@ sub execute_query ($self, $statement) {
     my $rollup = grep { $_ eq '__selecto_rollup_grouping' } @{$statement->columns};
     my $group_count = $rollup ? scalar(@{$LAST_DATA_QUERY->groups}) : 0;
     my @rows;
-    my $row_count = defined($LAST_DATA_QUERY->limit_value) ? 2 : 42;
+    my $row_count = defined($LAST_DATA_QUERY->limit_value)
+        && $LAST_DATA_QUERY->limit_value <= 1000 ? 2 : 42;
     for my $row_index (1 .. $row_count) {
         my $row = [map {
                 $_ eq '__selecto_rollup_grouping' ? 0
@@ -477,6 +479,12 @@ sub execute_query ($self, $statement) {
     }
     return { columns => $statement->columns, rows => \@rows };
 }
+sub stream_query ($self, $statement, %options) {
+    my $result = $self->execute_query($statement);
+    return TestSelectoComponents::Stream->new(
+        columns => $result->{columns}, rows => $result->{rows},
+    );
+}
 sub preview_write { return {}; }
 sub execute_write { return {}; }
 sub execute_batch { return []; }
@@ -503,6 +511,28 @@ sub _walk ($expression, $values) {
     }
 }
 
+package TestSelectoComponents::Stream;
+
+use Mojo::Base -base, -signatures;
+
+has 'columns';
+has 'rows';
+
+sub new ($class, @args) {
+    my $self = $class->SUPER::new(@args);
+    $self->{index} = 0;
+    return $self;
+}
+
+sub next ($self) {
+    return undef if $self->{closed};
+    my $row = $self->rows->[$self->{index}++];
+    $self->{closed} = 1 unless $row;
+    return $row;
+}
+
+sub close ($self) { $self->{closed} = 1; return $self; }
+
 package TestSelectoComponents::CarrierAdapter;
 
 use Mojo::Base 'Selecto::PostgreSQL', -signatures;
@@ -519,6 +549,27 @@ sub execute_query ($self, $statement) {
         columns => $statement->columns,
         rows => [[map { $values{$_} } @{$statement->columns}]],
     };
+}
+
+package TestSelectoComponents::Controller;
+
+use Mojo::Base -base, -signatures;
+
+has params => sub { {} };
+
+sub every_param ($self, $name) {
+    my $value = $self->params->{$name};
+    return () unless defined $value;
+    return @$value if ref($value) eq 'ARRAY';
+    return ($value);
+}
+
+sub stash ($self, @args) {
+    $self->{stash} //= {};
+    return $self->{stash}{$args[0]} if @args == 1;
+    my %values = @args;
+    @{$self->{stash}}{keys %values} = values %values;
+    return $self;
 }
 
 1;

@@ -95,7 +95,15 @@
   }
 
   function restoreCharts() {
-    document.querySelectorAll("[data-sc-chart]").forEach(initializeChart);
+    var roots = Array.from(document.querySelectorAll("[data-sc-chart]"));
+    if (!roots.length) return;
+    if (window.Chart) {
+      roots.forEach(initializeChart);
+      return;
+    }
+    loadChartLibrary(roots[0]).then(function () {
+      roots.filter(function (root) { return root.isConnected; }).forEach(initializeChart);
+    }).catch(function () {});
   }
 
   function destroyChartsWithin(node) {
@@ -132,4 +140,25 @@
     fallback.select();
     try { if (document.execCommand("copy")) copied(); } catch (_error) {}
     fallback.remove();
+  }
+  var chartLoadPromise;
+
+  function loadChartLibrary(root) {
+    if (window.Chart) return Promise.resolve();
+    if (chartLoadPromise) return chartLoadPromise;
+    var surface = root && root.closest("[data-sc-chart-src]");
+    var source = surface && surface.dataset.scChartSrc;
+    if (!source) return Promise.reject(new Error("Chart library URL is unavailable"));
+    chartLoadPromise = new Promise(function (resolve, reject) {
+      var script = document.createElement("script");
+      script.src = source;
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = function () {
+        chartLoadPromise = null;
+        reject(new Error("Chart library could not be loaded"));
+      };
+      document.head.appendChild(script);
+    });
+    return chartLoadPromise;
   }

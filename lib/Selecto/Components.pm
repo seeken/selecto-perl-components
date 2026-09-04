@@ -9,6 +9,7 @@ use Mojo::JSON qw(decode_json encode_json);
 use Mojo::URL ();
 use Mojo::WebSocket qw(WS_PING);
 use Scalar::Util qw(blessed);
+use Time::HiRes qw(time);
 use Selecto::Components::Config ();
 use Selecto::Components::Controller::Actions ();
 use Selecto::Components::Controller::Explorer ();
@@ -135,6 +136,22 @@ sub _routes (
     my $route_path = _mounted_route_path($config->path, $route_prefix);
     $routes->get($route_path)->to(cb => sub ($controller) {
         my $format = normalize_export_format($controller->param('format'));
+        if ($format eq 'xlsx') {
+            my ($file_export, $error);
+            eval { $file_export = $explorer->xlsx_file_export($controller); 1 }
+                or $error = $@ || 'Excel export preparation failed';
+            return _render_export_preparation_error($controller, $error) if $error;
+            return _render_file_export($controller, $file_export, $format)
+                if $file_export;
+        }
+        if ($EXPORT_FORMATS{$format} && $format ne 'xlsx') {
+            my ($stream_export, $error);
+            eval { $stream_export = $explorer->stream_export($controller, $format); 1 }
+                or $error = $@ || 'streaming export preparation failed';
+            return _render_export_preparation_error($controller, $error) if $error;
+            return _render_stream_export($controller, $stream_export, $format)
+                if $stream_export;
+        }
         my $model = Selecto::Components::Controller::Explorer::_decorate_model($controller, $explorer->model(
             $controller, undef, {all_rows => $EXPORT_FORMATS{$format} ? 1 : 0},
         ));
@@ -283,8 +300,22 @@ sub _render_page ($controller, $model) {
         $controller->res->headers->cache_control('no-store');
     }
     my $status = $model->{runtime_error} || !$model->{state} || !$model->{state}->valid ? 422 : 200;
+    my $render_started = time;
+    my $html = encode('UTF-8', Selecto::Components::Renderer->page($model));
+    my $render_ms = int((time - $render_started) * 1000 + 0.5);
+    my $stats = ref($model->{result}) eq 'HASH'
+        && ref($model->{result}{debug}) eq 'HASH'
+        ? $model->{result}{debug}{stats} : {};
+    my @timings = ('selecto_render;dur=' . $render_ms);
+    push @timings, 'selecto_model;dur=' . (0 + $stats->{model_ms})
+        if defined($stats->{model_ms});
+    push @timings, 'selecto_data;dur=' . (0 + $stats->{data_query_ms})
+        if defined($stats->{data_query_ms});
+    push @timings, 'selecto_count;dur=' . (0 + $stats->{count_query_ms})
+        if defined($stats->{count_query_ms});
+    $controller->res->headers->header('Server-Timing' => join(', ', @timings));
     return $controller->render(
-        data => encode('UTF-8', Selecto::Components::Renderer->page($model)),
+        data => $html,
         format => 'html',
         status => $status,
     );
@@ -307,6 +338,59 @@ sub _render_export ($controller, $explorer, $model, $format) {
     return $controller->render(
         data => $export->{utf8} ? encode('UTF-8', $data) : $data,
         status => 200,
+    );
+}
+
+sub _render_stream_export ($controller, $export, $format) {
+    my $metadata = $EXPORT_FORMATS{$format};
+    my $filename = $export->{config}->id . '-export.' . $metadata->{extension};
+    $controller->res->headers->cache_control('no-store');
+    $controller->res->headers->content_disposition(qq{attachment; filename="$filename"});
+    $controller->res->headers->content_type($metadata->{content_type});
+    $controller->on(finish => sub {
+        eval { $export->{close}->() } if $export->{close};
+    });
+    $controller->render_later;
+    my $write_next;
+    $write_next = sub {
+        my $chunk;
+        my $ok = eval { $chunk = $export->{next_chunk}->(); 1 };
+        unless ($ok) {
+            my $error = $@ || 'streaming export failed';
+            $error =~ s/\s+\z//;
+            $controller->app->log->error("Selecto streaming export failed: $error");
+            eval { $export->{close}->() } if $export->{close};
+            return $controller->write('');
+        }
+        unless (defined $chunk) {
+            eval { $export->{close}->() } if $export->{close};
+            return $controller->write('');
+        }
+        $chunk = encode('UTF-8', $chunk) if $metadata->{utf8};
+        return $controller->write($chunk => sub { $write_next->() });
+    };
+    $write_next->();
+    return undef;
+}
+
+sub _render_file_export ($controller, $export, $format) {
+    my $metadata = $EXPORT_FORMATS{$format};
+    my $filename = $export->{config}->id . '-export.' . $metadata->{extension};
+    $controller->res->headers->cache_control('no-store');
+    $controller->res->headers->content_disposition(qq{attachment; filename="$filename"});
+    $controller->res->headers->content_type($metadata->{content_type});
+    my $path = $export->{path};
+    $controller->on(finish => sub { unlink $path if defined($path) && -f $path });
+    return $controller->reply->file($path);
+}
+
+sub _render_export_preparation_error ($controller, $error) {
+    $error //= 'export preparation failed';
+    $error =~ s/\s+\z//;
+    $controller->app->log->error("Selecto export failed: $error");
+    return $controller->render(
+        text => "The export could not be prepared. Please review the query and try again.\n",
+        status => 422,
     );
 }
 
