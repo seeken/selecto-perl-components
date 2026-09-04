@@ -57,6 +57,11 @@ is $config->localize($domain, 'domain.title', $config->title),
     'Explorateur de produits', 'domain title is localized from its semantic dictionary key';
 
 my $fields = $config->field_catalog($domain);
+my $lookups_after_catalog = scalar @lookups;
+is $config->field_catalog($domain), $fields,
+    'request-local field catalog is reused by identity';
+is scalar(@lookups), $lookups_after_catalog,
+    'reusing a field catalog does not repeat dictionary lookups';
 my %field = map { $_->{path} => $_ } @$fields;
 is $field{unit_price}{label}, 'Argent', 'root field labels are localized';
 is $field{product_name}{label}, 'Zulu produit', 'a second root field label is localized';

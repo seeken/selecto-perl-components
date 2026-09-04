@@ -425,8 +425,10 @@ my $grid_result = Selecto::Components::QueryBuilder->build(
 my $grid_statement = $postgresql->compile($domain, $grid_result->{query});
 ok $grid_result->{aggregate_grid},
     'two groups and one resulting measure enable aggregate grid rendering';
-unlike $grid_statement->sql, qr/\b(?:LIMIT|OFFSET)\b/,
-    'aggregate grid queries return the full matrix instead of one incomplete page';
+like $grid_statement->sql, qr/\bLIMIT 10001\z/,
+    'aggregate grid queries include one sentinel row beyond the display ceiling';
+unlike $grid_statement->sql, qr/\bOFFSET\b/,
+    'aggregate grids are bounded independently of the requested result page';
 
 my $incompatible_grid_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

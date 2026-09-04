@@ -359,9 +359,14 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
     $query = $rollup ? $query->group_by_rollup(\@groups) : $query->group_by(\@groups);
     $query = _with_filters($query, $state, $config, $domain);
     $query = $query->order_by($_, 'asc') for @group_orders;
-    $query = $query->limit($state->limit)
-        ->offset(($state->page - 1) * $state->limit)
-        if (!$aggregate_grid && (!exists($options->{paginate}) || $options->{paginate}));
+    if ($aggregate_grid) {
+        # A pair of high-cardinality dimensions can otherwise materialize an
+        # effectively unbounded matrix in both PostgreSQL and the browser.
+        $query = $query->limit($config->max_grid_result_cells + 1);
+    } elsif (!exists($options->{paginate}) || $options->{paginate}) {
+        $query = $query->limit($state->limit)
+            ->offset(($state->page - 1) * $state->limit);
+    }
     $query = _with_query_library($query, $domain, $state);
     return {
         query => $query,

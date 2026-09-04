@@ -3,15 +3,20 @@ package Selecto::Components::Controller::Explorer;
 use Mojo::Base -base, -signatures;
 use Selecto::Components::Actions ();
 use Selecto::Components::Controller::SavedQueries ();
+use Time::HiRes qw(time);
 
 sub _decorate_model ($controller, $model) {
+    my $started = time;
     $model->{csrf_token} = Selecto::Components::_csrf_token($controller);
     $model->{action_notice} = $controller->flash('selecto_action_notice');
     $model->{action_error} = $controller->flash('selecto_action_error');
     $model->{saved_query_notice} = $controller->flash('selecto_saved_query_notice');
     $model->{saved_query_error} = $controller->flash('selecto_saved_query_error');
     $model->{saved_queries} = [];
-    if ($model->{domain} && $model->{config}->saved_queries_enabled($model->{domain})) {
+    my $results_only = ref($model->{input}) eq 'HASH'
+        && ($model->{input}{render_scope} // '') eq 'results';
+    if (!$results_only && $model->{domain}
+        && $model->{config}->saved_queries_enabled($model->{domain})) {
         my $ok = eval {
             my $queries = $model->{config}->saved_query_store->list(
                 $controller, $model->{config},
@@ -48,6 +53,12 @@ sub _decorate_model ($controller, $model) {
             $model->{available_actions} = [];
             $model->{bulk_actions} = [];
         }
+    }
+    if (ref($model->{result}) eq 'HASH'
+        && ref($model->{result}{debug}) eq 'HASH'
+        && ref($model->{result}{debug}{stats}) eq 'HASH') {
+        $model->{result}{debug}{stats}{decorate_ms}
+            = int((time - $started) * 1000 + 0.5);
     }
     return $model;
 }

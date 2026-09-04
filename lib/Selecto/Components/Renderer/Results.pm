@@ -21,12 +21,16 @@ sub _results ($class, $model) {
         ' · <strong>' . _h($result->{elapsed_ms}) . ' ms</strong> query time</div></div>';
     my $actions = $model->{state}->view eq 'detail'
         ? $class->_bulk_actions($model) : '';
-    my $grid_warning = $model->{state}->view eq 'aggregate'
-        && $model->{state}->aggregate_grid
-        && !$result->{grid_data}
+    my $grid_warning = $result->{grid_limit_exceeded}
+        ? '<div class="sc-grid-warning" role="status">This grid requires more than ' .
+          _h($model->{config}->max_grid_result_cells) .
+          ' display cells. Add filters or choose lower-cardinality groups before displaying it.</div>'
+        : $model->{state}->view eq 'aggregate' && $model->{state}->aggregate_grid
+            && !$result->{grid_data}
         ? '<div class="sc-grid-warning" role="status">Grid view requires exactly two Group By fields and one Aggregate.</div>'
         : '';
-    my $body = $result->{graph} ? $class->_graph($result, $model)
+    my $body = $result->{grid_limit_exceeded} ? ''
+        : $result->{graph} ? $class->_graph($result, $model)
         : $result->{grid_data} ? $class->_grid($result, $model)
         : $class->_table($result, $model);
     my $pagination = $class->_pagination($model);
@@ -639,6 +643,7 @@ sub _pagination ($class, $model) {
     my $method = $model->{config}->query_params_enabled($model->{domain}) ? 'get' : 'post';
     my $controls = @buttons
         ? '<form action="' . _h($model->{config}->path) . '" method="' . $method . '" hx-ws:send>' .
+          _hidden('render_scope', 'results') . _hidden('reuse_count', 1) .
           $hidden . join('', @buttons) . '</form>'
         : '<span></span>';
     return '<nav class="sc-pagination" aria-label="Results pages"><span>Page ' . _h($state->page) .

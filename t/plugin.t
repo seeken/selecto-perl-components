@@ -23,6 +23,7 @@ $t->get_ok('/explore/products')
     ->status_is(200)
     ->content_type_like(qr{text/html})
     ->element_exists('section#selecto-channel-products')
+    ->attr_is('section#selecto-channel-products' => 'hx-ext' => 'ws')
     ->element_exists('[data-selecto-connection][role="status"][aria-live="polite"][aria-atomic="true"]')
     ->element_exists('[data-sc-workspace]:not(.is-builder-collapsed)')
     ->element_exists('[data-sc-builder-shell="products"]:not(.is-collapsed)')
@@ -85,6 +86,8 @@ $t->get_ok('/explore/products')
     ->content_like(qr{/selecto-components/htmx\.min\.js\?v=\Q@{[asset_revision()]}\E})
     ->content_like(qr{/selecto-components/hx-ws\.min\.js\?v=\Q@{[asset_revision()]}\E})
     ->content_like(qr{/selecto-components/chart\.umd\.min\.js\?v=\Q@{[asset_revision()]}\E})
+    ->element_exists('[data-sc-chart-src]')
+    ->element_exists_not('script[src^="/selecto-components/chart.umd.min.js"]')
     ->content_like(qr{/selecto-components/selecto-components\.css\?v=\Q@{[asset_revision()]}\E})
     ->content_like(qr{/selecto-components/selecto-components\.js\?v=\Q@{[asset_revision()]}\E})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
@@ -117,9 +120,9 @@ $t->get_ok('/explore/products')
     ->text_is('a.sc-object-link[href="/products/view?id=101"]' => '=2+2')
     ->element_exists('details.sc-debug-panel[data-sc-debug-panel][open]')
     ->text_is('.sc-debug-panel > summary strong' => 'Query Debug')
-    ->text_is('.sc-debug-stat:nth-child(5) span' => 'Rows returned')
-    ->text_is('.sc-debug-stat:nth-child(5) strong' => '2')
-    ->text_is('.sc-debug-stat:nth-child(6) strong' => '42')
+    ->text_is('.sc-debug-stat:nth-child(10) span' => 'Rows returned')
+    ->text_is('.sc-debug-stat:nth-child(10) strong' => '2')
+    ->text_is('.sc-debug-stat:nth-child(11) strong' => '42')
     ->text_is('.sc-debug-query:nth-of-type(1) h4' => 'Generated data query')
     ->element_exists('.sc-debug-query button[data-sc-debug-copy="selecto-debug-data-products"]')
     ->element_exists('.sc-debug-query:nth-of-type(1) code.sc-sql .sc-sql-keyword')
@@ -701,8 +704,8 @@ $t->get_ok('/explore/products?q=1&view=aggregate&aggregate_grid=1&aggregate_grid
     ->element_exists('.sc-aggregate-grid td.sc-grid-empty-cell input[name="grid_cell"][data-sc-grid-cell]')
     ->element_exists('button[data-sc-grid-apply]')
     ->element_exists_not('.sc-pagination');
-is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, undef,
-    'a valid aggregate grid fetches the full matrix without a page limit';
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, 10_001,
+    'a valid aggregate grid fetches the matrix within the server safety ceiling';
 is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $count_executions_before_grid,
     'a full aggregate grid avoids a redundant count query';
 
@@ -928,6 +931,30 @@ like $reordered->{content}, qr{<th scope="col">Unit Price</th><th scope="col">Pr
 cmp_ok index($reordered->{selecto}{url}, 'field=unit_price'), '<',
     index($reordered->{selecto}{url}, 'field=product_name'),
     'canonical URL preserves selected column order';
+my $count_executions_before_paging = $TestSelectoComponents::Adapter::COUNT_EXECUTIONS;
+$t->send_ok({text => encode_json({
+    headers => {},
+    render_scope => 'results',
+    reuse_count => 1,
+    q => 1,
+    view => 'detail',
+    field => ['unit_price', 'product_name', 'category.category_name'],
+    group => ['category.category_name'],
+    measure => 'count',
+    order => 'product_name',
+    direction => 'asc',
+    limit => 25,
+    page => 2,
+})})->message_ok;
+my $paged = decode_json($t->message->[1]);
+is $paged->{target}, '#selecto-results-products',
+    'pagination replaces only the results fragment';
+unlike $paged->{content}, qr/data-sc-builder-shell/,
+    'results-only pagination does not retransmit the field builder';
+is $paged->{selecto}{performance}{results_only}, 1,
+    'WebSocket metadata identifies the smaller results update';
+is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $count_executions_before_paging,
+    'pagination reuses the governed exact count on the same connection';
 $t->finish_ok;
 
 $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({

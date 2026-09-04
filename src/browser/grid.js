@@ -3,6 +3,21 @@
     return selector ? cells.filter(selector) : cells;
   }
 
+  function gridIndex(root) {
+    var cells = gridCells(root);
+    var rows = new Map();
+    var columns = new Map();
+    cells.forEach(function (cell) {
+      var row = cell.dataset.scGridRow;
+      var column = cell.dataset.scGridColumn;
+      if (!rows.has(row)) rows.set(row, []);
+      if (!columns.has(column)) columns.set(column, []);
+      rows.get(row).push(cell);
+      columns.get(column).push(cell);
+    });
+    return {cells: cells, rows: rows, columns: columns};
+  }
+
   function clearGridAxisHover(root) {
     if (!root) return;
     root.querySelectorAll(".is-grid-axis-hover").forEach(function (header) {
@@ -42,17 +57,15 @@
     }
   });
 
-  function gridSelectionPlan(root) {
-    var selected = gridCells(root, function (cell) { return cell.checked; });
+  function gridSelectionPlan(root, index) {
+    index = index || gridIndex(root);
+    var selected = index.cells.filter(function (cell) { return cell.checked; });
     var uncovered = new Set(selected);
     var candidates = [];
     root.querySelectorAll("[data-sc-grid-row-toggle], [data-sc-grid-column-toggle]").forEach(function (toggle) {
-      var cells = gridCells(root, function (cell) {
-        if (toggle.matches("[data-sc-grid-row-toggle]")) {
-          return cell.dataset.scGridRow === toggle.dataset.scGridRowToggle;
-        }
-        return cell.dataset.scGridColumn === toggle.dataset.scGridColumnToggle;
-      });
+      var cells = toggle.matches("[data-sc-grid-row-toggle]")
+        ? (index.rows.get(toggle.dataset.scGridRowToggle) || [])
+        : (index.columns.get(toggle.dataset.scGridColumnToggle) || []);
       if (cells.length && cells.every(function (cell) { return cell.checked; })) {
         candidates.push({toggle: toggle, cells: cells});
       }
@@ -101,9 +114,10 @@
 
   function updateGridSelection(root) {
     if (!root) return;
-    var cells = gridCells(root);
+    var index = gridIndex(root);
+    var cells = index.cells;
     var selected = cells.filter(function (cell) { return cell.checked; });
-    var plan = gridSelectionPlan(root);
+    var plan = gridSelectionPlan(root, index);
     var maximum = Number(root.dataset.scGridMax || 50);
     var count = root.querySelector("[data-sc-grid-selection-count]");
     var label = root.querySelector("[data-sc-grid-selection-label]");
@@ -121,14 +135,10 @@
       help.classList.toggle("is-error", !!selectionError);
     }
     root.querySelectorAll("[data-sc-grid-row-toggle]").forEach(function (toggle) {
-      syncGridAxisToggle(toggle, gridCells(root, function (cell) {
-        return cell.dataset.scGridRow === toggle.dataset.scGridRowToggle;
-      }));
+      syncGridAxisToggle(toggle, index.rows.get(toggle.dataset.scGridRowToggle) || []);
     });
     root.querySelectorAll("[data-sc-grid-column-toggle]").forEach(function (toggle) {
-      syncGridAxisToggle(toggle, gridCells(root, function (cell) {
-        return cell.dataset.scGridColumn === toggle.dataset.scGridColumnToggle;
-      }));
+      syncGridAxisToggle(toggle, index.columns.get(toggle.dataset.scGridColumnToggle) || []);
     });
     var all = root.querySelector("[data-sc-grid-toggle-all]");
     if (all) syncGridAxisToggle(all, cells);
@@ -152,13 +162,13 @@
         delete root.dataset.scGridSelectionError;
       }
     } else if (event.target.matches("[data-sc-grid-row-toggle]")) {
-      setGridCells(root, gridCells(root, function (cell) {
-        return cell.dataset.scGridRow === event.target.dataset.scGridRowToggle;
-      }), event.target.checked);
+      setGridCells(root,
+        gridIndex(root).rows.get(event.target.dataset.scGridRowToggle) || [],
+        event.target.checked);
     } else if (event.target.matches("[data-sc-grid-column-toggle]")) {
-      setGridCells(root, gridCells(root, function (cell) {
-        return cell.dataset.scGridColumn === event.target.dataset.scGridColumnToggle;
-      }), event.target.checked);
+      setGridCells(root,
+        gridIndex(root).columns.get(event.target.dataset.scGridColumnToggle) || [],
+        event.target.checked);
     } else if (event.target.matches("[data-sc-grid-toggle-all]")) {
       setGridCells(root, gridCells(root), event.target.checked);
     } else {

@@ -7,6 +7,7 @@ use Selecto::Components::Renderer::Markup qw(_format_url _html_display);
 use Selecto::Components::Renderer::Builder ();
 use Selecto::Components::Renderer::Results ();
 use Selecto::Components::Renderer::Debug ();
+use Time::HiRes qw(time);
 
 sub page ($class, $model) {
     my $config = $model->{config};
@@ -37,12 +38,12 @@ sub page ($class, $model) {
         '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' . asset_revision() . '">' .
         '<script defer src="/selecto-components/htmx.min.js?v=' . asset_revision() . '"></script>' .
         '<script defer src="/selecto-components/hx-ws.min.js?v=' . asset_revision() . '"></script>' .
-        '<script defer src="/selecto-components/chart.umd.min.js?v=' . asset_revision() . '"></script>' .
         '<script defer src="/selecto-components/selecto-components.js?v=' . asset_revision() . '"></script>' .
         ($page_shell->{head_html} // '') .
         '</head><body' . $body_class . '>' . ($page_shell->{body_start_html} // '') .
         '<main class="' . _h($main_class) . '"><div class="sc-shell">' .
-        '<section id="selecto-channel-' . _h($config->id) . '" hx-ws:connect="' . $ws_path . '" hx-swap="none">' .
+        '<section id="selecto-channel-' . _h($config->id) . '" hx-ext="ws" hx-ws:connect="' .
+        $ws_path . '" hx-swap="none">' .
         $surface . '</section></div></main></body></html>';
 }
 
@@ -98,16 +99,24 @@ sub surface ($class, $model) {
         'aria-live="polite" aria-atomic="true">Connecting</span>';
     return '<section id="selecto-surface-' . _h($config->id) . '" class="sc-surface" data-selecto-url="' .
         _h($model->{canonical_url}) . '" data-sc-query-params="' .
-        ($query_params ? 'enabled' : 'disabled') . '">' .
+        ($query_params ? 'enabled' : 'disabled') . '" data-sc-chart-src="' .
+        _h('/selecto-components/chart.umd.min.js?v=' . asset_revision()) . '">' .
         '<header class="sc-hero"><div class="sc-hero-heading">' . $builder_toggle .
         '<h1>' . _h($localized_title) . '</h1>' . $connection . '</div>' .
         $hero_actions . '</header>' .
         $alert . '<div class="sc-workspace' . ($builder_collapsed ? ' is-builder-collapsed' : '') .
         '" data-sc-workspace>' .
         $class->_form($model, $field_catalog, $detail_catalog) .
-        '<section class="sc-results" aria-live="polite">' .
-        $class->_promoted_filter_header($model, $field_catalog) . $class->_results($model) . '</section>' .
+        $class->results_fragment($model, $field_catalog) .
         '</div></section>';
+}
+
+sub results_fragment ($class, $model, $field_catalog = undef) {
+    $field_catalog //= $model->{config}->field_catalog($model->{domain});
+    return '<section id="selecto-results-' . _h($model->{config}->id) .
+        '" class="sc-results" aria-live="polite">' .
+        $class->_promoted_filter_header($model, $field_catalog) .
+        $class->_results($model) . '</section>';
 }
 
 sub _builder_collapsed ($model) {
@@ -119,11 +128,33 @@ sub _builder_collapsed ($model) {
 }
 
 sub websocket_message ($class, $model) {
+    my $results_only = ref($model->{input}) eq 'HASH'
+        && ($model->{input}{render_scope} // '') eq 'results'
+        && $model->{state} && $model->{state}->valid && $model->{result};
+    my $started = time;
+    my $content = $results_only ? $class->results_fragment($model) : $class->surface($model);
+    my $query_summary = $results_only
+        ? Selecto::Components::Renderer::Builder->_query_summary_for_model(
+            $model, $model->{config}->field_catalog($model->{domain}),
+        ) : undef;
+    my $render_ms = int((time - $started) * 1000 + 0.5);
     return {
-        content => $class->surface($model),
-        target => '#selecto-surface-' . $model->{config}->id,
+        content => $content,
+        target => $results_only
+            ? '#selecto-results-' . $model->{config}->id
+            : '#selecto-surface-' . $model->{config}->id,
         swap => 'outerHTML',
-        selecto => { url => $model->{canonical_url} },
+        selecto => {
+            url => $model->{canonical_url},
+            (defined($query_summary) ? (query_summary => $query_summary) : ()),
+            performance => {
+                render_ms => $render_ms,
+                response_chars => length($content),
+                results_only => $results_only ? 1 : 0,
+                query_signature => $model->{state}->query_signature,
+                page => $model->{state}->page,
+            },
+        },
     };
 }
 
