@@ -8,7 +8,7 @@ use Mojo::Base -base, -signatures;
 use Mojo::File qw(path);
 use Selecto::Components::Util qw(html_escape);
 
-my $ASSET_REVISION = '0.3.10';
+my $ASSET_REVISION = '0.3.11';
 
 sub install_assets ($class, $app) {
     die "install_assets requires a Mojolicious application\n"
@@ -29,6 +29,7 @@ sub install_assets ($class, $app) {
 sub page ($class, %options) {
     my $base_path = _base_path($options{base_path});
     my $title = _string($options{title} // 'Selecto API Console', 'title');
+    my $curl_auth = _curl_auth($options{curl_auth});
     my $theme = _theme($options{theme});
     my $shell = _page_shell($options{page_shell});
     my $style = _theme_style($theme);
@@ -50,11 +51,19 @@ sub page ($class, %options) {
         ($shell->{body_start_html} // '') . '<main class="' .
         html_escape($content_classes) . '" ' .
         'data-selecto-api-console data-api-base="' . html_escape($base_path) .
-        '" data-title="' . html_escape($title) . '">' .
+        '" data-title="' . html_escape($title) .
+        '" data-curl-auth="' . html_escape($curl_auth) . '">' .
         '<div class="sac-boot" role="status"><span class="sac-spinner" ' .
         'aria-hidden="true"></span><span>Reading the Selecto domain&hellip;</span></div>' .
         '<noscript><div class="sac-fatal">The Selecto API Console requires JavaScript.</div></noscript>' .
         '</main></body></html>';
+}
+
+sub _curl_auth ($value) {
+    $value //= 'cookie';
+    die "curl_auth must be basic, cookie, or none\n"
+        if ref($value) || "$value" !~ /\A(?:basic|cookie|none)\z/;
+    return "$value";
 }
 
 sub _theme ($value) {

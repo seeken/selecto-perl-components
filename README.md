@@ -139,7 +139,7 @@ by forms, WebSockets, exports, actions, and saved queries.
 
 The API Console browser code is owned by the sibling `selecto-api-console`
 repository and packaged as `@selecto/api-console`. This Perl distribution
-ships generated `0.3.10` assets so Mojolicious applications remain
+ships generated `0.3.11` assets so Mojolicious applications remain
 self-contained; it does not fork the JavaScript or CSS source. The console is
 host-neutral. It does not receive a serialized
 field catalog from Perl and does not contain application domain names. A host
@@ -151,6 +151,7 @@ canonical API base path:
 <script defer src="/selecto-api-console/selecto-api-console.js"></script>
 <main data-selecto-api-console
       data-api-base="/api2/orders/v1"
+      data-curl-auth="basic"
       data-title="Orders API Console"></main>
 ```
 
@@ -170,6 +171,9 @@ Mojolicious hosts may render the complete shell and install its static path
 with `Selecto::Components::APIConsole->page(...)` and
 `Selecto::Components::APIConsole->install_assets($app)`. Other Selecto hosts
 can serve the same JavaScript and CSS unchanged using the HTML contract above.
+Hosts configure generated cURL authentication with `curl_auth`/`data-curl-auth`:
+`basic` emits username/password placeholders, `cookie` (the default) emits a
+session-cookie placeholder, and `none` omits authentication arguments.
 The packaged standalone page is also available at
 `/selecto-api-console/index.html?api=/api2/orders/v1`.
 
