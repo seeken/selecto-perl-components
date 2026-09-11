@@ -87,7 +87,17 @@
     return labelOrder || String(left.path || "").localeCompare(String(right.path || ""), undefined, options);
   }
 
-  function relationFields(relation, schemas, prefix, depth, schemaStack, output) {
+  function relationshipLabel(path, joins) {
+    const segments = String(path || "").split(".").filter(Boolean);
+    let prefix = "";
+    return segments.map((segment) => {
+      prefix = prefix ? `${prefix}.${segment}` : segment;
+      const join = joins[prefix] || joins[segment] || {};
+      return join.name || humanize(segment);
+    }).join(" · ");
+  }
+
+  function relationFields(relation, schemas, joins, prefix, depth, schemaStack, output) {
     if (!relation || depth > MAX_RELATION_DEPTH) return;
     const columns = relation.columns || {};
     const declared = Array.isArray(relation.fields) ? relation.fields : Object.keys(columns);
@@ -95,10 +105,11 @@
       const column = columns[name] || {};
       if (column.internal) return;
       const path = prefix ? `${prefix}.${name}` : name;
+      const fieldLabel = column.label || humanize(name);
       output.push({
         path,
         name,
-        label: column.label || humanize(name),
+        label: prefix ? `${relationshipLabel(prefix, joins)}: ${fieldLabel}` : fieldLabel,
         type: String(column.type || "string").toLowerCase(),
         relation: prefix || "Root",
       });
@@ -113,6 +124,7 @@
       relationFields(
         schema,
         schemas,
+        joins,
         prefix ? `${prefix}.${name}` : name,
         depth + 1,
         schemaStack.concat(queryable),
@@ -123,8 +135,21 @@
 
   function collectFields(domain) {
     const output = [];
-    relationFields(domain && domain.source, (domain && domain.schemas) || {}, "", 0, [], output);
+    relationFields(
+      domain && domain.source,
+      (domain && domain.schemas) || {},
+      (domain && domain.joins) || {},
+      "", 0, [], output
+    );
     return output.sort(compareSemanticFields);
+  }
+
+  function associationIsMany(association, schemas) {
+    if (!association || typeof association !== "object") return false;
+    if (association.cardinality) return association.cardinality === "many";
+    const schema = association.queryable && schemas && schemas[association.queryable];
+    if (!schema || typeof association.related_key !== "string") return false;
+    return association.related_key !== String(schema.primary_key || "id");
   }
 
   function operatorsForType(type) {
@@ -182,6 +207,11 @@
     return String(value);
   }
 
+  function rowValue(row, column, index) {
+    if (Array.isArray(row)) return row[index];
+    return row && typeof row === "object" ? row[column] : undefined;
+  }
+
   function segmentParameterSpecs(library, ids) {
     const segments = (library && library.segments) || {};
     const specs = {};
@@ -212,9 +242,11 @@
       this.queryPath = `${this.base}/query`;
       this.fields = [];
       this.fieldMap = new Map();
+      this.nextSelectedFieldId = 1;
       this.state = {
         mode: "select",
         selectedFields: [],
+        configuredField: "",
         projection: "",
         view: "",
         segments: [],
@@ -222,6 +254,9 @@
         filters: [],
         orders: [],
         ordering: "",
+        timezone: "",
+        rowFormat: "arrays",
+        subtables: [],
         limit: 100,
         offset: 0,
         rawDirty: false,
@@ -268,7 +303,8 @@
       const defaults = Array.isArray(this.domain.default_selected) ? this.domain.default_selected : [];
       const publicDefaults = defaults.filter((field) => this.fieldMap.has(field));
       if (publicDefaults.length) {
-        this.state.selectedFields = publicDefaults.slice(0, 12);
+        this.state.selectedFields = publicDefaults.slice(0, 12)
+          .map((path) => this.newSelectedField(path));
         return;
       }
       const primaryKey = this.domain.source && this.domain.source.primary_key;
@@ -278,7 +314,18 @@
       rootFields.forEach((field) => {
         if (initial.length < 5 && !initial.includes(field.path)) initial.push(field.path);
       });
-      this.state.selectedFields = initial;
+      this.state.selectedFields = initial.map((path) => this.newSelectedField(path));
+    }
+
+    newSelectedField(path) {
+      const occurrence = this.state.selectedFields
+        .filter((selection) => selection.field === path).length + 1;
+      return {
+        id: String(this.nextSelectedFieldId++),
+        field: path,
+        alias: occurrence > 1 ? `${path.replace(/\./g, "_")}__${occurrence}` : "",
+        format: "",
+      };
     }
 
     render() {
@@ -313,6 +360,7 @@
                 </select>
                 <div data-sac-select-mode>
                   <div class="sac-selected-fields" data-sac-selected-fields></div>
+                  <div class="sac-normalization" data-sac-normalization></div>
                   <label class="sac-label" for="sac-field-search">Available fields</label>
                   <input id="sac-field-search" type="search" placeholder="Search domain fields" data-sac-field-search>
                   <div class="sac-field-list" data-sac-field-list></div>
@@ -343,10 +391,19 @@
                 <label class="sac-label" for="sac-ordering">Named ordering</label>
                 <select id="sac-ordering" data-sac-ordering></select>
                 <div class="sac-order-list" data-sac-orders></div>
+                <label class="sac-label" for="sac-row-format">Result row shape</label>
+                <select id="sac-row-format" data-sac-row-format>
+                  <option value="arrays">Ordered arrays</option>
+                  <option value="objects">JSON objects</option>
+                </select>
+                <p class="sac-help">The selected shape also applies to rows inside subtables.</p>
                 <div class="sac-inline-controls">
                   <label>Limit<input type="number" min="0" max="1000" data-sac-limit></label>
                   <label>Offset<input type="number" min="0" data-sac-offset></label>
                 </div>
+                <label class="sac-label" for="sac-timezone">Use timezone</label>
+                <input id="sac-timezone" type="text" placeholder="America/New_York" data-sac-timezone>
+                <p class="sac-help">Applies an IANA timezone to UTC and epoch date/time fields and filters.</p>
               </section>
             </aside>
             <section class="sac-execution">
@@ -419,12 +476,15 @@
       this.root.querySelector("[data-sac-projection]").value = this.state.projection;
       this.root.querySelector("[data-sac-view]").value = this.state.view;
       this.root.querySelector("[data-sac-ordering]").value = this.state.ordering;
+      this.root.querySelector("[data-sac-row-format]").value = this.state.rowFormat;
       this.root.querySelector("[data-sac-limit]").value = this.state.limit;
       this.root.querySelector("[data-sac-offset]").value = this.state.offset;
+      this.root.querySelector("[data-sac-timezone]").value = this.state.timezone;
       Array.from(this.root.querySelector("[data-sac-segments]").options).forEach((option) => {
         option.selected = this.state.segments.includes(option.value);
       });
       this.renderSelectedFields();
+      this.renderNormalization();
       this.renderFieldList();
       this.renderViewHelp();
       this.renderParameters();
@@ -434,6 +494,47 @@
       this.syncRequest();
     }
 
+    renderNormalization() {
+      const container = this.root.querySelector("[data-sac-normalization]");
+      const selectItems = this.openapi && this.openapi.components && this.openapi.components.schemas
+        && this.openapi.components.schemas.SelectoQuery
+        && this.openapi.components.schemas.SelectoQuery.properties
+        && this.openapi.components.schemas.SelectoQuery.properties.select
+        && this.openapi.components.schemas.SelectoQuery.properties.select.items;
+      const supportsSubtables = selectItems && Array.isArray(selectItems.oneOf)
+        && selectItems.oneOf.some((item) => String(item && item.$ref || "").endsWith("/SelectoSubtableSelection"));
+      const associations = this.domain && this.domain.source && this.domain.source.associations || {};
+      const schemas = this.domain && this.domain.schemas || {};
+      const selected = new Set(this.state.selectedFields.map((item) => item.field.split(".")[0]));
+      const names = Object.keys(associations).filter((name) => {
+        const specification = associations[name] || {};
+        return associationIsMany(specification, schemas) && selected.has(name);
+      }).sort();
+      if (!supportsSubtables || !names.length) {
+        container.replaceChildren();
+        container.hidden = true;
+        return;
+      }
+      container.hidden = false;
+      container.replaceChildren(element("span", "sac-label", "To-many relationships"));
+      names.forEach((name) => {
+        const label = element("label", "sac-normalization-option");
+        const checkbox = element("input", "");
+        checkbox.type = "checkbox";
+        checkbox.value = name;
+        checkbox.dataset.sacSubtable = "";
+        checkbox.checked = this.state.subtables.includes(name);
+        const description = element("span", "");
+        description.append("Return ", element("code", "", name), " as a subtable");
+        label.append(checkbox, description);
+        container.append(label);
+      });
+      container.append(element(
+        "p", "sac-help",
+        "A subtable preserves one root row. Unchecked to-many fields remain flat and may repeat the root row."
+      ));
+    }
+
     renderSelectedFields() {
       const container = this.root.querySelector("[data-sac-selected-fields]");
       container.replaceChildren();
@@ -441,34 +542,85 @@
         container.append(element("p", "sac-muted", "Choose at least one field."));
         return;
       }
-      this.state.selectedFields.forEach((path, index) => {
+      this.state.selectedFields.forEach((selection, index) => {
+        const path = selection.field;
         const field = this.fieldMap.get(path) || {label: path, type: "field"};
         const row = element("div", "sac-selected-field");
         row.dataset.field = path;
+        row.dataset.selectionId = selection.id;
         const handle = element("span", "sac-drag", "⋮⋮");
         handle.setAttribute("aria-hidden", "true");
         const copy = element("div", "sac-selected-copy");
         copy.append(element("strong", "", field.label), element("code", "", path));
+        const configured = [selection.alias && `as ${selection.alias}`, selection.format].filter(Boolean).join(" · ");
+        if (configured) copy.append(element("small", "sac-field-config-summary", configured));
         const actions = element("div", "sac-field-actions");
-        [["up", "↑", "Move up"], ["down", "↓", "Move down"], ["remove", "×", "Remove"]].forEach(([action, text, label]) => {
+        [["configure", "Configure", "Configure"], ["up", "↑", "Move up"], ["down", "↓", "Move down"], ["remove", "×", "Remove"]].forEach(([action, text, label]) => {
           const button = element("button", "", text);
           button.type = "button";
           button.dataset.sacFieldAction = action;
           button.setAttribute("aria-label", `${label} ${field.label}`);
+          if (action === "configure") {
+            button.classList.add("sac-configure-field");
+            button.setAttribute("aria-expanded", String(this.state.configuredField === selection.id));
+          }
           if ((action === "up" && index === 0) || (action === "down" && index === this.state.selectedFields.length - 1)) button.disabled = true;
           actions.append(button);
         });
         row.append(handle, copy, actions);
+        if (this.state.configuredField === selection.id) {
+          row.classList.add("is-configuring");
+          row.append(this.fieldConfiguration(field, selection));
+        }
         container.append(row);
       });
     }
 
+    selectionSchema() {
+      return this.openapi && this.openapi.components && this.openapi.components.schemas
+        && this.openapi.components.schemas.SelectoSelection || {};
+    }
+
+    fieldFormats(field) {
+      if (!field || !TEMPORAL_TYPES.has(field.type)) return [];
+      const format = (this.selectionSchema().properties || {}).format || {};
+      return Array.isArray(format.enum) ? format.enum.filter((value) => typeof value === "string") : [];
+    }
+
+    fieldConfiguration(field, config) {
+      const panel = element("div", "sac-field-configuration");
+      const aliasLabel = element("label", "");
+      aliasLabel.append(element("span", "", "Result alias"));
+      const alias = element("input", "");
+      alias.type = "text";
+      alias.value = config.alias || "";
+      alias.placeholder = field.path.replace(/\./g, "_");
+      alias.pattern = "[A-Za-z_][A-Za-z0-9_]*";
+      alias.maxLength = 80;
+      alias.dataset.sacFieldAlias = "";
+      alias.setAttribute("aria-label", `Result alias for ${field.label}`);
+      aliasLabel.append(alias);
+      panel.append(aliasLabel);
+
+      const formats = this.fieldFormats(field);
+      if (formats.length) {
+        const formatLabel = element("label", "");
+        formatLabel.append(element("span", "", "Format"));
+        const format = element("select", "");
+        format.dataset.sacFieldFormat = "";
+        format.setAttribute("aria-label", `Format for ${field.label}`);
+        appendOptions(format, formats.map((value) => ({value, label: humanize(value)})), config.format || "", "Default");
+        formatLabel.append(format);
+        panel.append(formatLabel);
+      }
+      return panel;
+    }
+
     renderFieldList() {
       const query = (this.root.querySelector("[data-sac-field-search]").value || "").trim().toLowerCase();
-      const selected = new Set(this.state.selectedFields);
       const container = this.root.querySelector("[data-sac-field-list]");
       container.replaceChildren();
-      const matches = this.fields.filter((field) => !selected.has(field.path) && (!query || `${field.path} ${field.label} ${field.type}`.toLowerCase().includes(query)));
+      const matches = this.fields.filter((field) => !query || `${field.path} ${field.label} ${field.type}`.toLowerCase().includes(query));
       matches.slice(0, 150).forEach((field) => {
         const button = element("button", "sac-available-field");
         button.type = "button";
@@ -666,7 +818,31 @@
 
     buildPayload() {
       const payload = {};
-      if (this.state.mode === "select") payload.select = this.state.selectedFields.slice();
+      if (this.state.mode === "select") {
+        const selectedFields = this.state.selectedFields.map((selection) => {
+          const alias = String(selection.alias || "").trim();
+          const format = String(selection.format || "");
+          const value = !alias && !format ? selection.field
+            : Object.assign({field: selection.field}, alias ? {alias} : {}, format ? {format} : {});
+          return {association: selection.field.split(".")[0], value};
+        });
+        const subtables = new Set(this.state.subtables);
+        const grouped = new Map();
+        payload.select = [];
+        selectedFields.forEach((selection) => {
+          if (!subtables.has(selection.association)) {
+            payload.select.push(selection.value);
+            return;
+          }
+          let group = grouped.get(selection.association);
+          if (!group) {
+            group = [];
+            grouped.set(selection.association, group);
+            payload.select.push(group);
+          }
+          group.push(selection.value);
+        });
+      }
       if (this.state.mode === "projection") payload.projection = this.state.projection;
       if (this.state.mode === "view") payload.view = this.state.view;
       if (this.state.segments.length) payload.segments = this.state.segments.slice();
@@ -680,6 +856,8 @@
       if (this.state.filters.length) payload.filters = this.state.filters.flatMap((filter) => this.filterPayloads(filter));
       if (this.state.ordering) payload.ordering = this.state.ordering;
       else if (this.state.orders.length) payload.order_by = this.state.orders.map((order) => ({field: order.field, direction: order.direction}));
+      if (String(this.state.timezone || "").trim()) payload.timezone = String(this.state.timezone).trim();
+      payload.row_format = this.state.rowFormat;
       payload.limit = Number.parseInt(this.state.limit, 10) || 0;
       payload.offset = Number.parseInt(this.state.offset, 10) || 0;
       return payload;
@@ -709,12 +887,12 @@
       if (resultTab) return this.switchResultTab(resultTab.dataset.sacResultTab);
       const addField = event.target.closest("[data-sac-add-field]");
       if (addField) {
-        this.state.selectedFields.push(addField.dataset.sacAddField);
+        this.state.selectedFields.push(this.newSelectedField(addField.dataset.sacAddField));
         this.changed();
         return;
       }
       const fieldAction = event.target.closest("[data-sac-field-action]");
-      if (fieldAction) return this.moveField(fieldAction.closest("[data-field]").dataset.field, fieldAction.dataset.sacFieldAction);
+      if (fieldAction) return this.moveField(fieldAction.closest("[data-selection-id]").dataset.selectionId, fieldAction.dataset.sacFieldAction);
       const addFilter = event.target.closest("[data-sac-add-filter]");
       if (addFilter) {
         const initialField = this.fieldMap.get(addFilter.dataset.sacAddFilter);
@@ -763,6 +941,17 @@
       else if (target.matches("[data-sac-view]")) this.state.view = target.value;
       else if (target.matches("[data-sac-segments]")) this.state.segments = Array.from(target.selectedOptions).map((option) => option.value);
       else if (target.matches("[data-sac-ordering]")) this.state.ordering = target.value;
+      else if (target.matches("[data-sac-row-format]")) this.state.rowFormat = target.value;
+      else if (target.matches("[data-sac-field-format]")) {
+        const selection = this.selectedFieldFor(target);
+        selection.format = target.value;
+      }
+      else if (target.matches("[data-sac-subtable]")) {
+        const values = new Set(this.state.subtables);
+        if (target.checked) values.add(target.value);
+        else values.delete(target.value);
+        this.state.subtables = Array.from(values).sort();
+      }
       else if (target.matches("[data-sac-filter-op]")) {
         const filter = this.filterFor(target);
         filter.op = target.value;
@@ -787,11 +976,15 @@
         this.updateCurl();
         return;
       }
-      if (target.matches("[data-sac-parameter]")) this.state.parameters[target.dataset.sacParameter] = target.value;
+      if (target.matches("[data-sac-field-alias]")) {
+        this.selectedFieldFor(target).alias = target.value;
+      }
+      else if (target.matches("[data-sac-parameter]")) this.state.parameters[target.dataset.sacParameter] = target.value;
       else if (target.matches("[data-sac-filter-value]")) this.filterFor(target).value = target.value;
       else if (target.matches("[data-sac-filter-end]")) this.filterFor(target).end = target.value;
       else if (target.matches("[data-sac-limit]")) this.state.limit = target.value;
       else if (target.matches("[data-sac-offset]")) this.state.offset = target.value;
+      else if (target.matches("[data-sac-timezone]")) this.state.timezone = target.value;
       else return;
       this.syncRequest(true);
     }
@@ -806,10 +999,23 @@
       return this.state.orders.find((order) => order.id === id);
     }
 
-    moveField(path, action) {
-      const index = this.state.selectedFields.indexOf(path);
+    selectedFieldFor(target) {
+      const id = target.closest("[data-selection-id]").dataset.selectionId;
+      return this.state.selectedFields.find((selection) => selection.id === id);
+    }
+
+    moveField(id, action) {
+      const index = this.state.selectedFields.findIndex((selection) => selection.id === id);
       if (index < 0) return;
-      if (action === "remove") this.state.selectedFields.splice(index, 1);
+      if (action === "configure") {
+        this.state.configuredField = this.state.configuredField === id ? "" : id;
+        this.renderSelectedFields();
+        return;
+      }
+      if (action === "remove") {
+        this.state.selectedFields.splice(index, 1);
+        if (this.state.configuredField === id) this.state.configuredField = "";
+      }
       if (action === "up" && index > 0) [this.state.selectedFields[index - 1], this.state.selectedFields[index]] = [this.state.selectedFields[index], this.state.selectedFields[index - 1]];
       if (action === "down" && index < this.state.selectedFields.length - 1) [this.state.selectedFields[index + 1], this.state.selectedFields[index]] = [this.state.selectedFields[index], this.state.selectedFields[index + 1]];
       this.changed();
@@ -905,7 +1111,9 @@
         head.append(tr);
         rows.forEach((row) => {
           const resultRow = element("tr", "");
-          columns.forEach((_column, index) => resultRow.append(element("td", "", renderValue(row[index]))));
+          columns.forEach((column, index) => resultRow.append(
+            element("td", "", renderValue(rowValue(row, column, index)))
+          ));
           body.append(resultRow);
         });
       } else {
@@ -953,9 +1161,10 @@
   }
 
   const api = {
-    version: "0.3.2",
+    version: "0.3.9",
     APIConsole,
     DATE_SHORTCUTS,
+    associationIsMany,
     collectFields,
     compareSemanticFields,
     discoverCanonicalAPI,
@@ -963,6 +1172,7 @@
     normalizeAPIBase,
     operatorsForType,
     renderValue,
+    rowValue,
     segmentParameterSpecs,
   };
   global.SelectoAPIConsole = api;
