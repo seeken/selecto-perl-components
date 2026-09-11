@@ -394,6 +394,9 @@ code, pre, textarea.sac-request-editor {
 
 .sac-compact-actions { gap: .55rem; }
 .sac-edited { color: var(--sac-accent); font-size: .7rem; font-weight: 800; }
+.sac-import-message { padding: .65rem 1rem; border-bottom: 1px solid var(--sac-border); font-size: .76rem; line-height: 1.45; }
+.sac-import-message[data-kind="success"] { color: var(--sac-success); background: color-mix(in srgb, var(--sac-success) 8%, var(--sac-surface)); }
+.sac-import-message[data-kind="error"] { color: var(--sac-error); background: color-mix(in srgb, var(--sac-error) 8%, var(--sac-surface)); }
 
 .sac-request-editor {
   display: block;
