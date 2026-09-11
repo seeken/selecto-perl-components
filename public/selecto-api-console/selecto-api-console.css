@@ -266,6 +266,10 @@ code, pre, textarea.sac-request-editor {
 
 .sac-selected-fields { display: grid; gap: .38rem; margin: .75rem 0 1rem; }
 
+.sac-normalization { margin: 0 0 1rem; padding: .65rem; border: 1px solid var(--sac-border); border-radius: 9px; background: var(--sac-surface-2); }
+.sac-normalization-option { display: flex; align-items: center; gap: .5rem; margin-top: .4rem; font-size: .78rem; }
+.sac-card .sac-normalization-option input { width: auto; min-height: 0; margin: 0; }
+
 .sac-selected-field {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -281,6 +285,7 @@ code, pre, textarea.sac-request-editor {
 .sac-selected-copy, .sac-available-field > span { display: grid; min-width: 0; }
 .sac-selected-copy strong, .sac-available-field strong { overflow: hidden; font-size: .82rem; text-overflow: ellipsis; white-space: nowrap; }
 .sac-selected-copy code, .sac-available-field code { overflow: hidden; margin-top: .12rem; color: var(--sac-muted); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
+.sac-field-config-summary { margin-top: .2rem; color: var(--sac-teal); font-size: .68rem; font-weight: 700; }
 .sac-field-actions { display: flex; gap: .2rem; }
 .sac-field-actions button, .sac-icon-button {
   display: inline-grid;
@@ -297,6 +302,20 @@ code, pre, textarea.sac-request-editor {
 
 .sac-field-actions button:hover, .sac-icon-button:hover { border-color: var(--sac-teal); color: var(--sac-teal); }
 .sac-field-actions button:disabled, .sac-icon-button:disabled { opacity: .3; cursor: default; }
+.sac-field-actions .sac-configure-field { width: auto; padding: 0 .55rem; font-size: .7rem; font-weight: 800; }
+.sac-field-actions .sac-configure-field[aria-expanded="true"] { border-color: var(--sac-teal); color: var(--sac-teal); }
+
+.sac-field-configuration {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .55rem;
+  padding: .65rem;
+  border-top: 1px solid var(--sac-border);
+}
+.sac-field-configuration label { min-width: 0; }
+.sac-field-configuration label > span { display: block; margin-bottom: .3rem; color: var(--sac-muted); font-size: .68rem; font-weight: 800; text-transform: uppercase; }
+.sac-field-configuration input, .sac-field-configuration select { min-height: 2.25rem; }
 
 .sac-field-list {
   display: grid;
@@ -489,6 +508,7 @@ code, pre, textarea.sac-request-editor {
   .sac-run-row { align-items: stretch; flex-direction: column; }
   .sac-run-row .sac-button { width: 100%; }
   .sac-parameters { grid-template-columns: 1fr; }
+  .sac-field-configuration { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

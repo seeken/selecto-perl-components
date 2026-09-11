@@ -2,6 +2,7 @@ package Selecto::Components::Config;
 
 use Mojo::Base -base, -signatures;
 use Scalar::Util qw(blessed);
+use Selecto::DateFormat ();
 use Selecto::Components::DateShortcut ();
 use Selecto::Components::I18N ();
 use Selecto::Components::Util qw(humanize);
@@ -35,19 +36,7 @@ has 'theme_resolver';
 has 'page_shell_resolver';
 has 'websocket_message_cleanup';
 
-my @DATE_FORMATS = (
-    { id => 'day', label => 'Day' },
-    { id => 'time', label => 'Time' },
-    { id => 'day_hour', label => 'Day + Hour' },
-    { id => 'week', label => 'Week' },
-    { id => 'month', label => 'Month' },
-    { id => 'quarter', label => 'Quarter' },
-    { id => 'year', label => 'Year' },
-    { id => 'month_of_year', label => 'Month of Year' },
-    { id => 'day_of_month', label => 'Day of Month' },
-    { id => 'day_of_week', label => 'Day of Week' },
-    { id => 'hour', label => 'Hour of Day' },
-);
+my @DATE_FORMATS = @{Selecto::DateFormat->choices};
 
 sub new ($class, @args) {
     my $self = $class->SUPER::new(@args);
