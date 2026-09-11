@@ -212,6 +212,14 @@
     return row && typeof row === "object" ? row[column] : undefined;
   }
 
+  function isPlainObject(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+
+  function onlyKeys(value, allowed) {
+    return Object.keys(value).filter((key) => !allowed.includes(key));
+  }
+
   function segmentParameterSpecs(library, ids) {
     const segments = (library && library.segments) || {};
     const specs = {};
@@ -410,8 +418,9 @@
               <section class="sac-request-card">
                 <div class="sac-card-heading">
                   <div><span class="sac-method">POST</span><code data-sac-query-path></code></div>
-                  <div class="sac-compact-actions"><span class="sac-edited" data-sac-edited hidden>Manually edited</span><button type="button" class="sac-text-button" data-sac-reset-json>Reset JSON</button><button type="button" class="sac-text-button" data-sac-copy-request>Copy</button></div>
+                  <div class="sac-compact-actions"><span class="sac-edited" data-sac-edited hidden>Manually edited</span><button type="button" class="sac-text-button" data-sac-load-json>Load into chooser</button><button type="button" class="sac-text-button" data-sac-reset-json>Reset JSON</button><button type="button" class="sac-text-button" data-sac-copy-request>Copy</button></div>
                 </div>
+                <div class="sac-import-message" data-sac-import-message hidden></div>
                 <textarea class="sac-request-editor" spellcheck="false" aria-label="Query request JSON" data-sac-request></textarea>
                 <div class="sac-run-row"><p>All fields and identifiers are validated against the published domain.</p><button type="button" class="sac-button sac-primary" data-sac-run><span data-sac-run-label>Run query</span></button></div>
               </section>
@@ -863,11 +872,188 @@
       return payload;
     }
 
+    chooserStateFromPayload(payload) {
+      if (!isPlainObject(payload)) throw new Error("The request must be a JSON object.");
+      const allowed = ["select", "projection", "view", "segments", "parameters", "filters", "ordering", "order_by", "timezone", "row_format", "limit", "offset"];
+      const unknown = onlyKeys(payload, allowed);
+      if (unknown.length) throw new Error(`Unsupported request properties: ${unknown.join(", ")}.`);
+      const sources = ["select", "projection", "view"].filter((key) => Object.prototype.hasOwnProperty.call(payload, key));
+      if (sources.length !== 1) throw new Error("Use exactly one of select, projection, or view.");
+      if (Object.prototype.hasOwnProperty.call(payload, "ordering") && Object.prototype.hasOwnProperty.call(payload, "order_by")) {
+        throw new Error("The chooser cannot use ordering and order_by together.");
+      }
+
+      const library = this.domain && this.domain.query_library || {};
+      const draft = {
+        mode: sources[0], selectedFields: [], configuredField: "",
+        projection: "", view: "", segments: [], parameters: {}, filters: [],
+        orders: [], ordering: "", timezone: "", rowFormat: "arrays", subtables: [],
+        limit: 100, offset: 0,
+      };
+      let selectedId = this.nextSelectedFieldId;
+      let filterId = this.nextFilterId;
+      let orderId = this.nextOrderId;
+
+      const parseSelection = (entry) => {
+        let field;
+        let alias = "";
+        let format = "";
+        if (typeof entry === "string") field = entry;
+        else if (isPlainObject(entry)) {
+          const extra = onlyKeys(entry, ["field", "alias", "format"]);
+          if (extra.length) throw new Error(`Unsupported selected-field properties: ${extra.join(", ")}.`);
+          field = entry.field;
+          if (Object.prototype.hasOwnProperty.call(entry, "alias")) alias = entry.alias;
+          if (Object.prototype.hasOwnProperty.call(entry, "format")) format = entry.format;
+        } else throw new Error("Each selected field must be a field name or field configuration object.");
+        if (typeof field !== "string" || !this.fieldMap.has(field)) throw new Error(`The chooser does not know the field ${JSON.stringify(field)}.`);
+        if (typeof alias !== "string" || (alias && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias))) throw new Error(`The alias for ${field} is not representable.`);
+        if (typeof format !== "string" || (format && !this.fieldFormats(this.fieldMap.get(field)).includes(format))) throw new Error(`The format for ${field} is not available in the chooser.`);
+        return {id: String(selectedId++), field, alias, format};
+      };
+
+      if (draft.mode === "select") {
+        if (!Array.isArray(payload.select) || !payload.select.length) throw new Error("select must be a non-empty array.");
+        const nestedAssociations = new Set();
+        const flatAssociations = new Set();
+        payload.select.forEach((entry) => {
+          if (!Array.isArray(entry)) {
+            const selection = parseSelection(entry);
+            draft.selectedFields.push(selection);
+            flatAssociations.add(selection.field.split(".")[0]);
+            return;
+          }
+          if (!entry.length) throw new Error("A subtable selection cannot be empty.");
+          const selections = entry.map(parseSelection);
+          const associations = new Set(selections.map((selection) => selection.field.split(".")[0]));
+          if (associations.size !== 1 || selections.some((selection) => !selection.field.includes("."))) {
+            throw new Error("Each subtable must contain fields from one direct relationship.");
+          }
+          const association = selections[0].field.split(".")[0];
+          const specification = this.domain && this.domain.source && this.domain.source.associations && this.domain.source.associations[association];
+          if (!specification || !associationIsMany(specification, this.domain.schemas || {})) throw new Error(`${association} is not an available to-many subtable.`);
+          if (nestedAssociations.has(association)) throw new Error(`The chooser supports one ${association} subtable per request.`);
+          nestedAssociations.add(association);
+          draft.subtables.push(association);
+          draft.selectedFields.push(...selections);
+        });
+        const mixed = Array.from(nestedAssociations).find((association) => flatAssociations.has(association));
+        if (mixed) throw new Error(`The chooser cannot mix flat and subtable fields from ${mixed}.`);
+      } else if (draft.mode === "projection") {
+        if (typeof payload.projection !== "string" || !Object.prototype.hasOwnProperty.call(library.projections || {}, payload.projection)) {
+          throw new Error("The chooser supports one published named projection.");
+        }
+        draft.projection = payload.projection;
+      } else {
+        if (typeof payload.view !== "string" || !Object.prototype.hasOwnProperty.call(library.views || {}, payload.view)) {
+          throw new Error("The chooser only supports published named views.");
+        }
+        draft.view = payload.view;
+      }
+
+      if (payload.segments !== undefined) {
+        if (!Array.isArray(payload.segments) || payload.segments.some((id) => typeof id !== "string" || !Object.prototype.hasOwnProperty.call(library.segments || {}, id))) {
+          throw new Error("One or more named segments are not available in the chooser.");
+        }
+        if (new Set(payload.segments).size !== payload.segments.length) throw new Error("The chooser cannot represent repeated named segments.");
+        draft.segments = payload.segments.slice();
+      }
+      if (payload.parameters !== undefined) {
+        if (!isPlainObject(payload.parameters)) throw new Error("parameters must be a JSON object.");
+        const segmentIds = draft.segments.slice();
+        if (draft.mode === "view") segmentIds.push(...(((library.views || {})[draft.view] || {}).segments || []));
+        const specs = segmentParameterSpecs(library, segmentIds);
+        const unsupported = Object.keys(payload.parameters).filter((name) => !Object.prototype.hasOwnProperty.call(specs, name));
+        if (unsupported.length) throw new Error(`Parameters not exposed by the selected segments: ${unsupported.join(", ")}.`);
+        if (Object.values(payload.parameters).some((value) => value !== null && typeof value === "object")) throw new Error("The chooser only supports scalar parameter values.");
+        draft.parameters = Object.assign({}, payload.parameters);
+      }
+      if (payload.filters !== undefined) {
+        if (!Array.isArray(payload.filters)) throw new Error("filters must be an array.");
+        draft.filters = payload.filters.map((filter) => {
+          if (!isPlainObject(filter)) throw new Error("Each filter must be a JSON object.");
+          const extra = onlyKeys(filter, ["field", "op", "value", "end"]);
+          if (extra.length) throw new Error(`Unsupported filter properties: ${extra.join(", ")}.`);
+          const field = this.fieldMap.get(filter.field);
+          if (!field) throw new Error(`The chooser does not know the filter field ${JSON.stringify(filter.field)}.`);
+          if (typeof filter.op !== "string" || !operatorsForType(field.type).includes(filter.op)) throw new Error(`The ${filter.op} filter is not available for ${filter.field}.`);
+          if (filter.op === "in" && (!Array.isArray(filter.value) || filter.value.some((value) => typeof value !== "string"))) throw new Error("The chooser supports in-filter values as an array of strings.");
+          if (!/^(is_null|not_null)$/.test(filter.op) && !Object.prototype.hasOwnProperty.call(filter, "value")) throw new Error(`The ${filter.op} filter requires a value.`);
+          if (filter.op === "between" && !Object.prototype.hasOwnProperty.call(filter, "end")) throw new Error("A between filter requires an end value.");
+          return {
+            id: String(filterId++), field: filter.field, op: filter.op,
+            value: filter.op === "in" ? filter.value.join(", ") : (filter.value === undefined ? "" : filter.value),
+            end: filter.end === undefined ? "" : filter.end,
+          };
+        });
+      }
+      if (payload.ordering !== undefined) {
+        if (typeof payload.ordering !== "string" || !Object.prototype.hasOwnProperty.call(library.orderings || {}, payload.ordering)) throw new Error("The named ordering is not available in the chooser.");
+        draft.ordering = payload.ordering;
+      }
+      if (payload.order_by !== undefined) {
+        if (!Array.isArray(payload.order_by)) throw new Error("order_by must be an array.");
+        draft.orders = payload.order_by.map((order) => {
+          if (!isPlainObject(order) || onlyKeys(order, ["field", "direction"]).length || !this.fieldMap.has(order.field) || !["asc", "desc"].includes(order.direction)) {
+            throw new Error("Each custom ordering needs a known field and an asc or desc direction.");
+          }
+          return {id: String(orderId++), field: order.field, direction: order.direction};
+        });
+      }
+      if (payload.timezone !== undefined) {
+        if (typeof payload.timezone !== "string") throw new Error("timezone must be a string.");
+        draft.timezone = payload.timezone;
+      }
+      if (payload.row_format !== undefined) {
+        if (!["arrays", "objects"].includes(payload.row_format)) throw new Error("row_format must be arrays or objects.");
+        draft.rowFormat = payload.row_format;
+      }
+      [["limit", 100], ["offset", 0]].forEach(([name, fallback]) => {
+        if (payload[name] === undefined) return;
+        if (!Number.isInteger(payload[name]) || payload[name] < 0) throw new Error(`${name} must be a non-negative integer.`);
+        draft[name] = payload[name];
+      });
+      return {draft, counters: {selectedId, filterId, orderId}};
+    }
+
+    loadPayloadIntoChooser(payload) {
+      const converted = this.chooserStateFromPayload(payload);
+      Object.assign(this.state, converted.draft, {rawDirty: false});
+      this.nextSelectedFieldId = converted.counters.selectedId;
+      this.nextFilterId = converted.counters.filterId;
+      this.nextOrderId = converted.counters.orderId;
+      return this.state;
+    }
+
+    setImportMessage(message, kind) {
+      const target = this.root.querySelector("[data-sac-import-message]");
+      if (!target) return;
+      target.textContent = message || "";
+      target.dataset.kind = kind || "";
+      target.hidden = !message;
+    }
+
+    loadRequestIntoChooser() {
+      const editor = this.root.querySelector("[data-sac-request]");
+      let payload;
+      try {
+        payload = JSON.parse(editor.value);
+        this.loadPayloadIntoChooser(payload);
+      } catch (error) {
+        this.setImportMessage(`The chooser cannot represent this JSON: ${error.message} You can still run it, but the chooser will not track it; you are in manual JSON mode.`, "error");
+        return false;
+      }
+      this.renderAll();
+      this.setImportMessage("Chooser updated from the request JSON.", "success");
+      return true;
+    }
+
     syncRequest(force) {
       if (this.state.rawDirty && !force) return;
       this.root.querySelector("[data-sac-request]").value = JSON.stringify(this.buildPayload(), null, 2);
       this.state.rawDirty = false;
       this.root.querySelector("[data-sac-edited]").hidden = true;
+      if (force) this.setImportMessage("", "");
       this.updateCurl();
     }
 
@@ -925,6 +1111,7 @@
         this.changed();
         return;
       }
+      if (event.target.closest("[data-sac-load-json]")) return this.loadRequestIntoChooser();
       if (event.target.closest("[data-sac-reset-json]")) return this.syncRequest(true);
       if (event.target.closest("[data-sac-run]")) return this.run();
       if (event.target.closest("[data-sac-copy-request]")) return this.copy(this.root.querySelector("[data-sac-request]").value, event.target);
@@ -973,6 +1160,7 @@
       if (target.matches("[data-sac-request]")) {
         this.state.rawDirty = true;
         this.root.querySelector("[data-sac-edited]").hidden = false;
+        this.setImportMessage("", "");
         this.updateCurl();
         return;
       }
@@ -1023,6 +1211,7 @@
 
     changed() {
       this.state.rawDirty = false;
+      this.setImportMessage("", "");
       this.renderAll();
     }
 
@@ -1161,7 +1350,7 @@
   }
 
   const api = {
-    version: "0.3.9",
+    version: "0.3.10",
     APIConsole,
     DATE_SHORTCUTS,
     associationIsMany,

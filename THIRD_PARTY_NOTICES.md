@@ -1,6 +1,6 @@
 # Third-party notices
 
-## @selecto/api-console 0.3.9
+## @selecto/api-console 0.3.10
 
 The files beneath `public/selecto-api-console/` are generated distribution
 artifacts from the sibling `selecto-api-console` repository. They are shipped
