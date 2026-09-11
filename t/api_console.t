@@ -12,16 +12,18 @@ my $page = Selecto::Components::APIConsole->page(
 );
 like $page, qr{data-selecto-api-console}, 'page exposes the framework-neutral mount point';
 like $page, qr{data-api-base="/api2/load/v1"}, 'page normalizes the API base path';
+like $page, qr{data-curl-auth="cookie"}, 'page defaults generated cURL to cookie auth';
 like $page, qr{<html lang="en" data-sac-color-scheme="light">},
     'console pages use the shared light operational palette by default';
-like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.3\.10},
+like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.3\.11},
     'page loads the versioned shared stylesheet';
-like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.3\.10},
+like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.3\.11},
     'page loads the versioned shared JavaScript';
 
 $page = Selecto::Components::APIConsole->page(
     base_path => '/api2/load/v1',
     title => 'Load API Console',
+    curl_auth => 'basic',
     theme => {
         scheme => 'light', primary => '#cc5500', secondary => '#dc8b52',
         on_primary => '#000000',
@@ -45,6 +47,8 @@ like $page, qr{<meta name="host-end" content="1"></head>},
 like $page,
     qr{<body class="sac-body cgt-host-menu-toolbar"><nav data-host-menu>Menu</nav><main class="sac-app cgt-mojo-page"},
     'host navigation and the standard Mojo content class wrap the console';
+like $page, qr{data-curl-auth="basic"},
+    'host applications can select Basic auth for generated cURL';
 
 $page = Selecto::Components::APIConsole->page(
     base_path => '/api2/client/v1',
@@ -73,6 +77,13 @@ eval {
 };
 like "$@", qr/page_shell content_class must contain CSS class names/,
     'unsafe host content classes cannot inject HTML attributes';
+eval {
+    Selecto::Components::APIConsole->page(
+        base_path => '/api2/load/v1', curl_auth => 'oauth<script>',
+    );
+};
+like "$@", qr/curl_auth must be basic, cookie, or none/,
+    'unknown cURL authentication modes are rejected';
 
 my $app = Mojolicious->new;
 my $asset_path = Selecto::Components::APIConsole->install_assets($app);

@@ -4,6 +4,7 @@
   const MAX_RELATION_DEPTH = 4;
   const TEMPORAL_TYPES = new Set(["date", "datetime", "naive_datetime", "utc_datetime", "epoch_datetime"]);
   const NUMERIC_TYPES = new Set(["integer", "decimal", "float", "number"]);
+  const CURL_AUTH_MODES = new Set(["basic", "cookie", "none"]);
   const DATE_SHORTCUTS = [
     ["Days", "today", "Today"],
     ["Days", "yesterday", "Yesterday"],
@@ -47,6 +48,33 @@
       throw new Error("The API console requires an absolute same-origin API path.");
     }
     return candidate;
+  }
+
+  function normalizeCurlAuth(value, fallback) {
+    const candidate = String(value || fallback || "cookie").trim().toLowerCase();
+    if (!CURL_AUTH_MODES.has(candidate)) {
+      throw new Error("The API console cURL authentication mode must be basic, cookie, or none.");
+    }
+    return candidate;
+  }
+
+  function curlAuthConfiguration(mode) {
+    if (mode === "basic") {
+      return {
+        args: ["  --basic", "  --user 'YOUR_USERNAME:YOUR_PASSWORD'"],
+        help: "Replace the username and password placeholders with your credentials. cURL sends them using HTTP Basic authentication over HTTPS.",
+      };
+    }
+    if (mode === "none") {
+      return {
+        args: [],
+        help: "This host does not add authentication credentials to generated cURL commands.",
+      };
+    }
+    return {
+      args: ["  --cookie 'YOUR_SESSION_COOKIE'"],
+      help: "The browser uses your current authenticated session. Supply the corresponding session cookie when running cURL separately.",
+    };
   }
 
   function standaloneOption(name) {
@@ -244,6 +272,7 @@
       this.root = root;
       this.base = root.dataset.apiBase || standaloneOption("api");
       this.title = root.dataset.title || standaloneOption("title") || "Selecto API Console";
+      this.curlAuth = normalizeCurlAuth(root.dataset.curlAuth, standaloneOption("curl_auth"));
       this.domain = null;
       this.manifest = null;
       this.openapi = null;
@@ -436,7 +465,7 @@
                 <div class="sac-empty-response" data-sac-empty-response><strong>Build a query, then run it.</strong><span>The result table and canonical JSON response will appear here.</span></div>
                 <div class="sac-result-panel" data-sac-result-panel="table" hidden><div class="sac-table-wrap"><table><thead data-sac-result-head></thead><tbody data-sac-result-body></tbody></table></div></div>
                 <div class="sac-result-panel" data-sac-result-panel="json" hidden><div class="sac-code-heading"><span>Canonical response</span><button type="button" class="sac-text-button" data-sac-copy-response>Copy</button></div><pre data-sac-response-json></pre></div>
-                <div class="sac-result-panel" data-sac-result-panel="curl" hidden><div class="sac-code-heading"><span>Command line</span><button type="button" class="sac-text-button" data-sac-copy-curl>Copy</button></div><pre data-sac-curl></pre><p class="sac-help">The browser uses your current authenticated session. Supply the corresponding session cookie when running cURL separately.</p></div>
+                <div class="sac-result-panel" data-sac-result-panel="curl" hidden><div class="sac-code-heading"><span>Command line</span><button type="button" class="sac-text-button" data-sac-copy-curl>Copy</button></div><pre data-sac-curl></pre><p class="sac-help" data-sac-curl-auth-help></p></div>
               </section>
             </section>
           </div>
@@ -453,6 +482,7 @@
       this.root.querySelector("[data-sac-openapi-link]").href = `${this.base}/openapi.json`;
       this.root.querySelector("[data-sac-domain-json]").textContent = JSON.stringify(this.domain, null, 2);
       this.root.querySelector("[data-sac-openapi-json]").textContent = JSON.stringify(this.openapi, null, 2);
+      this.root.querySelector("[data-sac-curl-auth-help]").textContent = curlAuthConfiguration(this.curlAuth).help;
       this.bind();
       this.populateLibraryControls();
       this.renderAll();
@@ -1061,7 +1091,14 @@
       const editor = this.root.querySelector("[data-sac-request]");
       const body = editor ? editor.value : JSON.stringify(this.buildPayload(), null, 2);
       const url = `${window.location.origin}${this.queryPath}`;
-      const command = `curl -X POST ${shellEscape(url)} \\\n  -H 'Content-Type: application/json' \\\n  -H 'Accept: application/json' \\\n  --cookie 'YOUR_SESSION_COOKIE' \\\n  --data-binary ${shellEscape(body)}`;
+      const auth = curlAuthConfiguration(this.curlAuth);
+      const command = [
+        `curl -X POST ${shellEscape(url)}`,
+        ...auth.args,
+        "  -H 'Content-Type: application/json'",
+        "  -H 'Accept: application/json'",
+        `  --data-binary ${shellEscape(body)}`,
+      ].join(" \\\n");
       const target = this.root.querySelector("[data-sac-curl]");
       if (target) target.textContent = command;
     }
@@ -1350,12 +1387,13 @@
   }
 
   const api = {
-    version: "0.3.10",
+    version: "0.3.11",
     APIConsole,
     DATE_SHORTCUTS,
     associationIsMany,
     collectFields,
     compareSemanticFields,
+    normalizeCurlAuth,
     discoverCanonicalAPI,
     mountAll,
     normalizeAPIBase,
