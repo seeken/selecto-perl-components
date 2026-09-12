@@ -80,6 +80,11 @@ is $low_stock->{description}, 'Sous le seuil fourni.',
 my $resolved = Selecto::Components::Actions->find(
     $config, $domain, undef, 'build_shipments',
 );
+my $definition = Selecto::Components::Actions->definition(
+    $config, $domain, undef, 'build_shipments',
+);
+is $definition->{label}, 'Construire les expéditions',
+    'action form definitions can be resolved without a target authorization decision';
 is $resolved->{action}{label}, 'Construire les expéditions', 'action labels are localized';
 is $resolved->{action}{description}, 'Regrouper les produits sélectionnés.',
     'action descriptions are localized';
