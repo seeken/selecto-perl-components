@@ -98,8 +98,20 @@
     const domainPath = route("getDomain", `${normalizedBase}/domain`);
     const openapiPath = route("getOpenApi", `${normalizedBase}/openapi.json`);
     const queryPath = route("queryDomain", `${normalizedBase}/query`);
+    const writePath = route("writeDomain", `${normalizedBase}/write`);
+    const actionRoute = routes.find((item) => item && item.operation_id === "executeAction");
+    let actionPath = `${normalizedBase}/actions/{action}`;
+    if (actionRoute && typeof actionRoute.path === "string" && actionRoute.path.endsWith("/actions/{action}")) {
+      const prefix = actionRoute.path.slice(0, -"/{action}".length);
+      try {
+        normalizeAPIBase(prefix);
+        actionPath = actionRoute.path;
+      } catch (_error) {
+        // Keep the same-origin fallback.
+      }
+    }
     const [domain, openapi] = await Promise.all([fetchJSON(domainPath), fetchJSON(openapiPath)]);
-    return {base: normalizedBase, manifest, domain, openapi, queryPath};
+    return {base: normalizedBase, manifest, domain, openapi, queryPath, writePath, actionPath};
   }
 
   function humanize(value) {
@@ -277,6 +289,8 @@
       this.manifest = null;
       this.openapi = null;
       this.queryPath = `${this.base}/query`;
+      this.writePath = `${this.base}/write`;
+      this.actionPath = `${this.base}/actions/{action}`;
       this.fields = [];
       this.fieldMap = new Map();
       this.nextSelectedFieldId = 1;
@@ -301,6 +315,12 @@
       };
       this.nextFilterId = 1;
       this.nextOrderId = 1;
+      this.writeState = {
+        operation: "", assignments: {}, included: {}, filters: [],
+        expectedCount: 1, returning: [], conflictTarget: [], updateFields: [],
+        response: null,
+      };
+      this.actionState = {id: "", targetIds: "", inputs: {}, groups: [], response: null};
     }
 
     async start() {
@@ -311,6 +331,8 @@
         this.domain = discovery.domain;
         this.openapi = discovery.openapi;
         this.queryPath = discovery.queryPath;
+        this.writePath = discovery.writePath;
+        this.actionPath = discovery.actionPath;
         this.fields = collectFields(discovery.domain);
         this.fieldMap = new Map(this.fields.map((field) => [field.path, field]));
         this.seedState();
@@ -381,6 +403,8 @@
         </header>
         <nav class="sac-tabs" aria-label="API console sections">
           <button type="button" class="is-active" data-sac-main-tab="query">Query</button>
+          <button type="button" data-sac-main-tab="writes">Writes</button>
+          <button type="button" data-sac-main-tab="actions">Actions</button>
           <button type="button" data-sac-main-tab="domain">Domain</button>
           <button type="button" data-sac-main-tab="openapi">OpenAPI</button>
         </nav>
@@ -470,6 +494,34 @@
             </section>
           </div>
         </section>
+        <section data-sac-main-panel="writes" class="sac-main-panel" hidden>
+          <div class="sac-mutation-layout">
+            <section class="sac-card sac-mutation-builder" data-sac-write-builder></section>
+            <section class="sac-mutation-execution">
+              <section class="sac-request-card">
+                <div class="sac-card-heading"><div><span class="sac-method">POST</span><code data-sac-write-path></code></div><button type="button" class="sac-text-button" data-sac-copy-write>Copy JSON</button></div>
+                <div class="sac-correctness" data-sac-write-correctness></div>
+                <textarea class="sac-request-editor" readonly aria-label="Governed write request JSON" data-sac-write-request></textarea>
+                <div class="sac-run-row"><p>Only operations and fields published by the governed write contract can be sent.</p><button type="button" class="sac-button sac-primary" data-sac-run-write><span>Send write</span></button></div>
+              </section>
+              <section class="sac-response-card sac-mutation-response"><div class="sac-response-heading"><div><h2>Response</h2><span class="sac-response-status" data-sac-write-status>Ready</span></div></div><pre data-sac-write-response>Build a valid governed write, then send it.</pre></section>
+            </section>
+          </div>
+        </section>
+        <section data-sac-main-panel="actions" class="sac-main-panel" hidden>
+          <div class="sac-mutation-layout">
+            <section class="sac-card sac-mutation-builder" data-sac-action-builder></section>
+            <section class="sac-mutation-execution">
+              <section class="sac-request-card">
+                <div class="sac-card-heading"><div><span class="sac-method">POST</span><code data-sac-action-path></code></div><button type="button" class="sac-text-button" data-sac-copy-action>Copy JSON</button></div>
+                <div class="sac-correctness" data-sac-action-correctness></div>
+                <textarea class="sac-request-editor" readonly aria-label="Governed action request JSON" data-sac-action-request></textarea>
+                <div class="sac-run-row"><p>Inputs and target IDs are checked locally, then governed and authorized again by the server.</p><button type="button" class="sac-button sac-primary" data-sac-run-action><span>Send action</span></button></div>
+              </section>
+              <section class="sac-response-card sac-mutation-response"><div class="sac-response-heading"><div><h2>Response</h2><span class="sac-response-status" data-sac-action-status>Ready</span></div></div><pre data-sac-action-response>Choose an action, complete its form, then send it.</pre></section>
+            </section>
+          </div>
+        </section>
         <section data-sac-main-panel="domain" class="sac-document-panel" hidden><div class="sac-document-heading"><div><span class="sac-kicker">Discovery</span><h2>Canonical domain</h2></div><button type="button" class="sac-button sac-secondary" data-sac-copy-domain>Copy JSON</button></div><pre data-sac-domain-json></pre></section>
         <section data-sac-main-panel="openapi" class="sac-document-panel" hidden><div class="sac-document-heading"><div><span class="sac-kicker">Discovery</span><h2>OpenAPI 3.1</h2></div><button type="button" class="sac-button sac-secondary" data-sac-copy-openapi>Copy JSON</button></div><pre data-sac-openapi-json></pre></section>`;
 
@@ -478,6 +530,7 @@
       this.root.querySelector("[data-sac-domain-name]").textContent = this.domain.name || "Domain";
       this.root.querySelector("[data-sac-base]").textContent = this.base;
       this.root.querySelector("[data-sac-query-path]").textContent = this.queryPath;
+      this.root.querySelector("[data-sac-write-path]").textContent = this.writePath;
       this.root.querySelector("[data-sac-domain-link]").href = `${this.base}/domain`;
       this.root.querySelector("[data-sac-openapi-link]").href = `${this.base}/openapi.json`;
       this.root.querySelector("[data-sac-domain-json]").textContent = JSON.stringify(this.domain, null, 2);
@@ -485,7 +538,10 @@
       this.root.querySelector("[data-sac-curl-auth-help]").textContent = curlAuthConfiguration(this.curlAuth).help;
       this.bind();
       this.populateLibraryControls();
+      this.seedMutationState();
       this.renderAll();
+      this.renderWritePanel();
+      this.renderActionPanel();
     }
 
     bind() {
@@ -504,6 +560,290 @@
       appendOptions(this.root.querySelector("[data-sac-view]"), definitions("views"), "", "Choose a view");
       appendOptions(this.root.querySelector("[data-sac-ordering]"), definitions("orderings"), "", "Custom ordering");
       appendOptions(this.root.querySelector("[data-sac-segments]"), definitions("segments"), "");
+    }
+
+    rootFields() {
+      const source = this.domain && this.domain.source || {};
+      const columns = source.columns || {};
+      const names = Array.isArray(source.fields) ? source.fields : Object.keys(columns);
+      return names.filter((name) => !(columns[name] || {}).internal).map((name) => ({
+        name,
+        label: (columns[name] || {}).label || humanize(name),
+        type: String((columns[name] || {}).type || "string").toLowerCase(),
+      }));
+    }
+
+    writeOperations() {
+      const operations = this.domain && this.domain.writes && this.domain.writes.operations || {};
+      return ["insert", "update", "upsert", "delete"].filter((name) => {
+        const spec = operations[name];
+        return spec && spec.enabled;
+      });
+    }
+
+    actionCatalog() {
+      const operation = this.openapi && this.openapi.paths && this.openapi.paths[this.actionPath]
+        && this.openapi.paths[this.actionPath].post;
+      const advertised = operation && operation["x-selecto-actions"];
+      if (Array.isArray(advertised)) return advertised.filter((action) => action && action.id);
+      return Object.entries(this.domain && this.domain.actions || {}).map(([id, spec]) => Object.assign({id}, spec));
+    }
+
+    seedMutationState() {
+      const operations = this.writeOperations();
+      this.writeState.operation = operations[0] || "";
+      const actions = this.actionCatalog();
+      this.actionState.id = actions[0] ? actions[0].id : "";
+      const primaryKey = this.domain && this.domain.source && this.domain.source.primary_key || "id";
+      if (operations.includes("update") || operations.includes("delete")) {
+        this.writeState.filters = [{field: primaryKey, op: "eq", value: ""}];
+      }
+      this.ensureActionGroups();
+    }
+
+    selectedAction() {
+      return this.actionCatalog().find((action) => action.id === this.actionState.id) || null;
+    }
+
+    actionUsesGroups(action) {
+      return Boolean(action && action.selection && action.selection.mode === "groups");
+    }
+
+    ensureActionGroups() {
+      const action = this.selectedAction();
+      if (this.actionUsesGroups(action) && !this.actionState.groups.length) {
+        this.actionState.groups = [{ids: "", inputs: {}}];
+      }
+      if (!this.actionUsesGroups(action)) this.actionState.groups = [];
+    }
+
+    valueControl(type, value, attributes) {
+      let control;
+      if (type === "textarea") control = element("textarea", "");
+      else if (type === "select") control = element("select", "");
+      else {
+        control = element("input", "");
+        control.type = type === "number" ? "number"
+          : type === "date" ? "date"
+          : type === "datetime-local" ? "datetime-local" : "text";
+      }
+      Object.entries(attributes || {}).forEach(([name, setting]) => {
+        if (name === "dataset") Object.assign(control.dataset, setting);
+        else if (setting !== undefined) control[name] = setting;
+      });
+      if (type !== "select") control.value = value === undefined ? "" : value;
+      return control;
+    }
+
+    renderWritePanel() {
+      const container = this.root.querySelector("[data-sac-write-builder]");
+      container.replaceChildren();
+      const operations = this.writeOperations();
+      const heading = element("div", "sac-card-heading");
+      const headingCopy = element("div", "");
+      headingCopy.append(element("span", "sac-step", "1"), element("h2", "", "Build a governed write"));
+      heading.append(headingCopy);
+      container.append(heading);
+      if (!operations.length) {
+        container.append(element("p", "sac-empty-contract", "This domain does not publish any governed write operations."));
+        this.syncWriteRequest();
+        return;
+      }
+
+      const operationLabel = element("label", "sac-label", "Operation");
+      const operation = element("select", "");
+      operation.dataset.sacWriteOperation = "";
+      appendOptions(operation, operations.map((name) => ({value: name, label: humanize(name)})), this.writeState.operation);
+      container.append(operationLabel, operation);
+
+      const contract = this.domain.writes || {};
+      const fieldContract = contract.fields || {};
+      const permission = ["insert", "upsert"].includes(this.writeState.operation) ? "insertable" : "updatable";
+      const writable = this.rootFields().filter((field) => {
+        const spec = fieldContract[field.name];
+        return this.writeState.operation !== "delete" && spec && spec[permission];
+      });
+      if (this.writeState.operation !== "delete") {
+        container.append(element("span", "sac-label", "Assignments"));
+        const list = element("div", "sac-mutation-fields");
+        writable.forEach((field) => {
+          const row = element("label", "sac-mutation-field");
+          const checkbox = element("input", "");
+          checkbox.type = "checkbox";
+          checkbox.checked = Boolean(this.writeState.included[field.name]);
+          checkbox.dataset.sacWriteInclude = field.name;
+          const copy = element("span", "");
+          copy.append(element("strong", "", field.label), element("code", "", field.name));
+          const input = this.valueControl(field.type === "boolean" ? "select" : (NUMERIC_TYPES.has(field.type) ? "number" : "text"), this.writeState.assignments[field.name], {
+            dataset: {sacWriteField: field.name}, disabled: !checkbox.checked,
+          });
+          if (field.type === "boolean") appendOptions(input, [
+            {value: "true", label: "true"}, {value: "false", label: "false"},
+          ], this.writeState.assignments[field.name] || "true");
+          row.append(checkbox, copy, input);
+          list.append(row);
+        });
+        if (!writable.length) list.append(element("p", "sac-muted", "No fields are writable for this operation."));
+        container.append(list);
+      }
+
+      if (["update", "delete"].includes(this.writeState.operation)) {
+        const filterHeading = element("div", "sac-card-heading sac-mutation-subheading");
+        const filterCopy = element("div", "");
+        filterCopy.append(element("h2", "", "Target filters"));
+        const add = element("button", "sac-text-button", "+ Filter");
+        add.type = "button";
+        add.dataset.sacAddWriteFilter = "";
+        filterHeading.append(filterCopy, add);
+        container.append(filterHeading);
+        const fields = this.rootFields();
+        const filters = element("div", "sac-mutation-filters");
+        this.writeState.filters.forEach((filter, index) => {
+          const row = element("div", "sac-write-filter");
+          row.dataset.writeFilterIndex = String(index);
+          const field = element("select", "");
+          field.dataset.sacWriteFilterField = "";
+          appendOptions(field, fields.map((item) => ({value: item.name, label: item.label})), filter.field);
+          const op = element("select", "");
+          op.dataset.sacWriteFilterOp = "";
+          appendOptions(op, ["eq", "ne", "gt", "gte", "lt", "lte", "in", "is_null", "not_null"].map((name) => ({value: name, label: optionLabel(name)})), filter.op);
+          const value = element("input", "");
+          value.type = "text";
+          value.value = filter.value || "";
+          value.dataset.sacWriteFilterValue = "";
+          value.hidden = /^(is_null|not_null)$/.test(filter.op);
+          const remove = element("button", "sac-icon-button", "×");
+          remove.type = "button";
+          remove.dataset.sacRemoveWriteFilter = String(index);
+          row.append(field, op, value, remove);
+          filters.append(row);
+        });
+        container.append(filters);
+      }
+
+      const countLabel = element("label", "sac-label", "Expected affected rows");
+      const count = element("input", "");
+      count.type = "number";
+      count.min = "1";
+      count.value = this.writeState.expectedCount;
+      count.dataset.sacWriteExpected = "";
+      container.append(countLabel, count);
+
+      const returningLabel = element("label", "sac-label", "Return fields");
+      const returning = element("select", "");
+      returning.multiple = true;
+      returning.size = Math.min(6, Math.max(2, this.rootFields().length));
+      returning.dataset.sacWriteReturning = "";
+      appendOptions(returning, this.rootFields().map((field) => ({value: field.name, label: field.label})), "");
+      Array.from(returning.options).forEach((option) => (option.selected = this.writeState.returning.includes(option.value)));
+      container.append(returningLabel, returning);
+
+      if (this.writeState.operation === "upsert") {
+        [["Conflict target", "sacWriteConflict", this.writeState.conflictTarget], ["Update on conflict", "sacWriteUpdateFields", this.writeState.updateFields]].forEach(([labelText, datasetName, selected]) => {
+          container.append(element("label", "sac-label", labelText));
+          const select = element("select", "");
+          select.multiple = true;
+          select.size = Math.min(6, Math.max(2, this.rootFields().length));
+          select.dataset[datasetName] = "";
+          appendOptions(select, this.rootFields().map((field) => ({value: field.name, label: field.label})), "");
+          Array.from(select.options).forEach((option) => (option.selected = selected.includes(option.value)));
+          container.append(select);
+        });
+      }
+      this.syncWriteRequest();
+    }
+
+    actionInputControl(spec, value, dataset) {
+      const type = String(spec.type || "string").toLowerCase();
+      const control = this.valueControl(type, value, {dataset});
+      if (type === "select") {
+        const options = Array.isArray(spec.options) ? spec.options : [];
+        appendOptions(control, options.map((option) => ({
+          value: String(option.value), label: option.label || String(option.value),
+        })), value || "", spec.required ? "Choose…" : "None");
+      }
+      if (spec.minimum !== undefined) control.min = spec.minimum;
+      if (spec.maximum !== undefined) control.max = spec.maximum;
+      if (spec.max_length !== undefined) control.maxLength = spec.max_length;
+      if (spec.rows !== undefined && control.tagName === "TEXTAREA") control.rows = spec.rows;
+      return control;
+    }
+
+    appendActionInputs(container, specs, values, groupIndex) {
+      (specs || []).forEach((spec) => {
+        const label = element("label", "sac-action-input");
+        label.append(element("span", "sac-label", `${spec.label || humanize(spec.id)}${spec.required ? " *" : ""}`));
+        const dataset = groupIndex === undefined
+          ? {sacActionInput: spec.id}
+          : {sacActionGroupInput: spec.id, groupIndex: String(groupIndex)};
+        const control = this.actionInputControl(spec, values[spec.id], dataset);
+        label.append(control);
+        container.append(label);
+      });
+    }
+
+    renderActionPanel() {
+      const container = this.root.querySelector("[data-sac-action-builder]");
+      container.replaceChildren();
+      const actions = this.actionCatalog();
+      const heading = element("div", "sac-card-heading");
+      const headingCopy = element("div", "");
+      headingCopy.append(element("span", "sac-step", "1"), element("h2", "", "Choose an action"));
+      heading.append(headingCopy);
+      container.append(heading);
+      if (!actions.length) {
+        container.append(element("p", "sac-empty-contract", "No actions are available in this governed domain."));
+        this.syncActionRequest();
+        return;
+      }
+      const picker = element("select", "");
+      picker.dataset.sacActionId = "";
+      appendOptions(picker, actions.map((action) => ({value: action.id, label: action.label || action.name || humanize(action.id)})), this.actionState.id);
+      container.append(element("label", "sac-label", "Action"), picker);
+      const action = this.selectedAction();
+      if (action && action.description) container.append(element("p", "sac-help", action.description));
+      const inputs = element("div", "sac-action-inputs");
+      this.appendActionInputs(inputs, action && action.inputs, this.actionState.inputs);
+      container.append(inputs);
+
+      if (this.actionUsesGroups(action)) {
+        const groupsHeading = element("div", "sac-card-heading sac-mutation-subheading");
+        const groupCopy = element("div", "");
+        groupCopy.append(element("h2", "", "Target groups"));
+        const add = element("button", "sac-text-button", "+ Group");
+        add.type = "button";
+        add.dataset.sacAddActionGroup = "";
+        add.disabled = this.actionState.groups.length >= Number(action.selection.max_groups || 6);
+        groupsHeading.append(groupCopy, add);
+        container.append(groupsHeading);
+        const groups = element("div", "sac-action-groups");
+        this.actionState.groups.forEach((group, index) => {
+          const card = element("section", "sac-action-group");
+          const groupHeading = element("div", "sac-card-heading");
+          const marker = action.selection.markers && action.selection.markers[index];
+          const groupTitle = element("div", "");
+          groupTitle.append(element("strong", "", marker && marker.label || `Group ${index + 1}`));
+          const remove = element("button", "sac-icon-button", "×");
+          remove.type = "button";
+          remove.dataset.sacRemoveActionGroup = String(index);
+          groupHeading.append(groupTitle, remove);
+          const ids = element("textarea", "");
+          ids.value = group.ids || "";
+          ids.placeholder = "Load IDs, separated by commas or new lines";
+          ids.dataset.sacActionGroupIds = String(index);
+          card.append(groupHeading, element("span", "sac-label", "Target IDs *"), ids);
+          this.appendActionInputs(card, action.selection.group_inputs || [], group.inputs, index);
+          groups.append(card);
+        });
+        container.append(groups);
+      } else {
+        const ids = element("textarea", "");
+        ids.value = this.actionState.targetIds;
+        ids.placeholder = "IDs, separated by commas or new lines";
+        ids.dataset.sacActionTargetIds = "";
+        container.append(element("label", "sac-label", "Target IDs *"), ids);
+      }
+      this.syncActionRequest();
     }
 
     renderAll() {
@@ -1103,6 +1443,249 @@
       if (target) target.textContent = command;
     }
 
+    coerceValue(raw, type, label) {
+      const text = String(raw === undefined ? "" : raw).trim();
+      if (type === "boolean") {
+        if (text === "true") return {value: true};
+        if (text === "false") return {value: false};
+        return {value: raw, error: `${label} must be true or false.`};
+      }
+      if (type === "integer") {
+        if (/^-?\d+$/.test(text)) return {value: Number.parseInt(text, 10)};
+        return {value: raw, error: `${label} must be an integer.`};
+      }
+      if (["float", "number"].includes(type)) {
+        const value = Number(text);
+        if (text !== "" && Number.isFinite(value)) return {value};
+        return {value: raw, error: `${label} must be a number.`};
+      }
+      // Decimal values remain strings so API clients do not lose precision.
+      if (type === "decimal" && text !== "" && !/^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(text)) {
+        return {value: raw, error: `${label} must be a decimal number.`};
+      }
+      return {value: String(raw === undefined ? "" : raw)};
+    }
+
+    buildWriteRequest() {
+      const errors = [];
+      const operation = this.writeState.operation;
+      const operations = this.writeOperations();
+      const payload = {operation};
+      if (!operations.includes(operation)) errors.push("Choose an enabled write operation.");
+      const fields = new Map(this.rootFields().map((field) => [field.name, field]));
+      const contract = this.domain && this.domain.writes || {};
+      const permission = ["insert", "upsert"].includes(operation) ? "insertable" : "updatable";
+      if (operation !== "delete") {
+        payload.assignments = {};
+        Object.keys(this.writeState.included).filter((name) => this.writeState.included[name]).forEach((name) => {
+          const field = fields.get(name);
+          const rule = contract.fields && contract.fields[name];
+          if (!field || !rule || !rule[permission]) {
+            errors.push(`${name} is not writable for ${operation}.`);
+            return;
+          }
+          const converted = this.coerceValue(this.writeState.assignments[name], field.type, field.label);
+          payload.assignments[name] = converted.value;
+          if (converted.error) errors.push(converted.error);
+        });
+        if (!Object.keys(payload.assignments).length) errors.push("Choose at least one assignment.");
+      }
+
+      if (["update", "delete"].includes(operation)) {
+        payload.filters = this.writeState.filters.map((filter, index) => {
+          const field = fields.get(filter.field);
+          const item = {field: filter.field, op: filter.op};
+          if (!field) errors.push(`Filter ${index + 1} must use a public root field.`);
+          if (!/^(eq|ne|gt|gte|lt|lte|in|is_null|not_null)$/.test(filter.op)) errors.push(`Filter ${index + 1} has an unsupported operator.`);
+          if (!/^(is_null|not_null)$/.test(filter.op)) {
+            if (filter.op === "in") {
+              const values = String(filter.value || "").split(",").map((value) => value.trim()).filter(Boolean);
+              if (!values.length) errors.push(`Filter ${index + 1} requires one or more values.`);
+              item.value = values.map((value) => {
+                const converted = this.coerceValue(value, field && field.type || "string", `Filter ${index + 1}`);
+                if (converted.error) errors.push(converted.error);
+                return converted.value;
+              });
+            } else {
+              if (String(filter.value || "").trim() === "") errors.push(`Filter ${index + 1} requires a value.`);
+              const converted = this.coerceValue(filter.value, field && field.type || "string", `Filter ${index + 1}`);
+              item.value = converted.value;
+              if (converted.error) errors.push(converted.error);
+            }
+          }
+          return item;
+        });
+        if (!payload.filters.length) errors.push(`${humanize(operation)} requires at least one explicit filter.`);
+      }
+
+      const count = Number(this.writeState.expectedCount);
+      const operationSpec = contract.operations && contract.operations[operation] || {};
+      if (!Number.isInteger(count) || count < 1 || count > 1000) errors.push("Expected affected rows must be an integer from 1 to 1000.");
+      else {
+        payload.expected_count = count;
+        if (count > 1 && !operationSpec.bulk) errors.push("This operation does not permit bulk changes.");
+        if (["insert", "upsert"].includes(operation) && count !== 1) errors.push("Insert and upsert must expect exactly one row.");
+      }
+      if (this.writeState.returning.length) payload.returning = this.writeState.returning.slice();
+      if (operation === "upsert") {
+        payload.conflict_target = this.writeState.conflictTarget.slice();
+        payload.upsert_update_fields = this.writeState.updateFields.slice();
+        if (!payload.conflict_target.length) errors.push("Choose at least one conflict target field.");
+        if (!payload.upsert_update_fields.length) errors.push("Choose at least one field to update on conflict.");
+      }
+      return {payload, errors};
+    }
+
+    actionInputValues(specs, rawValues, errors, prefix) {
+      const values = {};
+      (specs || []).forEach((spec) => {
+        const label = `${prefix}${spec.label || humanize(spec.id)}`;
+        const raw = rawValues[spec.id];
+        const text = String(raw === undefined ? "" : raw).trim();
+        if (!text) {
+          if (spec.required) errors.push(`${label} is required.`);
+          return;
+        }
+        let value = text;
+        if (spec.type === "number") {
+          const converted = this.coerceValue(text, "number", label);
+          value = converted.value;
+          if (converted.error) errors.push(converted.error);
+          if (!converted.error && spec.minimum !== undefined && value < Number(spec.minimum)) errors.push(`${label} is below its minimum.`);
+          if (!converted.error && spec.maximum !== undefined && value > Number(spec.maximum)) errors.push(`${label} is above its maximum.`);
+        }
+        if (spec.type === "lookup" && spec.value_type === "integer") {
+          const converted = this.coerceValue(text, "integer", label);
+          value = converted.value;
+          if (converted.error) errors.push(converted.error);
+        }
+        if (spec.type === "select" && Array.isArray(spec.options) && spec.options.length
+          && !spec.options.some((option) => String(option.value) === text)) errors.push(`${label} is not an available choice.`);
+        if (spec.min_length !== undefined && text.length < Number(spec.min_length)) errors.push(`${label} is too short.`);
+        if (spec.max_length !== undefined && text.length > Number(spec.max_length)) errors.push(`${label} is too long.`);
+        values[spec.id] = value;
+      });
+      return values;
+    }
+
+    parseTargetIds(raw, errors, label) {
+      const parts = String(raw || "").split(/[\s,]+/).map((value) => value.trim()).filter(Boolean);
+      if (!parts.length) errors.push(`${label} requires at least one ID.`);
+      const integerIds = (this.domain && this.domain.source && this.domain.source.columns
+        && (this.domain.source.columns[this.domain.source.primary_key] || {}).type) === "integer";
+      const ids = parts.map((value) => {
+        if (integerIds && !/^\d+$/.test(value)) {
+          errors.push(`${label} contains an invalid integer ID.`);
+          return value;
+        }
+        return integerIds ? Number.parseInt(value, 10) : value;
+      });
+      if (new Set(ids.map(String)).size !== ids.length) errors.push(`${label} contains a repeated ID.`);
+      if (ids.length > 1000) errors.push(`${label} exceeds the 1000-row action limit.`);
+      return ids;
+    }
+
+    buildActionRequest() {
+      const errors = [];
+      const action = this.selectedAction();
+      if (!action) return {path: this.actionPath, payload: {target: {ids: []}, inputs: {}}, errors: ["Choose an available action."]};
+      const payload = {
+        target: {ids: []},
+        inputs: this.actionInputValues(action.inputs, this.actionState.inputs, errors, ""),
+      };
+      if (this.actionUsesGroups(action)) {
+        const maximum = Number(action.selection.max_groups || 6);
+        if (!this.actionState.groups.length) errors.push("Create at least one target group.");
+        if (this.actionState.groups.length > maximum) errors.push(`This action allows at most ${maximum} groups.`);
+        payload.groups = this.actionState.groups.map((group, index) => {
+          const ids = this.parseTargetIds(group.ids, errors, `Group ${index + 1}`);
+          payload.target.ids.push(...ids);
+          return {
+            index,
+            selected_ids: ids,
+            inputs: this.actionInputValues(action.selection.group_inputs, group.inputs, errors, `Group ${index + 1}: `),
+          };
+        });
+        if (new Set(payload.target.ids.map(String)).size !== payload.target.ids.length) errors.push("A target ID may appear in only one group.");
+      } else {
+        payload.target.ids = this.parseTargetIds(this.actionState.targetIds, errors, "Action target");
+      }
+      const path = this.actionPath.replace("{action}", encodeURIComponent(action.id));
+      return {path, payload, errors};
+    }
+
+    renderCorrectness(target, errors, success) {
+      target.replaceChildren();
+      if (!errors.length) {
+        target.dataset.kind = "success";
+        target.append(element("strong", "", success));
+        return;
+      }
+      target.dataset.kind = "error";
+      target.append(element("strong", "", `${errors.length} correction${errors.length === 1 ? "" : "s"} needed`));
+      const list = element("ul", "");
+      errors.forEach((error) => list.append(element("li", "", error)));
+      target.append(list);
+    }
+
+    syncWriteRequest() {
+      const model = this.buildWriteRequest();
+      this.root.querySelector("[data-sac-write-request]").value = JSON.stringify(model.payload, null, 2);
+      this.renderCorrectness(this.root.querySelector("[data-sac-write-correctness]"), model.errors, "This request matches the governed write contract.");
+      this.root.querySelector("[data-sac-run-write]").disabled = Boolean(model.errors.length);
+      return model;
+    }
+
+    syncActionRequest() {
+      const model = this.buildActionRequest();
+      this.root.querySelector("[data-sac-action-request]").value = JSON.stringify(model.payload, null, 2);
+      this.root.querySelector("[data-sac-action-path]").textContent = model.path;
+      this.renderCorrectness(this.root.querySelector("[data-sac-action-correctness]"), model.errors, "This request matches the published action inputs.");
+      this.root.querySelector("[data-sac-run-action]").disabled = Boolean(model.errors.length);
+      return model;
+    }
+
+    async runMutation(kind) {
+      const isWrite = kind === "write";
+      const model = isWrite ? this.syncWriteRequest() : this.syncActionRequest();
+      if (model.errors.length) return;
+      const path = isWrite ? this.writePath : model.path;
+      const button = this.root.querySelector(isWrite ? "[data-sac-run-write]" : "[data-sac-run-action]");
+      const status = this.root.querySelector(isWrite ? "[data-sac-write-status]" : "[data-sac-action-status]");
+      const output = this.root.querySelector(isWrite ? "[data-sac-write-response]" : "[data-sac-action-response]");
+      button.disabled = true;
+      button.classList.add("is-running");
+      status.textContent = "Sending…";
+      status.dataset.kind = "running";
+      const started = performance.now();
+      try {
+        const response = await fetch(path, {
+          method: "POST", credentials: "same-origin",
+          headers: {"Content-Type": "application/json", Accept: "application/json"},
+          body: JSON.stringify(model.payload),
+        });
+        const text = await response.text();
+        let payload;
+        try {
+          payload = text ? JSON.parse(text) : null;
+        } catch (_error) {
+          payload = {ok: false, error: {code: "invalid_response", message: text || "Empty response", details: {}}};
+        }
+        output.textContent = JSON.stringify(payload, null, 2);
+        status.textContent = `${response.status} ${response.statusText} · ${Math.round(performance.now() - started)} ms`;
+        status.dataset.kind = response.ok ? "success" : "error";
+        if (isWrite) this.writeState.response = payload;
+        else this.actionState.response = payload;
+      } catch (error) {
+        output.textContent = JSON.stringify({ok: false, error: {code: "network_error", message: error.message, details: {}}}, null, 2);
+        status.textContent = "Network error";
+        status.dataset.kind = "error";
+      } finally {
+        button.classList.remove("is-running");
+        button.disabled = Boolean((isWrite ? this.buildWriteRequest() : this.buildActionRequest()).errors.length);
+      }
+    }
+
     onClick(event) {
       const mainTab = event.target.closest("[data-sac-main-tab]");
       if (mainTab) return this.switchMainTab(mainTab.dataset.sacMainTab);
@@ -1151,6 +1734,29 @@
       if (event.target.closest("[data-sac-load-json]")) return this.loadRequestIntoChooser();
       if (event.target.closest("[data-sac-reset-json]")) return this.syncRequest(true);
       if (event.target.closest("[data-sac-run]")) return this.run();
+      if (event.target.closest("[data-sac-add-write-filter]")) {
+        const primaryKey = this.domain && this.domain.source && this.domain.source.primary_key || "id";
+        this.writeState.filters.push({field: primaryKey, op: "eq", value: ""});
+        return this.renderWritePanel();
+      }
+      const removeWriteFilter = event.target.closest("[data-sac-remove-write-filter]");
+      if (removeWriteFilter) {
+        this.writeState.filters.splice(Number(removeWriteFilter.dataset.sacRemoveWriteFilter), 1);
+        return this.renderWritePanel();
+      }
+      if (event.target.closest("[data-sac-add-action-group]")) {
+        this.actionState.groups.push({ids: "", inputs: {}});
+        return this.renderActionPanel();
+      }
+      const removeActionGroup = event.target.closest("[data-sac-remove-action-group]");
+      if (removeActionGroup) {
+        this.actionState.groups.splice(Number(removeActionGroup.dataset.sacRemoveActionGroup), 1);
+        return this.renderActionPanel();
+      }
+      if (event.target.closest("[data-sac-run-write]")) return this.runMutation("write");
+      if (event.target.closest("[data-sac-run-action]")) return this.runMutation("action");
+      if (event.target.closest("[data-sac-copy-write]")) return this.copy(this.root.querySelector("[data-sac-write-request]").value, event.target);
+      if (event.target.closest("[data-sac-copy-action]")) return this.copy(this.root.querySelector("[data-sac-action-request]").value, event.target);
       if (event.target.closest("[data-sac-copy-request]")) return this.copy(this.root.querySelector("[data-sac-request]").value, event.target);
       if (event.target.closest("[data-sac-copy-response]")) return this.copy(this.root.querySelector("[data-sac-response-json]").textContent, event.target);
       if (event.target.closest("[data-sac-copy-curl]")) return this.copy(this.root.querySelector("[data-sac-curl]").textContent, event.target);
@@ -1160,6 +1766,56 @@
 
     onChange(event) {
       const target = event.target;
+      if (target.matches("[data-sac-write-operation]")) {
+        this.writeState.operation = target.value;
+        this.writeState.assignments = {};
+        this.writeState.included = {};
+        this.writeState.conflictTarget = [];
+        this.writeState.updateFields = [];
+        if (["update", "delete"].includes(target.value) && !this.writeState.filters.length) {
+          const primaryKey = this.domain && this.domain.source && this.domain.source.primary_key || "id";
+          this.writeState.filters = [{field: primaryKey, op: "eq", value: ""}];
+        }
+        return this.renderWritePanel();
+      }
+      if (target.matches("[data-sac-write-include]")) {
+        this.writeState.included[target.dataset.sacWriteInclude] = target.checked;
+        return this.renderWritePanel();
+      }
+      if (target.matches("[data-sac-write-returning]")) {
+        this.writeState.returning = Array.from(target.selectedOptions).map((option) => option.value);
+        return this.syncWriteRequest();
+      }
+      if (target.matches("[data-sac-write-conflict]")) {
+        this.writeState.conflictTarget = Array.from(target.selectedOptions).map((option) => option.value);
+        return this.syncWriteRequest();
+      }
+      if (target.matches("[data-sac-write-update-fields]")) {
+        this.writeState.updateFields = Array.from(target.selectedOptions).map((option) => option.value);
+        return this.syncWriteRequest();
+      }
+      if (target.matches("[data-sac-write-filter-field]")) {
+        this.writeState.filters[Number(target.closest("[data-write-filter-index]").dataset.writeFilterIndex)].field = target.value;
+        return this.syncWriteRequest();
+      }
+      if (target.matches("[data-sac-write-filter-op]")) {
+        const filter = this.writeState.filters[Number(target.closest("[data-write-filter-index]").dataset.writeFilterIndex)];
+        filter.op = target.value;
+        return this.renderWritePanel();
+      }
+      if (target.matches("[data-sac-action-id]")) {
+        this.actionState = {id: target.value, targetIds: "", inputs: {}, groups: [], response: null};
+        this.ensureActionGroups();
+        return this.renderActionPanel();
+      }
+      if (target.matches("[data-sac-action-input]")) {
+        this.actionState.inputs[target.dataset.sacActionInput] = target.value;
+        return this.syncActionRequest();
+      }
+      if (target.matches("[data-sac-action-group-input]")) {
+        this.actionState.groups[Number(target.dataset.groupIndex)].inputs[target.dataset.sacActionGroupInput] = target.value;
+        return this.syncActionRequest();
+      }
       if (target.matches("[data-sac-mode]")) this.state.mode = target.value;
       else if (target.matches("[data-sac-projection]")) this.state.projection = target.value;
       else if (target.matches("[data-sac-view]")) this.state.view = target.value;
@@ -1192,6 +1848,34 @@
 
     onInput(event) {
       const target = event.target;
+      if (target.matches("[data-sac-write-field]")) {
+        this.writeState.assignments[target.dataset.sacWriteField] = target.value;
+        return this.syncWriteRequest();
+      }
+      if (target.matches("[data-sac-write-expected]")) {
+        this.writeState.expectedCount = target.value;
+        return this.syncWriteRequest();
+      }
+      if (target.matches("[data-sac-write-filter-value]")) {
+        this.writeState.filters[Number(target.closest("[data-write-filter-index]").dataset.writeFilterIndex)].value = target.value;
+        return this.syncWriteRequest();
+      }
+      if (target.matches("[data-sac-action-target-ids]")) {
+        this.actionState.targetIds = target.value;
+        return this.syncActionRequest();
+      }
+      if (target.matches("[data-sac-action-group-ids]")) {
+        this.actionState.groups[Number(target.dataset.sacActionGroupIds)].ids = target.value;
+        return this.syncActionRequest();
+      }
+      if (target.matches("[data-sac-action-input]")) {
+        this.actionState.inputs[target.dataset.sacActionInput] = target.value;
+        return this.syncActionRequest();
+      }
+      if (target.matches("[data-sac-action-group-input]")) {
+        this.actionState.groups[Number(target.dataset.groupIndex)].inputs[target.dataset.sacActionGroupInput] = target.value;
+        return this.syncActionRequest();
+      }
       if (target.matches("[data-sac-field-search]")) return this.renderFieldList();
       if (target.matches("[data-sac-filter-search]")) return this.renderFilterFieldList();
       if (target.matches("[data-sac-request]")) {
@@ -1387,7 +2071,7 @@
   }
 
   const api = {
-    version: "0.3.11",
+    version: "0.4.0",
     APIConsole,
     DATE_SHORTCUTS,
     associationIsMany,

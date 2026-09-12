@@ -187,6 +187,16 @@ code, pre, textarea.sac-request-editor {
   align-items: start;
 }
 
+.sac-mutation-layout {
+  display: grid;
+  grid-template-columns: minmax(22rem, 34rem) minmax(34rem, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.sac-mutation-execution { display: grid; gap: 1rem; min-width: 0; }
+.sac-mutation-builder { min-width: 0; }
+
 .sac-builder, .sac-execution { display: grid; gap: 1rem; min-width: 0; }
 
 .sac-card, .sac-request-card, .sac-response-card, .sac-document-panel {
@@ -231,7 +241,7 @@ code, pre, textarea.sac-request-editor {
   text-transform: uppercase;
 }
 
-.sac-card input, .sac-card select, .sac-parameter input {
+.sac-card input, .sac-card select, .sac-card textarea, .sac-parameter input {
   width: 100%;
   min-height: 2.55rem;
   padding: .58rem .68rem;
@@ -240,6 +250,8 @@ code, pre, textarea.sac-request-editor {
   color: var(--sac-text);
   background: var(--sac-surface);
 }
+
+.sac-card textarea { min-height: 5.5rem; resize: vertical; }
 
 .sac-card select[multiple] { min-height: 7.5rem; padding: .25rem; }
 .sac-card select[multiple] option { padding: .45rem .5rem; border-radius: 5px; }
@@ -428,6 +440,40 @@ code, pre, textarea.sac-request-editor {
   animation: sac-spin .7s linear infinite;
 }
 
+.sac-correctness {
+  padding: .75rem 1rem;
+  border-bottom: 1px solid var(--sac-border);
+  font-size: .76rem;
+  line-height: 1.45;
+}
+.sac-correctness[data-kind="success"] { color: var(--sac-success); background: color-mix(in srgb, var(--sac-success) 8%, var(--sac-surface)); }
+.sac-correctness[data-kind="error"] { color: var(--sac-error); background: color-mix(in srgb, var(--sac-error) 8%, var(--sac-surface)); }
+.sac-correctness ul { margin: .35rem 0 0; padding-left: 1.25rem; }
+.sac-empty-contract { margin: 1rem 0; padding: 1rem; border: 1px dashed var(--sac-border-strong); border-radius: 9px; color: var(--sac-muted); line-height: 1.5; }
+.sac-mutation-fields, .sac-mutation-filters, .sac-action-inputs, .sac-action-groups { display: grid; gap: .5rem; }
+.sac-mutation-field {
+  display: grid;
+  grid-template-columns: auto minmax(8rem, .8fr) minmax(10rem, 1fr);
+  align-items: center;
+  gap: .6rem;
+  padding: .55rem;
+  border: 1px solid var(--sac-border);
+  border-radius: 9px;
+  background: var(--sac-surface-2);
+}
+.sac-card .sac-mutation-field > input[type="checkbox"] { width: auto; min-height: 0; }
+.sac-mutation-field > span { display: grid; min-width: 0; }
+.sac-mutation-field code { color: var(--sac-muted); font-size: .68rem; }
+.sac-mutation-subheading { margin-top: 1.25rem; margin-bottom: .5rem; }
+.sac-write-filter { display: grid; grid-template-columns: 1fr .65fr 1fr auto; gap: .35rem; }
+.sac-write-filter .sac-icon-button { width: 2.55rem; height: 2.55rem; }
+.sac-action-input > .sac-label { margin-top: .2rem; }
+.sac-action-group { padding: .75rem; border: 1px solid var(--sac-border); border-radius: 10px; background: var(--sac-surface-2); }
+.sac-action-group .sac-card-heading { margin-bottom: .4rem; }
+.sac-action-group textarea { background: var(--sac-surface); }
+.sac-mutation-response { min-height: 12rem; }
+.sac-mutation-response pre { min-height: 8rem; max-height: 30rem; margin: 0; padding: 1rem; overflow: auto; color: var(--sac-code-text); background: var(--sac-code-bg); font-size: .78rem; line-height: 1.6; white-space: pre-wrap; }
+
 @keyframes sac-spin { to { transform: rotate(360deg); } }
 
 .sac-response-card { min-height: 25rem; overflow: hidden; }
@@ -496,7 +542,7 @@ code, pre, textarea.sac-request-editor {
 .sac-fatal p { max-width: 38rem; color: var(--sac-error); }
 
 @media (max-width: 1050px) {
-  .sac-query-layout { grid-template-columns: 1fr; }
+  .sac-query-layout, .sac-mutation-layout { grid-template-columns: 1fr; }
   .sac-builder { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .sac-card { min-width: 0; }
   .sac-filter-controls { grid-template-columns: 1fr; }
@@ -512,6 +558,8 @@ code, pre, textarea.sac-request-editor {
   .sac-run-row .sac-button { width: 100%; }
   .sac-parameters { grid-template-columns: 1fr; }
   .sac-field-configuration { grid-template-columns: 1fr; }
+  .sac-mutation-field, .sac-write-filter { grid-template-columns: 1fr; }
+  .sac-card .sac-mutation-field > input[type="checkbox"] { justify-self: start; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,18 +1,18 @@
 {
   "format": "selecto.api-console.assets.v1",
-  "version": "0.3.11",
+  "version": "0.4.0",
   "assets": {
     "selecto-api-console.js": {
-      "bytes": 69776,
-      "sha256": "cc2962ab5f54834e15e87d3b21c66c5afe3d82b3e7af5dc9585d76917ddb131d"
+      "bytes": 106476,
+      "sha256": "4fb7035d83ef50c247d1424694030d13c72ae48d6898ce9203da7976faf4c2f0"
     },
     "selecto-api-console.css": {
-      "bytes": 18233,
-      "sha256": "8c918a919ba4390de02782784f2994902517086ae4d3e2689457bffb51abc3bc"
+      "bytes": 20813,
+      "sha256": "f6f53be0d21fb883524ab9b72576840ee5558a003c525e71a8b7c51a859aac48"
     },
     "index.html": {
-      "bytes": 659,
-      "sha256": "bf7d93189200ae188b00dfe9e9ba9db9044634a03ff4eb2cbaa845fde6adea04"
+      "bytes": 657,
+      "sha256": "998e7bbd6e3fc7131bcf4fe523f3081dffb8a96f320f08977fcc29857d9dcb0d"
     },
     "compatibility.json": {
       "bytes": 1258,

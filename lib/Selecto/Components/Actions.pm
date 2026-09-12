@@ -63,6 +63,22 @@ sub find ($class, $config, $domain, $controller, $id, $phase = 'preview', $targe
     return { action => $action, decision => $decision };
 }
 
+# Resolve the public form contract without making a target authorization
+# decision. API/OpenAPI discovery uses this after its host has already applied
+# principal-level domain governance; find()/authorize() remain mandatory before
+# execution.
+sub definition ($class, $config, $domain, $controller, $id) {
+    return undef unless defined($id) && !ref($id)
+        && "$id" =~ /\A[a-z][a-z0-9_-]*\z/;
+    my $actions = $domain->actions;
+    return undef unless ref($actions) eq 'HASH' && ref($actions->{$id}) eq 'HASH';
+    return undef unless $config->action_handler($id);
+    my $action = $class->_normalize_action(
+        $id, $actions->{$id}, $config, $controller, $domain,
+    );
+    return $action && $class->_bulk_enabled($action) ? $action : undef;
+}
+
 sub authorize ($class, $config, $controller, $action, $phase, $target = undef) {
     return $class->_authorize($config, $controller, $action, $phase, $target);
 }
