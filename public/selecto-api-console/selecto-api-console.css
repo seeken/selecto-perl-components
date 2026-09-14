@@ -493,6 +493,8 @@ code, pre, textarea.sac-request-editor {
 .sac-action-group textarea { background: var(--sac-surface); }
 .sac-mutation-response { min-height: 12rem; }
 .sac-mutation-response pre { min-height: 8rem; max-height: 30rem; margin: 0; padding: 1rem; overflow: auto; color: var(--sac-code-text); background: var(--sac-code-bg); font-size: .78rem; line-height: 1.6; white-space: pre-wrap; }
+.sac-mutation-curl { max-height: 18rem; margin: 0; padding: 1rem; overflow: auto; color: var(--sac-code-text); background: var(--sac-code-bg); font-size: .76rem; line-height: 1.55; white-space: pre; }
+.sac-curl-help { margin: 0; padding: .65rem 1rem; border-bottom: 1px solid var(--sac-border); }
 
 @keyframes sac-spin { to { transform: rotate(360deg); } }
 

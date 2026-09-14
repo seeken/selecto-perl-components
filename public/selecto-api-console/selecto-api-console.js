@@ -220,6 +220,11 @@
       && Boolean(rule && rule.required);
   }
 
+  function writeRequiredValueMissing(included, value) {
+    return !included || value === null || value === undefined
+      || (typeof value === "string" && value.trim() === "");
+  }
+
   function optionLabel(operator) {
     return ({
       eq: "equals",
@@ -521,6 +526,9 @@
                 <div class="sac-import-message" data-sac-write-import-message hidden></div>
                 <div class="sac-correctness" data-sac-write-correctness></div>
                 <textarea class="sac-request-editor" spellcheck="false" aria-label="Governed write request JSON" data-sac-write-request></textarea>
+                <div class="sac-code-heading"><span>cURL command</span><button type="button" class="sac-text-button" data-sac-copy-write-curl>Copy cURL</button></div>
+                <pre class="sac-mutation-curl" data-sac-write-curl></pre>
+                <p class="sac-help sac-curl-help" data-sac-write-curl-auth-help></p>
                 <div class="sac-run-row"><p>Only operations and fields published by the governed write contract can be sent.</p><button type="button" class="sac-button sac-primary" data-sac-run-write><span>Send write</span></button></div>
               </section>
               <section class="sac-response-card sac-mutation-response"><div class="sac-response-heading"><div><h2>Response</h2><span class="sac-response-status" data-sac-write-status>Ready</span></div></div><pre data-sac-write-response>Build a valid governed write, then send it.</pre></section>
@@ -536,6 +544,9 @@
                 <div class="sac-import-message" data-sac-action-import-message hidden></div>
                 <div class="sac-correctness" data-sac-action-correctness></div>
                 <textarea class="sac-request-editor" spellcheck="false" aria-label="Governed action request JSON" data-sac-action-request></textarea>
+                <div class="sac-code-heading"><span>cURL command</span><button type="button" class="sac-text-button" data-sac-copy-action-curl>Copy cURL</button></div>
+                <pre class="sac-mutation-curl" data-sac-action-curl></pre>
+                <p class="sac-help sac-curl-help" data-sac-action-curl-auth-help></p>
                 <div class="sac-run-row"><p>Inputs and target IDs are checked locally, then governed and authorized again by the server.</p><button type="button" class="sac-button sac-primary" data-sac-run-action><span>Send action</span></button></div>
               </section>
               <section class="sac-response-card sac-mutation-response"><div class="sac-response-heading"><div><h2>Response</h2><span class="sac-response-status" data-sac-action-status>Ready</span></div></div><pre data-sac-action-response>Choose an action, complete its form, then send it.</pre></section>
@@ -556,6 +567,8 @@
       this.root.querySelector("[data-sac-domain-json]").textContent = JSON.stringify(this.domain, null, 2);
       this.root.querySelector("[data-sac-openapi-json]").textContent = JSON.stringify(this.openapi, null, 2);
       this.root.querySelector("[data-sac-curl-auth-help]").textContent = curlAuthConfiguration(this.curlAuth).help;
+      this.root.querySelector("[data-sac-write-curl-auth-help]").textContent = curlAuthConfiguration(this.curlAuth).help;
+      this.root.querySelector("[data-sac-action-curl-auth-help]").textContent = curlAuthConfiguration(this.curlAuth).help;
       this.bind();
       this.populateLibraryControls();
       this.seedMutationState();
@@ -1593,17 +1606,27 @@
     updateCurl() {
       const editor = this.root.querySelector("[data-sac-request]");
       const body = editor ? editor.value : JSON.stringify(this.buildPayload(), null, 2);
-      const url = `${window.location.origin}${this.queryPath}`;
+      const command = this.curlCommand(this.queryPath, body);
+      const target = this.root.querySelector("[data-sac-curl]");
+      if (target) target.textContent = command;
+    }
+
+    curlCommand(path, body) {
+      const url = `${window.location.origin}${path}`;
       const auth = curlAuthConfiguration(this.curlAuth);
-      const command = [
+      return [
         `curl -X POST ${shellEscape(url)}`,
         ...auth.args,
         "  -H 'Content-Type: application/json'",
         "  -H 'Accept: application/json'",
         `  --data-binary ${shellEscape(body)}`,
       ].join(" \\\n");
-      const target = this.root.querySelector("[data-sac-curl]");
-      if (target) target.textContent = command;
+    }
+
+    updateMutationCurl(kind, path) {
+      const editor = this.root.querySelector(`[data-sac-${kind}-request]`);
+      const target = this.root.querySelector(`[data-sac-${kind}-curl]`);
+      if (editor && target) target.textContent = this.curlCommand(path, editor.value);
     }
 
     coerceValue(raw, type, label) {
@@ -1722,8 +1745,10 @@
       const permission = ["insert", "upsert"].includes(operation) ? "insertable" : "updatable";
       let assignmentState = {assignments: {}, included: {}};
       if (operation !== "delete") {
-        if (!Object.prototype.hasOwnProperty.call(payload, "assignments")) throw new Error(`${humanize(operation)} requires assignments.`);
-        assignmentState = this.writeAssignmentState(payload.assignments, fields, contract.fields || {}, permission, "Root");
+        assignmentState = this.writeAssignmentState(
+          payload.assignments === undefined ? {} : payload.assignments,
+          fields, contract.fields || {}, permission, "Root",
+        );
       } else if (Object.prototype.hasOwnProperty.call(payload, "assignments")) {
         throw new Error("Delete JSON cannot include assignments because the delete form cannot represent them.");
       }
@@ -1800,11 +1825,11 @@
           if (extra.length) throw new Error(`${humanize(name)} has unsupported properties: ${extra.join(", ")}.`);
           const nestedOperation = related.operation;
           if (!["insert", "update"].includes(nestedOperation)) throw new Error(`${humanize(name)} requires an insert or update operation.`);
-          if (!Object.prototype.hasOwnProperty.call(related, "assignments")) throw new Error(`${humanize(name)} requires assignments.`);
           const nestedWrites = spec.domain.writes || {};
           const nestedFields = new Map(this.relationshipFields(spec).map((field) => [field.name, field]));
           const nested = this.writeAssignmentState(
-            related.assignments, nestedFields, nestedWrites.fields || {},
+            related.assignments === undefined ? {} : related.assignments,
+            nestedFields, nestedWrites.fields || {},
             nestedOperation === "insert" ? "insertable" : "updatable", humanize(name),
           );
           const state = {
@@ -1822,15 +1847,9 @@
         });
       }
 
-      const previous = this.writeState;
-      this.writeState = draft;
-      let model;
-      try {
-        model = this.buildWriteRequest();
-      } finally {
-        this.writeState = previous;
-      }
-      if (model.errors.length) throw new Error(model.errors.join(" "));
+      // Import is intentionally structural. Incomplete requests belong in the
+      // form so its correctness panel can guide the next edit; only JSON that
+      // cannot be represented by these controls is rejected here.
       return draft;
     }
 
@@ -1852,7 +1871,9 @@
         payload.assignments = {};
         this.rootFields().forEach((field) => {
           const rule = contract.fields && contract.fields[field.name];
-          if (writeFieldRequired(rule, operation) && !this.writeState.included[field.name]) {
+          if (writeFieldRequired(rule, operation) && writeRequiredValueMissing(
+            this.writeState.included[field.name], this.writeState.assignments[field.name],
+          )) {
             errors.push(`${field.label} (${field.name}) is required for ${operation}.`);
           }
         });
@@ -1933,7 +1954,9 @@
         const assignments = {};
         nestedFields.forEach((field, fieldName) => {
           const rule = nestedWrites.fields && nestedWrites.fields[fieldName];
-          if (writeFieldRequired(rule, nestedOperation) && !state.included[fieldName]) {
+          if (writeFieldRequired(rule, nestedOperation) && writeRequiredValueMissing(
+            state.included[fieldName], state.assignments[fieldName],
+          )) {
             errors.push(`${humanize(name)}: ${field.label} (${fieldName}) is required for ${nestedOperation}.`);
           }
         });
@@ -2217,6 +2240,7 @@
         this.renderCorrectness(this.root.querySelector("[data-sac-write-correctness]"), manual.errors, "Valid JSON in manual mode; the server will enforce the governed write contract.");
         this.root.querySelector("[data-sac-run-write]").disabled = Boolean(manual.errors.length);
         if (badge) badge.hidden = false;
+        this.updateMutationCurl("write", manual.path);
         return manual;
       }
       const model = this.buildWriteRequest();
@@ -2226,6 +2250,7 @@
       if (force) this.setMutationImportMessage("write", "", "");
       this.renderCorrectness(this.root.querySelector("[data-sac-write-correctness]"), model.errors, "This request matches the governed write contract.");
       this.root.querySelector("[data-sac-run-write]").disabled = Boolean(model.errors.length);
+      this.updateMutationCurl("write", this.writePath);
       return model;
     }
 
@@ -2238,6 +2263,7 @@
         this.renderCorrectness(this.root.querySelector("[data-sac-action-correctness]"), manual.errors, "Valid JSON in manual mode; the server will enforce the published action contract.");
         this.root.querySelector("[data-sac-run-action]").disabled = Boolean(manual.errors.length);
         if (badge) badge.hidden = false;
+        this.updateMutationCurl("action", manual.path);
         return manual;
       }
       const model = this.buildActionRequest();
@@ -2248,6 +2274,7 @@
       this.root.querySelector("[data-sac-action-path]").textContent = model.path;
       this.renderCorrectness(this.root.querySelector("[data-sac-action-correctness]"), model.errors, "This request matches the published action inputs.");
       this.root.querySelector("[data-sac-run-action]").disabled = Boolean(model.errors.length);
+      this.updateMutationCurl("action", model.path);
       return model;
     }
 
@@ -2367,6 +2394,8 @@
       if (event.target.closest("[data-sac-run-action]")) return this.runMutation("action");
       if (event.target.closest("[data-sac-copy-write]")) return this.copy(this.root.querySelector("[data-sac-write-request]").value, event.target);
       if (event.target.closest("[data-sac-copy-action]")) return this.copy(this.root.querySelector("[data-sac-action-request]").value, event.target);
+      if (event.target.closest("[data-sac-copy-write-curl]")) return this.copy(this.root.querySelector("[data-sac-write-curl]").textContent, event.target);
+      if (event.target.closest("[data-sac-copy-action-curl]")) return this.copy(this.root.querySelector("[data-sac-action-curl]").textContent, event.target);
       if (event.target.closest("[data-sac-copy-request]")) return this.copy(this.root.querySelector("[data-sac-request]").value, event.target);
       if (event.target.closest("[data-sac-copy-response]")) return this.copy(this.root.querySelector("[data-sac-response-json]").textContent, event.target);
       if (event.target.closest("[data-sac-copy-curl]")) return this.copy(this.root.querySelector("[data-sac-curl]").textContent, event.target);
@@ -2729,6 +2758,7 @@
     operatorsForType,
     writeControlKind,
     writeFieldRequired,
+    writeRequiredValueMissing,
     renderValue,
     rowValue,
     segmentParameterSpecs,
