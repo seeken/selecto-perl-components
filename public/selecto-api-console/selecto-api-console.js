@@ -622,6 +622,18 @@
       });
     }
 
+    writeFieldsForOperation(fields, fieldContract, operation) {
+      const permission = ["insert", "upsert"].includes(operation) ? "insertable" : "updatable";
+      return fields.filter((field) => {
+        const spec = fieldContract[field.name];
+        return operation !== "delete" && spec && spec[permission];
+      }).map((field, index) => ({field, index})).sort((left, right) => {
+        const leftRequired = writeFieldRequired(fieldContract[left.field.name], operation) ? 1 : 0;
+        const rightRequired = writeFieldRequired(fieldContract[right.field.name], operation) ? 1 : 0;
+        return rightRequired - leftRequired || left.index - right.index;
+      }).map((entry) => entry.field);
+    }
+
     actionCatalog() {
       const operation = this.openapi && this.openapi.paths && this.openapi.paths[this.actionPath]
         && this.openapi.paths[this.actionPath].post;
@@ -724,11 +736,9 @@
 
       const contract = this.domain.writes || {};
       const fieldContract = contract.fields || {};
-      const permission = ["insert", "upsert"].includes(this.writeState.operation) ? "insertable" : "updatable";
-      const writable = this.rootFields().filter((field) => {
-        const spec = fieldContract[field.name];
-        return this.writeState.operation !== "delete" && spec && spec[permission];
-      });
+      const writable = this.writeFieldsForOperation(
+        this.rootFields(), fieldContract, this.writeState.operation,
+      );
       if (this.writeState.operation !== "delete") {
         container.append(element("span", "sac-label", "Assignments"));
         const list = element("div", "sac-mutation-fields");
@@ -863,11 +873,9 @@
         appendOptions(operation, operations.map((value) => ({value, label: humanize(value)})), state.operation);
         fieldset.append(operationLabel, operation);
 
-        const permission = state.operation === "insert" ? "insertable" : "updatable";
-        const fields = this.relationshipFields(spec).filter((field) => {
-          const rule = nestedWrites.fields && nestedWrites.fields[field.name];
-          return rule && rule[permission];
-        });
+        const fields = this.writeFieldsForOperation(
+          this.relationshipFields(spec), nestedWrites.fields || {}, state.operation,
+        );
         const list = element("div", "sac-mutation-fields");
         fields.forEach((field) => {
           const rule = nestedWrites.fields && nestedWrites.fields[field.name];
