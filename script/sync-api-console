@@ -41,6 +41,8 @@ my @files = qw(
     index.html
     selecto-api-console.css
     selecto-api-console.js
+    selecto-importer.css
+    selecto-importer.js
 );
 my $target = File::Spec->catdir($repo, 'public', 'selecto-api-console');
 make_path($target);

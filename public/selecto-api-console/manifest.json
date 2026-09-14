@@ -10,6 +10,14 @@
       "bytes": 21613,
       "sha256": "fae9794c6d00f74f71be5d9c4a0c4278df70e9d5ffe61123eb20563a976debc2"
     },
+    "selecto-importer.js": {
+      "bytes": 19727,
+      "sha256": "8702e7e8457469d8e4d8429bcd2aeab8f3afb26bc8105ebd619ec425ad6d5b08"
+    },
+    "selecto-importer.css": {
+      "bytes": 2550,
+      "sha256": "fb3d33c0dfa354ee887e50966baf0cb09f508e100e3669ec763f824050a3d30f"
+    },
     "index.html": {
       "bytes": 657,
       "sha256": "073eecb05e6d7be8b33d558ad76929332cb1a8570cc5d861398d9729249e334a"

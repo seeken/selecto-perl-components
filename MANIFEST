@@ -14,6 +14,7 @@ lib/Selecto/Components/Controller/Lookups.pm
 lib/Selecto/Components/Controller/SavedQueries.pm
 lib/Selecto/Components/DateShortcut.pm
 lib/Selecto/Components/Explorer.pm
+lib/Selecto/Components/Importer.pm
 lib/Selecto/Components/I18N.pm
 lib/Selecto/Components/QueryBuilder.pm
 lib/Selecto/Components/QueryLibrary.pm
@@ -39,6 +40,8 @@ public/selecto-api-console/LICENSE
 public/selecto-api-console/manifest.json
 public/selecto-api-console/selecto-api-console.css
 public/selecto-api-console/selecto-api-console.js
+public/selecto-api-console/selecto-importer.css
+public/selecto-api-console/selecto-importer.js
 public/selecto-components/chart.umd.min.js
 public/selecto-components/htmx.min.js
 public/selecto-components/hx-ws.min.js
