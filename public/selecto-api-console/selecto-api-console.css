@@ -464,6 +464,26 @@ code, pre, textarea.sac-request-editor {
 .sac-card .sac-mutation-field > input[type="checkbox"] { width: auto; min-height: 0; }
 .sac-mutation-field > span { display: grid; min-width: 0; }
 .sac-mutation-field code { color: var(--sac-muted); font-size: .68rem; }
+.sac-write-relationship {
+  display: grid;
+  gap: .65rem;
+  margin: .25rem 0 .75rem;
+  padding: .8rem;
+  border: 1px solid var(--sac-border-strong);
+  border-radius: 10px;
+  background: var(--sac-surface);
+}
+
+.sac-required-field {
+  color: #a43b28;
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  margin-top: 0.2rem;
+  text-transform: uppercase;
+}
+.sac-write-relationship legend { padding: 0 .35rem; font-weight: 700; }
+.sac-write-relationship legend input { width: auto; min-height: 0; }
 .sac-mutation-subheading { margin-top: 1.25rem; margin-bottom: .5rem; }
 .sac-write-filter { display: grid; grid-template-columns: 1fr .65fr 1fr auto; gap: .35rem; }
 .sac-write-filter .sac-icon-button { width: 2.55rem; height: 2.55rem; }

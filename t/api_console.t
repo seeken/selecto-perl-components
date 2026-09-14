@@ -15,9 +15,9 @@ like $page, qr{data-api-base="/api2/load/v1"}, 'page normalizes the API base pat
 like $page, qr{data-curl-auth="cookie"}, 'page defaults generated cURL to cookie auth';
 like $page, qr{<html lang="en" data-sac-color-scheme="light">},
     'console pages use the shared light operational palette by default';
-like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.4\.0},
+like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.5\.0},
     'page loads the versioned shared stylesheet';
-like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.4\.0},
+like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.5\.0},
     'page loads the versioned shared JavaScript';
 
 $page = Selecto::Components::APIConsole->page(

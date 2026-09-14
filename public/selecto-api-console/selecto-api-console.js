@@ -204,6 +204,22 @@
     return common;
   }
 
+  function writeControlKind(field) {
+    const type = String(field && field.type || "string").toLowerCase();
+    const column = field && field.column || {};
+    if (Array.isArray(column.options) || Array.isArray(column.enum) || type === "boolean") return "select";
+    if (type === "date") return "date";
+    if (["datetime", "naive_datetime", "utc_datetime"].includes(type)) return "datetime-local";
+    if (NUMERIC_TYPES.has(type) || type === "epoch_datetime") return "number";
+    if (["json", "object", "array", "text"].includes(type)) return "textarea";
+    return "text";
+  }
+
+  function writeFieldRequired(rule, operation) {
+    return ["insert", "upsert"].includes(String(operation || "").toLowerCase())
+      && Boolean(rule && rule.required);
+  }
+
   function optionLabel(operator) {
     return ({
       eq: "equals",
@@ -318,9 +334,11 @@
       this.writeState = {
         operation: "", assignments: {}, included: {}, filters: [],
         expectedCount: 1, returning: [], conflictTarget: [], updateFields: [],
+        relationships: {},
+        rawDirty: false,
         response: null,
       };
-      this.actionState = {id: "", targetIds: "", inputs: {}, groups: [], response: null};
+      this.actionState = {id: "", targetIds: "", inputs: {}, groups: [], rawDirty: false, response: null};
     }
 
     async start() {
@@ -499,9 +517,10 @@
             <section class="sac-card sac-mutation-builder" data-sac-write-builder></section>
             <section class="sac-mutation-execution">
               <section class="sac-request-card">
-                <div class="sac-card-heading"><div><span class="sac-method">POST</span><code data-sac-write-path></code></div><button type="button" class="sac-text-button" data-sac-copy-write>Copy JSON</button></div>
+                <div class="sac-card-heading"><div><span class="sac-method">POST</span><code data-sac-write-path></code></div><div class="sac-compact-actions"><span class="sac-edited" data-sac-write-edited hidden>Manually edited</span><button type="button" class="sac-text-button" data-sac-load-write-json>Load into write form</button><button type="button" class="sac-text-button" data-sac-reset-write-json>Reset JSON</button><button type="button" class="sac-text-button" data-sac-copy-write>Copy JSON</button></div></div>
+                <div class="sac-import-message" data-sac-write-import-message hidden></div>
                 <div class="sac-correctness" data-sac-write-correctness></div>
-                <textarea class="sac-request-editor" readonly aria-label="Governed write request JSON" data-sac-write-request></textarea>
+                <textarea class="sac-request-editor" spellcheck="false" aria-label="Governed write request JSON" data-sac-write-request></textarea>
                 <div class="sac-run-row"><p>Only operations and fields published by the governed write contract can be sent.</p><button type="button" class="sac-button sac-primary" data-sac-run-write><span>Send write</span></button></div>
               </section>
               <section class="sac-response-card sac-mutation-response"><div class="sac-response-heading"><div><h2>Response</h2><span class="sac-response-status" data-sac-write-status>Ready</span></div></div><pre data-sac-write-response>Build a valid governed write, then send it.</pre></section>
@@ -513,9 +532,10 @@
             <section class="sac-card sac-mutation-builder" data-sac-action-builder></section>
             <section class="sac-mutation-execution">
               <section class="sac-request-card">
-                <div class="sac-card-heading"><div><span class="sac-method">POST</span><code data-sac-action-path></code></div><button type="button" class="sac-text-button" data-sac-copy-action>Copy JSON</button></div>
+                <div class="sac-card-heading"><div><span class="sac-method">POST</span><code data-sac-action-path></code></div><div class="sac-compact-actions"><span class="sac-edited" data-sac-action-edited hidden>Manually edited</span><button type="button" class="sac-text-button" data-sac-load-action-json>Load into action form</button><button type="button" class="sac-text-button" data-sac-reset-action-json>Reset JSON</button><button type="button" class="sac-text-button" data-sac-copy-action>Copy JSON</button></div></div>
+                <div class="sac-import-message" data-sac-action-import-message hidden></div>
                 <div class="sac-correctness" data-sac-action-correctness></div>
-                <textarea class="sac-request-editor" readonly aria-label="Governed action request JSON" data-sac-action-request></textarea>
+                <textarea class="sac-request-editor" spellcheck="false" aria-label="Governed action request JSON" data-sac-action-request></textarea>
                 <div class="sac-run-row"><p>Inputs and target IDs are checked locally, then governed and authorized again by the server.</p><button type="button" class="sac-button sac-primary" data-sac-run-action><span>Send action</span></button></div>
               </section>
               <section class="sac-response-card sac-mutation-response"><div class="sac-response-heading"><div><h2>Response</h2><span class="sac-response-status" data-sac-action-status>Ready</span></div></div><pre data-sac-action-response>Choose an action, complete its form, then send it.</pre></section>
@@ -570,7 +590,28 @@
         name,
         label: (columns[name] || {}).label || humanize(name),
         type: String((columns[name] || {}).type || "string").toLowerCase(),
+        column: columns[name] || {},
       }));
+    }
+
+    relationshipFields(spec) {
+      const source = spec && spec.domain && spec.domain.source || {};
+      const columns = source.columns || {};
+      const names = Array.isArray(source.fields) ? source.fields : Object.keys(columns);
+      return names.filter((name) => !(columns[name] || {}).internal).map((name) => ({
+        name,
+        label: (columns[name] || {}).label || humanize(name),
+        type: String((columns[name] || {}).type || "string").toLowerCase(),
+        column: columns[name] || {},
+      }));
+    }
+
+    writeRelationships() {
+      const relationships = this.domain && this.domain.writes && this.domain.writes.relationships || {};
+      return Object.entries(relationships).filter(([_name, spec]) => {
+        return spec && spec.writable && spec.cardinality !== "many"
+          && spec.domain && spec.domain.writes;
+      });
     }
 
     writeOperations() {
@@ -635,6 +676,31 @@
       return control;
     }
 
+    writeValueControl(field, value, attributes) {
+      const type = String(field.type || "string").toLowerCase();
+      const choices = Array.isArray(field.column && field.column.options)
+        ? field.column.options
+        : Array.isArray(field.column && field.column.enum) ? field.column.enum : null;
+      const kind = writeControlKind(field);
+      const control = this.valueControl(kind, value, attributes);
+      if (choices) {
+        appendOptions(control, choices.map((choice) => {
+          return choice && typeof choice === "object"
+            ? {value: String(choice.value), label: choice.label || String(choice.value)}
+            : {value: String(choice), label: String(choice)};
+        }), value === undefined ? "" : String(value), "Choose…");
+      } else if (type === "boolean") {
+        appendOptions(control, [
+          {value: "true", label: "True"}, {value: "false", label: "False"},
+        ], value === undefined || value === "" ? "true" : String(value));
+      }
+      if (control.tagName === "INPUT" && control.type === "number") {
+        control.step = type === "integer" || type === "epoch_datetime" ? "1" : "any";
+      }
+      if (control.tagName === "TEXTAREA") control.rows = 3;
+      return control;
+    }
+
     renderWritePanel() {
       const container = this.root.querySelector("[data-sac-write-builder]");
       container.replaceChildren();
@@ -667,25 +733,33 @@
         container.append(element("span", "sac-label", "Assignments"));
         const list = element("div", "sac-mutation-fields");
         writable.forEach((field) => {
+          const rule = fieldContract[field.name];
+          const required = writeFieldRequired(rule, this.writeState.operation);
+          if (required) this.writeState.included[field.name] = true;
           const row = element("label", "sac-mutation-field");
           const checkbox = element("input", "");
           checkbox.type = "checkbox";
           checkbox.checked = Boolean(this.writeState.included[field.name]);
+          checkbox.disabled = required;
+          checkbox.title = required ? "Required for insert" : "Include this assignment";
           checkbox.dataset.sacWriteInclude = field.name;
           const copy = element("span", "");
-          copy.append(element("strong", "", field.label), element("code", "", field.name));
-          const input = this.valueControl(field.type === "boolean" ? "select" : (NUMERIC_TYPES.has(field.type) ? "number" : "text"), this.writeState.assignments[field.name], {
-            dataset: {sacWriteField: field.name}, disabled: !checkbox.checked,
+          copy.append(
+            element("strong", "", `${field.label}${required ? " *" : ""}`),
+            element("code", "", field.name),
+          );
+          if (required) copy.append(element("small", "sac-required-field", "Required for insert"));
+          const input = this.writeValueControl(field, this.writeState.assignments[field.name], {
+            dataset: {sacWriteField: field.name}, disabled: !checkbox.checked, required,
           });
-          if (field.type === "boolean") appendOptions(input, [
-            {value: "true", label: "true"}, {value: "false", label: "false"},
-          ], this.writeState.assignments[field.name] || "true");
           row.append(checkbox, copy, input);
           list.append(row);
         });
         if (!writable.length) list.append(element("p", "sac-muted", "No fields are writable for this operation."));
         container.append(list);
       }
+
+      this.renderWriteRelationships(container);
 
       if (["update", "delete"].includes(this.writeState.operation)) {
         const filterHeading = element("div", "sac-card-heading sac-mutation-subheading");
@@ -707,11 +781,14 @@
           const op = element("select", "");
           op.dataset.sacWriteFilterOp = "";
           appendOptions(op, ["eq", "ne", "gt", "gte", "lt", "lte", "in", "is_null", "not_null"].map((name) => ({value: name, label: optionLabel(name)})), filter.op);
-          const value = element("input", "");
-          value.type = "text";
-          value.value = filter.value || "";
-          value.dataset.sacWriteFilterValue = "";
+          const selectedField = fields.find((item) => item.name === filter.field) || {type: "string"};
+          const value = filter.op === "in"
+            ? this.valueControl("text", filter.value, {dataset: {sacWriteFilterValue: ""}})
+            : this.writeValueControl(selectedField, filter.value, {
+                dataset: {sacWriteFilterValue: ""},
+              });
           value.hidden = /^(is_null|not_null)$/.test(filter.op);
+          if (filter.op === "in") value.placeholder = "comma-separated values";
           const remove = element("button", "sac-icon-button", "×");
           remove.type = "button";
           remove.dataset.sacRemoveWriteFilter = String(index);
@@ -751,6 +828,84 @@
         });
       }
       this.syncWriteRequest();
+    }
+
+    renderWriteRelationships(container) {
+      const relationships = this.writeRelationships();
+      if (!relationships.length || !["insert", "update"].includes(this.writeState.operation)) return;
+      container.append(element("span", "sac-label", "Related records"));
+      relationships.forEach(([name, spec]) => {
+        const nestedWrites = spec.domain.writes || {};
+        const allowed = new Set(Array.isArray(spec.allowed_ops) ? spec.allowed_ops : []);
+        const operations = ["insert", "update"].filter((operation) => {
+          const operationSpec = nestedWrites.operations && nestedWrites.operations[operation];
+          return allowed.has(operation) && operationSpec && operationSpec.enabled
+            && !(operation === "update" && this.writeState.operation !== "update");
+        });
+        if (!operations.length) return;
+        const state = this.writeState.relationships[name] || (this.writeState.relationships[name] = {
+          enabled: false, operation: operations[0], assignments: {}, included: {}, returning: [],
+        });
+        if (!operations.includes(state.operation)) state.operation = operations[0];
+        const fieldset = element("fieldset", "sac-write-relationship");
+        const legend = element("legend", "");
+        const enabled = element("input", "");
+        enabled.type = "checkbox";
+        enabled.checked = Boolean(state.enabled);
+        enabled.dataset.sacWriteRelationship = name;
+        legend.append(enabled, document.createTextNode(` ${humanize(name)}`));
+        fieldset.append(legend);
+
+        const operationLabel = element("label", "sac-label", "Related operation");
+        const operation = element("select", "");
+        operation.disabled = !state.enabled;
+        operation.dataset.sacWriteRelationshipOperation = name;
+        appendOptions(operation, operations.map((value) => ({value, label: humanize(value)})), state.operation);
+        fieldset.append(operationLabel, operation);
+
+        const permission = state.operation === "insert" ? "insertable" : "updatable";
+        const fields = this.relationshipFields(spec).filter((field) => {
+          const rule = nestedWrites.fields && nestedWrites.fields[field.name];
+          return rule && rule[permission];
+        });
+        const list = element("div", "sac-mutation-fields");
+        fields.forEach((field) => {
+          const rule = nestedWrites.fields && nestedWrites.fields[field.name];
+          const required = writeFieldRequired(rule, state.operation);
+          if (required) state.included[field.name] = true;
+          const row = element("label", "sac-mutation-field");
+          const include = element("input", "");
+          include.type = "checkbox";
+          include.checked = Boolean(state.included[field.name]);
+          include.disabled = !state.enabled || required;
+          include.title = required ? "Required for insert" : "Include this assignment";
+          include.dataset.sacWriteRelationshipInclude = name;
+          include.dataset.field = field.name;
+          const copy = element("span", "");
+          copy.append(
+            element("strong", "", `${field.label}${required ? " *" : ""}`),
+            element("code", "", field.name),
+          );
+          if (required) copy.append(element("small", "sac-required-field", "Required for insert"));
+          const input = this.writeValueControl(field, state.assignments[field.name], {
+            dataset: {sacWriteRelationshipField: name, field: field.name},
+            disabled: !state.enabled || !include.checked, required,
+          });
+          row.append(include, copy, input);
+          list.append(row);
+        });
+        fieldset.append(list);
+        const returningLabel = element("label", "sac-label", "Return related fields");
+        const returning = element("select", "");
+        returning.multiple = true;
+        returning.size = Math.min(6, Math.max(2, this.relationshipFields(spec).length));
+        returning.disabled = !state.enabled;
+        returning.dataset.sacWriteRelationshipReturning = name;
+        appendOptions(returning, this.relationshipFields(spec).map((field) => ({value: field.name, label: field.label})), "");
+        Array.from(returning.options).forEach((option) => (option.selected = (state.returning || []).includes(option.value)));
+        fieldset.append(returningLabel, returning);
+        container.append(fieldset);
+      });
     }
 
     actionInputControl(spec, value, dataset) {
@@ -1445,6 +1600,18 @@
 
     coerceValue(raw, type, label) {
       const text = String(raw === undefined ? "" : raw).trim();
+      if (type === "date") {
+        const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+        const valid = match && (() => {
+          const value = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+          return value.getUTCFullYear() === Number(match[1])
+            && value.getUTCMonth() + 1 === Number(match[2])
+            && value.getUTCDate() === Number(match[3]);
+        })();
+        return valid ? {value: text} : {
+          value: raw, error: `${label} must be an ISO date (YYYY-MM-DD); uncheck it to omit it.`,
+        };
+      }
       if (type === "boolean") {
         if (text === "true") return {value: true};
         if (text === "false") return {value: false};
@@ -1463,7 +1630,205 @@
       if (type === "decimal" && text !== "" && !/^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(text)) {
         return {value: raw, error: `${label} must be a decimal number.`};
       }
+      if (type === "epoch_datetime") {
+        if (/^-?\d+$/.test(text)) return {value: Number.parseInt(text, 10)};
+        return {value: raw, error: `${label} must be epoch seconds.`};
+      }
+      if (["json", "object", "array"].includes(type)) {
+        try {
+          const value = JSON.parse(text);
+          if (type === "array" && !Array.isArray(value)) throw new Error("array");
+          if (type === "object" && (!value || Array.isArray(value) || typeof value !== "object")) throw new Error("object");
+          return {value};
+        } catch (_error) {
+          return {value: raw, error: `${label} must be valid JSON${type === "json" ? "" : ` for an ${type}`}.`};
+        }
+      }
       return {value: String(raw === undefined ? "" : raw)};
+    }
+
+    formValueFor(value, type, label, column) {
+      if (value === null || value === undefined) {
+        throw new Error(`${label} cannot be represented by this form because it is null.`);
+      }
+      const normalizedType = String(type || "string").toLowerCase();
+      const choices = Array.isArray(column && column.options)
+        ? column.options : Array.isArray(column && column.enum) ? column.enum : null;
+      if (choices && !choices.some((choice) => String(choice && typeof choice === "object" ? choice.value : choice) === String(value))) {
+        throw new Error(`${label} is not an available choice.`);
+      }
+      if (["json", "object", "array"].includes(normalizedType)) {
+        if (normalizedType === "array" && !Array.isArray(value)) throw new Error(`${label} must be an array.`);
+        if (normalizedType === "object" && (!isPlainObject(value))) throw new Error(`${label} must be an object.`);
+        return JSON.stringify(value);
+      }
+      if (normalizedType === "boolean") {
+        if (value !== true && value !== false && value !== "true" && value !== "false") throw new Error(`${label} must be true or false.`);
+        return String(value);
+      }
+      if (["integer", "epoch_datetime"].includes(normalizedType)) {
+        const raw = String(value);
+        if (!/^-?\d+$/.test(raw)) throw new Error(`${label} must be an integer.`);
+        return raw;
+      }
+      if (["float", "number", "decimal"].includes(normalizedType)) {
+        const raw = String(value);
+        const converted = this.coerceValue(raw, normalizedType, label);
+        if (converted.error) throw new Error(converted.error);
+        return raw;
+      }
+      if (typeof value !== "string") throw new Error(`${label} must be a string.`);
+      const converted = this.coerceValue(value, normalizedType, label);
+      if (converted.error) throw new Error(converted.error);
+      return value;
+    }
+
+    writeAssignmentState(assignments, fields, rules, permission, label) {
+      if (!isPlainObject(assignments)) throw new Error(`${label} assignments must be a JSON object.`);
+      const rawAssignments = {};
+      const included = {};
+      Object.entries(assignments).forEach(([name, value]) => {
+        const field = fields.get(name);
+        const rule = rules && rules[name];
+        if (!field || !rule || !rule[permission]) throw new Error(`${label} field ${name} is not writable for this operation.`);
+        rawAssignments[name] = this.formValueFor(value, field.type, `${label} ${field.label || name}`, field.column);
+        included[name] = true;
+      });
+      return {assignments: rawAssignments, included};
+    }
+
+    writeStateFromPayload(payload) {
+      if (!isPlainObject(payload)) throw new Error("The write request must be a JSON object.");
+      const unknown = onlyKeys(payload, [
+        "operation", "assignments", "filters", "expected_count", "returning",
+        "conflict_target", "upsert_update_fields", "relationships",
+      ]);
+      if (unknown.length) throw new Error(`Unsupported write properties: ${unknown.join(", ")}.`);
+      if (typeof payload.operation !== "string" || !this.writeOperations().includes(payload.operation)) {
+        throw new Error("Choose an enabled write operation.");
+      }
+
+      const operation = payload.operation;
+      const fields = new Map(this.rootFields().map((field) => [field.name, field]));
+      const contract = this.domain && this.domain.writes || {};
+      const permission = ["insert", "upsert"].includes(operation) ? "insertable" : "updatable";
+      let assignmentState = {assignments: {}, included: {}};
+      if (operation !== "delete") {
+        if (!Object.prototype.hasOwnProperty.call(payload, "assignments")) throw new Error(`${humanize(operation)} requires assignments.`);
+        assignmentState = this.writeAssignmentState(payload.assignments, fields, contract.fields || {}, permission, "Root");
+      } else if (Object.prototype.hasOwnProperty.call(payload, "assignments")) {
+        throw new Error("Delete JSON cannot include assignments because the delete form cannot represent them.");
+      }
+
+      const draft = {
+        operation,
+        assignments: assignmentState.assignments,
+        included: assignmentState.included,
+        filters: [],
+        expectedCount: payload.expected_count === undefined ? 1 : payload.expected_count,
+        returning: [],
+        conflictTarget: [],
+        updateFields: [],
+        relationships: {},
+        rawDirty: false,
+        response: null,
+      };
+
+      if (payload.filters !== undefined) {
+        if (!["update", "delete"].includes(operation)) throw new Error(`${humanize(operation)} does not use target filters in this form.`);
+        if (!Array.isArray(payload.filters)) throw new Error("filters must be an array.");
+        draft.filters = payload.filters.map((filter, index) => {
+          if (!isPlainObject(filter)) throw new Error(`Filter ${index + 1} must be a JSON object.`);
+          const extra = onlyKeys(filter, ["field", "op", "value"]);
+          if (extra.length) throw new Error(`Filter ${index + 1} has unsupported properties: ${extra.join(", ")}.`);
+          const field = fields.get(filter.field);
+          if (!field) throw new Error(`Filter ${index + 1} must use a public root field.`);
+          if (typeof filter.op !== "string" || !/^(eq|ne|gt|gte|lt|lte|in|is_null|not_null)$/.test(filter.op)) {
+            throw new Error(`Filter ${index + 1} has an unsupported operator.`);
+          }
+          const nullOperator = /^(is_null|not_null)$/.test(filter.op);
+          if (nullOperator && Object.prototype.hasOwnProperty.call(filter, "value")) throw new Error(`Filter ${index + 1} cannot include a value for ${filter.op}.`);
+          if (!nullOperator && !Object.prototype.hasOwnProperty.call(filter, "value")) throw new Error(`Filter ${index + 1} requires a value.`);
+          let value = "";
+          if (filter.op === "in") {
+            if (!Array.isArray(filter.value) || !filter.value.length) throw new Error(`Filter ${index + 1} requires a non-empty value array.`);
+            value = filter.value.map((item) => {
+              const raw = this.formValueFor(item, field.type, `Filter ${index + 1}`, field.column);
+              if (raw.includes(",")) throw new Error(`Filter ${index + 1} contains a value with a comma that this form cannot represent.`);
+              return raw;
+            }).join(", ");
+          } else if (!nullOperator) value = this.formValueFor(filter.value, field.type, `Filter ${index + 1}`, field.column);
+          return {field: filter.field, op: filter.op, value};
+        });
+      } else if (["update", "delete"].includes(operation)) {
+        draft.filters = [];
+      }
+
+      const arrayField = (name, destination) => {
+        if (payload[name] === undefined) return;
+        if (!Array.isArray(payload[name]) || payload[name].some((field) => typeof field !== "string" || !fields.has(field))) {
+          throw new Error(`${name} must contain only public root field names.`);
+        }
+        if (new Set(payload[name]).size !== payload[name].length) throw new Error(`${name} cannot repeat a field.`);
+        draft[destination] = payload[name].slice();
+      };
+      arrayField("returning", "returning");
+      if (operation === "upsert") {
+        arrayField("conflict_target", "conflictTarget");
+        arrayField("upsert_update_fields", "updateFields");
+      } else if (payload.conflict_target !== undefined || payload.upsert_update_fields !== undefined) {
+        throw new Error("Conflict fields can only be represented for an upsert.");
+      }
+
+      if (payload.relationships !== undefined) {
+        if (!["insert", "update"].includes(operation)) throw new Error(`${humanize(operation)} cannot include related writes in this form.`);
+        if (!isPlainObject(payload.relationships)) throw new Error("relationships must be a JSON object.");
+        const relationships = new Map(this.writeRelationships());
+        Object.entries(payload.relationships).forEach(([name, related]) => {
+          const spec = relationships.get(name);
+          if (!spec) throw new Error(`${name} is not an available writable relationship.`);
+          if (!isPlainObject(related)) throw new Error(`${humanize(name)} must be a JSON object.`);
+          const extra = onlyKeys(related, ["operation", "assignments", "returning"]);
+          if (extra.length) throw new Error(`${humanize(name)} has unsupported properties: ${extra.join(", ")}.`);
+          const nestedOperation = related.operation;
+          if (!["insert", "update"].includes(nestedOperation)) throw new Error(`${humanize(name)} requires an insert or update operation.`);
+          if (!Object.prototype.hasOwnProperty.call(related, "assignments")) throw new Error(`${humanize(name)} requires assignments.`);
+          const nestedWrites = spec.domain.writes || {};
+          const nestedFields = new Map(this.relationshipFields(spec).map((field) => [field.name, field]));
+          const nested = this.writeAssignmentState(
+            related.assignments, nestedFields, nestedWrites.fields || {},
+            nestedOperation === "insert" ? "insertable" : "updatable", humanize(name),
+          );
+          const state = {
+            enabled: true, operation: nestedOperation,
+            assignments: nested.assignments, included: nested.included, returning: [],
+          };
+          if (related.returning !== undefined) {
+            if (!Array.isArray(related.returning) || related.returning.some((field) => typeof field !== "string" || !nestedFields.has(field))) {
+              throw new Error(`${humanize(name)} returning must contain only public related field names.`);
+            }
+            if (new Set(related.returning).size !== related.returning.length) throw new Error(`${humanize(name)} returning cannot repeat a field.`);
+            state.returning = related.returning.slice();
+          }
+          draft.relationships[name] = state;
+        });
+      }
+
+      const previous = this.writeState;
+      this.writeState = draft;
+      let model;
+      try {
+        model = this.buildWriteRequest();
+      } finally {
+        this.writeState = previous;
+      }
+      if (model.errors.length) throw new Error(model.errors.join(" "));
+      return draft;
+    }
+
+    loadWritePayloadIntoForm(payload) {
+      this.writeState = this.writeStateFromPayload(payload);
+      return this.writeState;
     }
 
     buildWriteRequest() {
@@ -1477,6 +1842,12 @@
       const permission = ["insert", "upsert"].includes(operation) ? "insertable" : "updatable";
       if (operation !== "delete") {
         payload.assignments = {};
+        this.rootFields().forEach((field) => {
+          const rule = contract.fields && contract.fields[field.name];
+          if (writeFieldRequired(rule, operation) && !this.writeState.included[field.name]) {
+            errors.push(`${field.label} (${field.name}) is required for ${operation}.`);
+          }
+        });
         Object.keys(this.writeState.included).filter((name) => this.writeState.included[name]).forEach((name) => {
           const field = fields.get(name);
           const rule = contract.fields && contract.fields[name];
@@ -1533,6 +1904,51 @@
         if (!payload.conflict_target.length) errors.push("Choose at least one conflict target field.");
         if (!payload.upsert_update_fields.length) errors.push("Choose at least one field to update on conflict.");
       }
+      const related = {};
+      this.writeRelationships().forEach(([name, spec]) => {
+        const state = this.writeState.relationships[name];
+        if (!state || !state.enabled) return;
+        const nestedWrites = spec.domain.writes || {};
+        const allowed = new Set(Array.isArray(spec.allowed_ops) ? spec.allowed_ops : []);
+        const nestedOperation = state.operation;
+        const operationSpec = nestedWrites.operations && nestedWrites.operations[nestedOperation];
+        if (!allowed.has(nestedOperation) || !operationSpec || !operationSpec.enabled) {
+          errors.push(`${humanize(name)} does not allow ${nestedOperation}.`);
+          return;
+        }
+        if (nestedOperation === "update" && operation !== "update") {
+          errors.push(`${humanize(name)} can only be updated with a root update.`);
+          return;
+        }
+        const permission = nestedOperation === "insert" ? "insertable" : "updatable";
+        const nestedFields = new Map(this.relationshipFields(spec).map((field) => [field.name, field]));
+        const assignments = {};
+        nestedFields.forEach((field, fieldName) => {
+          const rule = nestedWrites.fields && nestedWrites.fields[fieldName];
+          if (writeFieldRequired(rule, nestedOperation) && !state.included[fieldName]) {
+            errors.push(`${humanize(name)}: ${field.label} (${fieldName}) is required for ${nestedOperation}.`);
+          }
+        });
+        Object.keys(state.included).filter((field) => state.included[field]).forEach((fieldName) => {
+          const field = nestedFields.get(fieldName);
+          const rule = nestedWrites.fields && nestedWrites.fields[fieldName];
+          if (!field || !rule || !rule[permission]) {
+            errors.push(`${humanize(name)}: ${fieldName} is not writable for ${nestedOperation}.`);
+            return;
+          }
+          const converted = this.coerceValue(
+            state.assignments[fieldName], field.type, `${humanize(name)}: ${field.label}`,
+          );
+          assignments[fieldName] = converted.value;
+          if (converted.error) errors.push(converted.error);
+        });
+        if (!Object.keys(assignments).length) {
+          errors.push(`${humanize(name)} requires at least one assignment.`);
+        }
+        related[name] = {operation: nestedOperation, assignments};
+        if (state.returning && state.returning.length) related[name].returning = state.returning.slice();
+      });
+      if (Object.keys(related).length) payload.relationships = related;
       return {payload, errors};
     }
 
@@ -1614,6 +2030,95 @@
       return {path, payload, errors};
     }
 
+    actionInputState(specs, values, label) {
+      if (!isPlainObject(values)) throw new Error(`${label}inputs must be a JSON object.`);
+      const specifications = new Map((specs || []).map((spec) => [spec.id, spec]));
+      const unknown = Object.keys(values).filter((name) => !specifications.has(name));
+      if (unknown.length) throw new Error(`${label}unsupported inputs: ${unknown.join(", ")}.`);
+      const raw = {};
+      Object.entries(values).forEach(([name, value]) => {
+        const spec = specifications.get(name);
+        if (value === null || value === undefined || typeof value === "object") {
+          throw new Error(`${label}${spec.label || humanize(name)} must be a scalar value.`);
+        }
+        if (String(value).trim() === "") throw new Error(`${label}${spec.label || humanize(name)} cannot be blank in imported JSON.`);
+        raw[name] = String(value);
+      });
+      return raw;
+    }
+
+    actionIdsState(ids, label) {
+      if (!Array.isArray(ids) || !ids.length) throw new Error(`${label} requires a non-empty IDs array.`);
+      const integerIds = (this.domain && this.domain.source && this.domain.source.columns
+        && (this.domain.source.columns[this.domain.source.primary_key] || {}).type) === "integer";
+      return ids.map((value) => {
+        if (integerIds && !/^\d+$/.test(String(value))) throw new Error(`${label} contains an invalid integer ID.`);
+        if (!integerIds && !["string", "number"].includes(typeof value)) throw new Error(`${label} contains an ID this form cannot represent.`);
+        const raw = String(value);
+        if (/[\s,]/.test(raw)) throw new Error(`${label} contains an ID with whitespace or a comma that this form cannot represent.`);
+        return raw;
+      });
+    }
+
+    actionStateFromPayload(payload) {
+      if (!isPlainObject(payload)) throw new Error("The action request must be a JSON object.");
+      const unknown = onlyKeys(payload, ["target", "inputs", "groups"]);
+      if (unknown.length) throw new Error(`Unsupported action properties: ${unknown.join(", ")}.`);
+      const action = this.selectedAction();
+      if (!action) throw new Error("Choose an action before loading its JSON.");
+      if (!isPlainObject(payload.target) || onlyKeys(payload.target, ["ids"]).length || !Object.prototype.hasOwnProperty.call(payload.target, "ids")) {
+        throw new Error("target must be an object containing only ids.");
+      }
+      if (!Object.prototype.hasOwnProperty.call(payload, "inputs")) throw new Error("inputs must be provided as a JSON object.");
+      const targetIds = this.actionIdsState(payload.target.ids, "Action target");
+      const draft = {
+        id: action.id,
+        targetIds: "",
+        inputs: this.actionInputState(action.inputs, payload.inputs, ""),
+        groups: [],
+        rawDirty: false,
+        response: null,
+      };
+      if (this.actionUsesGroups(action)) {
+        if (!Array.isArray(payload.groups) || !payload.groups.length) throw new Error("This action requires a non-empty groups array.");
+        draft.groups = payload.groups.map((group, index) => {
+          if (!isPlainObject(group)) throw new Error(`Group ${index + 1} must be a JSON object.`);
+          const extra = onlyKeys(group, ["index", "selected_ids", "inputs"]);
+          if (extra.length) throw new Error(`Group ${index + 1} has unsupported properties: ${extra.join(", ")}.`);
+          if (group.index !== index) throw new Error(`Group ${index + 1} must use index ${index}.`);
+          if (!Object.prototype.hasOwnProperty.call(group, "selected_ids")) throw new Error(`Group ${index + 1} requires selected_ids.`);
+          if (!Object.prototype.hasOwnProperty.call(group, "inputs")) throw new Error(`Group ${index + 1} requires inputs.`);
+          return {
+            ids: this.actionIdsState(group.selected_ids, `Group ${index + 1}`).join(", "),
+            inputs: this.actionInputState(action.selection.group_inputs, group.inputs, `Group ${index + 1}: `),
+          };
+        });
+        const groupedIds = draft.groups.flatMap((group) => group.ids.split(/,\s*/));
+        if (targetIds.length !== groupedIds.length || targetIds.some((id, index) => id !== groupedIds[index])) {
+          throw new Error("target.ids must match the grouped selected_ids in the same order.");
+        }
+      } else {
+        if (payload.groups !== undefined) throw new Error("The selected action does not use target groups.");
+        draft.targetIds = targetIds.join(", ");
+      }
+
+      const previous = this.actionState;
+      this.actionState = draft;
+      let model;
+      try {
+        model = this.buildActionRequest();
+      } finally {
+        this.actionState = previous;
+      }
+      if (model.errors.length) throw new Error(model.errors.join(" "));
+      return draft;
+    }
+
+    loadActionPayloadIntoForm(payload) {
+      this.actionState = this.actionStateFromPayload(payload);
+      return this.actionState;
+    }
+
     renderCorrectness(target, errors, success) {
       target.replaceChildren();
       if (!errors.length) {
@@ -1628,17 +2133,110 @@
       target.append(list);
     }
 
-    syncWriteRequest() {
+    setMutationImportMessage(kind, message, messageKind) {
+      const target = this.root.querySelector(`[data-sac-${kind}-import-message]`);
+      if (!target) return;
+      target.textContent = message || "";
+      target.dataset.kind = messageKind || "";
+      target.hidden = !message;
+    }
+
+    manualMutationModel(kind) {
+      const isWrite = kind === "write";
+      const editor = this.root.querySelector(isWrite ? "[data-sac-write-request]" : "[data-sac-action-request]");
+      const errors = [];
+      let payload = {};
+      try {
+        payload = JSON.parse(editor.value);
+        if (!isPlainObject(payload)) errors.push(`The ${kind} request must be a JSON object.`);
+      } catch (error) {
+        errors.push(`Invalid JSON: ${error.message}`);
+      }
+      const action = isWrite ? null : this.selectedAction();
+      if (!isWrite && !action) errors.push("Choose an action before sending its JSON.");
+      return {
+        payload,
+        path: isWrite ? this.writePath : this.actionPath.replace("{action}", encodeURIComponent(action && action.id || "")),
+        errors,
+        manual: true,
+      };
+    }
+
+    loadMutationRequestIntoForm(kind) {
+      const isWrite = kind === "write";
+      const editor = this.root.querySelector(isWrite ? "[data-sac-write-request]" : "[data-sac-action-request]");
+      let payload;
+      try {
+        payload = JSON.parse(editor.value);
+        if (isWrite) this.loadWritePayloadIntoForm(payload);
+        else this.loadActionPayloadIntoForm(payload);
+      } catch (error) {
+        const state = isWrite ? this.writeState : this.actionState;
+        state.rawDirty = true;
+        const badge = this.root.querySelector(isWrite ? "[data-sac-write-edited]" : "[data-sac-action-edited]");
+        if (badge) badge.hidden = false;
+        if (isWrite) this.syncWriteRequest();
+        else this.syncActionRequest();
+        this.setMutationImportMessage(kind, `The ${kind} form cannot represent this JSON: ${error.message} The pasted JSON is unchanged and can still be sent in manual mode for server-side validation.`, "error");
+        return false;
+      }
+      if (isWrite) this.renderWritePanel();
+      else this.renderActionPanel();
+      this.setMutationImportMessage(kind, `${humanize(kind)} form updated from the request JSON.`, "success");
+      return true;
+    }
+
+    resetMutationJSON(kind) {
+      const state = kind === "write" ? this.writeState : this.actionState;
+      state.rawDirty = false;
+      this.setMutationImportMessage(kind, "", "");
+      return kind === "write" ? this.syncWriteRequest(true) : this.syncActionRequest(true);
+    }
+
+    mutationFormChanged(kind, render) {
+      const state = kind === "write" ? this.writeState : this.actionState;
+      state.rawDirty = false;
+      this.setMutationImportMessage(kind, "", "");
+      if (render) return kind === "write" ? this.renderWritePanel() : this.renderActionPanel();
+      return kind === "write" ? this.syncWriteRequest(true) : this.syncActionRequest(true);
+    }
+
+    syncWriteRequest(force) {
+      const editor = this.root.querySelector("[data-sac-write-request]");
+      const badge = this.root.querySelector("[data-sac-write-edited]");
+      if (this.writeState.rawDirty && !force) {
+        const manual = this.manualMutationModel("write");
+        this.renderCorrectness(this.root.querySelector("[data-sac-write-correctness]"), manual.errors, "Valid JSON in manual mode; the server will enforce the governed write contract.");
+        this.root.querySelector("[data-sac-run-write]").disabled = Boolean(manual.errors.length);
+        if (badge) badge.hidden = false;
+        return manual;
+      }
       const model = this.buildWriteRequest();
-      this.root.querySelector("[data-sac-write-request]").value = JSON.stringify(model.payload, null, 2);
+      editor.value = JSON.stringify(model.payload, null, 2);
+      this.writeState.rawDirty = false;
+      if (badge) badge.hidden = true;
+      if (force) this.setMutationImportMessage("write", "", "");
       this.renderCorrectness(this.root.querySelector("[data-sac-write-correctness]"), model.errors, "This request matches the governed write contract.");
       this.root.querySelector("[data-sac-run-write]").disabled = Boolean(model.errors.length);
       return model;
     }
 
-    syncActionRequest() {
+    syncActionRequest(force) {
+      const editor = this.root.querySelector("[data-sac-action-request]");
+      const badge = this.root.querySelector("[data-sac-action-edited]");
+      if (this.actionState.rawDirty && !force) {
+        const manual = this.manualMutationModel("action");
+        this.root.querySelector("[data-sac-action-path]").textContent = manual.path;
+        this.renderCorrectness(this.root.querySelector("[data-sac-action-correctness]"), manual.errors, "Valid JSON in manual mode; the server will enforce the published action contract.");
+        this.root.querySelector("[data-sac-run-action]").disabled = Boolean(manual.errors.length);
+        if (badge) badge.hidden = false;
+        return manual;
+      }
       const model = this.buildActionRequest();
-      this.root.querySelector("[data-sac-action-request]").value = JSON.stringify(model.payload, null, 2);
+      editor.value = JSON.stringify(model.payload, null, 2);
+      this.actionState.rawDirty = false;
+      if (badge) badge.hidden = true;
+      if (force) this.setMutationImportMessage("action", "", "");
       this.root.querySelector("[data-sac-action-path]").textContent = model.path;
       this.renderCorrectness(this.root.querySelector("[data-sac-action-correctness]"), model.errors, "This request matches the published action inputs.");
       this.root.querySelector("[data-sac-run-action]").disabled = Boolean(model.errors.length);
@@ -1682,7 +2280,7 @@
         status.dataset.kind = "error";
       } finally {
         button.classList.remove("is-running");
-        button.disabled = Boolean((isWrite ? this.buildWriteRequest() : this.buildActionRequest()).errors.length);
+        button.disabled = Boolean((isWrite ? this.syncWriteRequest() : this.syncActionRequest()).errors.length);
       }
     }
 
@@ -1737,22 +2335,26 @@
       if (event.target.closest("[data-sac-add-write-filter]")) {
         const primaryKey = this.domain && this.domain.source && this.domain.source.primary_key || "id";
         this.writeState.filters.push({field: primaryKey, op: "eq", value: ""});
-        return this.renderWritePanel();
+        return this.mutationFormChanged("write", true);
       }
       const removeWriteFilter = event.target.closest("[data-sac-remove-write-filter]");
       if (removeWriteFilter) {
         this.writeState.filters.splice(Number(removeWriteFilter.dataset.sacRemoveWriteFilter), 1);
-        return this.renderWritePanel();
+        return this.mutationFormChanged("write", true);
       }
       if (event.target.closest("[data-sac-add-action-group]")) {
         this.actionState.groups.push({ids: "", inputs: {}});
-        return this.renderActionPanel();
+        return this.mutationFormChanged("action", true);
       }
       const removeActionGroup = event.target.closest("[data-sac-remove-action-group]");
       if (removeActionGroup) {
         this.actionState.groups.splice(Number(removeActionGroup.dataset.sacRemoveActionGroup), 1);
-        return this.renderActionPanel();
+        return this.mutationFormChanged("action", true);
       }
+      if (event.target.closest("[data-sac-load-write-json]")) return this.loadMutationRequestIntoForm("write");
+      if (event.target.closest("[data-sac-reset-write-json]")) return this.resetMutationJSON("write");
+      if (event.target.closest("[data-sac-load-action-json]")) return this.loadMutationRequestIntoForm("action");
+      if (event.target.closest("[data-sac-reset-action-json]")) return this.resetMutationJSON("action");
       if (event.target.closest("[data-sac-run-write]")) return this.runMutation("write");
       if (event.target.closest("[data-sac-run-action]")) return this.runMutation("action");
       if (event.target.closest("[data-sac-copy-write]")) return this.copy(this.root.querySelector("[data-sac-write-request]").value, event.target);
@@ -1776,45 +2378,65 @@
           const primaryKey = this.domain && this.domain.source && this.domain.source.primary_key || "id";
           this.writeState.filters = [{field: primaryKey, op: "eq", value: ""}];
         }
-        return this.renderWritePanel();
+        return this.mutationFormChanged("write", true);
+      }
+      if (target.matches("[data-sac-write-relationship]")) {
+        this.writeState.relationships[target.dataset.sacWriteRelationship].enabled = target.checked;
+        return this.mutationFormChanged("write", true);
+      }
+      if (target.matches("[data-sac-write-relationship-operation]")) {
+        const state = this.writeState.relationships[target.dataset.sacWriteRelationshipOperation];
+        state.operation = target.value;
+        state.assignments = {};
+        state.included = {};
+        return this.mutationFormChanged("write", true);
+      }
+      if (target.matches("[data-sac-write-relationship-include]")) {
+        const state = this.writeState.relationships[target.dataset.sacWriteRelationshipInclude];
+        state.included[target.dataset.field] = target.checked;
+        return this.mutationFormChanged("write", true);
       }
       if (target.matches("[data-sac-write-include]")) {
         this.writeState.included[target.dataset.sacWriteInclude] = target.checked;
-        return this.renderWritePanel();
+        return this.mutationFormChanged("write", true);
       }
       if (target.matches("[data-sac-write-returning]")) {
         this.writeState.returning = Array.from(target.selectedOptions).map((option) => option.value);
-        return this.syncWriteRequest();
+        return this.mutationFormChanged("write", false);
+      }
+      if (target.matches("[data-sac-write-relationship-returning]")) {
+        this.writeState.relationships[target.dataset.sacWriteRelationshipReturning].returning = Array.from(target.selectedOptions).map((option) => option.value);
+        return this.mutationFormChanged("write", false);
       }
       if (target.matches("[data-sac-write-conflict]")) {
         this.writeState.conflictTarget = Array.from(target.selectedOptions).map((option) => option.value);
-        return this.syncWriteRequest();
+        return this.mutationFormChanged("write", false);
       }
       if (target.matches("[data-sac-write-update-fields]")) {
         this.writeState.updateFields = Array.from(target.selectedOptions).map((option) => option.value);
-        return this.syncWriteRequest();
+        return this.mutationFormChanged("write", false);
       }
       if (target.matches("[data-sac-write-filter-field]")) {
         this.writeState.filters[Number(target.closest("[data-write-filter-index]").dataset.writeFilterIndex)].field = target.value;
-        return this.syncWriteRequest();
+        return this.mutationFormChanged("write", true);
       }
       if (target.matches("[data-sac-write-filter-op]")) {
         const filter = this.writeState.filters[Number(target.closest("[data-write-filter-index]").dataset.writeFilterIndex)];
         filter.op = target.value;
-        return this.renderWritePanel();
+        return this.mutationFormChanged("write", true);
       }
       if (target.matches("[data-sac-action-id]")) {
-        this.actionState = {id: target.value, targetIds: "", inputs: {}, groups: [], response: null};
+        this.actionState = {id: target.value, targetIds: "", inputs: {}, groups: [], rawDirty: false, response: null};
         this.ensureActionGroups();
-        return this.renderActionPanel();
+        return this.mutationFormChanged("action", true);
       }
       if (target.matches("[data-sac-action-input]")) {
         this.actionState.inputs[target.dataset.sacActionInput] = target.value;
-        return this.syncActionRequest();
+        return this.mutationFormChanged("action", false);
       }
       if (target.matches("[data-sac-action-group-input]")) {
         this.actionState.groups[Number(target.dataset.groupIndex)].inputs[target.dataset.sacActionGroupInput] = target.value;
-        return this.syncActionRequest();
+        return this.mutationFormChanged("action", false);
       }
       if (target.matches("[data-sac-mode]")) this.state.mode = target.value;
       else if (target.matches("[data-sac-projection]")) this.state.projection = target.value;
@@ -1850,30 +2472,45 @@
       const target = event.target;
       if (target.matches("[data-sac-write-field]")) {
         this.writeState.assignments[target.dataset.sacWriteField] = target.value;
-        return this.syncWriteRequest();
+        return this.mutationFormChanged("write", false);
+      }
+      if (target.matches("[data-sac-write-relationship-field]")) {
+        const state = this.writeState.relationships[target.dataset.sacWriteRelationshipField];
+        state.assignments[target.dataset.field] = target.value;
+        return this.mutationFormChanged("write", false);
       }
       if (target.matches("[data-sac-write-expected]")) {
         this.writeState.expectedCount = target.value;
-        return this.syncWriteRequest();
+        return this.mutationFormChanged("write", false);
       }
       if (target.matches("[data-sac-write-filter-value]")) {
         this.writeState.filters[Number(target.closest("[data-write-filter-index]").dataset.writeFilterIndex)].value = target.value;
-        return this.syncWriteRequest();
+        return this.mutationFormChanged("write", false);
       }
       if (target.matches("[data-sac-action-target-ids]")) {
         this.actionState.targetIds = target.value;
-        return this.syncActionRequest();
+        return this.mutationFormChanged("action", false);
       }
       if (target.matches("[data-sac-action-group-ids]")) {
         this.actionState.groups[Number(target.dataset.sacActionGroupIds)].ids = target.value;
-        return this.syncActionRequest();
+        return this.mutationFormChanged("action", false);
       }
       if (target.matches("[data-sac-action-input]")) {
         this.actionState.inputs[target.dataset.sacActionInput] = target.value;
-        return this.syncActionRequest();
+        return this.mutationFormChanged("action", false);
       }
       if (target.matches("[data-sac-action-group-input]")) {
         this.actionState.groups[Number(target.dataset.groupIndex)].inputs[target.dataset.sacActionGroupInput] = target.value;
+        return this.mutationFormChanged("action", false);
+      }
+      if (target.matches("[data-sac-write-request]")) {
+        this.writeState.rawDirty = true;
+        this.setMutationImportMessage("write", "", "");
+        return this.syncWriteRequest();
+      }
+      if (target.matches("[data-sac-action-request]")) {
+        this.actionState.rawDirty = true;
+        this.setMutationImportMessage("action", "", "");
         return this.syncActionRequest();
       }
       if (target.matches("[data-sac-field-search]")) return this.renderFieldList();
@@ -2071,7 +2708,7 @@
   }
 
   const api = {
-    version: "0.4.0",
+    version: "0.5.0",
     APIConsole,
     DATE_SHORTCUTS,
     associationIsMany,
@@ -2082,6 +2719,8 @@
     mountAll,
     normalizeAPIBase,
     operatorsForType,
+    writeControlKind,
+    writeFieldRequired,
     renderValue,
     rowValue,
     segmentParameterSpecs,
