@@ -73,14 +73,14 @@
       return removed;
     }
 
-    importerContract() { return this.domain && this.domain.extensions && this.domain.extensions.importer || null; }
+    importerContract() { return this.domain && this.domain.imports || null; }
     importFields() { return this.importerContract() && this.importerContract().fields || {}; }
     importActions() { return this.importerContract() && this.importerContract().actions || {}; }
     actionInputEntries() {
       const entries = [];
       Object.entries(this.importActions()).forEach(([action, actionSpec]) => {
         const publishedAction = (this.domain.actions || {})[action] || {};
-        const publishedInputs = new Map((publishedAction.inputs || []).map((spec) => [spec.id, spec]));
+        const publishedInputs = new Map(Object.entries(publishedAction.inputs || {}));
         Object.entries(actionSpec.inputs || {}).forEach(([input, inputSpec]) => {
           const publishedInput = publishedInputs.get(input) || {};
           entries.push({

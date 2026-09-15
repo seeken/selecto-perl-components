@@ -208,16 +208,16 @@ sub _domain {
                 description => 'Add a note to selected products.',
                 type => 'bulk_action',
                 scope => 'bulk',
-                inputs => [
-                    {
-                        id => 'note_type', label => 'Note type', type => 'select',
+                inputs => {
+                    note_type => {
+                        label => 'Note type', type => 'select',
                         choice_source => 'product_note_types', required => 1,
                     },
-                    {
-                        id => 'comment', label => 'Comment', type => 'textarea',
+                    comment => {
+                        label => 'Comment', type => 'textarea',
                         required => 1, min_length => 1, max_length => 255,
                     },
-                ],
+                },
                 execution => {kind => 'host', operation => 'add_product_note'},
             },
             mark_for_review => {
@@ -225,12 +225,12 @@ sub _domain {
                 description => 'Mark selected products for review.',
                 type => 'bulk_action',
                 scope => 'bulk',
-                inputs => [
-                    {
-                        id => 'reason', label => 'Reason', type => 'textarea',
+                inputs => {
+                    reason => {
+                        label => 'Reason', type => 'textarea',
                         required => 1, min_length => 1, max_length => 120,
                     },
-                ],
+                },
                 execution => {kind => 'host', operation => 'mark_for_review'},
             },
             build_shipments => {
