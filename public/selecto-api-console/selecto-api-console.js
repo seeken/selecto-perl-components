@@ -304,7 +304,7 @@
     constructor(root) {
       this.root = root;
       this.base = root.dataset.apiBase || standaloneOption("api");
-      this.title = root.dataset.title || standaloneOption("title") || "Selecto API Console";
+      this.title = root.dataset.title || standaloneOption("title") || "API Console";
       this.curlAuth = normalizeCurlAuth(root.dataset.curlAuth, standaloneOption("curl_auth"));
       this.domain = null;
       this.manifest = null;
@@ -414,7 +414,6 @@
       this.root.innerHTML = `
         <header class="sac-header">
           <div class="sac-brand">
-            <span class="sac-kicker">Selecto API</span>
             <h1 data-sac-title></h1>
             <div class="sac-domain-meta"><span data-sac-domain-name></span><code data-sac-base></code></div>
           </div>
@@ -2725,7 +2724,7 @@
     renderFatal(error) {
       this.root.replaceChildren();
       const panel = element("section", "sac-fatal");
-      panel.append(element("span", "sac-kicker", "Selecto API Console"), element("h1", "", "Could not load the API"), element("p", "", error.message || String(error)));
+      panel.append(element("span", "sac-kicker", "API Console"), element("h1", "", "Could not load the API"), element("p", "", error.message || String(error)));
       const retry = element("button", "sac-button sac-primary", "Retry");
       retry.type = "button";
       retry.addEventListener("click", () => global.location.reload());

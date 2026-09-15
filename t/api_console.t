@@ -5,6 +5,7 @@ use warnings;
 use Test::More;
 use Mojolicious;
 use Selecto::Components::APIConsole ();
+use Selecto::Components::Importer ();
 
 my $page = Selecto::Components::APIConsole->page(
     base_path => '/api2/load/v1/',
@@ -15,9 +16,9 @@ like $page, qr{data-api-base="/api2/load/v1"}, 'page normalizes the API base pat
 like $page, qr{data-curl-auth="cookie"}, 'page defaults generated cURL to cookie auth';
 like $page, qr{<html lang="en" data-sac-color-scheme="light">},
     'console pages use the shared light operational palette by default';
-like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.5\.0},
+like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.5\.1},
     'page loads the versioned shared stylesheet';
-like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.5\.0},
+like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.5\.1},
     'page loads the versioned shared JavaScript';
 
 $page = Selecto::Components::APIConsole->page(
@@ -49,6 +50,25 @@ like $page,
     'host navigation and the standard Mojo content class wrap the console';
 like $page, qr{data-curl-auth="basic"},
     'host applications can select Basic auth for generated cURL';
+
+my $importer_page = Selecto::Components::Importer->page(
+    base_path => '/api2/load/v1',
+    page_shell => {
+        head_start_html => '<meta name="import-start" content="1">',
+        head_html => '<meta name="import-end" content="1">',
+        body_start_html => '<nav data-host-menu>Menu</nav>',
+        body_class => 'cgt-host-menu-toolbar',
+        content_class => 'cgt-mojo-page',
+    },
+);
+like $importer_page,
+    qr{<meta name="import-start" content="1"><link rel="stylesheet" href="/selecto-api-console/},
+    'host dependencies can load before importer assets';
+like $importer_page, qr{<meta name="import-end" content="1"></head>},
+    'host compatibility markup follows importer assets';
+like $importer_page,
+    qr{<body class="sai-body cgt-host-menu-toolbar"><nav data-host-menu>Menu</nav><main class="sai-app cgt-mojo-page"},
+    'host navigation and standard content class wrap the importer';
 
 $page = Selecto::Components::APIConsole->page(
     base_path => '/api2/client/v1',
