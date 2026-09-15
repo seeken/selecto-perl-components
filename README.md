@@ -529,16 +529,16 @@ actions => {
     add_note => {
         label => 'Add Note',
         scope => 'bulk',
-        inputs => [
-            {
-                id => 'note_type', label => 'Note type', type => 'select',
+        inputs => {
+            note_type => {
+                label => 'Note type', type => 'select',
                 choice_source => 'note_types', required => 1,
             },
-            {
-                id => 'comment', label => 'Comment', type => 'textarea',
+            comment => {
+                label => 'Comment', type => 'textarea',
                 required => 1, max_length => 255,
             },
-        ],
+        },
         execution => {kind => 'host', operation => 'add_note'},
     },
 },

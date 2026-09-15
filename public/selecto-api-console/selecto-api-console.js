@@ -944,8 +944,14 @@
       return control;
     }
 
+    actionInputSpecs(specs) {
+      if (Array.isArray(specs)) return specs;
+      if (!isPlainObject(specs)) return [];
+      return Object.entries(specs).map(([id, spec]) => Object.assign({id}, spec || {}));
+    }
+
     appendActionInputs(container, specs, values, groupIndex) {
-      (specs || []).forEach((spec) => {
+      this.actionInputSpecs(specs).forEach((spec) => {
         const label = element("label", "sac-action-input");
         label.append(element("span", "sac-label", `${spec.label || humanize(spec.id)}${spec.required ? " *" : ""}`));
         const dataset = groupIndex === undefined
@@ -1984,7 +1990,7 @@
 
     actionInputValues(specs, rawValues, errors, prefix) {
       const values = {};
-      (specs || []).forEach((spec) => {
+      this.actionInputSpecs(specs).forEach((spec) => {
         const label = `${prefix}${spec.label || humanize(spec.id)}`;
         const raw = rawValues[spec.id];
         const text = String(raw === undefined ? "" : raw).trim();
@@ -2062,7 +2068,7 @@
 
     actionInputState(specs, values, label) {
       if (!isPlainObject(values)) throw new Error(`${label}inputs must be a JSON object.`);
-      const specifications = new Map((specs || []).map((spec) => [spec.id, spec]));
+      const specifications = new Map(this.actionInputSpecs(specs).map((spec) => [spec.id, spec]));
       const unknown = Object.keys(values).filter((name) => !specifications.has(name));
       if (unknown.length) throw new Error(`${label}unsupported inputs: ${unknown.join(", ")}.`);
       const raw = {};
