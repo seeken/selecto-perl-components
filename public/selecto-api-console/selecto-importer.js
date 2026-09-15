@@ -26,6 +26,8 @@
       this.extraActionInputs = new Set();
       this.selectedKeySetId = null;
       this.idempotencyEnabled = true;
+      this.selectedRows = new Set();
+      this.executionScope = "all_valid";
       this.stagedRows = [];
     }
 
@@ -116,6 +118,9 @@
         if (target.matches("[data-sai-upload]")) this.uploadFile();
         if (target.matches("[data-sai-preview]")) this.preview();
         if (target.matches("[data-sai-run]")) this.run();
+        if (target.matches("[data-sai-run-scope]")) this.runScope();
+        if (target.matches("[data-sai-select-valid]")) this.selectValidRows();
+        if (target.matches("[data-sai-clear-selection]")) { this.selectedRows.clear(); this.renderResults(this.stagedRows, "previewed"); }
         if (target.matches("[data-sai-run-row]")) this.runRow(Number(target.dataset.saiRunRow));
         if (target.matches("[data-sai-save-profile]")) this.saveProfile();
         if (target.matches("[data-sai-copy]")) navigator.clipboard && navigator.clipboard.writeText(this.configJSON());
@@ -134,6 +139,15 @@
           this.idempotencyEnabled = event.target.checked;
           this.syncConfigEditor();
           if (!this.idempotencyEnabled) this.message("Duplicate protection is off: completed rows from this file can be deliberately replayed.");
+        }
+        if (event.target.matches("[data-sai-row-select]")) {
+          const rowNumber = Number(event.target.dataset.saiRowSelect);
+          if (event.target.checked) this.selectedRows.add(rowNumber); else this.selectedRows.delete(rowNumber);
+          this.updateSelectionSummary();
+        }
+        if (event.target.matches("[data-sai-execution-scope]")) {
+          this.executionScope = event.target.value;
+          this.updateSelectionSummary();
         }
         if (event.target.matches("[data-sai-config]")) this.loadJSON(event.target.value);
       });
@@ -483,8 +497,30 @@
     }
     async preview() { return this.execute("/imports/preview", "Previewing rows…"); }
     async run() {
+      this.executionScope = "all_valid";
+      return this.runScope();
+    }
+    selection() {
+      const scope = this.executionScope || "all_valid";
+      return scope === "selected"
+        ? {scope, row_numbers: [...this.selectedRows].sort((a, b) => a - b)} : {scope};
+    }
+    selectValidRows() {
+      this.selectedRows = new Set(this.stagedRows.filter((row) => !row.status && (row.decision === "insert" || row.decision === "update")).map((row) => row.row_number));
+      this.renderResults(this.stagedRows, "previewed");
+    }
+    updateSelectionSummary() {
+      const node = this.root.querySelector("[data-sai-selection-summary]");
+      if (!node) return;
+      const selected = this.selectedRows.size;
+      node.textContent = this.executionScope === "selected"
+        ? `${selected} row${selected === 1 ? "" : "s"} selected` : `Import scope: ${this.executionScope.replace(/_/g, " ")}`;
+    }
+    async runScope() {
+      const selection = this.selection();
+      if (selection.scope === "selected" && !selection.row_numbers.length) return this.message("Select one or more valid preview rows first.", true);
       if (!this.idempotencyEnabled && !global.confirm("Duplicate protection is off. Re-run matching rows from this file?")) return;
-      return this.execute("/imports/runs", "Importing rows…", {mode: "run"});
+      return this.execute("/imports/runs", "Importing selected rows…", {mode: "run", selection});
     }
     async runRow(rowNumber) {
       if (!Number.isInteger(rowNumber) || rowNumber < 1) return;
@@ -509,6 +545,7 @@
         const payload = await this.fetchJSON(apiPath(this.base, path), {method: "POST", headers: {"Content-Type": "application/json", Accept: "application/json"}, body: JSON.stringify(Object.assign(this.requestBody(), extra || {}))});
         const rows = payload.rows || payload.run && payload.run.rows || [];
         this.stagedRows = rows;
+        if (path === "/imports/preview") this.selectedRows = new Set([...this.selectedRows].filter((number) => rows.some((row) => row.row_number === number && (row.decision === "insert" || row.decision === "update"))));
         this.renderResults(this.stagedRows, payload.run && payload.run.status || "previewed");
         this.message(`Completed ${rows.length} staged rows.`);
       } catch (error) {
@@ -525,8 +562,21 @@
     renderResults(rows, status) {
       this.root.querySelector("[data-sai-results-card]").hidden = false;
       const container = this.root.querySelector("[data-sai-results]"); container.replaceChildren(element("p", "", `Run status: ${status}`));
+      const preview = rows.some((row) => !row.status);
+      if (preview) {
+        const controls = element("div", "sai-execution-controls");
+        const scopeLabel = element("label", "", "Import");
+        const scope = element("select", ""); scope.dataset.saiExecutionScope = "";
+        [["all_valid", "All valid rows"], ["selected", "Selected rows"], ["inserts", "Inserts only"], ["updates", "Updates only"]].forEach(([value, label]) => scope.add(new Option(label, value, false, value === this.executionScope)));
+        scopeLabel.append(scope);
+        const selectValid = element("button", "sai-button sai-secondary", "Select all valid"); selectValid.type = "button"; selectValid.dataset.saiSelectValid = "";
+        const clear = element("button", "sai-button sai-secondary", "Clear selection"); clear.type = "button"; clear.dataset.saiClearSelection = "";
+        const run = element("button", "sai-button sai-primary", "Import scope"); run.type = "button"; run.dataset.saiRunScope = "";
+        const summary = element("span", "sai-selection-summary"); summary.dataset.saiSelectionSummary = "";
+        controls.append(scopeLabel, selectValid, clear, run, summary); container.append(controls);
+      }
       const table = element("table", "sai-results-table");
-      table.innerHTML = "<thead><tr><th>Row</th><th>Decision</th><th>Key</th><th>Details</th><th>Action</th></tr></thead>";
+      table.innerHTML = `<thead><tr>${preview ? "<th>Select</th>" : ""}<th>Row</th><th>Decision</th><th>Key</th><th>Source data</th><th>Proposed work</th><th>Result / issues</th><th>Action</th></tr></thead>`;
       const body = element("tbody", "");
       rows.forEach((row) => {
         const tr = element("tr", row.status === "failed" || row.decision === "error" ? "is-error" : "");
@@ -539,10 +589,19 @@
         const actionResults = (row.action_results || []).map((result) => result.message).filter(Boolean).join("; ");
         const writeResult = json(row.result && row.result.values || row.target || {});
         const details = errors || [writeResult === "{}" ? "" : writeResult, actionResults].filter(Boolean).join(" — ") || "—";
-        tr.append(element("td", "", String(row.row_number)), element("td", "", row.status || row.decision), element("td", "", json(row.key || {})), element("td", "", details), action);
+        if (preview) {
+          const choice = element("td", "");
+          const allowed = row.decision === "insert" || row.decision === "update";
+          const input = element("input", ""); input.type = "checkbox"; input.dataset.saiRowSelect = row.row_number; input.checked = this.selectedRows.has(row.row_number); input.disabled = !allowed;
+          choice.append(input); tr.append(choice);
+        }
+        const proposed = {};
+        if (row.assignments && Object.keys(row.assignments).length) proposed.assignments = row.assignments;
+        if (row.actions && row.actions.length) proposed.actions = row.actions.map(({action: actionId, inputs}) => ({action: actionId, inputs}));
+        tr.append(element("td", "", String(row.row_number)), element("td", "", row.status || row.decision), element("td", "", json(row.key || {})), element("td", "", json(row.source || {})), element("td", "", json(proposed)), element("td", "", details), action);
         body.append(tr);
       });
-      table.append(body); container.append(table);
+      table.append(body); container.append(table); this.updateSelectionSummary();
     }
     async saveProfile() {
       if (!this.upload) return this.message("Inspect a file before saving its mapping.", true);
