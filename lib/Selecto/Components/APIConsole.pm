@@ -8,7 +8,7 @@ use Mojo::Base -base, -signatures;
 use Mojo::File qw(path);
 use Selecto::Components::Util qw(html_escape);
 
-my $ASSET_REVISION = '0.5.0';
+my $ASSET_REVISION = '0.5.1';
 
 sub install_assets ($class, $app) {
     die "install_assets requires a Mojolicious application\n"
@@ -28,11 +28,12 @@ sub install_assets ($class, $app) {
 
 sub page ($class, %options) {
     my $base_path = _base_path($options{base_path});
-    my $title = _string($options{title} // 'Selecto API Console', 'title');
+    my $title = _string($options{title} // 'API Console', 'title');
     my $curl_auth = _curl_auth($options{curl_auth});
-    my $theme = _theme($options{theme});
-    my $shell = _page_shell($options{page_shell});
-    my $style = _theme_style($theme);
+    my $presentation = $class->page_presentation(%options);
+    my $theme = $presentation->{theme};
+    my $shell = $presentation->{page_shell};
+    my $style = $presentation->{theme_style};
     my $html_attributes = ' data-sac-color-scheme="' . html_escape($theme->{scheme}) . '"' .
         (length($style) ? ' style="' . html_escape($style) . '"' : '');
     my $body_classes = join ' ', grep { length } 'sac-body', $shell->{body_class} // '';
@@ -57,6 +58,15 @@ sub page ($class, %options) {
         'aria-hidden="true"></span><span>Reading the Selecto domain&hellip;</span></div>' .
         '<noscript><div class="sac-fatal">The Selecto API Console requires JavaScript.</div></noscript>' .
         '</main></body></html>';
+}
+
+sub page_presentation ($class, %options) {
+    my $theme = _theme($options{theme});
+    return {
+        theme => $theme,
+        page_shell => _page_shell($options{page_shell}),
+        theme_style => _theme_style($theme),
+    };
 }
 
 sub _curl_auth ($value) {
