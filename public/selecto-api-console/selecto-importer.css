@@ -3,3 +3,4 @@
 .sai-match-choice{min-height:1.5em}.sai-key-choice{display:inline-flex;gap:4px;align-items:center;margin:2px 16px 2px 0;font-weight:600;font-size:13px}
 .sai-execution-controls{display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin:12px 0}.sai-execution-controls label{display:grid;gap:4px;font-weight:650}.sai-execution-controls select{padding:7px;border:1px solid #aebdca;border-radius:4px;background:#fff}.sai-selection-summary{color:#536273;font-weight:600}
 .sai-results-table td:nth-child(n+4){font-family:ui-monospace,monospace;white-space:pre-wrap}
+.sai-action-requirements{margin:18px 0;padding:12px;background:#f7fafc;border:1px solid #d8e0e8;border-radius:6px}.sai-action-requirements h3{margin:0}.sai-action-requirement{margin-top:10px}.sai-action-requirement ul{margin:5px 0;padding-left:22px}.sai-action-requirement .is-missing{color:#9d2020;font-weight:650}

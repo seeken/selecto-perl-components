@@ -84,7 +84,10 @@
         Object.entries(actionSpec.inputs || {}).forEach(([input, inputSpec]) => {
           const publishedInput = publishedInputs.get(input) || {};
           entries.push({
-            action, input, spec: Object.assign({}, inputSpec, {type: inputSpec.type || publishedInput.type}),
+            action, input, spec: Object.assign({}, inputSpec, {
+              type: inputSpec.type || publishedInput.type,
+              required: Boolean(inputSpec.required || publishedInput.required),
+            }),
             label: `${actionSpec.label || publishedAction.label || action}: ${inputSpec.label || publishedInput.label || input}`,
           });
         });
@@ -269,8 +272,56 @@
         body.append(row);
       });
       this.renderExtraMappings(fields);
+      this.renderActionRequirements(card);
       this.renderMatchChoices();
       this.syncConfigEditor();
+    }
+
+    configuredActions() {
+      return Object.keys(this.importActions()).filter((action) => this.actionInputEntries().some(({action: candidate, input}) =>
+        candidate === action && (this.actionMappings.get(`${action}:${input}`) || {}).kind !== "omit"
+      ));
+    }
+    actionInputMissing(action, input, spec) {
+      const mapping = this.actionMappings.get(`${action}:${input}`) || {kind: "omit"};
+      if (mapping.kind === "omit") return true;
+      if (mapping.kind === "static") return !String(mapping.value || "").trim();
+      if (mapping.kind === "parameter") return !String(mapping.value || mapping.name || "").trim();
+      return false;
+    }
+    missingRequiredActionInputs() {
+      return this.actionInputEntries().filter(({action, input, spec}) =>
+        spec.required && this.configuredActions().includes(action) && this.actionInputMissing(action, input, spec)
+      );
+    }
+    renderActionRequirements(card) {
+      let panel = card.querySelector("[data-sai-action-requirements]");
+      if (!panel) {
+        panel = element("section", "sai-action-requirements"); panel.dataset.saiActionRequirements = "";
+        const config = card.querySelector("[data-sai-config]");
+        card.insertBefore(panel, config && config.closest("label"));
+      }
+      panel.replaceChildren();
+      const actions = this.configuredActions();
+      panel.hidden = !actions.length;
+      if (!actions.length) return;
+      panel.append(element("h3", "", "Action inputs"), element("p", "sai-hint", "Every required action input must be mapped from the file, supplied as a static value, or supplied as a run parameter."));
+      actions.forEach((action) => {
+        const actionSpec = this.importActions()[action] || {};
+        const group = element("div", "sai-action-requirement");
+        group.append(element("strong", "", actionSpec.label || ((this.domain.actions || {})[action] || {}).label || action));
+        const list = element("ul", "");
+        this.actionInputEntries().filter((entry) => entry.action === action).forEach(({input, spec, label}) => {
+          const missing = spec.required && this.actionInputMissing(action, input, spec);
+          const mapping = this.actionMappings.get(`${action}:${input}`) || {kind: "omit"};
+          const item = element("li", missing ? "is-missing" : "");
+          const requirement = spec.required ? "Required" : "Optional";
+          const source = missing ? "Missing — choose a file column or add a static/parameter value." : `Configured from ${mapping.kind}.`;
+          item.textContent = `${label} — ${requirement}. ${source}`;
+          list.append(item);
+        });
+        group.append(list); panel.append(group);
+      });
     }
 
     sourceChanged(node) {
@@ -540,6 +591,10 @@
     async execute(path, message, extra) {
       if (!this.upload) return this.message("Inspect a file first.", true);
       if (!this.selectedKeySet()) return this.message("Map a file column to a match field before previewing or importing.", true);
+      const missingInputs = this.missingRequiredActionInputs();
+      if (missingInputs.length) {
+        return this.message(`Action setup is incomplete: ${missingInputs.map(({label}) => label).join(", ")} ${missingInputs.length === 1 ? "is" : "are"} required.`, true);
+      }
       this.message(message);
       try {
         const payload = await this.fetchJSON(apiPath(this.base, path), {method: "POST", headers: {"Content-Type": "application/json", Accept: "application/json"}, body: JSON.stringify(Object.assign(this.requestBody(), extra || {}))});
@@ -585,7 +640,10 @@
           const button = element("button", "sai-button sai-row-action", "Import row");
           button.type = "button"; button.dataset.saiRunRow = row.row_number; action.append(button);
         } else action.textContent = "—";
-        const errors = (row.errors || []).map((error) => `${error.field ? `${error.field}: ` : ""}${error.message}`).join("; ");
+        const errors = (row.errors || []).map((error) => {
+          const label = error.field || (error.action ? `${error.action}${error.input ? `.${error.input}` : ""}` : "");
+          return `${label ? `${label}: ` : ""}${error.message}`;
+        }).join("; ");
         const actionResults = (row.action_results || []).map((result) => result.message).filter(Boolean).join("; ");
         const writeResult = json(row.result && row.result.values || row.target || {});
         const details = errors || [writeResult === "{}" ? "" : writeResult, actionResults].filter(Boolean).join(" — ") || "—";
