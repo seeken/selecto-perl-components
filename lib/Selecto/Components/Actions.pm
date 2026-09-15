@@ -7,6 +7,7 @@ use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(decode_json);
 use Selecto::Components::Util qw(humanize);
 use Selecto::CoDomain ();
+use Selecto::DateShortcut ();
 use Storable qw(dclone);
 
 my @LUCKY_CHARMS_MARKERS = (
@@ -335,6 +336,9 @@ sub _request_inputs {
                 if defined($input->{minimum}) && $value < $input->{minimum};
             push @errors, "$input->{label} is above its maximum."
                 if defined($input->{maximum}) && $value > $input->{maximum};
+        }
+        if ($input->{type} eq 'date' && !Selecto::DateShortcut->valid_date($value)) {
+            push @errors, "$input->{label} must be an ISO date (YYYY-MM-DD).";
         }
         if ($input->{type} eq 'lookup' && ($input->{value_type} // '') eq 'integer') {
             push @errors, "$input->{label} must be a valid selection."

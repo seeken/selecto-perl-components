@@ -67,6 +67,33 @@ test("columns and filters can add the same field more than once", async ({page})
   await expect(addFilter).toBeVisible();
 });
 
+test("an export uses the columns currently selected in the builder", async ({page}) => {
+  await load(page, `
+    <section id="selecto-surface-truck">
+      <a data-sc-export-format="tsv" href="/explorer/truck?q=1&format=tsv">TSV</a>
+      <form data-sc-builder action="http://selecto.test/explorer/truck">
+        <input name="q" value="1"><input name="view" value="detail">
+        <input name="field" value="vin"><input name="field" value="lic_no">
+        <input name="filter_field" value="status"><input name="filter_op" value="eq">
+        <input name="filter_value" value="at">
+      </form>
+    </section>
+  `);
+
+  const href = await page.evaluate(() => {
+    const link = document.querySelector("[data-sc-export-format]");
+    link.addEventListener("click", (event) => event.preventDefault(), {once: true});
+    link.dispatchEvent(new MouseEvent("click", {bubbles: true, cancelable: true}));
+    return link.href;
+  });
+  const url = new URL(href, "http://selecto.test");
+  expect(url.pathname).toBe("/explorer/truck");
+  expect(url.searchParams.getAll("field")).toEqual(["vin", "lic_no"]);
+  expect(url.searchParams.get("filter_field")).toBe("status");
+  expect(url.searchParams.get("filter_value")).toBe("at");
+  expect(url.searchParams.get("format")).toBe("tsv");
+});
+
 test("a back-forward cache restore preserves results and reconnects without a query", async ({page}) => {
   await load(page, `
     <section id="selecto-channel-orders" hx-ws:connect="/explore/orders/ws">

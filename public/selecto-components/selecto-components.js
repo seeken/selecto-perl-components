@@ -805,6 +805,36 @@
     HTMLFormElement.prototype.submit.call(form);
   }
 
+  function exportUrlFromBuilder(form, format) {
+    var target = new URL(form.getAttribute("action") || window.location.href, window.location.href);
+    var query = new URLSearchParams();
+    new FormData(form).forEach(function (value, name) {
+      // The Explorer builder has no file controls, but do not turn one into
+      // a misleading URL if a host adds one around the surface.
+      if (typeof File !== "undefined" && value instanceof File) return;
+      query.append(name, value);
+    });
+    query.set("format", format);
+    target.search = query.toString();
+    return target.pathname + target.search + target.hash;
+  }
+
+  // Export links are rendered from the last completed query.  The picker can
+  // be edited locally immediately before a download, so rebuild the link from
+  // the live form as it is clicked. This keeps the export projection, filters,
+  // and ordering aligned with what the user currently selected.
+  document.addEventListener("click", function (event) {
+    var link = event.target.closest("[data-sc-export-format]");
+    if (!link) return;
+    var surface = link.closest('[id^="selecto-surface-"]');
+    var form = surface && surface.querySelector("form[data-sc-builder]");
+    var format = link.dataset.scExportFormat;
+    if (!form || !format) return;
+    try {
+      link.href = exportUrlFromBuilder(form, format);
+    } catch (_error) {}
+  });
+
   document.addEventListener("htmx:ws:after:message:incoming", function (event) {
     var incoming = event.detail && event.detail.message;
     if (incoming && typeof incoming.json === "function") {
