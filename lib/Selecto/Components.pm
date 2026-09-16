@@ -14,6 +14,7 @@ use Selecto::Components::Config ();
 use Selecto::Components::Controller::Actions ();
 use Selecto::Components::Controller::Explorer ();
 use Selecto::Components::Controller::Lookups ();
+use Selecto::Components::Controller::RecordEditor ();
 use Selecto::Components::Controller::SavedQueries ();
 use Selecto::Components::Explorer ();
 use Selecto::Components::Renderer ();
@@ -175,6 +176,14 @@ sub _routes (
 
     $routes->post($route_path . '/actions/:selecto_action_id')->to(cb => sub ($controller) {
         return Selecto::Components::Controller::Actions::_run_action($controller, $explorer);
+    });
+
+    $routes->get($route_path . '/records/:selecto_record_id/edit')->to(cb => sub ($controller) {
+        return Selecto::Components::Controller::RecordEditor->show($controller, $explorer);
+    });
+
+    $routes->post($route_path . '/records/:selecto_record_id/edit')->to(cb => sub ($controller) {
+        return Selecto::Components::Controller::RecordEditor->save($controller, $explorer);
     });
 
     $routes->get(

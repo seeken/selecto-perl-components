@@ -124,6 +124,25 @@ sub _domain {
             },
         },
         joins => { category => { type => 'inner' } },
+        writes => {
+            operations => {update => {enabled => 1}},
+            fields => {
+                product_name => {updatable => 1},
+                unit_price => {updatable => 1},
+                created_on => {updatable => 1},
+            },
+        },
+        editors => {
+            product_profile => {
+                label => 'Edit product', submit_label => 'Save product',
+                fields => [
+                    {field => 'product_name', required => 1},
+                    {field => 'unit_price', control => 'number', nullable => 1},
+                    {field => 'created_on', control => 'date', nullable => 1},
+                ],
+                actions => ['edit_one_product'],
+            },
+        },
         query_library => {
             segments => {
                 low_stock => {
@@ -199,6 +218,15 @@ sub _domain {
                 payload => {
                     url_template => '/products/maint?id={{id}}',
                     target => '_self',
+                },
+            },
+            edit_product => {
+                name => 'Edit product', type => 'record_editor',
+                required_fields => [qw(id product_name)],
+                payload => {
+                    editor => 'product_profile', target_field => 'id',
+                    title => 'Edit {{product_name}}', size => 'lg',
+                    navigation_enabled => 1,
                 },
             },
         },
@@ -395,6 +423,17 @@ sub config {
                 };
             },
         },
+        action_eligibility_resolvers => {
+            edit_one_product => sub {
+                my ($controller, $request) = @_;
+                push @ELIGIBILITY_REQUESTS, {%$request};
+                my %eligible = map {
+                    my $id = "$_";
+                    ($id => $id eq '101' ? 1 : 0)
+                } @{$request->{row_ids} // []};
+                return \%eligible;
+            },
+        },
         saved_query_store => TestSelectoComponents::SavedQueryStore->new,
         websocket_message_cleanup => sub {
             my ($controller, $config) = @_;
@@ -458,7 +497,7 @@ use Selecto::Statement ();
 
 our (
     $LAST_QUERY, $LAST_COUNT_QUERY, $LAST_COUNT_STATEMENT,
-    $LAST_COMPILED_QUERY, $LAST_DATA_QUERY, $COUNT_EXECUTIONS,
+    $LAST_COMPILED_QUERY, $LAST_DATA_QUERY, $COUNT_EXECUTIONS, $LAST_WRITE, $WRITE_ERROR,
 );
 
 sub name { return 'test'; }
@@ -471,7 +510,10 @@ sub compile ($self, $domain, $query) {
     } else {
         $LAST_COUNT_QUERY = $query;
     }
-    my @columns = map { defined($_->alias_name) ? $_->alias_name : $_->kind } @{$query->selections};
+    my @columns = map {
+        defined($_->alias_name) ? $_->alias_name
+            : $_->kind eq 'field' ? $_->arguments->[0] : $_->kind
+    } @{$query->selections};
     return Selecto::Statement->new(
         sql => 'SELECT governed_test_query',
         params => _predicate_values($query->predicate),
@@ -486,6 +528,13 @@ sub execute_query ($self, $statement) {
         return { columns => $statement->columns, rows => [[42]] };
     }
     $LAST_DATA_QUERY = $LAST_COMPILED_QUERY;
+    if (defined($LAST_DATA_QUERY->limit_value) && $LAST_DATA_QUERY->limit_value == 2
+        && join(',', @{$statement->columns}) eq 'id,product_name,unit_price,created_on') {
+        return {
+            columns => $statement->columns,
+            rows => [[101, 'Test Widget', 12.5, '2026-09-15']],
+        };
+    }
     my $rollup = grep { $_ eq '__selecto_rollup_grouping' } @{$statement->columns};
     my $group_count = $rollup ? scalar(@{$LAST_DATA_QUERY->groups}) : 0;
     my @rows;
@@ -529,7 +578,14 @@ sub stream_query ($self, $statement, %options) {
     );
 }
 sub preview_write { return {}; }
-sub execute_write { return {}; }
+sub execute_write {
+    my ($self, $command) = @_;
+    die $WRITE_ERROR if $WRITE_ERROR;
+    $LAST_WRITE = $command;
+    return Selecto::Write::Result->new(
+        operation => $command->operation, affected_rows => 1,
+    );
+}
 sub execute_batch { return []; }
 
 sub _predicate_values ($expression) {

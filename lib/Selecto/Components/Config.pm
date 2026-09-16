@@ -30,6 +30,7 @@ has co_domain_engines => sub { return {} };
 has co_domain_scopes  => sub { return {} };
 has action_eligibility_resolvers => sub { return {} };
 has 'action_authorizer';
+has 'record_editor_handler';
 has 'saved_query_store';
 has 'localizer';
 has 'theme_resolver';
@@ -92,6 +93,9 @@ sub new ($class, @args) {
                 && $self->default_row_click_action !~ /\A[a-z][a-z0-9_-]*\z/;
     die "action_authorizer must be a coderef\n"
         if defined($self->action_authorizer) && ref($self->action_authorizer) ne 'CODE';
+    die "record_editor_handler must be a coderef\n"
+        if defined($self->record_editor_handler)
+            && ref($self->record_editor_handler) ne 'CODE';
     if (defined(my $store = $self->saved_query_store)) {
         die "saved_query_store must be an object\n" unless blessed($store);
         for my $method (qw(list save delete)) {

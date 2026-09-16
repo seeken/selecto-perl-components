@@ -84,6 +84,24 @@ sub authorize ($class, $config, $controller, $action, $phase, $target = undef) {
     return $class->_authorize($config, $controller, $action, $phase, $target);
 }
 
+# Resolve optional, host-owned row eligibility separately from principal and
+# target authorization. A configured resolver applies even when the action
+# does not need an eligibility projection in the result set (for example, an
+# action offered from a record editor).
+sub row_eligibility ($class, $config, $controller, $action, $row_ids, $phase = 'display') {
+    $row_ids = [] unless ref($row_ids) eq 'ARRAY';
+    my $resolver = $config->action_eligibility_resolver($action->{id});
+    return undef unless $resolver;
+    my $eligible = $resolver->($controller, {
+        phase => $phase,
+        action => $action,
+        row_ids => [@$row_ids],
+    });
+    die "action $action->{id} eligibility resolver returned an invalid result\n"
+        unless ref($eligible) eq 'HASH';
+    return {%$eligible};
+}
+
 sub request ($class, $config, $action, $selected_ids, $raw_inputs, $options = undef) {
     $options = {} unless ref($options) eq 'HASH';
     my @errors;

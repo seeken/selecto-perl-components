@@ -9,6 +9,7 @@ use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::DateShortcut ();
 use Selecto::Components::AssetManifest qw(asset_revision);
+use Selecto::Error ();
 
 is Selecto::Components::normalize_export_format('Excel'), 'xlsx',
     'Excel aliases normalize case-insensitively to the governed xlsx format';
@@ -138,6 +139,100 @@ is $t->tx->res->dom
 is $t->tx->res->dom
     ->at('[data-sc-saved-queries] .sc-saved-query-list li:nth-child(2) a')->all_text,
     'Zulu inventory', 'second saved query follows in alphabetical order';
+
+my $record_editor_url = '/explore/products/records/101/edit?editor=product_profile' .
+    '&return_to=%2Fexplore%2Fproducts';
+$t->get_ok($record_editor_url)
+    ->status_is(200)
+    ->element_exists('form[data-sc-record-editor-form]')
+    ->element_exists('input[name="editor_field_product_name"][value="Test Widget"][required]')
+    ->element_exists('input[name="editor_field_unit_price"][type="number"]')
+    ->element_exists('input[name="editor_field_created_on"][type="date"]')
+    ->text_is('form[data-sc-record-editor-form] button[type="submit"]' => 'Save product')
+    ->element_exists('[data-sc-record-editor-action-open="sc-record-editor-action-edit_one_product"]' .
+        '[aria-expanded="false"]')
+    ->text_is('[data-sc-record-editor-action-open]' => 'Edit One Product')
+    ->element_exists('form#sc-record-editor-action-edit_one_product' .
+        '[data-sc-record-editor-action-panel][hidden]')
+    ->text_is('form#sc-record-editor-action-edit_one_product button[type="submit"]' =>
+        'Edit One Product')
+    ->content_unlike(qr/Apply to selected rows/);
+my $record_editor_form = $t->tx->res->dom->at('form[data-sc-record-editor-form]');
+my %record_editor_hidden = map {
+    $_->attr('name') => $_->attr('value')
+} @{$record_editor_form->find('input[type="hidden"]')->to_array};
+is $TestSelectoComponents::ELIGIBILITY_REQUESTS[-1]{phase}, 'display',
+    'record editor checks host row eligibility before offering an action';
+$t->get_ok('/explore/products/records/102/edit?editor=product_profile')
+    ->status_is(200)
+    ->element_exists_not('[data-sc-record-editor-action-open]');
+
+$t->post_ok('/explore/products/records/101/edit?editor=product_profile' =>
+    {Accept => 'application/json'} => form => {
+        %record_editor_hidden,
+        editor_field_product_name => 'Updated Widget',
+        editor_field_unit_price => '12.5',
+        editor_field_created_on => '2026-09-15',
+    })
+    ->status_is(200)
+    ->json_is('/ok' => 1)
+    ->json_is('/row_id' => '101')
+    ->json_is('/authorized' => 1)
+    ->json_is('/changed_fields/0' => 'product_name');
+is_deeply $TestSelectoComponents::Adapter::LAST_WRITE->assignments,
+    {product_name => 'Updated Widget'},
+    'record editor sends only changed governed assignments';
+
+$TestSelectoComponents::Adapter::WRITE_ERROR = Selecto::Error->new(
+    code => 'cardinality_mismatch', message => 'stale editor snapshot',
+);
+$t->post_ok('/explore/products/records/101/edit?editor=product_profile' =>
+    {Accept => 'application/json'} => form => {
+        %record_editor_hidden,
+        editor_field_product_name => 'Conflicting Widget',
+        editor_field_unit_price => '12.5',
+        editor_field_created_on => '2026-09-15',
+    })
+    ->status_is(409)
+    ->json_is('/ok' => 0)
+    ->json_is('/code' => 'record_changed')
+    ->json_like('/message' => qr/changed after you opened it/);
+$TestSelectoComponents::Adapter::WRITE_ERROR = undef;
+
+$t->post_ok('/explore/products/records/101/edit?editor=product_profile' =>
+    {Accept => 'application/json'} => form => {
+        %record_editor_hidden,
+        editor_field_product_name => '',
+        editor_field_unit_price => 'not-a-number',
+        editor_field_created_on => '09/15/2026',
+    })
+    ->status_is(422)
+    ->json_is('/ok' => 0)
+    ->json_is('/field_errors/product_name' => 'This field is required.')
+    ->json_is('/field_errors/unit_price' => 'Enter a number.')
+    ->json_is('/field_errors/created_on' => 'Enter a date as YYYY-MM-DD.');
+$t->post_ok('/explore/products/records/101/edit?editor=product_profile' =>
+    {Accept => 'application/json'} => form => {
+        %record_editor_hidden,
+        editor_field_product_name => 'Test Widget',
+        editor_field_unit_price => '12.5',
+        editor_field_created_on => '2026-09-15',
+        editor_field_category_id => 99,
+    })
+    ->status_is(422)
+    ->json_is('/ok' => 0)
+    ->json_like('/message' => qr/not available in this editor/);
+my $record_editor_results_url = '/explore/products?q=1&view=detail' .
+    '&row_click_action=edit_product&field=product_name&field_alias=&field_format=' .
+    '&group=category.category_name&measure=count&order=product_name&direction=asc' .
+    '&limit=25&page=1';
+$t->get_ok($record_editor_results_url)
+    ->status_is(200)
+    ->element_exists('tbody tr[data-sc-record-id="101"][data-sc-row-click-type="record_editor"]')
+    ->element_exists('dialog[data-sc-row-dialog-kind="record_editor"].sc-row-editor-dialog')
+    ->element_exists('dialog[data-sc-row-dialog-kind="record_editor"] [data-sc-row-editor-body]')
+    ->element_exists_not('dialog[data-sc-row-dialog-kind="record_editor"] iframe');
+$t->get_ok('/explore/products')->status_is(200);
 ok !$t->tx->res->dom->at('[data-sc-saved-queries] a[href^="/explore/elsewhere"]'),
     'saved query list rejects URLs for another explorer';
 my $saved_query_form = $t->tx->res->dom->at(
@@ -319,6 +414,20 @@ $t->post_ok('/explore/products/actions/edit_one_product' => {Accept => 'applicat
     action_input_note => 'One row only',
 })->status_is(422)->json_is('/ok' => 0)
     ->json_like('/message' => qr/Select exactly one row/);
+$t->post_ok('/explore/products/actions/edit_one_product' => {Accept => 'application/json'} => form => {
+    csrf_token => $row_action_csrf,
+    selected_id => [102],
+    action_input_note => 'Not eligible',
+})->status_is(403)->json_is('/ok' => 0)
+    ->json_is('/message' => 'That action is not available for this row.');
+is $TestSelectoComponents::ELIGIBILITY_REQUESTS[-1]{phase}, 'execute',
+    'action execution rechecks host row eligibility';
+$t->post_ok('/explore/products/actions/edit_one_product' => {Accept => 'application/json'} => form => {
+    csrf_token => $row_action_csrf,
+    selected_id => [101],
+    action_input_note => 'Eligible row',
+})->status_is(200)->json_is('/ok' => 1)
+    ->json_is('/message' => 'Product edited.');
 
 $t->post_ok('/explore/products/actions/set_reorder_level' => {Accept => 'application/json'} => form => {
     csrf_token => $row_action_csrf,
@@ -333,6 +442,7 @@ my $grouped_action_url = '/explore/products?q=1&view=detail' .
     '&field=action%3Abuild_shipments&field_alias=&field_format=' .
     '&field=product_name&field_alias=&field_format=' .
     '&group=category.category_name&measure=count&order=product_name&direction=asc&limit=25&page=1';
+@TestSelectoComponents::ELIGIBILITY_REQUESTS = ();
 $t->get_ok($grouped_action_url)
     ->status_is(200)
     ->element_exists('[data-sc-bulk-action][data-sc-action-id="build_shipments"][data-sc-action-mode="groups"]')

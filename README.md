@@ -509,6 +509,55 @@ the current page, and includes an `Open full page` link. Its payload also accept
 `title`, `size`, `referrer_policy`, `navigation_enabled`, and optional `allow`
 or `sandbox` iframe attributes.
 
+Use `type => 'record_editor'` to open a native, lazily loaded editor instead of
+an iframe. The action payload names an entry in the canonical domain's
+`editors` registry and the root field used as its stable target:
+
+```perl
+writes => {
+    operations => {update => {enabled => 1}},
+    fields => {
+        product_name => {updatable => 1},
+        unit_price   => {updatable => 1},
+    },
+},
+editors => {
+    product_profile => {
+        label => 'Edit product',
+        fields => [
+            {field => 'product_name', required => 1},
+            {field => 'unit_price', control => 'number', nullable => 1},
+        ],
+        actions => ['retire_product'],
+    },
+},
+detail_actions => {
+    edit_product => {
+        name => 'Edit product', type => 'record_editor',
+        required_fields => [qw(id product_name)],
+        payload => {
+            editor => 'product_profile', target_field => 'id',
+            title => 'Edit {{product_name}}', size => 'lg',
+        },
+    },
+},
+```
+
+The component fetches the record through the request-specific governed domain,
+signs its original editable values, validates CSRF and submitted field names,
+and updates with `expected_count => 1`. Those original values form the
+optimistic-concurrency predicate, so a competing edit returns HTTP 409. After
+success the browser re-fetches the same governed Explorer result before
+replacing the row. A row that leaves the result remains as a disabled visible
+tombstone until refresh; a row that leaves authorization is reduced to safe
+identity only. Dirty forms warn before Close or Previous/Next navigation.
+
+Published editor actions are rendered as explicitly separate operations. They
+are not silently chained to profile Save. A host that needs audit or a shared
+transaction coordinator can provide `record_editor_handler`; it receives the
+effective domain, editor, target, signed originals, normalized changed
+assignments, and a `default_save` callback.
+
 ## Selected-row actions
 
 Selected-row actions come from the canonical domain contract. The Components
