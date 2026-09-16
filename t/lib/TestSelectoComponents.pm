@@ -233,6 +233,33 @@ sub _domain {
                 },
                 execution => {kind => 'host', operation => 'mark_for_review'},
             },
+            edit_one_product => {
+                label => 'Edit One Product',
+                description => 'Edit one product through a row dialog.',
+                type => 'bulk_action', scope => 'row', bulk => {enabled => 1},
+                selection => {
+                    mode => 'rows', min_rows => 1, max_rows => 1,
+                    presentation => 'row_dialog',
+                },
+                inputs => {note => {
+                    label => 'Note', type => 'string', required => 1,
+                    min_length => 1, max_length => 80,
+                }},
+                execution => {kind => 'host', operation => 'edit_one_product'},
+            },
+            set_reorder_level => {
+                label => 'Set Reorder Level',
+                description => 'Set a compact value directly in the result row.',
+                type => 'bulk_action', scope => 'row', bulk => {enabled => 1},
+                selection => {
+                    mode => 'rows', min_rows => 1, max_rows => 1,
+                    presentation => 'row_inline',
+                },
+                inputs => {level => {
+                    label => 'Level', type => 'number', required => 1, minimum => 0,
+                }},
+                execution => {kind => 'host', operation => 'set_reorder_level'},
+            },
             build_shipments => {
                 label => 'Build Shipments',
                 description => 'Group selected products into shipments.',
@@ -339,6 +366,22 @@ sub config {
                     ok => 1,
                     applied_count => scalar(@{$request->{selected_ids}}),
                     message => 'Products marked for review.',
+                };
+            },
+            edit_one_product => sub {
+                my ($controller, $request) = @_;
+                push @ACTION_REQUESTS, $request;
+                return {
+                    ok => 1, applied_count => scalar(@{$request->{selected_ids}}),
+                    message => 'Product edited.',
+                };
+            },
+            set_reorder_level => sub {
+                my ($controller, $request) = @_;
+                push @ACTION_REQUESTS, $request;
+                return {
+                    ok => 1, applied_count => scalar(@{$request->{selected_ids}}),
+                    message => 'Reorder level set.',
                 };
             },
             build_shipments => sub {

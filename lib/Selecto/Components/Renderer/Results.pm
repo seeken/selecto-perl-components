@@ -43,45 +43,69 @@ sub _bulk_actions ($class, $model) {
     my $actions = $model->{bulk_actions} // [];
     return '' unless @$actions && $model->{result} && defined($model->{result}{action_key});
     my $config = $model->{config};
-    my $panels = '';
+    my ($panels, $row_definitions) = ('', '');
     for my $action (@$actions) {
         if (($action->{selection}{mode} // 'rows') eq 'groups') {
             $panels .= _grouped_action_panel($model, $action);
             next;
         }
+        my $presentation = $action->{selection}{presentation} // 'toolbar';
+        next if $presentation eq 'row_inline';
         my $id = $action->{id};
         my $dialog_id = 'selecto-action-' . $config->id . '-' . $id;
         my $dialog_title_id = $dialog_id . '-title';
         my $enabled = ($action->{status} // 'enabled') eq 'enabled';
+        my $dialog = _action_dialog(
+            $model, $action, $dialog_id, $dialog_title_id,
+            $presentation eq 'row_dialog' ? 1 : 0,
+        );
+        if ($presentation eq 'row_dialog') {
+            $row_definitions .= '<div class="sc-row-action-definition" data-sc-bulk-action ' .
+                'data-sc-action-id="' . _h($id) . '" data-sc-action-mode="row-dialog" ' .
+                'data-sc-action-max-rows="1" data-sc-action-submit-label="' .
+                _h($action->{submit_label}) . '">' . $dialog . '</div>';
+            next;
+        }
         my $button = '<button type="button" class="sc-button sc-secondary" data-sc-action-open="' .
             _h($dialog_id) . '" data-sc-action-disabled="' . ($enabled ? '0' : '1') . '" disabled' .
             ($enabled ? '' : ' title="' . _h($action->{status_reason} // 'Action unavailable') . '"') .
             '>' . _h($action->{label}) . '</button>';
-        my $inputs = join '', map { _action_input($_, $id) } @{$action->{inputs}};
-        my $description = length($action->{description} // '')
-            ? '<p class="sc-action-description">' . _h($action->{description}) . '</p>' : '';
-        my $dialog = '<dialog class="sc-action-dialog" id="' . _h($dialog_id) .
-            '" aria-labelledby="' . _h($dialog_title_id) . '" data-sc-action-dialog>' .
-            '<form method="post" action="' . _h($config->path . '/actions/' . $id) .
-            '" data-sc-action-form><header><div><p class="sc-eyebrow">Selected-row action</p><h3 id="' .
-            _h($dialog_title_id) . '">' .
-            _h($action->{label}) . '</h3></div><button type="button" class="sc-action-close" ' .
-            'data-sc-action-close aria-label="Close action form">×</button></header>' . $description .
-            '<p class="sc-action-target-summary">Apply to <strong data-sc-action-selection-count>0</strong> ' .
-            'selected rows.</p><input type="hidden" name="csrf_token" value="' .
-            _h($model->{csrf_token} // '') . '"><input type="hidden" name="return_to" value="' .
-            _h($model->{canonical_url}) . '"><div data-sc-action-targets></div>' .
-            '<div class="sc-action-inputs">' . $inputs . '</div>' .
-            '<div class="sc-action-result" data-sc-action-result role="status" hidden></div>' .
-            '<footer><button type="button" class="sc-button sc-secondary" data-sc-action-close>Cancel</button>' .
-            '<button type="submit" class="sc-button sc-primary">Apply to selected rows</button></footer>' .
-            '</form></dialog>';
         $panels .= '<section class="sc-bulk-action" data-sc-bulk-action data-sc-action-id="' .
-            _h($id) . '"><div role="status" aria-live="polite" aria-atomic="true"><strong ' .
+            _h($id) . '" data-sc-action-mode="rows" data-sc-action-max-rows="' .
+            _h($action->{selection}{max_rows}) . '" data-sc-action-submit-label="' .
+            _h($action->{submit_label}) . '"><div role="status" aria-live="polite" aria-atomic="true"><strong ' .
             'data-sc-selection-count>0</strong> ' .
             '<span data-sc-selection-label>rows selected</span></div>' . $button . $dialog . '</section>';
     }
-    return '<div class="sc-bulk-actions" data-sc-bulk-actions>' . $panels . '</div>';
+    return ($panels ? '<div class="sc-bulk-actions" data-sc-bulk-actions>' . $panels . '</div>' : '') .
+        $row_definitions;
+}
+
+sub _action_dialog ($model, $action, $dialog_id, $dialog_title_id, $single_row = 0) {
+    my $config = $model->{config};
+    my $id = $action->{id};
+    my $inputs = join '', map { _action_input($_, $id) } @{$action->{inputs}};
+    my $description = length($action->{description} // '')
+        ? '<p class="sc-action-description">' . _h($action->{description}) . '</p>' : '';
+    my $summary = $single_row
+        ? '<p class="sc-action-target-summary">Apply to this row.</p>'
+        : '<p class="sc-action-target-summary">Apply to <strong data-sc-action-selection-count>0</strong> selected rows.</p>';
+    return '<dialog class="sc-action-dialog" id="' . _h($dialog_id) .
+        '" aria-labelledby="' . _h($dialog_title_id) . '" data-sc-action-dialog>' .
+        '<form method="post" action="' . _h($config->path . '/actions/' . $id) .
+        '" data-sc-action-form><header><div><p class="sc-eyebrow">' .
+        ($single_row ? 'Row action' : 'Selected-row action') . '</p><h3 id="' .
+        _h($dialog_title_id) . '">' . _h($action->{label}) .
+        '</h3></div><button type="button" class="sc-action-close" ' .
+        'data-sc-action-close aria-label="Close action form">×</button></header>' .
+        $description . $summary . '<input type="hidden" name="csrf_token" value="' .
+        _h($model->{csrf_token} // '') . '"><input type="hidden" name="return_to" value="' .
+        _h($model->{canonical_url}) . '"><div data-sc-action-targets></div>' .
+        '<div class="sc-action-inputs">' . $inputs . '</div>' .
+        '<div class="sc-action-result" data-sc-action-result role="status" hidden></div>' .
+        '<footer><button type="button" class="sc-button sc-secondary" data-sc-action-close>Cancel</button>' .
+        '<button type="submit" class="sc-button sc-primary">' .
+        _h($action->{submit_label}) . '</button></footer></form></dialog>';
 }
 
 sub _grouped_action_panel ($model, $action) {
@@ -127,13 +151,14 @@ sub _grouped_action_panel ($model, $action) {
         $button . $dialog . '</section>';
 }
 
-sub _action_input ($input, $action_id = 'action') {
+sub _action_input ($input, $action_id = 'action', $instance_id = '') {
     my $name = 'action_input_' . $input->{id};
     my $required = $input->{required} ? ' required aria-required="true"' : '';
     my $marker = $input->{required} ? ' <span aria-hidden="true">*</span>' : '';
     my $control;
     if ($input->{type} eq 'lookup') {
-        my $results_id = 'sc-action-lookup-' . $action_id . '-' . $input->{id};
+        my $results_id = 'sc-action-lookup-' . $action_id . '-' . $input->{id} .
+            (length($instance_id) ? '-' . $instance_id : '');
         my $placeholder = $input->{placeholder}
             // ('Search and choose ' . lc($input->{label}));
         my $hint = $input->{direct_entry}
@@ -181,6 +206,28 @@ sub _action_input ($input, $action_id = 'action') {
         '</span>' . $control . '</' . $element . '>';
 }
 
+sub _row_inline_action ($model, $action, $target, $row_number) {
+    my $id = $action->{id};
+    my $instance = 'row-' . $row_number;
+    my $inputs = join '', map { _action_input($_, $id, $instance) } @{$action->{inputs}};
+    my $enabled = ($action->{status} // 'enabled') eq 'enabled';
+    my $disabled = $enabled ? '' : ' disabled';
+    my $title = $enabled ? ''
+        : ' title="' . _h($action->{status_reason} // 'Action unavailable') . '"';
+    return '<div class="sc-row-inline-action" data-sc-bulk-action data-sc-action-id="' .
+        _h($id) . '" data-sc-action-mode="row-inline" data-sc-row-id="' . _h($target) .
+        '" data-sc-action-max-rows="1" data-sc-action-submit-label="' .
+        _h($action->{submit_label}) . '"><form method="post" action="' .
+        _h($model->{config}->path . '/actions/' . $id) . '" data-sc-action-form' . $title . '>' .
+        '<input type="hidden" name="csrf_token" value="' . _h($model->{csrf_token} // '') . '">' .
+        '<input type="hidden" name="return_to" value="' . _h($model->{canonical_url}) . '">' .
+        '<div data-sc-action-targets></div><fieldset' . $disabled . '><div class="sc-row-inline-inputs">' .
+        $inputs . '</div><button type="submit" class="sc-button sc-primary">' .
+        _h($action->{submit_label}) . '</button></fieldset>' .
+        '<div class="sc-action-result" data-sc-action-result role="status" hidden></div>' .
+        '</form></div>';
+}
+
 sub _table ($class, $result, $model) {
     my %actions = map { $_->{id} => $_ } @{$model->{bulk_actions} // []};
     my @columns = grep { !$_->{action_id} || $actions{$_->{action_id}} } @{$result->{columns}};
@@ -188,8 +235,13 @@ sub _table ($class, $result, $model) {
         my $column = $_;
         if ($column->{action_id}) {
             my $action = $actions{$column->{action_id}};
+            my $presentation = $action->{selection}{presentation} // 'toolbar';
             ($action->{selection}{mode} // 'rows') eq 'groups'
                 ? '<th scope="col" class="sc-select-column sc-group-select-column" ' .
+                    'data-sc-action-column="' . _h($column->{action_id}) . '">' .
+                    _h($column->{label}) . '</th>'
+                : $presentation ne 'toolbar'
+                ? '<th scope="col" class="sc-select-column sc-row-action-column" ' .
                     'data-sc-action-column="' . _h($column->{action_id}) . '">' .
                     _h($column->{label}) . '</th>'
                 : '<th scope="col" class="sc-select-column" data-sc-action-column="' .
@@ -273,12 +325,31 @@ sub _table ($class, $result, $model) {
                         _h($column->{action_id}) . '" data-sc-row-id="' .
                         _h($target) . '"' . $row_details . '></div></td>';
                 } else {
-                    $cells .= '<td class="sc-select-column" data-sc-action-column="' .
-                        _h($column->{action_id}) . '"><input type="checkbox" data-sc-row-select ' .
-                        'data-sc-action-id="' . _h($column->{action_id}) . '" value="' .
-                        _h($target) . '" aria-label="Select row ' .
-                        _h($index + 1) . ' for ' . _h($column->{label}) . '"' .
-                        '></td>';
+                    my $presentation = $action->{selection}{presentation} // 'toolbar';
+                    if ($presentation eq 'row_dialog') {
+                        my $dialog_id = 'selecto-action-' . $model->{config}->id . '-' .
+                            $column->{action_id};
+                        my $enabled = ($action->{status} // 'enabled') eq 'enabled';
+                        $cells .= '<td class="sc-select-column sc-row-action-column" ' .
+                            'data-sc-action-column="' . _h($column->{action_id}) . '">' .
+                            '<button type="button" class="sc-button sc-secondary sc-row-action-button" ' .
+                            'data-sc-action-open="' . _h($dialog_id) . '" data-sc-action-id="' .
+                            _h($column->{action_id}) . '" data-sc-row-action-target="' . _h($target) . '"' .
+                            ($enabled ? '' : ' disabled title="' .
+                                _h($action->{status_reason} // 'Action unavailable') . '"') . '>' .
+                            _h($action->{label}) . '</button></td>';
+                    } elsif ($presentation eq 'row_inline') {
+                        $cells .= '<td class="sc-select-column sc-row-action-column sc-row-inline-column" ' .
+                            'data-sc-action-column="' . _h($column->{action_id}) . '">' .
+                            _row_inline_action($model, $action, $target, $index + 1) . '</td>';
+                    } else {
+                        $cells .= '<td class="sc-select-column" data-sc-action-column="' .
+                            _h($column->{action_id}) . '"><input type="checkbox" data-sc-row-select ' .
+                            'data-sc-action-id="' . _h($column->{action_id}) . '" value="' .
+                            _h($target) . '" aria-label="Select row ' .
+                            _h($index + 1) . ' for ' . _h($column->{label}) . '"' .
+                            '></td>';
+                    }
                 }
                 next;
             }

@@ -285,6 +285,50 @@ is $TestSelectoComponents::ACTION_REQUESTS[-1]{action}{id}, 'mark_for_review',
 is_deeply $TestSelectoComponents::ACTION_REQUESTS[-1]{selected_ids}, ['202'],
     'the second action receives its own selected rows';
 
+my $row_action_columns_url = '/explore/products?q=1&view=detail' .
+    '&field=action%3Aedit_one_product&field_alias=&field_format=' .
+    '&field=product_name&field_alias=&field_format=' .
+    '&field=action%3Aset_reorder_level&field_alias=&field_format=' .
+    '&group=category.category_name&measure=count&order=product_name&direction=asc&limit=25&page=1';
+$t->get_ok($row_action_columns_url)
+    ->status_is(200)
+    ->element_exists_not('[data-sc-bulk-actions]')
+    ->element_exists_not('th[data-sc-action-column="edit_one_product"] input[data-sc-select-page]')
+    ->element_exists_not('input[data-sc-row-select][data-sc-action-id="edit_one_product"]')
+    ->element_exists('[data-sc-bulk-action][data-sc-action-id="edit_one_product"]' .
+        '[data-sc-action-mode="row-dialog"][data-sc-action-max-rows="1"]')
+    ->element_exists('button[data-sc-action-id="edit_one_product"]' .
+        '[data-sc-row-action-target="101"]')
+    ->element_exists('button[data-sc-action-id="edit_one_product"]' .
+        '[data-sc-row-action-target="102"]')
+    ->element_exists('dialog#selecto-action-products-edit_one_product form' .
+        '[action="/explore/products/actions/edit_one_product"]')
+    ->element_count_is('[data-sc-bulk-action][data-sc-action-id="set_reorder_level"]' .
+        '[data-sc-action-mode="row-inline"]', 2)
+    ->element_exists('[data-sc-bulk-action][data-sc-action-id="set_reorder_level"]' .
+        '[data-sc-row-id="101"] input[name="action_input_level"][type="number"]')
+    ->element_exists('[data-sc-bulk-action][data-sc-action-id="set_reorder_level"]' .
+        '[data-sc-row-id="101"] button[type="submit"]');
+
+my $row_action_csrf = $t->tx->res->dom
+    ->at('form[action="/explore/products/actions/edit_one_product"] input[name="csrf_token"]')
+    ->attr('value');
+$t->post_ok('/explore/products/actions/edit_one_product' => {Accept => 'application/json'} => form => {
+    csrf_token => $row_action_csrf,
+    selected_id => [101, 102],
+    action_input_note => 'One row only',
+})->status_is(422)->json_is('/ok' => 0)
+    ->json_like('/message' => qr/Select exactly one row/);
+
+$t->post_ok('/explore/products/actions/set_reorder_level' => {Accept => 'application/json'} => form => {
+    csrf_token => $row_action_csrf,
+    selected_id => [101],
+    action_input_level => 12,
+})->status_is(200)->json_is('/ok' => 1)
+    ->json_is('/applied_count' => 1);
+is_deeply $TestSelectoComponents::ACTION_REQUESTS[-1]{selected_ids}, ['101'],
+    'an inline row action submits exactly its own row target';
+
 my $grouped_action_url = '/explore/products?q=1&view=detail' .
     '&field=action%3Abuild_shipments&field_alias=&field_format=' .
     '&field=product_name&field_alias=&field_format=' .
@@ -476,6 +520,8 @@ $t->get_ok('/selecto-api-console/selecto-api-console.js')->status_is(200)
     ->content_like(qr/function collectFields/)
     ->content_like(qr/function compareSemanticFields/)
     ->content_like(qr/data-selecto-api-console/)
+    ->content_like(qr/data-sac-response-format/)
+    ->content_like(qr/data-sac-response-filename/)
     ->content_like(qr/credentials:\s*"same-origin"/)
     ->content_unlike(qr/innerHTML\s*=\s*.*domain\.name/);
 $t->get_ok('/selecto-api-console/selecto-api-console.css')->status_is(200)

@@ -581,6 +581,31 @@ carry a session-bound CSRF token. Hosts remain responsible for checking every
 target against the current tenant/user and for transaction, audit, and
 business-rule behavior inside the handler.
 
+Actions that must operate on one result row can declare cardinality and their
+placement in the domain. `row_dialog` renders an action button in every row and
+opens the governed input form in a dialog. `row_inline` renders the governed
+inputs and submit button directly in each row. Neither presentation renders
+bulk-selection checkboxes or the action toolbar.
+
+```perl
+assign_equipment => {
+    label => 'Assign driver and trailer',
+    scope => 'row',
+    selection => {
+        mode => 'rows',
+        min_rows => 1,
+        max_rows => 1,
+        presentation => 'row_dialog', # or row_inline
+    },
+    inputs => [...],
+    execution => {kind => 'host', operation => 'assign_equipment'},
+},
+```
+
+`presentation` defaults to `toolbar`. All presentations honor `min_rows` and
+`max_rows`; the server validates those limits even if a caller bypasses the
+browser. Row presentations require `mode => 'rows'` and `max_rows => 1`.
+
 An action can instead group rows before it runs. The built-in `lucky_charms`
 palette uses pink hearts, orange stars, yellow moons, green clovers, blue
 diamonds, and purple horseshoes in that order, exposing a new distinct shape as

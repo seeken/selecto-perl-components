@@ -5,6 +5,12 @@
   const TEMPORAL_TYPES = new Set(["date", "datetime", "naive_datetime", "utc_datetime", "epoch_datetime"]);
   const NUMERIC_TYPES = new Set(["integer", "decimal", "float", "number"]);
   const CURL_AUTH_MODES = new Set(["basic", "cookie", "none"]);
+  const QUERY_RESPONSE_FORMATS = [
+    {id: "json", label: "JSON", mediaType: "application/json", extension: "json"},
+    {id: "csv", label: "CSV", mediaType: "text/csv", extension: "csv"},
+    {id: "tsv", label: "TSV", mediaType: "text/tab-separated-values", extension: "tsv"},
+    {id: "xlsx", label: "Excel (XLSX)", mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", extension: "xlsx"},
+  ];
   const DATE_SHORTCUTS = [
     ["Days", "today", "Today"],
     ["Days", "yesterday", "Yesterday"],
@@ -82,6 +88,48 @@
     return new URLSearchParams(global.location.search || "").get(name) || "";
   }
 
+  function discoverQueryResponseFormats(openapi, queryPath) {
+    const content = openapi && openapi.paths && openapi.paths[queryPath]
+      && openapi.paths[queryPath].post && openapi.paths[queryPath].post.responses
+      && openapi.paths[queryPath].post.responses[200]
+      && openapi.paths[queryPath].post.responses[200].content || {};
+    const advertised = QUERY_RESPONSE_FORMATS.filter((format) => Object.prototype.hasOwnProperty.call(content, format.mediaType));
+    return advertised.length ? advertised.map((format) => Object.assign({}, format))
+      : [Object.assign({}, QUERY_RESPONSE_FORMATS[0])];
+  }
+
+  function downloadFilename(contentDisposition, fallback) {
+    const match = String(contentDisposition || "").match(/(?:^|;)\s*filename="([^"]+)"/i);
+    const candidate = match ? match[1] : String(fallback || "query-download");
+    const basename = candidate.split(/[\\/]/).pop()
+      .replace(/[^A-Za-z0-9._ ()-]+/g, "-").trim();
+    return basename && basename !== "." && basename !== ".." && !basename.includes("..")
+      ? basename : "query-download";
+  }
+
+  function suggestedDownloadFilename(domainName, extension) {
+    const stem = String(domainName || "selecto").toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "selecto";
+    return `${stem}-query.${extension}`;
+  }
+
+  function validateDownloadFilename(value, format) {
+    if (!format || format.id === "json") return {value: "", error: ""};
+    const filename = String(value || "").trim();
+    const extension = `.${format.extension}`;
+    const safe = filename.length <= 160
+      && /^[A-Za-z0-9][A-Za-z0-9._ ()-]*$/.test(filename)
+      && !filename.includes("..")
+      && filename.toLowerCase().endsWith(extension.toLowerCase());
+    return safe
+      ? {value: filename, error: ""}
+      : {value: filename, error: `Filename must be a safe name ending in ${extension}.`};
+  }
+
+  function pathWithDownloadFilename(path, filename) {
+    return `${path}${path.includes("?") ? "&" : "?"}filename=${encodeURIComponent(filename)}`;
+  }
+
   async function discoverCanonicalAPI(base, fetchJSON) {
     const normalizedBase = normalizeAPIBase(base);
     const manifest = await fetchJSON(`${normalizedBase}/`);
@@ -111,7 +159,16 @@
       }
     }
     const [domain, openapi] = await Promise.all([fetchJSON(domainPath), fetchJSON(openapiPath)]);
-    return {base: normalizedBase, manifest, domain, openapi, queryPath, writePath, actionPath};
+    const advertisedAccess = manifest && manifest.access && typeof manifest.access === "object"
+      ? manifest.access : {};
+    const access = {
+      read: advertisedAccess.read !== false,
+      write: advertisedAccess.write !== false,
+      action: advertisedAccess.action !== false,
+      importer: advertisedAccess.importer === true,
+    };
+    const queryResponseFormats = discoverQueryResponseFormats(openapi, queryPath);
+    return {base: normalizedBase, manifest, domain, openapi, queryPath, writePath, actionPath, access, queryResponseFormats};
   }
 
   function humanize(value) {
@@ -312,6 +369,8 @@
       this.queryPath = `${this.base}/query`;
       this.writePath = `${this.base}/write`;
       this.actionPath = `${this.base}/actions/{action}`;
+      this.access = {read: true, write: true, action: true, importer: false};
+      this.queryResponseFormats = [Object.assign({}, QUERY_RESPONSE_FORMATS[0])];
       this.fields = [];
       this.fieldMap = new Map();
       this.nextSelectedFieldId = 1;
@@ -328,6 +387,8 @@
         ordering: "",
         timezone: "",
         rowFormat: "arrays",
+        responseFormat: "json",
+        responseFilename: "selecto-query.json",
         subtables: [],
         limit: 100,
         offset: 0,
@@ -356,6 +417,12 @@
         this.queryPath = discovery.queryPath;
         this.writePath = discovery.writePath;
         this.actionPath = discovery.actionPath;
+        this.access = discovery.access;
+        this.queryResponseFormats = discovery.queryResponseFormats;
+        this.state.responseFormat = this.queryResponseFormats[0].id;
+        this.state.responseFilename = suggestedDownloadFilename(
+          this.domain.name, this.responseFormat(this.state.responseFormat).extension,
+        );
         this.fields = collectFields(discovery.domain);
         this.fieldMap = new Map(this.fields.map((field) => [field.path, field]));
         this.seedState();
@@ -421,6 +488,7 @@
             <span class="sac-live"><i></i>Authenticated</span>
             <a class="sac-button sac-secondary" data-sac-domain-link>Domain JSON</a>
             <a class="sac-button sac-secondary" data-sac-openapi-link>OpenAPI</a>
+            <a class="sac-button sac-secondary" data-sac-importer-link hidden>Importer</a>
           </div>
         </header>
         <nav class="sac-tabs" aria-label="API console sections">
@@ -483,6 +551,12 @@
                 <div class="sac-inline-controls">
                   <label>Limit<input type="number" min="0" max="1000" data-sac-limit></label>
                   <label>Offset<input type="number" min="0" data-sac-offset></label>
+                  <label>Response<select data-sac-response-format></select></label>
+                </div>
+                <div data-sac-response-filename-wrap hidden>
+                  <label class="sac-label" for="sac-response-filename">Download filename</label>
+                  <input id="sac-response-filename" type="text" maxlength="160" required data-sac-response-filename>
+                  <p class="sac-help" data-sac-response-filename-help></p>
                 </div>
                 <label class="sac-label" for="sac-timezone">Use timezone</label>
                 <input id="sac-timezone" type="text" placeholder="America/New_York" data-sac-timezone>
@@ -563,17 +637,32 @@
       this.root.querySelector("[data-sac-write-path]").textContent = this.writePath;
       this.root.querySelector("[data-sac-domain-link]").href = `${this.base}/domain`;
       this.root.querySelector("[data-sac-openapi-link]").href = `${this.base}/openapi.json`;
+      const importerLink = this.root.querySelector("[data-sac-importer-link]");
+      importerLink.href = `${this.base}/importer`;
+      importerLink.hidden = !this.access.importer;
+      const surfaceTabs = [["query", this.access.read], ["writes", this.access.write], ["actions", this.access.action]];
+      for (const [name, allowed] of surfaceTabs) {
+        const tab = this.root.querySelector(`[data-sac-main-tab="${name}"]`);
+        if (tab) tab.hidden = !allowed;
+      }
       this.root.querySelector("[data-sac-domain-json]").textContent = JSON.stringify(this.domain, null, 2);
       this.root.querySelector("[data-sac-openapi-json]").textContent = JSON.stringify(this.openapi, null, 2);
       this.root.querySelector("[data-sac-curl-auth-help]").textContent = curlAuthConfiguration(this.curlAuth).help;
       this.root.querySelector("[data-sac-write-curl-auth-help]").textContent = curlAuthConfiguration(this.curlAuth).help;
       this.root.querySelector("[data-sac-action-curl-auth-help]").textContent = curlAuthConfiguration(this.curlAuth).help;
+      appendOptions(
+        this.root.querySelector("[data-sac-response-format]"),
+        this.queryResponseFormats.map((format) => ({value: format.id, label: format.label})),
+        this.state.responseFormat,
+      );
       this.bind();
       this.populateLibraryControls();
       this.seedMutationState();
       this.renderAll();
       this.renderWritePanel();
       this.renderActionPanel();
+      const initialTab = surfaceTabs.find(([, allowed]) => allowed);
+      if (initialTab && initialTab[0] !== "query") this.switchMainTab(initialTab[0]);
     }
 
     bind() {
@@ -1037,6 +1126,8 @@
       this.root.querySelector("[data-sac-view]").value = this.state.view;
       this.root.querySelector("[data-sac-ordering]").value = this.state.ordering;
       this.root.querySelector("[data-sac-row-format]").value = this.state.rowFormat;
+      this.root.querySelector("[data-sac-response-format]").value = this.state.responseFormat;
+      this.renderResponseFileOptions();
       this.root.querySelector("[data-sac-limit]").value = this.state.limit;
       this.root.querySelector("[data-sac-offset]").value = this.state.offset;
       this.root.querySelector("[data-sac-timezone]").value = this.state.timezone;
@@ -1608,24 +1699,56 @@
       this.updateCurl();
     }
 
+    renderResponseFileOptions() {
+      const format = this.responseFormat(this.state.responseFormat);
+      const wrapper = this.root.querySelector("[data-sac-response-filename-wrap]");
+      const input = this.root.querySelector("[data-sac-response-filename]");
+      const help = this.root.querySelector("[data-sac-response-filename-help]");
+      const downloadable = format.id !== "json";
+      wrapper.hidden = !downloadable;
+      input.required = downloadable;
+      input.value = this.state.responseFilename;
+      input.placeholder = `query.${format.extension}`;
+      const validation = validateDownloadFilename(this.state.responseFilename, format);
+      input.setCustomValidity(validation.error);
+      help.textContent = downloadable
+        ? `Required. Use a safe filename ending in .${format.extension}.`
+        : "";
+    }
+
     updateCurl() {
       const editor = this.root.querySelector("[data-sac-request]");
       const body = editor ? editor.value : JSON.stringify(this.buildPayload(), null, 2);
-      const command = this.curlCommand(this.queryPath, body);
+      const command = this.curlCommand(
+        this.queryPath, body, this.state.responseFormat, this.state.responseFilename,
+      );
       const target = this.root.querySelector("[data-sac-curl]");
       if (target) target.textContent = command;
     }
 
-    curlCommand(path, body) {
-      const url = `${window.location.origin}${path}`;
+    responseFormat(formatId) {
+      return this.queryResponseFormats.find((format) => format.id === formatId)
+        || QUERY_RESPONSE_FORMATS.find((format) => format.id === formatId)
+        || QUERY_RESPONSE_FORMATS[0];
+    }
+
+    curlCommand(path, body, responseFormat = "json", responseFilename = "") {
       const auth = curlAuthConfiguration(this.curlAuth);
-      return [
+      const format = this.responseFormat(responseFormat);
+      const validation = validateDownloadFilename(responseFilename, format);
+      const filename = format.id === "json"
+        ? "" : validation.error ? `query.${format.extension}` : validation.value;
+      const requestPath = filename ? pathWithDownloadFilename(path, filename) : path;
+      const url = `${window.location.origin}${requestPath}`;
+      const command = [
         `curl -X POST ${shellEscape(url)}`,
         ...auth.args,
         "  -H 'Content-Type: application/json'",
-        "  -H 'Accept: application/json'",
+        `  -H ${shellEscape(`Accept: ${format.mediaType}`)}`,
         `  --data-binary ${shellEscape(body)}`,
-      ].join(" \\\n");
+      ];
+      if (format.id !== "json") command.push(`  --output ${shellEscape(filename)}`);
+      return command.join(" \\\n");
     }
 
     updateMutationCurl(kind, path) {
@@ -2486,6 +2609,18 @@
       else if (target.matches("[data-sac-segments]")) this.state.segments = Array.from(target.selectedOptions).map((option) => option.value);
       else if (target.matches("[data-sac-ordering]")) this.state.ordering = target.value;
       else if (target.matches("[data-sac-row-format]")) this.state.rowFormat = target.value;
+      else if (target.matches("[data-sac-response-format]")) {
+        const previous = this.responseFormat(this.state.responseFormat);
+        this.state.responseFormat = target.value;
+        const format = this.responseFormat(this.state.responseFormat);
+        const oldSuffix = `.${previous.extension}`;
+        this.state.responseFilename = this.state.responseFilename.toLowerCase().endsWith(oldSuffix.toLowerCase())
+          ? `${this.state.responseFilename.slice(0, -oldSuffix.length)}.${format.extension}`
+          : suggestedDownloadFilename(this.domain && this.domain.name, format.extension);
+        this.renderResponseFileOptions();
+        this.updateCurl();
+        return;
+      }
       else if (target.matches("[data-sac-field-format]")) {
         const selection = this.selectedFieldFor(target);
         selection.format = target.value;
@@ -2557,6 +2692,15 @@
       }
       if (target.matches("[data-sac-field-search]")) return this.renderFieldList();
       if (target.matches("[data-sac-filter-search]")) return this.renderFilterFieldList();
+      if (target.matches("[data-sac-response-filename]")) {
+        this.state.responseFilename = target.value;
+        const validation = validateDownloadFilename(
+          this.state.responseFilename, this.responseFormat(this.state.responseFormat),
+        );
+        target.setCustomValidity(validation.error);
+        this.updateCurl();
+        return;
+      }
       if (target.matches("[data-sac-request]")) {
         this.state.rawDirty = true;
         this.root.querySelector("[data-sac-edited]").hidden = false;
@@ -2636,6 +2780,16 @@
         this.showLocalError(error.message);
         return;
       }
+      const format = this.responseFormat(this.state.responseFormat);
+      const filenameValidation = validateDownloadFilename(this.state.responseFilename, format);
+      if (filenameValidation.error) {
+        const filenameInput = this.root.querySelector("[data-sac-response-filename]");
+        filenameInput.setCustomValidity(filenameValidation.error);
+        if (filenameInput.reportValidity) filenameInput.reportValidity();
+        this.setStatus("Invalid download filename", "error");
+        this.showLocalError(filenameValidation.error);
+        return;
+      }
       const button = this.root.querySelector("[data-sac-run]");
       button.disabled = true;
       button.classList.add("is-running");
@@ -2645,17 +2799,30 @@
       let response;
       let payload;
       try {
-        response = await fetch(this.queryPath, {
+        const requestPath = format.id === "json"
+          ? this.queryPath : pathWithDownloadFilename(this.queryPath, filenameValidation.value);
+        response = await fetch(requestPath, {
           method: "POST",
           credentials: "same-origin",
-          headers: {"Content-Type": "application/json", Accept: "application/json"},
+          headers: {"Content-Type": "application/json", Accept: format.mediaType},
           body: JSON.stringify(request),
         });
-        const text = await response.text();
-        try {
-          payload = text ? JSON.parse(text) : null;
-        } catch (_error) {
-          payload = {ok: false, error: {code: "invalid_response", message: text || "Empty response", details: {}}};
+        if (response.ok && format.id !== "json") {
+          const blob = await response.blob();
+          const filename = downloadFilename(
+            response.headers.get("Content-Disposition"), filenameValidation.value,
+          );
+          this.downloadResponse(blob, filename);
+          payload = {ok: true, data: {
+            download: filename, format: format.id, bytes: blob.size,
+          }};
+        } else {
+          const text = await response.text();
+          try {
+            payload = text ? JSON.parse(text) : null;
+          } catch (_error) {
+            payload = {ok: false, error: {code: "invalid_response", message: text || "Empty response", details: {}}};
+          }
         }
         const elapsed = Math.round(performance.now() - started);
         this.state.response = payload;
@@ -2670,6 +2837,18 @@
         button.classList.remove("is-running");
         this.root.querySelector("[data-sac-run-label]").textContent = "Run query";
       }
+    }
+
+    downloadResponse(blob, filename) {
+      const url = global.URL.createObjectURL(blob);
+      const link = global.document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.hidden = true;
+      global.document.body.append(link);
+      link.click();
+      link.remove();
+      global.setTimeout(() => global.URL.revokeObjectURL(url), 0);
     }
 
     setStatus(text, kind) {
@@ -2707,7 +2886,10 @@
         });
       } else {
         const tr = element("tr", "");
-        const td = element("td", "sac-error-cell", payload && payload.error ? `${payload.error.code}: ${payload.error.message}` : "No tabular result.");
+        const downloaded = data && data.download;
+        const td = element("td", downloaded ? "" : "sac-error-cell", payload && payload.error
+          ? `${payload.error.code}: ${payload.error.message}`
+          : downloaded ? `Downloaded ${downloaded}` : "No tabular result.");
         td.colSpan = 1;
         tr.append(td);
         body.append(tr);
@@ -2756,6 +2938,11 @@
     associationIsMany,
     collectFields,
     compareSemanticFields,
+    discoverQueryResponseFormats,
+    downloadFilename,
+    pathWithDownloadFilename,
+    suggestedDownloadFilename,
+    validateDownloadFilename,
     normalizeCurlAuth,
     discoverCanonicalAPI,
     mountAll,
