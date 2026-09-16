@@ -20,6 +20,8 @@ lib/Selecto/Components/I18N.pm
 lib/Selecto/Components/QueryBuilder.pm
 lib/Selecto/Components/QueryLibrary.pm
 lib/Selecto/Components/RecordEditor.pm
+lib/Selecto/Components/Resource/Composer.pm
+lib/Selecto/Components/Resource/Registry.pm
 lib/Selecto/Components/Renderer.pm
 lib/Selecto/Components/Renderer/Builder.pm
 lib/Selecto/Components/Renderer/Debug.pm
@@ -77,6 +79,7 @@ t/plugin.t
 t/query_builder.t
 t/query_library.t
 t/renderer.t
+t/resource_composer.t
 t/route_bridge.t
 t/row_actions.t
 t/state.t

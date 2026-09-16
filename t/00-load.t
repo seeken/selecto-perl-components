@@ -17,6 +17,8 @@ use_ok 'Selecto::Components::Explorer';
 use_ok 'Selecto::Components::QueryBuilder';
 use_ok 'Selecto::Components::QueryLibrary';
 use_ok 'Selecto::Components::RecordEditor';
+use_ok 'Selecto::Components::Resource::Composer';
+use_ok 'Selecto::Components::Resource::Registry';
 use_ok 'Selecto::Components::Renderer';
 use_ok 'Selecto::Components::Renderer::Builder';
 use_ok 'Selecto::Components::Renderer::Debug';
