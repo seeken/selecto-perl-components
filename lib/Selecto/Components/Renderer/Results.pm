@@ -2,6 +2,7 @@ package Selecto::Components::Renderer::Results;
 
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(encode_json);
+use Mojo::Util qw(url_escape);
 use POSIX qw(ceil);
 use Selecto::Components::Renderer::Markup;
 use Selecto::Components::Renderer::Debug ();
@@ -277,15 +278,22 @@ sub _table ($class, $result, $model) {
             $result->{row_click_action}, $record, $result->{row_click_fields},
         );
         if ($row_action) {
+            if ($row_action->{type} eq 'record_editor') {
+                $row_action->{url} = $model->{config}->path . '/records/' .
+                    url_escape($row_action->{target_id}) . '/edit?editor=' .
+                    url_escape($row_action->{editor}) . '&return_to=' .
+                    url_escape($model->{canonical_url});
+            }
             $row_class = ' class="sc-clickable-row" tabindex="0" data-sc-row-click ' .
                 'data-sc-row-click-type="' . _h($row_action->{type}) . '" ' .
                 'data-sc-row-click-url="' . _h($row_action->{url}) . '" ';
-            if ($row_action->{type} eq 'iframe_modal') {
+            if ($row_action->{type} eq 'iframe_modal' || $row_action->{type} eq 'record_editor') {
                 $row_dialog_action //= $row_action;
                 $row_dialog_count++;
                 $row_class .= 'data-sc-row-dialog-id="' . _h($row_dialog_id) . '" ' .
                     'data-sc-row-click-title="' . _h($row_action->{title}) . '" ' .
-                    'aria-label="' . _h('Preview ' . $row_action->{title}) . '"';
+                    'aria-label="' . _h($row_action->{type} eq 'record_editor'
+                        ? $row_action->{title} : 'Preview ' . $row_action->{title}) . '"';
             } else {
                 $row_class .= 'data-sc-row-click-target="' . _h($row_action->{target}) . '" ' .
                     'aria-label="' . _h('Open ' . $result->{row_click_action}{name}) . '"';
@@ -392,12 +400,19 @@ sub _table ($class, $result, $model) {
             }
             $cells .= '<td>' . $content . '</td>';
         }
-        $rows .= '<tr' . $row_class . '>' . $cells . '</tr>';
+        my $record_id = $row_action && $row_action->{type} eq 'record_editor'
+            ? $row_action->{target_id}
+            : defined($result->{action_key}) ? $record->{$result->{action_key}} : undef;
+        my $record_attribute = defined($record_id) && !ref($record_id)
+            ? ' data-sc-record-id="' . _h($record_id) . '"' : '';
+        $rows .= '<tr' . $record_attribute . $row_class . '>' . $cells . '</tr>';
     }
     my $column_count = scalar(@columns);
     $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count . '">No rows matched this query.</td></tr>';
-    my $dialog = $row_dialog_action
-        ? _row_iframe_dialog($row_dialog_id, $row_dialog_action, $row_dialog_count) : '';
+    my $dialog = !$row_dialog_action ? ''
+        : $row_dialog_action->{type} eq 'record_editor'
+            ? _row_record_editor_dialog($row_dialog_id, $row_dialog_action, $row_dialog_count)
+            : _row_iframe_dialog($row_dialog_id, $row_dialog_action, $row_dialog_count);
     return '<div class="sc-table-wrap"><table><caption class="sc-visually-hidden">Query results</caption>' .
         '<thead><tr>' . $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>' .
         $dialog;
@@ -566,6 +581,28 @@ sub _row_iframe_dialog ($dialog_id, $action, $row_count) {
         'referrerpolicy="' . _h($action->{referrer_policy}) . '"' . $allow . $sandbox . '></iframe></div>' .
         '<footer><button type="button" class="sc-button sc-secondary" ' .
         'data-sc-row-dialog-close>Close</button></footer></section></dialog>';
+}
+
+sub _row_record_editor_dialog ($dialog_id, $action, $row_count) {
+    my $title_id = $dialog_id . '-title';
+    my $navigation = $action->{navigation_enabled} ? '' : ' hidden';
+    return '<dialog class="sc-row-dialog sc-row-editor-dialog sc-row-dialog-' .
+        _h($action->{size}) . '" id="' . _h($dialog_id) . '" aria-labelledby="' .
+        _h($title_id) . '" data-sc-row-dialog data-sc-row-dialog-kind="record_editor" ' .
+        'data-sc-row-dialog-navigation="' . ($action->{navigation_enabled} ? '1' : '0') . '">' .
+        '<section class="sc-row-dialog-panel"><header><div><p class="sc-eyebrow">Edit record</p>' .
+        '<h3 id="' . _h($title_id) . '" data-sc-row-dialog-title>' . _h($action->{title}) .
+        '</h3></div><button type="button" class="sc-action-close" data-sc-row-dialog-close ' .
+        'aria-label="Close record editor">×</button></header>' .
+        '<div class="sc-row-dialog-toolbar"><div class="sc-row-dialog-navigation"' . $navigation .
+        '><button type="button" class="sc-button sc-secondary" data-sc-row-dialog-nav="previous">' .
+        'Previous</button><button type="button" class="sc-button sc-secondary" ' .
+        'data-sc-row-dialog-nav="next">Next</button></div>' .
+        '<span data-sc-row-dialog-position aria-live="polite">Row 1 of ' . _h($row_count) .
+        ' on this page</span></div><div class="sc-row-dialog-frame-shell">' .
+        '<div class="sc-row-dialog-loading" data-sc-row-dialog-loading role="status" hidden>' .
+        'Loading editor…</div><div class="sc-row-editor-body" data-sc-row-editor-body></div></div>' .
+        '</section></dialog>';
 }
 
 sub _nested_table ($column, $value, $row_number = undef) {

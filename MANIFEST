@@ -11,6 +11,7 @@ lib/Selecto/Components/Config.pm
 lib/Selecto/Components/Controller/Actions.pm
 lib/Selecto/Components/Controller/Explorer.pm
 lib/Selecto/Components/Controller/Lookups.pm
+lib/Selecto/Components/Controller/RecordEditor.pm
 lib/Selecto/Components/Controller/SavedQueries.pm
 lib/Selecto/Components/DateShortcut.pm
 lib/Selecto/Components/Explorer.pm
@@ -18,6 +19,7 @@ lib/Selecto/Components/Importer.pm
 lib/Selecto/Components/I18N.pm
 lib/Selecto/Components/QueryBuilder.pm
 lib/Selecto/Components/QueryLibrary.pm
+lib/Selecto/Components/RecordEditor.pm
 lib/Selecto/Components/Renderer.pm
 lib/Selecto/Components/Renderer/Builder.pm
 lib/Selecto/Components/Renderer/Debug.pm

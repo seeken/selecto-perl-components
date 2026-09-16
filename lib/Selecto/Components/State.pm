@@ -247,7 +247,10 @@ sub _parse_row_click_action ($config, $domain, $input, $configured) {
         ? _scalar(_first($input, 'row_click_action'))
         : _scalar($config->default_row_click_action);
     return '' unless length($requested);
-    return Selecto::Components::RowActions->find($domain, $requested) ? $requested : '';
+    return $requested if Selecto::Components::RowActions->find($domain, $requested);
+    return '' if $configured;
+    my $available = Selecto::Components::RowActions->catalog($domain, $config);
+    return @$available ? $available->[0]{id} : '';
 }
 
 sub _parse_fields ($config, $domain, $input, $detail_map, $field_map, $query_library, $configured, $errors) {

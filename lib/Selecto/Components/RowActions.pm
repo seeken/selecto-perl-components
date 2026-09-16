@@ -12,7 +12,7 @@ sub catalog ($class, $domain, $config = undef) {
     for my $id (sort keys %$actions) {
         my $action = $actions->{$id};
         next unless ref($action) eq 'HASH'
-            && ($action->{type} // '') =~ /\A(?:external_link|iframe_modal)\z/;
+            && ($action->{type} // '') =~ /\A(?:external_link|iframe_modal|record_editor)\z/;
         my $name = "$action->{name}";
         $name = $config->localize(
             $domain, "detail_actions.$id.name", $name,
@@ -39,7 +39,8 @@ sub resolve ($class, $action, $record, $fields) {
         && ref($action->{payload}) eq 'HASH'
         && ref($record) eq 'HASH' && ref($fields) eq 'ARRAY';
     my $type = $action->{type} // '';
-    return undef unless $type eq 'external_link' || $type eq 'iframe_modal';
+    return undef unless $type eq 'external_link' || $type eq 'iframe_modal'
+        || $type eq 'record_editor';
     my %value_by_field;
     for my $field (@$fields) {
         return undef unless ref($field) eq 'HASH'
@@ -47,6 +48,31 @@ sub resolve ($class, $action, $record, $fields) {
         my $value = $record->{$field->{key}};
         return undef if !defined($value) || ref($value);
         $value_by_field{$field->{field}} = "$value";
+    }
+    if ($type eq 'record_editor') {
+        my $editor = $action->{payload}{editor};
+        my $target_field = $action->{payload}{target_field};
+        return undef unless defined($editor) && !ref($editor)
+            && "$editor" =~ /\A[a-zA-Z_][a-zA-Z0-9_]*\z/
+            && defined($target_field) && !ref($target_field)
+            && exists($value_by_field{$target_field});
+        my $title = _resolve_template(
+            $action->{payload}{title} // $action->{name} // 'Edit record',
+            \%value_by_field, 0,
+        );
+        return undef unless defined $title;
+        my $size = $action->{payload}{size} // 'lg';
+        $size = 'lg' unless !ref($size)
+            && "$size" =~ /\A(?:sm|md|lg|xl|full|third|fullscreen)\z/;
+        return {
+            type => $type,
+            editor => "$editor",
+            target_id => $value_by_field{$target_field},
+            title => $title,
+            size => "$size",
+            navigation_enabled => exists($action->{payload}{navigation_enabled})
+                ? ($action->{payload}{navigation_enabled} ? 1 : 0) : 1,
+        };
     }
     my $url = _resolve_template($action->{payload}{url_template}, \%value_by_field, 1);
     return undef unless defined $url;
@@ -98,6 +124,12 @@ sub resolve_external_link ($class, $action, $record, $fields) {
 sub resolve_iframe_modal ($class, $action, $record, $fields) {
     my $resolved = $class->resolve($action, $record, $fields);
     return undef unless $resolved && $resolved->{type} eq 'iframe_modal';
+    return $resolved;
+}
+
+sub resolve_record_editor ($class, $action, $record, $fields) {
+    my $resolved = $class->resolve($action, $record, $fields);
+    return undef unless $resolved && $resolved->{type} eq 'record_editor';
     return $resolved;
 }
 

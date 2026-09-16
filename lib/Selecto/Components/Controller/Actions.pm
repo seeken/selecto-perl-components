@@ -63,6 +63,33 @@ sub _run_action ($controller, $explorer) {
         message => $execute_decision->{reason} || 'That action is not permitted.',
     }) unless $execute_decision->{status} eq 'enabled';
 
+    my $eligible;
+    my $eligibility_ok = eval {
+        $eligible = Selecto::Components::Actions->row_eligibility(
+            $config, $controller, $resolved->{action},
+            $request->{selected_ids}, 'execute',
+        );
+        1;
+    };
+    unless ($eligibility_ok) {
+        $controller->app->log->error(
+            "Selecto action $action_id eligibility failed: $@",
+        );
+        return Selecto::Components::_action_response($controller, $return_to, {
+            ok => 0, status => 403,
+            message => 'That action is not available for the selected row.',
+        });
+    }
+    if (defined($eligible)
+        && grep { !$eligible->{"$_"} } @{$request->{selected_ids}}) {
+        return Selecto::Components::_action_response($controller, $return_to, {
+            ok => 0, status => 403,
+            message => @{$request->{selected_ids}} == 1
+                ? 'That action is not available for this row.'
+                : 'That action is not available for one or more selected rows.',
+        });
+    }
+
     my $handler = $config->action_handler($action_id);
     my $result;
     my $execute_ok = eval { $result = $handler->($controller, $request); 1 };

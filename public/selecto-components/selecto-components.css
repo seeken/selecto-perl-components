@@ -474,6 +474,39 @@ a { color: inherit; }
 .sc-row-dialog iframe { background: #fff; border: 0; display: block; height: 100%; opacity: 1; transition: opacity .12s ease; width: 100%; }
 .sc-row-dialog iframe.is-loading { opacity: .28; }
 .sc-row-dialog-loading { background: rgba(255, 255, 255, .92); border: 1px solid #d7dce0; border-radius: 8px; color: #273138; font-size: .82rem; font-weight: 750; left: 50%; padding: 9px 12px; position: absolute; top: 50%; transform: translate(-50%, -50%); z-index: 2; }
+.sc-row-editor-dialog .sc-row-dialog-frame-shell { background: var(--sc-panel); overflow: auto; }
+.sc-row-editor-body { min-height: 100%; }
+.sc-record-editor-form { display: grid; gap: 14px; padding: 16px; }
+.sc-record-editor-form > footer { align-items: center; border-top: 1px solid var(--sc-border); display: flex; gap: 8px; justify-content: flex-end; margin: 4px -16px -16px; padding: 12px 16px; }
+.sc-record-editor-description, .sc-record-editor-identity { color: var(--sc-muted); }
+.sc-record-editor-fields { align-content: start; display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); max-width: 42rem; width: 100%; }
+.sc-record-editor-field { display: grid; gap: 5px; min-width: 0; }
+.sc-record-editor-field > span { font-size: .8rem; font-weight: 750; }
+.sc-record-editor-field textarea { min-height: 88px; resize: vertical; }
+.sc-record-editor-field input:not([type="checkbox"]), .sc-record-editor-field select, .sc-record-editor-field textarea { box-sizing: border-box; width: 100%; }
+.sc-record-editor-error { color: var(--sc-danger); font-weight: 700; }
+.sc-record-editor-result, .sc-record-editor-error-panel { border: 1px solid; border-radius: 8px; padding: 10px 12px; }
+.sc-record-editor-result.is-success { background: var(--sc-success-bg); border-color: var(--sc-success-border); color: var(--sc-success-ink); }
+.sc-record-editor-result.is-error, .sc-record-editor-error-panel { background: var(--sc-danger-bg); border-color: var(--sc-danger-border); color: var(--sc-danger); }
+.sc-record-editor-actions { border-top: 1px solid var(--sc-border); display: grid; gap: 12px; padding: 16px; }
+.sc-record-editor-actions > header h4, .sc-record-editor-action h5 { margin: 0; }
+.sc-record-editor-actions > header p, .sc-record-editor-action header p { color: var(--sc-muted); margin: 4px 0 0; }
+.sc-record-editor-action-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.sc-record-editor-actions.is-action-open > .sc-record-editor-action-buttons { display: none; }
+.sc-record-editor-action-panels { display: grid; }
+.sc-record-editor-action { background: var(--sc-subpanel); border: 1px solid var(--sc-border); border-radius: 9px; display: grid; gap: 10px; padding: 12px; }
+.sc-record-editor-action[hidden] { display: none; }
+.sc-record-editor-action > header { align-items: start; display: flex; gap: 12px; justify-content: space-between; }
+.sc-record-editor-action fieldset { border: 0; display: grid; gap: 10px; margin: 0; padding: 0; }
+.sc-record-editor-action .sc-action-inputs { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.sc-record-editor-action-reason { color: var(--sc-danger); font-size: .8rem; font-weight: 700; }
+.sc-row-retired { background: color-mix(in srgb, var(--sc-panel) 72%, var(--sc-muted)); color: var(--sc-muted); opacity: .78; }
+.sc-row-retired > * { text-decoration-color: currentColor; }
+.sc-row-retired-badge { border: 1px solid currentColor; border-radius: 999px; display: inline-block; font-size: .68rem; font-weight: 800; margin-left: 6px; padding: 2px 7px; text-decoration: none; text-transform: uppercase; }
+.sc-row-retired-identity { font-weight: 750; }
+.sc-row-retired-notice > td { background: var(--sc-subpanel); color: var(--sc-muted); padding: 7px 10px; }
+.sc-row-retired-notice-content { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.sc-row-retired-notice .sc-row-retired-badge { margin-left: 0; }
 .sc-action-close { background: transparent; border: 0; color: var(--sc-muted); cursor: pointer; font-size: 1.6rem; line-height: 1; padding: 4px; }
 .sc-action-description, .sc-action-target-summary { color: var(--sc-muted); font-size: .86rem; }
 .sc-action-target-summary { background: var(--sc-subpanel); border: 1px solid var(--sc-border); border-radius: 8px; padding: 10px 12px; }

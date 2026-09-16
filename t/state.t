@@ -41,6 +41,14 @@ ok $stale_row_action->valid,
     'a stale or newly denied row action does not stop the underlying query';
 is $stale_row_action->row_click_action, '',
     'a stale or newly denied row action falls back to no row navigation';
+my $fallback_contract = dclone($domain->contract);
+delete $fallback_contract->{detail_actions}{open_product};
+my $fallback_domain = Selecto::Domain->parse($fallback_contract, strict => 1);
+my $fallback_state = Selecto::Components::State->from_input(
+    $config, $fallback_domain, {},
+);
+is $fallback_state->row_click_action, 'edit_product',
+    'an unavailable configured default falls back to the first governed row action';
 
 my $promoted_filter = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
@@ -479,6 +487,9 @@ ok $colliding_measure_by_id{unit_price} && $colliding_measure_by_id{'field:unit_
 
 my $restricted_contract = dclone($domain->contract);
 $restricted_contract->{source}{columns}{unit_price}{internal} = 1;
+$restricted_contract->{editors}{product_profile}{fields} = [grep {
+    $_->{field} ne 'unit_price'
+} @{$restricted_contract->{editors}{product_profile}{fields}}];
 my $restricted_domain = Selecto::Domain->parse($restricted_contract, strict => 1);
 my %restricted_measure_by_id = map { $_->{path} => $_ }
     @{$colliding_preset_config->measure_catalog($restricted_domain)};

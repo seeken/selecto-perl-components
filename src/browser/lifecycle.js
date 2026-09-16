@@ -271,7 +271,13 @@
   document.addEventListener("click", function (event) {
     var rowDialogClose = event.target.closest("[data-sc-row-dialog-close]");
     if (rowDialogClose) {
-      closeRowDialog(rowDialogClose.closest("[data-sc-row-dialog]"));
+      var closingDialog = rowDialogClose.closest("[data-sc-row-dialog]");
+      if (confirmEditorDiscard(closingDialog)) closeRowDialog(closingDialog);
+      return;
+    }
+    var refreshResults = event.target.closest("[data-sc-refresh-results]");
+    if (refreshResults) {
+      window.location.reload();
       return;
     }
     var rowDialogNav = event.target.closest("[data-sc-row-dialog-nav]");
@@ -284,7 +290,7 @@
     }
     var rowDialogBackdrop = event.target.closest("[data-sc-row-dialog]");
     if (rowDialogBackdrop && event.target === rowDialogBackdrop) {
-      closeRowDialog(rowDialogBackdrop);
+      if (confirmEditorDiscard(rowDialogBackdrop)) closeRowDialog(rowDialogBackdrop);
       return;
     }
     var resultRow = event.target.closest("[data-sc-row-click]");
@@ -352,6 +358,10 @@
 
   document.addEventListener("cancel", function (event) {
     if (event.target.matches && event.target.matches("[data-sc-row-dialog]")) {
+      if (!confirmEditorDiscard(event.target)) {
+        event.preventDefault();
+        return;
+      }
       clearRowDialog(event.target);
     }
   }, true);

@@ -241,6 +241,165 @@ test("row dialog opens and navigates between result rows", async ({page}) => {
   await expect(page.locator("[data-sc-row-dialog-frame]")).toHaveAttribute("src", "/two");
 });
 
+test("record editor saves through the governed endpoint and replaces the result row", async ({page}) => {
+  await page.route("https://selecto.test/**", async route => {
+    const request = route.request();
+    if (request.url().endsWith("/editor/101") && request.method() === "GET") {
+      return route.fulfill({status: 200, contentType: "text/html", body: `
+        <form action="https://selecto.test/editor/101" data-sc-record-editor-form>
+          <label data-sc-record-editor-field="product_name">Name
+            <input name="editor_field_product_name" value="Old name" required>
+            <small data-sc-record-editor-error hidden></small>
+          </label>
+          <div data-sc-record-editor-result hidden></div>
+          <button type="submit" data-sc-record-editor-save disabled>Save changes</button>
+        </form>`});
+    }
+    if (request.url().endsWith("/editor/101") && request.method() === "POST") {
+      return route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify({
+        ok: true, row_id: "101", authorized: 1,
+        changed_fields: ["product_name"], return_to: "https://selecto.test/results",
+        message: "Updated"
+      })});
+    }
+    return route.fulfill({status: 200, contentType: "text/html", body: `
+      <table><tbody><tr data-sc-record-id="101" data-sc-row-click
+        data-sc-row-click-type="record_editor" data-sc-row-dialog-id="editor-dialog"
+        data-sc-row-click-url="https://selecto.test/editor/101"><td>New name</td></tr></tbody></table>`});
+  });
+  await load(page, `
+    <section class="sc-results"><table><tbody><tr tabindex="0" data-sc-record-id="101"
+      data-sc-row-click data-sc-row-click-type="record_editor" data-sc-row-dialog-id="editor-dialog"
+      data-sc-row-click-url="https://selecto.test/editor/101" data-sc-row-click-title="Edit product">
+      <td>Old name</td></tr></tbody></table>
+      <dialog id="editor-dialog" data-sc-row-dialog data-sc-row-dialog-kind="record_editor">
+        <h2 data-sc-row-dialog-title></h2><span data-sc-row-dialog-position></span>
+        <button data-sc-row-dialog-nav="previous"></button><button data-sc-row-dialog-nav="next"></button>
+        <span data-sc-row-dialog-loading hidden></span><div data-sc-row-editor-body></div>
+      </dialog>
+    </section>`);
+
+  await page.locator("[data-sc-record-id='101']").click();
+  await expect(page.locator("[data-sc-record-editor-form]")).toBeVisible();
+  await expect(page.locator("[data-sc-record-editor-save]")).toBeDisabled();
+  await page.locator('[name="editor_field_product_name"]').fill("New name");
+  await expect(page.locator("[data-sc-record-editor-save]")).toBeEnabled();
+  await page.locator("[data-sc-record-editor-save]").click();
+  await expect(page.locator("[data-sc-record-id='101'] td")).toHaveText("New name");
+  await expect(page.locator("#editor-dialog")).not.toHaveAttribute("open", "");
+});
+
+test("a row that no longer matches keeps its column cells and uses a spanning notice", async ({page}) => {
+  await page.route("https://selecto.test/**", async route => {
+    const request = route.request();
+    if (request.url().endsWith("/editor/303") && request.method() === "GET") {
+      return route.fulfill({status: 200, contentType: "text/html", body: `
+        <form action="https://selecto.test/editor/303" data-sc-record-editor-form>
+          <input name="editor_field_status" value="Open">
+          <div data-sc-record-editor-result hidden></div>
+          <button type="submit" data-sc-record-editor-save disabled>Save changes</button>
+        </form>`});
+    }
+    if (request.url().endsWith("/editor/303") && request.method() === "POST") {
+      return route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify({
+        ok: true, row_id: "303", authorized: 1, changed_fields: ["status"],
+        return_to: "https://selecto.test/results", message: "Updated"
+      })});
+    }
+    return route.fulfill({status: 200, contentType: "text/html", body: `
+      <table><tbody><tr data-sc-record-id="999"><td>Different row</td><td>Open</td></tr></tbody></table>`});
+  });
+  await load(page, `
+    <section class="sc-results"><table><tbody><tr tabindex="0" data-sc-record-id="303"
+      data-sc-row-click data-sc-row-click-type="record_editor" data-sc-row-dialog-id="editor-dialog"
+      data-sc-row-click-url="https://selecto.test/editor/303">
+      <td>Truck 303</td><td>Open</td></tr></tbody></table>
+      <dialog id="editor-dialog" data-sc-row-dialog data-sc-row-dialog-kind="record_editor">
+        <span data-sc-row-dialog-position></span><button data-sc-row-dialog-nav="previous"></button>
+        <button data-sc-row-dialog-nav="next"></button><span data-sc-row-dialog-loading hidden></span>
+        <div data-sc-row-editor-body></div></dialog></section>`);
+
+  await page.locator("[data-sc-record-id='303']").click();
+  await page.locator('[name="editor_field_status"]').fill("Closed");
+  await page.locator("[data-sc-record-editor-save]").click();
+  const row = page.locator("[data-sc-record-id='303']");
+  await expect(row.locator("td")).toHaveCount(2);
+  await expect(row.locator("td").first()).toHaveText("Truck 303");
+  await expect(row.locator(".sc-row-retired-badge")).toHaveCount(0);
+  const notice = row.locator("xpath=following-sibling::tr[1]");
+  await expect(notice).toHaveClass(/sc-row-retired-notice/);
+  await expect(notice.locator("td")).toHaveAttribute("colspan", "2");
+  await expect(notice.locator(".sc-row-retired-badge"))
+    .toHaveText("Updated — no longer matches this result");
+  await expect(notice.locator("[data-sc-refresh-results]")).toBeVisible();
+});
+
+test("a record that leaves authorization remains as a minimal inert tombstone", async ({page}) => {
+  await page.route("https://selecto.test/**", async route => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({status: 200, contentType: "text/html", body: `
+        <form action="https://selecto.test/editor/202" data-sc-record-editor-form>
+          <input name="editor_field_product_name" value="Restricted value">
+          <div data-sc-record-editor-result hidden></div>
+          <button type="submit" data-sc-record-editor-save disabled>Save changes</button>
+        </form>`});
+    }
+    return route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify({
+      ok: true, row_id: "202", authorized: 0, changed_fields: ["product_name"],
+      return_to: "https://selecto.test/results", message: "Updated"
+    })});
+  });
+  await load(page, `
+    <section class="sc-results"><table><tbody><tr tabindex="0" data-sc-record-id="202"
+      data-sc-row-click data-sc-row-click-type="record_editor" data-sc-row-dialog-id="editor-dialog"
+      data-sc-row-click-url="https://selecto.test/editor/202"><td>Restricted value</td><td>Secret</td></tr>
+      </tbody></table><dialog id="editor-dialog" data-sc-row-dialog data-sc-row-dialog-kind="record_editor">
+        <span data-sc-row-dialog-position></span><button data-sc-row-dialog-nav="previous"></button>
+        <button data-sc-row-dialog-nav="next"></button><span data-sc-row-dialog-loading hidden></span>
+        <div data-sc-row-editor-body></div></dialog></section>`);
+
+  await page.locator("[data-sc-record-id='202']").click();
+  await page.locator('[name="editor_field_product_name"]').fill("Hidden now");
+  await page.locator("[data-sc-record-editor-save]").click();
+  const row = page.locator("[data-sc-record-id='202']");
+  await expect(row).toHaveAttribute("aria-disabled", "true");
+  await expect(row).not.toHaveAttribute("data-sc-row-click", "");
+  await expect(row).not.toContainText("Secret");
+  await expect(row.locator(".sc-row-retired-badge")).toHaveText("Updated — no longer available");
+  await expect(row.locator("[data-sc-refresh-results]")).toBeVisible();
+});
+
+test("record editor actions open one compact form on demand", async ({page}) => {
+  await load(page, `
+    <section class="sc-record-editor-actions">
+      <header><h4>Operational actions</h4></header>
+      <div class="sc-record-editor-action-buttons">
+        <button type="button" data-sc-record-editor-action-open="action-note"
+          aria-controls="action-note" aria-expanded="false">Add note</button>
+        <button type="button" data-sc-record-editor-action-open="action-status"
+          aria-controls="action-status" aria-expanded="false">Set status</button>
+      </div>
+      <div class="sc-record-editor-action-panels">
+        <form id="action-note" data-sc-record-editor-action-panel hidden>
+          <input name="note"><button type="button" data-sc-record-editor-action-close>Back to actions</button>
+        </form>
+        <form id="action-status" data-sc-record-editor-action-panel hidden>
+          <select name="status"><option>Active</option></select>
+          <button type="button" data-sc-record-editor-action-close>Back to actions</button>
+        </form>
+      </div>
+    </section>`);
+
+  await expect(page.locator("[data-sc-record-editor-action-panel]:visible")).toHaveCount(0);
+  await page.getByRole("button", {name: "Add note"}).click();
+  await expect(page.locator("#action-note")).toBeVisible();
+  await expect(page.locator("#action-status")).toBeHidden();
+  await expect(page.getByRole("button", {name: "Add note"})).toHaveAttribute("aria-expanded", "true");
+  await page.locator("#action-note [data-sc-record-editor-action-close]").click();
+  await expect(page.locator("#action-note")).toBeHidden();
+  await expect(page.getByRole("button", {name: "Add note"})).toBeFocused();
+});
+
 test("choosing an autocomplete result writes both label and stable value", async ({page}) => {
   await load(page, `
     <div data-sc-action-lookup>

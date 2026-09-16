@@ -142,6 +142,7 @@
   document.addEventListener("submit", function (event) {
     var form = event.target.closest("[data-sc-action-form]");
     if (!form || typeof window.fetch !== "function") return;
+    if (form.matches("[data-sc-record-editor-action-form]")) return;
     event.preventDefault();
     var root = form.closest("[data-sc-bulk-action]");
     var ids = selectedRowIds(root);
