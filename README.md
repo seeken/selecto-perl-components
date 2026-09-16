@@ -756,6 +756,13 @@ Oversized grids are rejected with guidance to add filters or choose
 lower-cardinality groups instead of exhausting the application worker or
 browser.
 
+Aggregate tables and Grid axes retain the natural order of governed temporal
+formats. In particular, weekday names follow ISO weekday order (Monday through
+Sunday), numeric years and date parts sort numerically, and canonical ISO date,
+week, month, quarter, and time labels sort chronologically. Grid axes are sorted
+after all distinct values have been collected, so sparse matrices cannot inherit
+an incorrect first-seen order.
+
 Adapters that advertise `stream` support use `stream_query` for flat exports.
 CSV, TSV, and JSON are emitted incrementally with backpressure from the HTTP
 connection. Excel is written to a temporary file with the writer's optimized

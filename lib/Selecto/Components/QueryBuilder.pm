@@ -290,8 +290,13 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             ) : ()),
         }
     } @{$state->groups};
-    my (@groups, @group_selections, @group_orders, @dimension_key_selections);
+    my (
+        @groups, @group_selections, @group_orders,
+        @group_sort_selections, @dimension_key_selections,
+    );
+    my $group_index = 0;
     for my $column (@group_columns) {
+        $group_index++;
         if (my $dimension = $column->{dimension}) {
             my $key = Selecto::Expression->field($dimension->{key_field});
             my $display = $rollup
@@ -309,10 +314,21 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             );
             push @groups, $group;
             push @group_selections, $group->as($column->{key});
-            push @group_orders, $group;
+            my $natural_order = _group_natural_order_expression(
+                $column, $state->group_configs->{$column->{field}} // {},
+            );
+            if ($natural_order) {
+                my $sort_key = '__selecto_group_sort_' . $group_index;
+                my $aggregate_order = Selecto::Expression->min($natural_order);
+                $column->{sort_key} = $sort_key;
+                push @group_sort_selections, $aggregate_order->as($sort_key);
+                push @group_orders, $aggregate_order;
+            } else {
+                push @group_orders, $group;
+            }
         }
     }
-    my @selections = @group_selections;
+    my @selections = (@group_selections, @group_sort_selections);
     my @measure_columns;
     for my $measure_id (@{$state->measures}) {
         my $measure = $config->measure($measure_id, $domain);
@@ -454,6 +470,15 @@ sub _group_expression ($column, $config) {
         });
     }
     return Selecto::Expression->datetime_format($field, $format);
+}
+
+sub _group_natural_order_expression ($column, $config) {
+    my $format = $config->{format} // '';
+    return undef unless $format eq 'day_of_week';
+    my $field = _temporal_expression(
+        $column->{field}, $column->{source_type} // $column->{type},
+    );
+    return Selecto::Expression->datetime_format($field, 'day_of_week_num');
 }
 
 sub _temporal_expression ($field, $type) {
