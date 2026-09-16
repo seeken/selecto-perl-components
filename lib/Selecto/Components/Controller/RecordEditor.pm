@@ -170,6 +170,7 @@ sub save ($class, $controller, $explorer) {
         authorized => $visible ? 1 : 0,
         return_to => $return_to,
         affected_rows => $result->{affected_rows} // 0,
+        close_dialog => $result->{close_dialog} ? 1 : 0,
     });
 }
 

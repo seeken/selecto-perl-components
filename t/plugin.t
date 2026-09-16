@@ -178,7 +178,8 @@ $t->post_ok('/explore/products/records/101/edit?editor=product_profile' =>
     ->json_is('/ok' => 1)
     ->json_is('/row_id' => '101')
     ->json_is('/authorized' => 1)
-    ->json_is('/changed_fields/0' => 'product_name');
+    ->json_is('/changed_fields/0' => 'product_name')
+    ->json_is('/close_dialog' => 0);
 is_deeply $TestSelectoComponents::Adapter::LAST_WRITE->assignments,
     {product_name => 'Updated Widget'},
     'record editor sends only changed governed assignments';

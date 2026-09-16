@@ -556,7 +556,10 @@ Published editor actions are rendered as explicitly separate operations. They
 are not silently chained to profile Save. A host that needs audit or a shared
 transaction coordinator can provide `record_editor_handler`; it receives the
 effective domain, editor, target, signed originals, normalized changed
-assignments, and a `default_save` callback.
+assignments, and a `default_save` callback. Successful profile saves and editor
+actions keep the dialog open by default, refresh the result row, and reload the
+signed editor state. A record-editor handler or action handler may return
+`close_dialog => 1` when completion should close the dialog instead.
 
 ## Selected-row actions
 
