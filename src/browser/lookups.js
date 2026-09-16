@@ -388,10 +388,12 @@
     if (event.target.matches("[data-sc-select-page]")) {
       var results = event.target.closest(".sc-results");
       var actionId = event.target.dataset.scActionId;
-      actionControls(results, "[data-sc-row-select]:not(:disabled)", actionId).forEach(function (input) {
-        input.checked = event.target.checked;
+      var pageRoot = actionRoot(results, actionId);
+      var maximum = actionMaxRows(pageRoot);
+      actionControls(results, "[data-sc-row-select]", actionId).forEach(function (input, index) {
+        input.checked = event.target.checked && index < maximum;
       });
-      refreshBulkAction(actionRoot(results, actionId));
+      refreshBulkAction(pageRoot);
       return;
     }
     if (event.target.matches("[data-sc-row-select]")) {
@@ -489,7 +491,12 @@
 
     var open = event.target.closest("[data-sc-action-open]");
     if (open && !open.disabled) {
-      var root = open.closest("[data-sc-bulk-action]");
+      var openResults = open.closest(".sc-results");
+      var root = open.closest("[data-sc-bulk-action]")
+        || actionRoot(openResults, open.dataset.scActionId);
+      if (root && open.dataset.scRowActionTarget) {
+        root.dataset.scRowId = open.dataset.scRowActionTarget;
+      }
       var dialog = document.getElementById(open.dataset.scActionOpen);
       var form = dialog && dialog.querySelector("[data-sc-action-form]");
       var ids = selectedRowIds(root);

@@ -258,6 +258,77 @@ test("choosing an autocomplete result writes both label and stable value", async
   await expect(page.locator("[data-sc-lookup-results]")).toBeHidden();
 });
 
+test("a row action dialog targets only the row whose button opened it", async ({page}) => {
+  await load(page, `
+    <section class="sc-results">
+      <div data-sc-bulk-action data-sc-action-id="assign_equipment"
+        data-sc-action-mode="row-dialog" data-sc-action-max-rows="1"
+        data-sc-action-submit-label="Assign equipment">
+        <dialog id="assign-equipment-dialog" data-sc-action-dialog>
+          <form action="/actions/assign-equipment" data-sc-action-form>
+            <div data-sc-action-targets></div>
+            <input name="action_input_driver_id" required>
+            <div data-sc-action-result hidden></div>
+            <footer>
+              <button type="button" data-sc-action-close>Cancel</button>
+              <button type="submit">Assign equipment</button>
+            </footer>
+          </form>
+        </dialog>
+      </div>
+      <table><tbody>
+        <tr><td><button type="button" data-sc-action-open="assign-equipment-dialog"
+          data-sc-action-id="assign_equipment" data-sc-row-action-target="101">Assign</button></td></tr>
+        <tr><td><button type="button" data-sc-action-open="assign-equipment-dialog"
+          data-sc-action-id="assign_equipment" data-sc-row-action-target="202">Assign</button></td></tr>
+      </tbody></table>
+    </section>
+  `);
+
+  await page.locator("[data-sc-row-action-target='202']").click();
+  await expect(page.locator("[data-sc-action-dialog]")).toHaveAttribute("open", "");
+  await expect(page.locator("[data-sc-action-targets] input[name='selected_id']")).toHaveCount(1);
+  await expect(page.locator("[data-sc-action-targets] input[name='selected_id']")).toHaveValue("202");
+});
+
+test("an inline row action submits only the row containing its form", async ({page}) => {
+  await load(page, `
+    <section class="sc-results">
+      <div data-sc-bulk-action data-sc-action-id="set_odometer"
+        data-sc-action-mode="row-inline" data-sc-action-max-rows="1"
+        data-sc-action-submit-label="Record" data-sc-row-id="101">
+        <form action="/actions/set-odometer" data-sc-action-form>
+          <div data-sc-action-targets></div>
+          <input name="action_input_odometer" value="12000" required>
+          <div data-sc-action-result hidden></div>
+          <button type="submit">Record</button>
+        </form>
+      </div>
+      <div data-sc-bulk-action data-sc-action-id="set_odometer"
+        data-sc-action-mode="row-inline" data-sc-action-max-rows="1"
+        data-sc-action-submit-label="Record" data-sc-row-id="202">
+        <form action="/actions/set-odometer" data-sc-action-form>
+          <div data-sc-action-targets></div>
+          <input name="action_input_odometer" value="34000" required>
+          <div data-sc-action-result hidden></div>
+          <button type="submit">Record</button>
+        </form>
+      </div>
+    </section>
+  `);
+  await page.evaluate(() => {
+    window.fetch = async (_url, options) => {
+      window.submittedAction = Array.from(options.body.entries());
+      return {ok: true, json: async () => ({ok: true, message: "Recorded"})};
+    };
+  });
+
+  await page.locator("[data-sc-row-id='202'] button[type='submit']").click();
+  await expect.poll(() => page.evaluate(() => window.submittedAction)).toContainEqual(["selected_id", "202"]);
+  expect(await page.evaluate(() => window.submittedAction)).not.toContainEqual(["selected_id", "101"]);
+  await expect(page.locator("[data-sc-row-id='202'] [data-sc-action-result]")).toContainText("Recorded");
+});
+
 test("Copy SQL copies the standalone interpolated statement", async ({page}) => {
   await load(page, `
     <button type="button" data-sc-debug-copy="parameterized"

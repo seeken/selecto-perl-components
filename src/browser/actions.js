@@ -10,6 +10,11 @@
     return root && root.dataset.scActionMode || "rows";
   }
 
+  function actionMaxRows(root) {
+    var value = Number(root && root.dataset.scActionMaxRows);
+    return Number.isInteger(value) && value > 0 ? value : Infinity;
+  }
+
   function actionControls(results, selector, actionId) {
     if (!results || !actionId) return [];
     return Array.from(results.querySelectorAll(selector)).filter(function (input) {
@@ -309,6 +314,9 @@
   }
 
   function selectedRowIds(root) {
+    if (actionMode(root) === "row-dialog" || actionMode(root) === "row-inline") {
+      return root && root.dataset.scRowId ? [root.dataset.scRowId] : [];
+    }
     var results = bulkActionResults(root);
     if (!results) return [];
     if (actionMode(root) === "groups") {
@@ -358,16 +366,22 @@
       });
       return;
     }
+    if (actionMode(root) === "row-dialog" || actionMode(root) === "row-inline") return;
     root.querySelectorAll("[data-sc-action-open]").forEach(function (button) {
       button.disabled = ids.length === 0 || button.dataset.scActionDisabled === "1";
     });
     var results = bulkActionResults(root);
     var pageToggle = actionControls(results, "[data-sc-select-page]", actionId)[0];
-    var rowToggles = actionControls(results, "[data-sc-row-select]:not(:disabled)", actionId);
+    var rowToggles = actionControls(results, "[data-sc-row-select]", actionId);
     var checked = rowToggles.filter(function (input) { return input.checked; }).length;
+    var maximum = actionMaxRows(root);
+    rowToggles.forEach(function (input) {
+      input.disabled = !input.checked && checked >= maximum;
+    });
     if (pageToggle) {
       pageToggle.checked = rowToggles.length > 0 && checked === rowToggles.length;
       pageToggle.indeterminate = checked > 0 && checked < rowToggles.length;
+      pageToggle.disabled = maximum < rowToggles.length;
     }
   }
 

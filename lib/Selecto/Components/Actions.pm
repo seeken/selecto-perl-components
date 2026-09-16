@@ -100,9 +100,18 @@ sub request ($class, $config, $action, $selected_ids, $raw_inputs, $options = un
         }
         push @ids, $id;
     }
-    push @errors, 'Select at least one row.' unless @ids;
-    push @errors, 'Too many rows were selected for one action.' if @ids > $config->max_action_rows;
-
+    my $minimum = $action->{selection}{min_rows} // 1;
+    my $maximum = $action->{selection}{max_rows} // $config->max_action_rows;
+    if (@ids < $minimum) {
+        push @errors, $minimum == 1
+            ? 'Select at least one row.'
+            : "Select at least $minimum rows.";
+    }
+    if (@ids > $maximum) {
+        push @errors, $maximum == 1
+            ? 'Select exactly one row.'
+            : "Select no more than $maximum rows.";
+    }
     my ($inputs, $input_errors) = _request_inputs($action->{inputs}, $raw_inputs);
     push @errors, @$input_errors;
 
@@ -147,7 +156,9 @@ sub _normalize_action ($class, $id, $spec, $config, $controller, $domain) {
         $action->{selection}, $config, $controller, $action, $domain,
     );
     my $submit_default = _text($action->{submit_label})
-        || ($action->{selection}{mode} eq 'groups' ? $action->{label} : 'Apply to selected rows');
+        || ($action->{selection}{mode} eq 'groups'
+            || $action->{selection}{presentation} ne 'toolbar'
+                ? $action->{label} : 'Apply to selected rows');
     $action->{submit_label} = $config->localize(
         $domain, "actions.$id.submit_label", $submit_default,
         {kind => 'action', id => $id, attribute => 'submit_label'},
@@ -156,15 +167,32 @@ sub _normalize_action ($class, $id, $spec, $config, $controller, $domain) {
 }
 
 sub _normalize_selection ($class, $spec, $config, $controller, $action, $domain) {
-    return {mode => 'rows'} unless ref($spec) eq 'HASH'
-        && lc(_text($spec->{mode})) eq 'groups';
+    $spec = {} unless ref($spec) eq 'HASH';
+    my $mode = lc(_text($spec->{mode}) || 'rows');
+    $mode = 'rows' unless $mode eq 'groups';
+    my $minimum = _text($spec->{min_rows});
+    $minimum = 1 unless $minimum =~ /\A\d+\z/ && $minimum >= 1;
+    my $maximum = _text($spec->{max_rows});
+    $maximum = $config->max_action_rows
+        unless $maximum =~ /\A\d+\z/ && $maximum >= $minimum;
+    $maximum = $config->max_action_rows if $maximum > $config->max_action_rows;
+    my $presentation = lc(_text($spec->{presentation}) || 'toolbar');
+    $presentation = 'toolbar'
+        unless $presentation =~ /\A(?:toolbar|row_dialog|row_inline)\z/;
+    my $selection = {
+        mode => $mode,
+        min_rows => 0 + $minimum,
+        max_rows => 0 + $maximum,
+        presentation => $presentation,
+    };
+    return $selection unless $mode eq 'groups';
     my $palette = lc(_text($spec->{palette}) || 'lucky_charms');
-    return {mode => 'rows'} unless $palette eq 'lucky_charms';
-    my $maximum = _text($spec->{max_groups});
-    $maximum = scalar(@LUCKY_CHARMS_MARKERS)
-        unless $maximum =~ /\A\d+\z/ && $maximum >= 1
-            && $maximum <= @LUCKY_CHARMS_MARKERS;
-    my @markers = map { dclone($_) } @LUCKY_CHARMS_MARKERS[0 .. $maximum - 1];
+    return $selection unless $palette eq 'lucky_charms';
+    my $maximum_groups = _text($spec->{max_groups});
+    $maximum_groups = scalar(@LUCKY_CHARMS_MARKERS)
+        unless $maximum_groups =~ /\A\d+\z/ && $maximum_groups >= 1
+            && $maximum_groups <= @LUCKY_CHARMS_MARKERS;
+    my @markers = map { dclone($_) } @LUCKY_CHARMS_MARKERS[0 .. $maximum_groups - 1];
     my $eligibility_field = _text($spec->{eligibility_field});
     if (length($eligibility_field)
         && $eligibility_field !~ /\A__[a-z][a-z0-9_]*\z/) {
@@ -178,9 +206,9 @@ sub _normalize_selection ($class, $spec, $config, $controller, $action, $domain)
             unless ($resolved->{type} // '') eq 'boolean';
     }
     return {
-        mode => 'groups',
+        %$selection,
         palette => $palette,
-        max_groups => 0 + $maximum,
+        max_groups => 0 + $maximum_groups,
         markers => \@markers,
         group_inputs => $class->_normalize_inputs(
             $spec->{group_inputs}, $config, $controller, $action, $domain,
