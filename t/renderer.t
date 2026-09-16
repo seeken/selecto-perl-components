@@ -350,6 +350,43 @@ is $grid_data->{maximum_positive}, 20,
     'aggregate grid records the maximum positive measure for heat scaling';
 is_deeply $grid_data->{cells}{$grid_data->{rows}[0]{key}}{$grid_data->{columns}[0]{key}}{selection_values},
     ['East', 1], 'grid cells retain both axis values for submitted selection filters';
+
+my $year_entries = Selecto::Components::Explorer::_sort_grid_entries([
+    {value => '2026'}, {value => '2024'}, {value => '2025'},
+], {format => 'year', source_type => 'date'});
+is_deeply [map { $_->{value} } @$year_entries], [qw(2024 2025 2026)],
+    'formatted years use chronological order on aggregate grid axes';
+
+my $weekday_entries = Selecto::Components::Explorer::_sort_grid_entries([
+    {value => 'Friday', sort_value => 5},
+    {value => 'Sunday', sort_value => 7},
+    {value => 'Monday', sort_value => 1},
+], {format => 'day_of_week', source_type => 'date', sort_key => '__weekday_sort'});
+is_deeply [map { $_->{value} } @$weekday_entries], [qw(Monday Friday Sunday)],
+    'weekday names use ISO weekday order instead of alphabetical order';
+
+my $sparse_year_built = {
+    aggregate_grid => 1,
+    columns => [
+        {key => 'region', field => 'region', label => 'Region', type => 'string'},
+        {key => 'created_year', field => 'created_on', label => 'Year', type => 'string',
+            source_type => 'date', format => 'year'},
+        {key => 'count', label => 'Rows', type => 'integer', measure => 1},
+    ],
+};
+my $sparse_year_records = [
+    {region => 'East', created_year => '2026', count => 1, __selecto_rollup_level => 2},
+    {region => 'West', created_year => '2024', count => 1, __selecto_rollup_level => 2},
+    {region => 'West', created_year => '2025', count => 1, __selecto_rollup_level => 2},
+];
+my $sparse_year_grid = Selecto::Components::Explorer::_aggregate_grid_data(
+    $grid_state, $sparse_year_built, $sparse_year_records,
+    [map { [[], []] } @$sparse_year_records],
+);
+is_deeply [map { $_->{value} } @{$sparse_year_grid->{columns}}],
+    [qw(2024 2025 2026)],
+    'a sparse grid sorts all collected years instead of retaining encounter order';
+
 my $grid_result = {
     %$grid_built,
     grid_data => $grid_data,

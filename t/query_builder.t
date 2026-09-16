@@ -10,6 +10,7 @@ use Selecto::Components::Explorer ();
 use Selecto::Components::QueryBuilder;
 use Selecto::Components::Renderer ();
 use Selecto::Components::State;
+use Selecto::DuckDB;
 use Selecto::PostgreSQL;
 
 my $config = Selecto::Components::Config->new(
@@ -18,6 +19,7 @@ my $config = Selecto::Components::Config->new(
 my $domain = TestSelectoComponents::domain();
 my $dbh = bless {}, 'TestSelectoComponents::CompileDBH';
 my $postgresql = Selecto::PostgreSQL->new(dbh => $dbh);
+my $duckdb = Selecto::DuckDB->new(dbh => $dbh);
 
 my $unsafe_link_contract = $domain->contract;
 $unsafe_link_contract->{source}{columns}{product_name}{link}{url_template}
@@ -615,6 +617,41 @@ like $formatted_aggregate_statement->sql,
     'aggregate date configuration defines the SQL rollup bucket';
 is $formatted_aggregate->{columns}[0]{label}, 'Month',
     'aggregate group label uses its independent configuration';
+
+my $weekday_aggregate_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'aggregate',
+    field => ['created_on'],
+    group => 'created_on',
+    group_alias => 'Weekday',
+    group_format => 'day_of_week',
+    measure => 'count',
+    order => 'created_on',
+    direction => 'asc',
+    limit => 25,
+    page => 1,
+});
+my $weekday_aggregate = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $weekday_aggregate_state,
+);
+my $weekday_aggregate_statement = $postgresql->compile(
+    $domain, $weekday_aggregate->{query},
+);
+like $weekday_aggregate_statement->sql,
+    qr/MIN\(TO_CHAR\("s0"\."created_on", 'ID'\)\) AS "__selecto_group_sort_1"/,
+    'weekday-name aggregates select their governed ISO weekday sort value';
+like $weekday_aggregate_statement->sql,
+    qr/ORDER BY \d+ DESC, 2 ASC NULLS LAST/,
+    'weekday-name rollups order data by weekday number rather than alphabetically';
+is $weekday_aggregate->{columns}[0]{sort_key}, '__selecto_group_sort_1',
+    'weekday aggregate metadata exposes its hidden natural-order result key';
+my $weekday_duckdb_statement = $duckdb->compile(
+    $domain, $weekday_aggregate->{query},
+);
+like $weekday_duckdb_statement->sql,
+    qr/MIN\(STRFTIME\("s0"\."created_on", '%u'\)\) AS "__selecto_group_sort_1"/,
+    'DuckDB compiles the same governed weekday natural-order key';
+
 my $formatted_drilldowns = Selecto::Components::Explorer::_drilldowns(
     $formatted_aggregate_state,
     $formatted_aggregate,

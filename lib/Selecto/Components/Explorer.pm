@@ -401,6 +401,8 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
             push @rows, {
                 key => $row_key,
                 value => $row_value,
+                (defined($groups[0]{sort_key})
+                    ? (sort_value => $record->{$groups[0]{sort_key}}) : ()),
                 selection_value => $record->{$groups[0]{drilldown_key} // $groups[0]{key}},
                 drilldown => _drilldown_for_group_indexes(
                     $state, \@groups, $record, [0],
@@ -411,6 +413,8 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
             push @columns, {
                 key => $column_key,
                 value => $column_value,
+                (defined($groups[1]{sort_key})
+                    ? (sort_value => $record->{$groups[1]{sort_key}}) : ()),
                 selection_value => $record->{$groups[1]{drilldown_key} // $groups[1]{key}},
                 drilldown => _drilldown_for_group_indexes(
                     $state, \@groups, $record, [1],
@@ -468,15 +472,45 @@ sub _grid_value_key ($value) {
 
 sub _sort_grid_entries ($entries, $column) {
     my $format = $column->{format} // '';
-    return [@$entries] unless $format =~ /\A(?:day_of_week|hour|month_of_year|day_of_month)\z/;
+    my $type = $column->{source_type} // $column->{type} // '';
+    my $has_sort_key = defined($column->{sort_key}) ? 1 : 0;
+    my $numeric = $format =~ /\A(?:epoch_seconds|epoch_milliseconds|year|month_of_year|day_of_month|day_of_week_num|day_of_year|hour)\z/;
+    my $lexical = $format =~ /\A(?:iso8601|rfc3339_millis|day|time|day_hour|week|iso_week|iso_week_date|month|quarter)\z/
+        || ((!length($format) || $format eq 'default') && $type =~ /(?:date|time)/i);
+    my $timezone = $format eq 'timezone_offset' ? 1 : 0;
+    return [@$entries] unless $has_sort_key || $numeric || $lexical || $timezone;
     return [sort {
         !defined($a->{value}) <=> !defined($b->{value})
-            || (defined($a->{value}) && defined($b->{value})
-                && looks_like_number($a->{value}) && looks_like_number($b->{value})
-                ? $a->{value} <=> $b->{value}
-                : (defined($a->{value}) ? "$a->{value}" : '') cmp
-                    (defined($b->{value}) ? "$b->{value}" : ''))
+            || _compare_grid_entry_values(
+                $a, $b, $has_sort_key, $numeric, $timezone,
+            )
     } @$entries];
+}
+
+sub _compare_grid_entry_values ($left, $right, $has_sort_key, $numeric, $timezone) {
+    my $left_value = $has_sort_key ? $left->{sort_value} : $left->{value};
+    my $right_value = $has_sort_key ? $right->{sort_value} : $right->{value};
+    my $defined_order = !defined($left_value) <=> !defined($right_value);
+    return $defined_order if $defined_order;
+    return 0 unless defined($left_value) && defined($right_value);
+    if (($has_sort_key || $numeric)
+        && looks_like_number($left_value) && looks_like_number($right_value)) {
+        return $left_value <=> $right_value;
+    }
+    if ($timezone) {
+        my $left_offset = _timezone_offset_minutes($left_value);
+        my $right_offset = _timezone_offset_minutes($right_value);
+        return $left_offset <=> $right_offset
+            if defined($left_offset) && defined($right_offset);
+    }
+    return "$left_value" cmp "$right_value";
+}
+
+sub _timezone_offset_minutes ($value) {
+    return undef unless defined($value) && !ref($value)
+        && "$value" =~ /\A([+-])(\d{2}):(\d{2})\z/;
+    my $minutes = ($2 * 60) + $3;
+    return $1 eq '-' ? -$minutes : $minutes;
 }
 
 sub _count_statement ($source) {
