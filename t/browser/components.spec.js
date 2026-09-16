@@ -242,13 +242,19 @@ test("row dialog opens and navigates between result rows", async ({page}) => {
 });
 
 test("record editor saves through the governed endpoint and replaces the result row", async ({page}) => {
+  let saved = false;
+  let editorGets = 0;
+  let releaseReload;
+  const reloadGate = new Promise(resolve => { releaseReload = resolve; });
   await page.route("https://selecto.test/**", async route => {
     const request = route.request();
     if (request.url().endsWith("/editor/101") && request.method() === "GET") {
+      editorGets += 1;
+      if (saved) await reloadGate;
       return route.fulfill({status: 200, contentType: "text/html", body: `
         <form action="https://selecto.test/editor/101" data-sc-record-editor-form>
           <label data-sc-record-editor-field="product_name">Name
-            <input name="editor_field_product_name" value="Old name" required>
+            <input name="editor_field_product_name" value="${saved ? "New name" : "Old name"}" required>
             <small data-sc-record-editor-error hidden></small>
           </label>
           <div data-sc-record-editor-result hidden></div>
@@ -256,6 +262,7 @@ test("record editor saves through the governed endpoint and replaces the result 
         </form>`});
     }
     if (request.url().endsWith("/editor/101") && request.method() === "POST") {
+      saved = true;
       return route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify({
         ok: true, row_id: "101", authorized: 1,
         changed_fields: ["product_name"], return_to: "https://selecto.test/results",
@@ -286,7 +293,15 @@ test("record editor saves through the governed endpoint and replaces the result 
   await expect(page.locator("[data-sc-record-editor-save]")).toBeEnabled();
   await page.locator("[data-sc-record-editor-save]").click();
   await expect(page.locator("[data-sc-record-id='101'] td")).toHaveText("New name");
-  await expect(page.locator("#editor-dialog")).not.toHaveAttribute("open", "");
+  await expect.poll(() => editorGets).toBe(2);
+  await expect(page.locator("#editor-dialog")).toHaveAttribute("open", "");
+  await expect(page.locator('[name="editor_field_product_name"]')).toHaveValue("New name");
+  await expect(page.locator("[data-sc-record-editor-result]")).toBeHidden();
+  releaseReload();
+  await expect(page.locator("#editor-dialog")).toHaveAttribute("open", "");
+  await expect(page.locator('[name="editor_field_product_name"]')).toHaveValue("New name");
+  await expect(page.locator("[data-sc-record-editor-result]")).toHaveText("Updated");
+  await expect(page.locator("[data-sc-record-editor-save]")).toBeDisabled();
 });
 
 test("a row that no longer matches keeps its column cells and uses a spanning notice", async ({page}) => {
@@ -398,6 +413,49 @@ test("record editor actions open one compact form on demand", async ({page}) => 
   await page.locator("#action-note [data-sc-record-editor-action-close]").click();
   await expect(page.locator("#action-note")).toBeHidden();
   await expect(page.getByRole("button", {name: "Add note"})).toBeFocused();
+});
+
+test("record editor actions stay open unless their response requests close", async ({page}) => {
+  let actionRuns = 0;
+  await page.route("https://selecto.test/**", async route => {
+    const request = route.request();
+    if (request.url().endsWith("/editor/505")) {
+      return route.fulfill({status: 200, contentType: "text/html", body: `
+        <div data-sc-record-editor-result hidden></div>
+        <form action="https://selecto.test/action/505" data-sc-record-editor-action-form
+          data-sc-record-id="505" data-sc-return-to="https://selecto.test/results">
+          <input name="action_input_note" value="Checked">
+          <button type="submit">Run action</button>
+          <div data-sc-action-result hidden></div>
+        </form>`});
+    }
+    if (request.url().endsWith("/action/505") && request.method() === "POST") {
+      actionRuns += 1;
+      return route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify({
+        ok: true, message: "Action complete", close_dialog: actionRuns === 2
+      })});
+    }
+    return route.fulfill({status: 200, contentType: "text/html", body: `
+      <table><tbody><tr data-sc-record-id="505" data-sc-row-click
+        data-sc-row-click-type="record_editor" data-sc-row-dialog-id="editor-dialog"
+        data-sc-row-click-url="https://selecto.test/editor/505"><td>Truck 505</td></tr></tbody></table>`});
+  });
+  await load(page, `
+    <section class="sc-results"><table><tbody><tr tabindex="0" data-sc-record-id="505"
+      data-sc-row-click data-sc-row-click-type="record_editor" data-sc-row-dialog-id="editor-dialog"
+      data-sc-row-click-url="https://selecto.test/editor/505"><td>Truck 505</td></tr></tbody></table>
+      <dialog id="editor-dialog" data-sc-row-dialog data-sc-row-dialog-kind="record_editor">
+        <span data-sc-row-dialog-position></span><button data-sc-row-dialog-nav="previous"></button>
+        <button data-sc-row-dialog-nav="next"></button><span data-sc-row-dialog-loading hidden></span>
+        <div data-sc-row-editor-body></div></dialog></section>`);
+
+  await page.locator("[data-sc-record-id='505']").click();
+  await page.getByRole("button", {name: "Run action"}).click();
+  await expect(page.locator("#editor-dialog")).toHaveAttribute("open", "");
+  await expect(page.locator("[data-sc-record-editor-result]")).toHaveText("Action complete");
+  await page.getByRole("button", {name: "Run action"}).click();
+  await expect(page.locator("#editor-dialog")).not.toHaveAttribute("open", "");
+  expect(actionRuns).toBe(2);
 });
 
 test("choosing an autocomplete result writes both label and stable value", async ({page}) => {

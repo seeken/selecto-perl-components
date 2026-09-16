@@ -86,16 +86,17 @@
       || window.confirm("Discard the unsaved changes to this record?");
   }
 
-  function loadRecordEditor(dialog, url) {
+  function loadRecordEditor(dialog, url, notice) {
     var body = dialog.querySelector("[data-sc-row-editor-body]");
     var loading = dialog.querySelector("[data-sc-row-dialog-loading]");
-    if (!body) return;
+    if (!body) return Promise.resolve();
     if (dialog._scEditorAbort) dialog._scEditorAbort.abort();
     var abort = typeof AbortController === "function" ? new AbortController() : null;
     dialog._scEditorAbort = abort;
-    body.replaceChildren();
-    if (loading) loading.hidden = false;
-    window.fetch(url, {
+    if (!notice) body.replaceChildren();
+    body.setAttribute("aria-busy", "true");
+    if (loading) loading.hidden = !!notice;
+    return window.fetch(url, {
       credentials: "same-origin",
       headers: {"X-Requested-With": "XMLHttpRequest"},
       signal: abort ? abort.signal : undefined
@@ -109,6 +110,14 @@
       if (dialog._scEditorAbort !== abort) return;
       replaceEditorBody(body, html);
       initializeRecordEditor(body.querySelector("[data-sc-record-editor-form]"));
+      if (notice) {
+        var result = body.querySelector("[data-sc-record-editor-result]");
+        if (result) {
+          result.textContent = notice;
+          result.hidden = false;
+          result.classList.add("is-success");
+        }
+      }
       var first = body.querySelector("input:not([type=hidden]),textarea,select,button");
       if (first) first.focus();
     }).catch(function (error) {
@@ -120,7 +129,10 @@
       message.textContent = error && error.message || "The editor could not be loaded.";
       body.appendChild(message);
     }).finally(function () {
-      if (dialog._scEditorAbort === abort && loading) loading.hidden = true;
+      if (dialog._scEditorAbort === abort) {
+        body.removeAttribute("aria-busy");
+        if (loading) loading.hidden = true;
+      }
     });
   }
 
@@ -284,16 +296,16 @@
     var currentRows = rowDialogRows(dialog);
     var current = currentRows[Number(dialog.dataset.scRowDialogIndex || 0)];
     var rowId = String(payload.row_id || current && current.dataset.scRecordId || "");
-    if (!current || !rowId) return Promise.resolve();
+    if (!current || !rowId) return Promise.resolve({retired: true});
     if (!payload.authorized) {
       dialog._scRetiredFocus = retireEditedRow(current, true);
-      return Promise.resolve();
+      return Promise.resolve({retired: true});
     }
     var returnUrl = new URL(payload.return_to || window.location.href, window.location.href);
     var ordered = returnUrl.searchParams.getAll("order");
     if ((payload.changed_fields || []).some(function (field) { return ordered.includes(field); })) {
       window.location.assign(returnUrl.pathname + returnUrl.search + returnUrl.hash);
-      return Promise.resolve();
+      return Promise.resolve({navigating: true});
     }
     return window.fetch(payload.return_to || window.location.href, {
       credentials: "same-origin",
@@ -308,11 +320,30 @@
       );
       if (!replacement) {
         dialog._scRetiredFocus = retireEditedRow(current, false);
-        return;
+        return {retired: true};
       }
-      current.replaceWith(document.importNode(replacement, true));
+      var imported = document.importNode(replacement, true);
+      current.replaceWith(imported);
+      return {row: imported};
     }).catch(function () {
       window.location.assign(payload.return_to || window.location.href);
+      return {navigating: true};
+    });
+  }
+
+  function finishEditorMutation(dialog, payload, message) {
+    return synchronizeEditedRow(dialog, payload).then(function (outcome) {
+      if (!outcome || outcome.navigating) return;
+      if (payload.close_dialog || outcome.retired) {
+        closeRowDialog(dialog);
+        return;
+      }
+      var editorUrl = outcome.row && outcome.row.dataset.scRowClickUrl;
+      if (!editorUrl) {
+        closeRowDialog(dialog);
+        return;
+      }
+      return loadRecordEditor(dialog, editorUrl, message);
     });
   }
 
@@ -359,14 +390,11 @@
         });
         throw new Error(payload.message || "The record could not be saved.");
       }
-      if (result) {
-        result.textContent = payload.message || "The record was updated.";
-        result.hidden = false;
-        result.classList.add("is-success");
-      }
       form.dataset.scInitialValues = recordEditorSignature(form);
       form.dataset.scRecordEditorDirty = "0";
-      return synchronizeEditedRow(dialog, payload).then(function () { closeRowDialog(dialog); });
+      return finishEditorMutation(
+        dialog, payload, payload.message || "The record was updated."
+      );
     }).catch(function (error) {
       if (result) {
         result.textContent = error && error.message || "The record could not be saved.";
@@ -451,15 +479,17 @@
       if (!payload._responseOk || !payload.ok) {
         throw new Error(payload.message || "The action could not be completed.");
       }
-      if (result) {
-        result.textContent = payload.message || "The action was completed.";
-        result.hidden = false;
-        result.classList.add("is-success");
+      if (!Object.prototype.hasOwnProperty.call(payload, "row_id")) {
+        payload.row_id = form.dataset.scRecordId;
       }
-      return synchronizeEditedRow(dialog, {
-        row_id: form.dataset.scRecordId, return_to: form.dataset.scReturnTo,
-        authorized: 1, changed_fields: []
-      }).then(function () { closeRowDialog(dialog); });
+      if (!Object.prototype.hasOwnProperty.call(payload, "return_to")) {
+        payload.return_to = form.dataset.scReturnTo;
+      }
+      if (!Object.prototype.hasOwnProperty.call(payload, "authorized")) payload.authorized = 1;
+      if (!Array.isArray(payload.changed_fields)) payload.changed_fields = [];
+      return finishEditorMutation(
+        dialog, payload, payload.message || "The action was completed."
+      );
     }).catch(function (error) {
       if (result) {
         result.textContent = error && error.message || "The action could not be completed.";
