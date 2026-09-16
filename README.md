@@ -25,6 +25,10 @@ Chromium with Playwright.
 ## Current surface
 
 - a reusable `Selecto::Components` Mojolicious plugin;
+- an immutable resource contribution registry and request-time composer for
+  host-owned workspaces, including named provider slots, deterministic panel
+  ordering, fact-based applicability, and capability pruning without imposing
+  shared-package branding or page styling;
 - an optional Mojolicious route bridge that mounts every explorer endpoint
   beneath a host-owned `under(...)` route, so authentication and request setup
   are applied by normal route dispatch rather than application-wide path hooks;

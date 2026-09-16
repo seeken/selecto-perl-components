@@ -29,6 +29,8 @@ WriteMakefile(
         'lib/Selecto/Components/QueryBuilder.pm' => '$(INST_LIB)/Selecto/Components/QueryBuilder.pm',
         'lib/Selecto/Components/QueryLibrary.pm' => '$(INST_LIB)/Selecto/Components/QueryLibrary.pm',
         'lib/Selecto/Components/RecordEditor.pm' => '$(INST_LIB)/Selecto/Components/RecordEditor.pm',
+        'lib/Selecto/Components/Resource/Composer.pm' => '$(INST_LIB)/Selecto/Components/Resource/Composer.pm',
+        'lib/Selecto/Components/Resource/Registry.pm' => '$(INST_LIB)/Selecto/Components/Resource/Registry.pm',
         'lib/Selecto/Components/Renderer.pm' => '$(INST_LIB)/Selecto/Components/Renderer.pm',
         'lib/Selecto/Components/Renderer/Builder.pm' => '$(INST_LIB)/Selecto/Components/Renderer/Builder.pm',
         'lib/Selecto/Components/Renderer/Debug.pm' => '$(INST_LIB)/Selecto/Components/Renderer/Debug.pm',
