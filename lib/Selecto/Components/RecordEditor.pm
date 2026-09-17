@@ -90,11 +90,10 @@ sub normalize ($class, $domain, $editor, $params) {
             $errors{$field} = 'Enter a date and time.';
             next;
         }
-        $values{$field} = $type =~ /\A(?:integer|bigint|smallint)\z/
-            ? 0 + $value
-            : $type =~ /\A(?:decimal|number|float|double|numeric)\z/
-                ? 0 + $value
-                : $value;
+        # DBI accepts validated numeric strings directly. Keep the submitted
+        # representation intact so exact decimals and large integers are not
+        # rounded through Perl's native numeric types before the write.
+        $values{$field} = $value;
     }
     return {valid => keys(%errors) ? 0 : 1, values => \%values, errors => \%errors};
 }

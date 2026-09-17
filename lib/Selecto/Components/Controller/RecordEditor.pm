@@ -228,7 +228,7 @@ sub _form ($controller, $context, $record, $snapshot, $signature) {
                 $options . '</select>';
         } elsif ($control eq 'checkbox') {
             $input = '<input type="checkbox" name="editor_field_' . _h($field) .
-                '" value="1"' . ($value ? ' checked' : '') . $required . '>';
+                '" value="1"' . ($value ? ' checked' : '') . '>';
         } else {
             $input = '<input type="' . _h($control) . '" name="editor_field_' .
                 _h($field) . '" value="' . _h(_input_value($value, $control)) . '"' .

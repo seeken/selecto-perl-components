@@ -148,6 +148,8 @@ $t->get_ok($record_editor_url)
     ->element_exists('input[name="editor_field_product_name"][value="Test Widget"][required]')
     ->element_exists('input[name="editor_field_unit_price"][type="number"]')
     ->element_exists('input[name="editor_field_created_on"][type="date"]')
+    ->element_exists('input[name="editor_field_discontinued"][type="checkbox"]' .
+        ':not([required]):not([aria-required])')
     ->text_is('form[data-sc-record-editor-form] button[type="submit"]' => 'Save product')
     ->element_exists('[data-sc-record-editor-action-open="sc-record-editor-action-edit_one_product"]' .
         '[aria-expanded="false"]')
@@ -183,6 +185,19 @@ $t->post_ok('/explore/products/records/101/edit?editor=product_profile' =>
 is_deeply $TestSelectoComponents::Adapter::LAST_WRITE->assignments,
     {product_name => 'Updated Widget'},
     'record editor sends only changed governed assignments';
+
+$t->post_ok('/explore/products/records/101/edit?editor=product_profile' =>
+    {Accept => 'application/json'} => form => {
+        %record_editor_hidden,
+        editor_field_product_name => 'Test Widget',
+        editor_field_unit_price => '12345678901234567890.123456789',
+        editor_field_created_on => '2026-09-15',
+    })
+    ->status_is(200)
+    ->json_is('/ok' => 1);
+is_deeply $TestSelectoComponents::Adapter::LAST_WRITE->assignments,
+    {unit_price => '12345678901234567890.123456789'},
+    'record editor preserves exact numeric strings through the governed write';
 
 $TestSelectoComponents::Adapter::WRITE_ERROR = Selecto::Error->new(
     code => 'cardinality_mismatch', message => 'stale editor snapshot',

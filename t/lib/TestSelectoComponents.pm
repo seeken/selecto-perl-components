@@ -78,7 +78,7 @@ sub _domain {
             source_table => 'products',
             primary_key => 'id',
             fields => [qw(
-                id product_name category_id unit_price units_in_stock created_on
+                id product_name category_id unit_price units_in_stock created_on discontinued
                 build_shipments_eligible
             )],
             columns => {
@@ -94,6 +94,7 @@ sub _domain {
                 unit_price => { type => 'decimal' },
                 units_in_stock => { type => 'integer' },
                 created_on => { type => 'date' },
+                discontinued => { type => 'boolean' },
                 build_shipments_eligible => {
                     type => 'boolean',
                     internal => 1,
@@ -130,6 +131,7 @@ sub _domain {
                 product_name => {updatable => 1},
                 unit_price => {updatable => 1},
                 created_on => {updatable => 1},
+                discontinued => {updatable => 1},
             },
         },
         editors => {
@@ -139,6 +141,7 @@ sub _domain {
                     {field => 'product_name', required => 1},
                     {field => 'unit_price', control => 'number', nullable => 1},
                     {field => 'created_on', control => 'date', nullable => 1},
+                    {field => 'discontinued', required => 1},
                 ],
                 actions => ['edit_one_product'],
             },
@@ -529,10 +532,11 @@ sub execute_query ($self, $statement) {
     }
     $LAST_DATA_QUERY = $LAST_COMPILED_QUERY;
     if (defined($LAST_DATA_QUERY->limit_value) && $LAST_DATA_QUERY->limit_value == 2
-        && join(',', @{$statement->columns}) eq 'id,product_name,unit_price,created_on') {
+        && join(',', @{$statement->columns}) eq
+            'id,product_name,unit_price,created_on,discontinued') {
         return {
             columns => $statement->columns,
-            rows => [[101, 'Test Widget', 12.5, '2026-09-15']],
+            rows => [[101, 'Test Widget', 12.5, '2026-09-15', 0]],
         };
     }
     my $rollup = grep { $_ eq '__selecto_rollup_grouping' } @{$statement->columns};
