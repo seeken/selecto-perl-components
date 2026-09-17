@@ -126,6 +126,12 @@
       : {value: filename, error: `Filename must be a safe name ending in ${extension}.`};
   }
 
+  function initialSurfaceTab(access) {
+    const surfaces = [["query", access.read], ["writes", access.write], ["actions", access.action]];
+    const available = surfaces.find(([, allowed]) => allowed);
+    return available ? available[0] : "domain";
+  }
+
   function pathWithDownloadFilename(path, filename) {
     return `${path}${path.includes("?") ? "&" : "?"}filename=${encodeURIComponent(filename)}`;
   }
@@ -661,8 +667,7 @@
       this.renderAll();
       this.renderWritePanel();
       this.renderActionPanel();
-      const initialTab = surfaceTabs.find(([, allowed]) => allowed);
-      if (initialTab && initialTab[0] !== "query") this.switchMainTab(initialTab[0]);
+      this.switchMainTab(initialSurfaceTab(this.access));
     }
 
     bind() {
@@ -2940,6 +2945,7 @@
     compareSemanticFields,
     discoverQueryResponseFormats,
     downloadFilename,
+    initialSurfaceTab,
     pathWithDownloadFilename,
     suggestedDownloadFilename,
     validateDownloadFilename,
