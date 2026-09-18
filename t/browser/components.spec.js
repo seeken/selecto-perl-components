@@ -1328,6 +1328,29 @@ test("switching views keeps the other view's current selections for running and 
   expect(submitted.getAll("measure")).toEqual(["count"]);
 });
 
+test("a host limit below 250 remains selectable in graph mode", async ({page}) => {
+  await load(page, `
+    <form data-sc-builder>
+      <input type="radio" name="view" value="detail" checked>
+      <input type="radio" name="view" value="graph">
+      <fieldset data-sc-result-view-panel="detail"></fieldset>
+      <fieldset data-sc-result-view-panel="summary" hidden disabled></fieldset>
+      <fieldset data-sc-graph-options hidden disabled></fieldset>
+      <fieldset data-sc-aggregate-options hidden disabled></fieldset>
+      <span data-sc-limit-label>Rows</span>
+      <select name="limit" data-sc-limit>
+        <option value="10">10</option><option value="25" selected>25</option>
+        <option value="50">50</option><option value="100">100</option>
+      </select>
+      <label data-sc-page-control>Page<input name="page" value="2"></label>
+    </form>
+  `);
+  await page.locator('input[name="view"][value="graph"]').check();
+  await expect(page.locator('[data-sc-limit]')).toHaveValue("100");
+  await expect(page.locator('[data-sc-limit] option[value="100"]')).not.toBeDisabled();
+  expect(await page.locator("form").evaluate(form => new FormData(form).get("limit"))).toBe("100");
+});
+
 test("an export uses the columns currently selected in the builder", async ({page}) => {
   await load(page, `
     <section id="selecto-surface-truck">
@@ -2130,4 +2153,86 @@ test("Copy SQL copies the standalone interpolated statement", async ({page}) => 
     "SELECT * FROM load WHERE id = E'42'"
   );
   await expect(page.locator("[data-sc-debug-copy]")).toHaveText("Copied");
+});
+
+test("picker additions increment the enclosing query form edit generation", async ({page}) => {
+  await load(page, `<form data-sc-builder data-sc-edit-generation="0">
+    <div data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
+      <div data-sc-picker-available><button type="button" data-sc-picker-action="add" data-sc-picker-available-item
+        data-field="id" data-label="ID" data-type="integer" data-search="id">Add ID</button></div>
+      <div data-sc-picker-set></div>
+    </div>
+    <div data-sc-filter-root data-sc-filter-max="10">
+      <div data-sc-filter-available><button type="button" data-sc-filter-action="add" data-sc-filter-available-item
+        data-field="id" data-label="ID" data-type="integer" data-search="id">Add ID filter</button></div>
+      <div data-sc-filter-set></div>
+    </div>
+  </form>`);
+  await page.getByRole("button", {name: "Add ID", exact: true}).click();
+  await expect(page.locator("form")).toHaveAttribute("data-sc-edit-generation", "1");
+  await page.getByRole("button", {name: "Add ID filter", exact: true}).click();
+  await expect(page.locator("form")).toHaveAttribute("data-sc-edit-generation", "2");
+});
+
+test("graph edits survive view switches without duplicate graph form values", async ({page}) => {
+  await load(page, `<form data-sc-builder>
+    <input type="radio" name="view" value="detail" checked>
+    <input type="radio" name="view" value="graph">
+    <fieldset data-sc-result-view-panel="detail"></fieldset>
+    <fieldset data-sc-result-view-panel="summary" hidden disabled></fieldset>
+    <fieldset data-sc-graph-options hidden disabled>
+      <select name="chart_type"><option value="bar">Bar</option><option value="line">Line</option></select>
+      <select name="graph_palette"><option value="default">Default</option><option value="brand">Brand</option></select>
+      <input type="checkbox" name="graph_show_table" value="1">
+      <input name="graph_series_group" value="country">
+      <div data-sc-category-colors></div>
+    </fieldset>
+    <div data-sc-inactive-graph-state hidden><input type="hidden" name="graph_palette" value="default"></div>
+  </form>`);
+  await page.locator('input[name="view"][value="graph"]').check();
+  await page.locator('select[name="chart_type"]').selectOption("line");
+  await page.locator('select[name="graph_palette"]').selectOption("brand");
+  await page.locator('input[name="graph_show_table"][type="checkbox"]').check();
+  await page.locator('input[name="view"][value="detail"]').check();
+  const detail = await page.locator("form").evaluate(form => Object.fromEntries(new FormData(form)));
+  expect(detail).toMatchObject({chart_type: "line", graph_palette: "brand", graph_show_table: "1", graph_series_group: "country"});
+  await page.locator('input[name="view"][value="graph"]').check();
+  const graph = await page.locator("form").evaluate(form => ({
+    palette: new FormData(form).getAll("graph_palette"), chart: new FormData(form).getAll("chart_type")
+  }));
+  expect(graph).toEqual({palette: ["brand"], chart: ["line"]});
+});
+
+test("exact membership values stay aligned with newly added filters and promoted edits", async ({page}) => {
+  await load(page, `<div data-sc-workspace>
+    <form id="membership-form" data-sc-builder>
+      <div data-sc-filter-root data-sc-filter-max="10">
+        <div data-sc-filter-available><button type="button" data-sc-filter-action="add" data-sc-filter-available-item
+          data-field="id" data-label="ID" data-type="integer" data-search="id">Add ID filter</button></div>
+        <div data-sc-filter-set>
+          <article data-sc-filter-set-item data-field="brand" data-label="Brand" data-type="string">
+            <input type="hidden" name="filter_field" value="brand">
+            <div class="sc-filter-editor"><select name="filter_op"><option value="in">One of</option><option value="eq">Equals</option></select>
+              <div data-sc-filter-values><textarea name="filter_values_json">["A,B"]</textarea>
+                <input type="hidden" name="filter_value" value=""><input type="hidden" name="filter_value_end" value=""></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </form>
+    <div data-sc-promoted-filters><button type="button" form="membership-form">Run</button>
+      <article data-sc-promoted-filter>
+        <select data-sc-promoted-filter-input="op" data-filter-field="brand"><option value="in">One of</option><option value="eq">Equals</option></select>
+        <div data-sc-promoted-filter-values><textarea data-sc-promoted-filter-input="values_json" data-filter-field="brand">["A,B"]</textarea></div>
+      </article>
+    </div>
+  </div>`);
+  await page.getByRole("button", {name: "Add ID filter", exact: true}).click();
+  expect(await page.locator("form").evaluate(form => new FormData(form).getAll("filter_values_json"))).toEqual(['["A,B"]', ""]);
+  await page.locator('[data-sc-promoted-filter-input="values_json"]').fill('["C,D", "E"]');
+  await expect(page.locator('textarea[name="filter_values_json"]')).toHaveValue('["C,D", "E"]');
+  await expect(page.locator('[data-sc-filter-set-item][data-field="brand"]')).not.toHaveClass(/is-draft/);
+  await page.locator('[data-sc-promoted-filter-input="op"]').selectOption("eq");
+  expect(await page.locator("form").evaluate(form => new FormData(form).getAll("filter_values_json"))).toEqual(["", ""]);
+  await expect(page.locator('[data-sc-promoted-filter-values] [data-sc-promoted-filter-input="value"]')).toHaveCount(1);
 });

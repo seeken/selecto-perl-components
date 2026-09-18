@@ -1,5 +1,5 @@
 [tools]
-perl = "5.40.2"
+perl = "5.40.2.1"
 node = "22"
 
 [env]
@@ -7,7 +7,7 @@ PORT = "4128"
 
 [tasks.test]
 description = "Run the Selecto Components Perl test suite"
-run = "script/with-local-sibling prove -lr t"
+run = "script/with-local-sibling mise exec -- perl -S prove -lr t"
 
 [tasks.assets]
 description = "Build and sync shared web assets and the API Console from local siblings or npm"
@@ -23,8 +23,8 @@ run = "npm run test:browser"
 
 [tasks.server]
 description = "Run the Northwind Components example"
-run = "script/with-local-sibling perl -Ilib examples/northwind.pl"
+run = "script/with-local-sibling mise exec -- perl -Ilib examples/northwind.pl"
 
 [tasks.verify]
 description = "Run syntax, unit, WebSocket, and distribution checks"
-run = "mise run assets:check && mise run test:browser && script/with-local-sibling sh -c 'if perl -MSelecto::Perl::Northwind::Database -e 1 >/dev/null 2>&1; then perl -Ilib -c examples/northwind.pl; else echo \"Skipping optional Northwind example compile (fixture not checked out)\"; fi; prove -lr t && perl Makefile.PL && make test'"
+run = "mise run assets:check && mise run test:browser && script/with-local-sibling sh -c 'if mise exec -- perl -MSelecto::Perl::Northwind::Database -e 1 >/dev/null 2>&1; then mise exec -- perl -Ilib -c examples/northwind.pl; else echo \"Skipping optional Northwind example compile (fixture not checked out)\"; fi; mise exec -- perl -S prove -lr t && mise exec -- perl Makefile.PL && make test'"

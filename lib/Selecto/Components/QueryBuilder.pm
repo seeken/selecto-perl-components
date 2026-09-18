@@ -425,6 +425,8 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                         axis => $measure_config->{resolved_axis} // 'left',
                         stack => $measure_config->{stack} // '',
                         color => $measure_config->{color} // '',
+                        (defined($measure_config->{fill_opacity})
+                            ? (fill_opacity => $measure_config->{fill_opacity}) : ()),
                         transforms => $measure_config->{transforms} // [],
                         raw_unit => {kind => 'count'},
                         unit => $measure_config->{unit} // {kind => 'count'},
@@ -452,6 +454,8 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                 axis => $measure_config->{resolved_axis} // 'left',
                 stack => $measure_config->{stack} // '',
                 color => $measure_config->{color} // '',
+                (defined($measure_config->{fill_opacity})
+                    ? (fill_opacity => $measure_config->{fill_opacity}) : ()),
                 transforms => $measure_config->{transforms} // [],
                 (defined($measure_config->{raw_unit})
                     ? (raw_unit => $measure_config->{raw_unit}) : ()),
@@ -598,11 +602,11 @@ sub _with_filters ($query, $state, $config, $domain) {
             my $when = Selecto::Expression->field($conditional->{when_field});
             my $present = _filter_expression(
                 Selecto::Expression->field($conditional->{present_field}),
-                $op, $value, $value_end,
+                $op, $value, $value_end, $filter->{values},
             );
             my $absent = _filter_expression(
                 Selecto::Expression->field($conditional->{absent_field}),
-                $op, $value, $value_end,
+                $op, $value, $value_end, $filter->{values},
             );
             $expression = Selecto::Expression->any([
                 Selecto::Expression->all([
@@ -616,7 +620,7 @@ sub _with_filters ($query, $state, $config, $domain) {
             my $operand = $filter->{grouped}
                 ? _group_expression({field => $field, type => $type}, $state->group_configs->{$field} // {})
                 : _temporal_expression($field, $type);
-            $expression = _filter_expression($operand, $op, $value, $value_end);
+            $expression = _filter_expression($operand, $op, $value, $value_end, $filter->{values});
         }
         if (defined($filter->{clause})) {
             push @clause_order, $filter->{clause}
@@ -638,13 +642,17 @@ sub _with_filters ($query, $state, $config, $domain) {
     return $query->where(@expressions == 1 ? $expressions[0] : Selecto::Expression->all(\@expressions));
 }
 
-sub _filter_expression ($operand, $op, $value, $value_end) {
+sub _filter_expression ($operand, $op, $value, $value_end, $membership_values = undef) {
     if ($op eq 'in') {
-        my @values = grep { length } map { _trim($_) } split /,/, $value;
+        my @values = ref($membership_values) eq 'ARRAY'
+            ? @$membership_values
+            : grep { length } map { _trim($_) } split /,/, $value;
         return Selecto::Expression->in($operand, \@values);
     }
     if ($op eq 'not_in') {
-        my @values = grep { length } map { _trim($_) } split /,/, $value;
+        my @values = ref($membership_values) eq 'ARRAY'
+            ? @$membership_values
+            : grep { length } map { _trim($_) } split /,/, $value;
         return Selecto::Expression->not(Selecto::Expression->in($operand, \@values));
     }
     return Selecto::Expression->between($operand, $value, $value_end)

@@ -10,6 +10,7 @@ use Selecto::Components::Renderer::Markup;
 use Selecto::Components::Renderer::Debug ();
 use Selecto::Components::RowActions ();
 use Selecto::Analytics::Pipeline ();
+use Selecto::Components::Graph::Colors ();
 
 sub _results ($class, $model) {
     return '<div class="sc-empty"><h2>Query unavailable</h2><p>Correct the controls and try again.</p></div>'
@@ -770,16 +771,17 @@ sub _graph ($class, $result, $model) {
     }
     @series_values = ({key => '__all', label => ''}) unless $series_dimension;
     my @labels = map { $_->{label} } @points;
-    my @palette = (
-        '#55d6be', '#5b8ff9', '#f6bd16', '#e8684a', '#9270ca', '#6dc8ec',
-        '#ff9d4d', '#269a99', '#ff99c3', '#5d7092', '#f08bb4', '#78d3f8',
-    );
+    my $assistant = $model->{config}->query_assistant // {};
+    my $palettes = Selecto::Components::Graph::Colors->palettes($assistant->{palettes});
+    my $palette_id = $model->{state}->graph_palette // 'default';
+    my $resolved_palette_id = $palette_id eq 'auto' || !exists($palettes->{$palette_id})
+        ? 'default' : $palette_id;
+    my @palette = @{$palettes->{$resolved_palette_id}};
     my @datasets;
     my (%display_values, %raw_values);
     my %axes;
     my $global_type = $model->{state}->chart_type;
     my $mixed_series = $global_type =~ /\A(?:bar|line|area)\z/ ? 1 : 0;
-    my $dataset_index = 0;
     for my $measure_index (0 .. $#measures) {
         my $measure = $measures[$measure_index];
         for my $series_index (0 .. $#series_values) {
@@ -815,8 +817,13 @@ sub _graph ($class, $result, $model) {
                 $raw_values{$measure->{key}}[$record_index] = $raw[$point_index];
             }
             my $configured_color = $series->{color} // '';
-            my $color = length($configured_color) && !$series_dimension
-                ? $configured_color : $palette[$dataset_index % @palette];
+            my $series_identity = $series->{id} // 'series_' . ($measure_index + 1);
+            my $color = Selecto::Components::Graph::Colors->resolve_series(
+                color => $series_dimension ? '' : $configured_color,
+                palette => $palette_id,
+                palettes => $assistant->{palettes},
+                series_id => $series_identity . ($series_dimension ? ':' . $breakout->{key} : ''),
+            );
             my $data = \@values;
             if ($global_type eq 'scatter') {
                 my @scatter_points = map {
@@ -854,10 +861,19 @@ sub _graph ($class, $result, $model) {
                 label => $dataset_label,
                 data => $data,
                 backgroundColor => $global_type =~ /\A(?:pie|doughnut)\z/
-                    ? [map { $palette[$_ % @palette] } 0 .. $#points] : $color,
+                    ? [map {
+                        my $record_index = $record_indices[$_];
+                        _category_color(
+                            $model->{state}, $axis_dimensions[0],
+                            defined($record_index) ? $records[$record_index] : undef,
+                            $palette[$_ % @palette],
+                        )
+                    } 0 .. $#points] : $color,
                 borderColor => $color,
                 borderWidth => 2,
-                colorAuto => length($configured_color) && !$series_dimension ? 0 : 1,
+                colorAuto => (length($configured_color) && !$series_dimension)
+                    || $palette_id ne 'auto' ? 0 : 1,
+                fillOpacity => defined($series->{fill_opacity}) ? $series->{fill_opacity} : 0.22,
                 rawData => \@raw,
                 drilldownIndices => \@record_indices,
                 transforms => [map { $_->{type} } @{$series->{transforms} // []}],
@@ -871,7 +887,6 @@ sub _graph ($class, $result, $model) {
                     (length($stack) ? (stack => $stack) : ()),
                 ) : ()),
             };
-            $dataset_index++;
         }
     }
     my @axis_drilldown_indices = $series_dimension
@@ -958,6 +973,21 @@ sub _graph ($class, $result, $model) {
         '<p class="sc-chart-hint">Click a data point or horizontal-axis label to drill down to detail rows.</p>' .
         '<div class="sc-chart-drilldowns" hidden>' . $drilldown_forms . '</div></div>' .
         ($model->{state}->graph_show_table ? $class->_table(\%raw_result, $model) : '');
+}
+
+sub _category_color ($state, $dimension, $record, $fallback) {
+    return $fallback unless $dimension && ref($record) eq 'HASH';
+    my $field = $dimension->{field} // '';
+    my $format = $dimension->{format} // '';
+    my $value = $record->{$dimension->{key}};
+    my $normalized = defined($value) && !ref($value) ? "$value" : '';
+    for my $override (@{$state->graph_category_colors // []}) {
+        return $override->{color}
+            if $override->{field} eq $field
+                && ($override->{format} // '') eq $format
+                && $override->{value} eq $normalized;
+    }
+    return $fallback;
 }
 
 sub _graph_unit_label ($unit) {

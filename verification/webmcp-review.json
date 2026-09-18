@@ -1,0 +1,60 @@
+{
+  "branch": "feat/perl-webmcp-query-editor",
+  "base_revision": "9bf8a584ca6bbf75e0e05cad9c86da2bfff1d370",
+  "original_feature_revision": "fbb046ab7d5de0f9956b596a21ac4c8eefcce6a4",
+  "selecto_perl_revision": "82e6186ebe4f7cc2da8dfba5fc22e3650f5997b4",
+  "verification": {
+    "command": "mise run verify",
+    "result": "pass",
+    "perl": "5.40.2",
+    "browser_tests": 99,
+    "perl_source_tests": 2364,
+    "perl_built_module_tests": 2364,
+    "generated_assets": "pass",
+    "syntax": "pass",
+    "manifest": "pass"
+  },
+  "live_demo": {
+    "result": "pass",
+    "fixture": "independently authored synthetic Northwind data",
+    "transports": [
+      "HTTP",
+      "WebSocket"
+    ],
+    "database": "PostgreSQL",
+    "registered_tools": [
+      "get_query_context",
+      "search_choices",
+      "validate_query_target",
+      "apply_query_draft",
+      "undo_query_draft"
+    ],
+    "statement_counts": {
+      "initial": 2,
+      "afterApply": 2,
+      "afterUndo": 2,
+      "afterExplicitRun": 4
+    },
+    "builder_expanded_after_apply": true,
+    "results_unchanged_until_run": true,
+    "strict_csp": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' ws: wss:; img-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "browser_errors": [],
+    "chart_labels": [
+      "Camp Pantry",
+      "Harbor Goods",
+      "Orchard Box",
+      "Trail Drinks"
+    ],
+    "chart_values": [
+      30,
+      61,
+      28,
+      68.5
+    ],
+    "cleanup": "server stopped and disposable database removed"
+  },
+  "proof_limits": [
+    "Browser tests and live demo mock document.modelContext; native browser WebMCP registration is unverified.",
+    "Evidence covers the configured synthetic fixtures and tested draft operations, not arbitrary host policies or databases."
+  ]
+}

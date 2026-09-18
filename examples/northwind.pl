@@ -8,6 +8,7 @@ use File::Spec ();
 use Mojolicious::Lite -signatures;
 use Selecto;
 use Selecto::Components ();
+use Selecto::Components::QueryAssistant::Store ();
 use Selecto::Engine ();
 use Selecto::Expression ();
 use Selecto::Query ();
@@ -23,6 +24,7 @@ my $dbh = Selecto::Perl::Northwind::Database->connect($ENV{DATABASE_URL}, driver
 my $adapter_name = Selecto::Perl::Northwind::Database->adapter_name($driver);
 my $adapter = Selecto->adapter($adapter_name => (dbh => $dbh));
 my $products_domain = Selecto::Perl::Northwind::Domains->load($northwind_root, 'products');
+my $query_drafts = Selecto::Components::QueryAssistant::Store->new;
 
 app->secrets(['selecto-perl-components-development-only']);
 app->hook(after_dispatch => sub ($controller) {
@@ -51,6 +53,13 @@ plugin 'Selecto::Components' => {
                 { id => 'inventory_value', label => 'Sum of unit prices', aggregate => 'sum', field => 'unit_price' },
                 { id => 'highest_price', label => 'Highest unit price', aggregate => 'max', field => 'unit_price' },
             ],
+            query_assistant => {
+                store => $query_drafts,
+                policy_version => 'northwind-demo-v1',
+                palettes => {
+                    northwind => ['#2563eb', '#f97316', '#16a34a', '#9333ea'],
+                },
+            },
             show_sql => 1,
         },
         orders => {
@@ -68,6 +77,13 @@ plugin 'Selecto::Components' => {
                 { id => 'order_count', label => 'Order count', aggregate => 'count' },
                 { id => 'total_freight', label => 'Total freight', aggregate => 'sum', field => 'freight' },
             ],
+            query_assistant => {
+                store => $query_drafts,
+                policy_version => 'northwind-demo-v1',
+                palettes => {
+                    northwind => ['#2563eb', '#f97316', '#16a34a', '#9333ea'],
+                },
+            },
             show_sql => 1,
         },
     },
