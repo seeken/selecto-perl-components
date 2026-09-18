@@ -16,6 +16,7 @@ use Selecto::Components::Controller::Explorer ();
 use Selecto::Components::Controller::Lookups ();
 use Selecto::Components::Controller::RecordEditor ();
 use Selecto::Components::Controller::SavedQueries ();
+use Selecto::Components::Controller::QueryAssistant ();
 use Selecto::Components::Explorer ();
 use Selecto::Components::Renderer ();
 use Selecto::Components::Util qw(humanize);
@@ -199,6 +200,24 @@ sub _routes (
     $routes->post($route_path . '/saved-queries/delete')->to(cb => sub ($controller) {
         return Selecto::Components::Controller::SavedQueries::_delete_saved_query($controller, $explorer);
     });
+
+    if ($config->query_assistant_enabled) {
+        $routes->post($route_path . '/assistant/drafts')->to(cb => sub ($controller) {
+            return Selecto::Components::Controller::QueryAssistant->create(
+                $controller, $explorer, $origin_check,
+            );
+        });
+        $routes->post($route_path . '/assistant/drafts/:selecto_assistant_draft/tools/:selecto_assistant_tool')->to(cb => sub ($controller) {
+            return Selecto::Components::Controller::QueryAssistant->tool(
+                $controller, $explorer, $origin_check,
+            );
+        });
+        $routes->post($route_path . '/assistant/drafts/:selecto_assistant_draft/sync')->to(cb => sub ($controller) {
+            return Selecto::Components::Controller::QueryAssistant->sync(
+                $controller, $explorer, $origin_check,
+            );
+        });
+    }
 
     $routes->websocket($route_path . '/ws')->to(cb => sub ($controller) {
         unless ($origin_check->($controller)) {

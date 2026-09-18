@@ -74,6 +74,7 @@
 
   function markBuilderDirty(root) {
     if (!root) return;
+    root.dataset.scEditGeneration = String(Number(root.dataset.scEditGeneration || "0") + 1);
     if (!root.matches("[data-sc-builder]")) root = root.closest("[data-sc-builder]");
     if (!root) return;
     root.classList.add("is-dirty");
@@ -140,14 +141,18 @@
     var limit = root.querySelector("[data-sc-limit]");
     if (limit) {
       var options = Array.from(limit.options);
+      var maximum = options.reduce(function (value, option) {
+        return Math.max(value, Number(option.value) || 0);
+      }, 0);
+      var graphMinimum = Math.min(250, maximum);
       options.forEach(function (option) {
-        var tooSmall = Number(option.value) < 250;
+        var tooSmall = Number(option.value) < graphMinimum;
         option.hidden = graphActive && tooSmall;
         option.disabled = graphActive && tooSmall;
       });
-      if (graphActive && Number(limit.value) < 250) {
+      if (graphActive && Number(limit.value) < graphMinimum) {
         var next = options.find(function (option) { return Number(option.value) >= 500; }) ||
-          options.find(function (option) { return Number(option.value) >= 250; }) ||
+          options.find(function (option) { return Number(option.value) >= graphMinimum; }) ||
           options[options.length - 1];
         if (next) limit.value = next.value;
       }

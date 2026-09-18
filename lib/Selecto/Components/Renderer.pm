@@ -88,6 +88,10 @@ sub surface ($class, $model) {
         {kind => 'domain', id => $config->id, attribute => 'title'},
     );
     my $builder_id = _h($config->id);
+    my $assistant = $config->query_assistant_enabled
+        ? ' data-sc-query-assistant="' . _h($config->path . '/assistant/drafts') .
+          '" data-sc-query-assistant-csrf="' . _h($model->{csrf_token} // '') . '"'
+        : '';
     my $tray_content_id = 'selecto-builder-tray-content-' . $builder_id;
     my $builder_toggle = '<button class="sc-builder-toggle" type="button" data-sc-builder-toggle ' .
         'data-sc-builder-id="' . $builder_id . '" aria-controls="' . $tray_content_id .
@@ -97,7 +101,7 @@ sub surface ($class, $model) {
         ($builder_collapsed ? '&#8250;' : '&#8249;') . '</span></button>';
     my $connection = '<span class="sc-connection" data-selecto-connection role="status" ' .
         'aria-live="polite" aria-atomic="true">Connecting</span>';
-    return '<section id="selecto-surface-' . _h($config->id) . '" class="sc-surface" data-selecto-url="' .
+    return '<section id="selecto-surface-' . _h($config->id) . '" class="sc-surface"' . $assistant . ' data-selecto-url="' .
         _h($model->{canonical_url}) . '" data-sc-query-params="' .
         ($query_params ? 'enabled' : 'disabled') . '" data-sc-chart-src="' .
         _h('/selecto-components/chart.umd.min.js?v=' . asset_revision()) . '">' .
