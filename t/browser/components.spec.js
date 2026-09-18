@@ -544,9 +544,9 @@ test("a reconnecting Explorer keeps drilldown and Back inside browser history", 
     window.nativeSubmitCalled = false;
     HTMLFormElement.prototype.submit = function () { window.nativeSubmitCalled = true; };
     const form = document.querySelector("[data-drilldown]");
-    // Model the WebSocket extension's bubbling submit listener while its
-    // connection is reconnecting. It queues the message and prevents HTTP.
-    form.addEventListener("submit", event => event.preventDefault());
+    // This deliberately models the short interval before HTMX has attached
+    // its listener to a freshly swapped form. Selecto itself must prevent a
+    // full document request while leaving the event available to HTMX.
     form.requestSubmit();
   });
   await expect.poll(() => page.url()).toContain("view=detail");
