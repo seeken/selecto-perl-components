@@ -169,7 +169,23 @@
       parseInt(match[3], 16) + "," + alpha + ")";
   }
 
-  function chartOptions(root, type) {
+  function formatChartValue(value, unit) {
+    if (value === null || typeof value === "undefined") return "—";
+    unit = unit || {};
+    if (unit.kind === "currency" && unit.code) {
+      try {
+        return new Intl.NumberFormat(undefined, {
+          style: "currency", currency: unit.code, maximumFractionDigits: 2
+        }).format(value);
+      } catch (_error) {}
+    }
+    if (unit.kind === "percentage") return Number(value).toLocaleString() + "%";
+    if (unit.kind === "count") return Number(value).toLocaleString(undefined, {maximumFractionDigits: 0});
+    var formatted = Number(value).toLocaleString(undefined, {maximumFractionDigits: 3});
+    return unit.code ? formatted + " " + unit.code : formatted;
+  }
+
+  function chartOptions(root, type, data) {
     var styles = window.getComputedStyle(root);
     var ink = styles.getPropertyValue("--sc-ink").trim() || "#dce6e8";
     var muted = styles.getPropertyValue("--sc-muted").trim() || "#9fb0b3";
@@ -184,6 +200,16 @@
           if (!items.length) return "";
           var raw = items[0].raw;
           return raw && raw.label ? raw.label : items[0].label;
+        }, label: function (context) {
+          var dataset = context.dataset || {};
+          var value = context.parsed && typeof context.parsed.y !== "undefined"
+            ? context.parsed.y : context.raw;
+          return (dataset.label ? dataset.label + ": " : "") + formatChartValue(value, dataset.unit);
+        }, afterLabel: function (context) {
+          var dataset = context.dataset || {};
+          if (!dataset.transforms || !dataset.transforms.length || !dataset.rawData) return "";
+          var rawValue = dataset.rawData[context.dataIndex];
+          return rawValue === null || typeof rawValue === "undefined" ? "Raw: —" : "Raw: " + rawValue;
         }}}
       },
       onClick: function (_event, elements) {
@@ -200,7 +226,22 @@
         grid: {color: chartColorWithAlpha(border, 0.45)},
         border: {color: border}
       };
-      options.scales = {x: Object.assign({}, axis), y: Object.assign({}, axis, {beginAtZero: true})};
+      options.scales = {x: Object.assign({}, axis)};
+      var axes = data && data.axes ? data.axes : {y: {side: "left"}};
+      Object.keys(axes).forEach(function (axisId) {
+        var definition = axes[axisId] || {};
+        options.scales[axisId] = Object.assign({}, axis, {
+          beginAtZero: true,
+          position: definition.side === "right" ? "right" : "left",
+          title: {display: Boolean(definition.label), text: definition.label || "", color: ink}
+        });
+        options.scales[axisId].ticks = Object.assign({}, axis.ticks, {
+          callback: function (value) { return formatChartValue(value, definition.unit); }
+        });
+        if (definition.side === "right") {
+          options.scales[axisId].grid = Object.assign({}, axis.grid, {drawOnChartArea: false});
+        }
+      });
     }
     if (type === "horizontal_bar") options.indexAxis = "y";
     if (type === "stacked_bar") {
@@ -228,8 +269,9 @@
         dataset.borderColor = brand;
         dataset.backgroundColor = brand;
       }
-      if (type === "line" || type === "area") dataset.tension = 0.28;
-      if (type === "area") {
+      var seriesType = dataset.scType || type;
+      if (seriesType === "line" || seriesType === "area") dataset.tension = 0.28;
+      if (seriesType === "area") {
         dataset.fill = "origin";
         dataset.backgroundColor = chartColorWithAlpha(dataset.borderColor, 0.22);
       }
@@ -243,7 +285,7 @@
       var chart = new window.Chart(canvas, {
         type: chartJsType(type),
         data: data,
-        options: chartOptions(root, type)
+        options: chartOptions(root, type, data)
       });
       chartInstances.set(root, chart);
       root.classList.add("is-ready");
@@ -1665,6 +1707,17 @@
   }
 
   function appendMeasureConfig(grid, type, label, selected) {
+    var seriesId = document.createElement("input");
+    seriesId.type = "hidden";
+    seriesId.name = "measure_series_id";
+    var usedSeriesIds = new Set(Array.from(
+      document.querySelectorAll('input[name="measure_series_id"]'),
+      function (input) { return input.value; }
+    ));
+    var nextSeries = 1;
+    while (usedSeriesIds.has("series_" + nextSeries)) nextSeries += 1;
+    seriesId.value = "series_" + nextSeries;
+    grid.appendChild(seriesId);
     var functions = measureFunctionsForType(type);
     if (!functions.some(function (entry) { return entry[0] === selected; })) selected = functions[0][0];
     var functionSelect = document.createElement("select");
@@ -1685,6 +1738,40 @@
     nulls.setAttribute("aria-label", "NULL handling for " + label);
     appendOptions(nulls, [["0", "Keep SQL SUM behavior"], ["1", "Treat NULL as 0"]], "0");
     appendConfigLabel(grid, "NULL handling", nulls, "data-sc-measure-sum");
+
+    var chartType = document.createElement("select");
+    chartType.name = "measure_chart_type";
+    chartType.setAttribute("aria-label", "Series style for " + label);
+    appendOptions(chartType, [
+      ["auto", "Use chart default"], ["bar", "Bar"], ["line", "Line"], ["area", "Area"]
+    ], "auto");
+    appendConfigLabel(grid, "Series style", chartType);
+
+    var axis = document.createElement("select");
+    axis.name = "measure_axis";
+    axis.setAttribute("aria-label", "Y axis for " + label);
+    appendOptions(axis, [["auto", "Automatic"], ["left", "Left"], ["right", "Right"]], "auto");
+    appendConfigLabel(grid, "Y axis", axis);
+
+    var transform = document.createElement("select");
+    transform.name = "measure_transform";
+    transform.setAttribute("data-sc-measure-transform", "");
+    transform.setAttribute("aria-label", "Analytical transform for " + label);
+    appendOptions(transform, [
+      ["", "None"], ["percent_of_total", "Percent of total"],
+      ["percent_change", "Percent change"], ["index_to_first", "Index to first value"],
+      ["cumulative", "Cumulative total"], ["moving_average", "Moving average"]
+    ], "");
+    appendConfigLabel(grid, "Transform", transform);
+
+    var windowInput = document.createElement("input");
+    windowInput.type = "number";
+    windowInput.name = "measure_transform_window";
+    windowInput.min = "2";
+    windowInput.max = "365";
+    windowInput.value = "3";
+    windowInput.setAttribute("aria-label", "Moving-average window for " + label);
+    appendConfigLabel(grid, "Moving window", windowInput, "data-sc-measure-transform-window");
   }
 
   function syncPickerConfig(item) {
@@ -1702,6 +1789,12 @@
       item.querySelectorAll("[data-sc-measure-buckets]").forEach(function (node) { node.hidden = !measureBuckets; });
       item.querySelectorAll("[data-sc-measure-sum]").forEach(function (node) {
         node.hidden = measureFunction.value !== "sum";
+      });
+    }
+    var measureTransform = item.querySelector("[data-sc-measure-transform]");
+    if (measureTransform) {
+      item.querySelectorAll("[data-sc-measure-transform-window]").forEach(function (node) {
+        node.hidden = measureTransform.value !== "moving_average";
       });
     }
   }
@@ -2209,7 +2302,7 @@
       updateFilterDraft(event.target.closest("[data-sc-filter-set-item], [data-sc-filter-condition]"));
     } else if (event.target.matches('[name="query_library_view"], [name="query_library_segment"]')) {
       refreshFilterBadge(builder);
-    } else if (event.target.matches("[data-sc-group-format], [data-sc-measure-function]")) {
+    } else if (event.target.matches("[data-sc-group-format], [data-sc-measure-function], [data-sc-measure-transform]")) {
       syncPickerConfig(event.target.closest("[data-sc-picker-set-item]"));
     }
     markBuilderDirty(builder);

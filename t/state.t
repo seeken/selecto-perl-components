@@ -454,7 +454,32 @@ is_deeply $multiple_measures->measures, ['count', 'total_price'],
     'measure order is retained';
 is_deeply $multiple_measures->measure_configs->{total_price}, {
     alias => 'Average price', function => 'avg', bucket_ranges => '', ignore_nulls => 0,
+    series_id => 'series_2', chart_type => 'auto', axis => 'auto',
+    raw_unit => {kind => 'currency', code => 'USD'},
+    unit => {kind => 'currency', code => 'USD'}, behavior => 'flow', transforms => [],
 }, 'each selected measure retains independent configuration';
+my $repeated_measure = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
+    measure => ['total_price', 'total_price'],
+    measure_alias => ['Revenue', 'Average revenue'],
+    measure_function => ['sum', 'avg'],
+});
+ok $repeated_measure->valid, 'the same measure can be selected more than once';
+is_deeply $repeated_measure->measures, ['total_price', 'total_price'],
+    'repeated measure order is retained';
+is_deeply $repeated_measure->measure_config_list, [
+    {alias => 'Revenue', function => 'sum', bucket_ranges => '', ignore_nulls => 0,
+        series_id => 'series_1', chart_type => 'auto', axis => 'auto',
+        resolved_axis => 'left', raw_unit => {kind => 'currency', code => 'USD'},
+        unit => {kind => 'currency', code => 'USD'}, behavior => 'flow', transforms => []},
+    {alias => 'Average revenue', function => 'avg', bucket_ranges => '', ignore_nulls => 0,
+        series_id => 'series_2', chart_type => 'auto', axis => 'auto',
+        resolved_axis => 'left', raw_unit => {kind => 'currency', code => 'USD'},
+        unit => {kind => 'currency', code => 'USD'}, behavior => 'flow', transforms => []},
+], 'each repeated measure retains independent positional configuration';
+my @repeated_pairs = @{$repeated_measure->query_pairs};
+is scalar(grep { $_ eq 'total_price' } @repeated_pairs), 2,
+    'canonical state serializes both repeated measure instances';
 is $multiple_measures->group_configs->{unit_price}{bucket_ranges}, '0-10, 11+',
     'group bucket ranges remain aligned with the selected group';
 
@@ -467,12 +492,15 @@ ok $column_measure_by_id{'__row_count__'}, 'a row-count measure is available wit
 is_deeply $column_measure_by_id{unit_price}, {
     path => 'unit_price', label => 'Unit Price', type => 'decimal',
     field => 'unit_price', default_function => 'count',
+    source_unit => {kind => 'currency', code => 'USD'},
+    source_behavior => 'flow', unit => {kind => 'count'},
 }, 'a numeric domain column is available as a configurable measure';
 is_deeply $column_measure_by_id{'category.category_name'}, {
     path => 'category.category_name',
     label => $column_measure_config->field_map($domain)->{'category.category_name'}{label},
     type => 'string',
     field => 'category.category_name', default_function => 'count',
+    unit => {kind => 'count'},
 }, 'a relationship column is available as a configurable measure';
 
 my $colliding_preset_config = Selecto::Components::Config->new(
@@ -511,7 +539,57 @@ is_deeply $column_measures->measures, ['unit_price', 'category.category_name'],
     'column-derived measure order is retained';
 is_deeply $column_measures->measure_configs->{'category.category_name'}, {
     alias => 'Named categories', function => 'count_distinct', bucket_ranges => '', ignore_nulls => 0,
+    series_id => 'series_2', chart_type => 'auto', axis => 'auto',
+    raw_unit => {kind => 'count'}, unit => {kind => 'count'}, behavior => 'flow', transforms => [],
 }, 'relationship-column aggregate configuration is retained';
+
+my $dual_axis_graph = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
+    measure => ['count', 'total_price'],
+    measure_function => ['count', 'sum'],
+    measure_series_id => ['volume', 'revenue'],
+    measure_chart_type => ['bar', 'line'],
+    measure_axis => ['auto', 'auto'],
+});
+ok $dual_axis_graph->valid, 'two incompatible units receive separate automatic axes';
+is_deeply [map { $_->{resolved_axis} } @{$dual_axis_graph->measure_config_list}],
+    ['left', 'right'], 'automatic axis planning is stable and unit-aware';
+is_deeply [map { $_->{series_id} } @{$dual_axis_graph->measure_config_list}],
+    ['volume', 'revenue'], 'submitted stable series identifiers are retained';
+
+my $bad_axis_graph = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
+    measure => ['count', 'total_price'],
+    measure_function => ['count', 'sum'],
+    measure_axis => ['left', 'left'],
+});
+ok !$bad_axis_graph->valid, 'an explicit axis rejects incompatible units';
+like join(' ', @{$bad_axis_graph->errors}), qr/incompatible units/,
+    'manual axis conflict explains the unit incompatibility';
+
+my $transformed_graph = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
+    measure => ['count', 'total_price'],
+    measure_function => ['count', 'sum'],
+    measure_transform => ['percent_of_total', 'moving_average'],
+    measure_transform_window => ['', 7],
+});
+ok $transformed_graph->valid, 'governed graph transforms parse with typed parameters';
+is_deeply $transformed_graph->measure_config_list->[0]{unit},
+    {kind => 'percentage', scale => 'whole'},
+    'a transform changes the series result unit without changing its source column';
+is_deeply $transformed_graph->measure_config_list->[1]{transforms},
+    [{type => 'moving_average', parameters => {window => 7}}],
+    'moving-average window is retained in ordered series state';
+
+my $bad_transform_window = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
+    measure => 'total_price', measure_function => 'sum',
+    measure_transform => 'moving_average', measure_transform_window => 999,
+});
+ok !$bad_transform_window->valid, 'out-of-range transform parameters fail closed';
+like join(' ', @{$bad_transform_window->errors}), qr/window must be from 2 through 365/,
+    'invalid smoothing window has a corrective error';
 
 my $unconfigured_measure_state = Selecto::Components::State->from_input(
     $column_measure_config, $domain, {}

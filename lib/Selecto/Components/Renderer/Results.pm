@@ -7,6 +7,7 @@ use POSIX qw(ceil);
 use Selecto::Components::Renderer::Markup;
 use Selecto::Components::Renderer::Debug ();
 use Selecto::Components::RowActions ();
+use Selecto::Analytics::Pipeline ();
 
 sub _results ($class, $model) {
     return '<div class="sc-empty"><h2>Query unavailable</h2><p>Correct the controls and try again.</p></div>'
@@ -639,12 +640,36 @@ sub _graph ($class, $result, $model) {
         '#ff9d4d', '#269a99', '#ff99c3', '#5d7092', '#f08bb4', '#78d3f8',
     );
     my @datasets;
+    my (%display_values, %raw_values);
+    my %axes;
+    my $global_type = $model->{state}->chart_type;
+    my $mixed_series = $global_type =~ /\A(?:bar|line|area)\z/ ? 1 : 0;
     for my $measure_index (0 .. $#measures) {
         my $measure = $measures[$measure_index];
-        my @values = map { _number($_->{$measure->{key}}) } @records;
+        my @aggregate_values = map { $_->{$measure->{key}} } @records;
+        my $series = $measure->{series} // {};
+        my $transforms = $series->{transforms} // [];
+        my $analysis = @$transforms
+            ? Selecto::Analytics::Pipeline->apply(
+                \@aggregate_values,
+                $transforms,
+                $series->{raw_unit},
+                $series->{behavior},
+            )
+            : {
+                unit => $series->{unit},
+                points => [map {
+                    my $value = _number($_);
+                    +{raw_value => $value, value => $value, derivation => []}
+                } @aggregate_values],
+            };
+        my @values = map { $_->{value} } @{$analysis->{points}};
+        my @raw = map { $_->{raw_value} } @{$analysis->{points}};
+        $display_values{$measure->{key}} = \@values;
+        $raw_values{$measure->{key}} = \@raw;
         my $color = $palette[$measure_index % @palette];
         my $data = \@values;
-        if ($model->{state}->chart_type eq 'scatter') {
+        if ($global_type eq 'scatter') {
             my @points = map {
                 my $index = $_;
                 my $raw_x = @dimensions
@@ -657,38 +682,67 @@ sub _graph ($class, $result, $model) {
             } 0 .. $#records;
             $data = \@points;
         }
+        my $series_type = $series->{chart_type} // 'auto';
+        $series_type = $global_type if $series_type eq 'auto';
+        my $resolved_axis = $series->{axis} // 'left';
+        my $axis_id = $resolved_axis eq 'right' ? 'y1' : 'y';
+        if ($mixed_series) {
+            $axes{$axis_id} //= {
+                side => $resolved_axis,
+                label => _graph_unit_label($series->{unit}),
+                (defined($series->{unit}) ? (unit => $series->{unit}) : ()),
+            };
+        }
         push @datasets, {
             label => $measure->{label},
             data => $data,
-            backgroundColor => $model->{state}->chart_type =~ /\A(?:pie|doughnut)\z/
+            backgroundColor => $global_type =~ /\A(?:pie|doughnut)\z/
                 ? [map { $palette[$_ % @palette] } 0 .. $#records] : $color,
             borderColor => $color,
             borderWidth => 2,
+            rawData => \@raw,
+            transforms => [map { $_->{type} } @{$series->{transforms} // []}],
+            unit => $analysis->{unit},
+            ($mixed_series ? (
+                type => $series_type eq 'area' ? 'line' : $series_type,
+                scType => $series_type,
+                yAxisID => $axis_id,
+                seriesId => $series->{id} // 'series_' . ($measure_index + 1),
+            ) : ()),
         };
     }
-    my $chart_data = encode_json({labels => \@labels, datasets => \@datasets});
+    my $chart_data = encode_json({
+        labels => \@labels,
+        datasets => \@datasets,
+        ($mixed_series ? (axes => \%axes) : ()),
+    });
     my @values = map {
-        my $record = $_;
-        map { _number($record->{$_->{key}}) } @measures
-    } @records;
+        my $record_index = $_;
+        map { _number($display_values{$_->{key}}[$record_index]) } @measures
+    } 0 .. $#records;
     my $max = 0;
     for my $value (@values) {
         $max = $value if $value > $max;
     }
     $max = 1 unless $max > 0;
     my $bars = join '', map {
-        my $record = $_;
+        my $record_index = $_;
+        my $record = $records[$record_index];
         my $group_label = join(' · ', map { _display($record->{$_->{key}}) } @dimensions);
         join '', map {
             my $measure = $_;
-            my $value = _number($record->{$measure->{key}});
+            my $display_value = $display_values{$measure->{key}}[$record_index];
+            my $raw_value = $raw_values{$measure->{key}}[$record_index];
+            my $value = _number($display_value);
             my $label = length($group_label)
                 ? $group_label . ' · ' . $measure->{label} : $measure->{label};
+            my $raw_note = @{$measure->{series}{transforms} // []}
+                ? '<small>Raw: ' . _h(_display($raw_value)) . '</small>' : '';
             '<li><span class="sc-graph-label">' . _h($label) . '</span><meter min="0" max="' .
             _h($max) . '" value="' . _h($value) . '"></meter><strong>' .
-            _h(_display($record->{$measure->{key}})) . '</strong></li>'
+            _h(_display($display_value)) . '</strong>' . $raw_note . '</li>'
         } @measures
-    } @records;
+    } 0 .. $#records;
     $bars ||= '<li class="sc-empty-cell">No rows matched this query.</li>';
     my $drilldown_forms = '';
     my $method = $model->{config}->query_params_enabled($model->{domain}) ? 'get' : 'post';
@@ -713,6 +767,17 @@ sub _graph ($class, $result, $model) {
         '<p class="sc-chart-hint">Click a data point to drill down to detail rows.</p>' .
         '<div class="sc-chart-drilldowns" hidden>' . $drilldown_forms . '</div></div>' .
         $class->_table($result, $model);
+}
+
+sub _graph_unit_label ($unit) {
+    return '' unless ref($unit) eq 'HASH';
+    my $kind = $unit->{kind} // '';
+    return 'Count' if $kind eq 'count';
+    return $unit->{code} // 'Currency' if $kind eq 'currency';
+    return 'Percent' if $kind eq 'percentage';
+    return ucfirst($kind) . (defined($unit->{code}) ? ' (' . $unit->{code} . ')' : '')
+        if length($kind);
+    return '';
 }
 
 sub _drilldown_control ($class, $model, $pairs, $label_html, $level, $options = undef) {

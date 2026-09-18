@@ -73,14 +73,25 @@ sub _selection_hidden ($kind, $values, $configs, $config_list = undef) {
 
 sub _measure_selection_hidden ($state) {
     return join '', map {
-        my $measure = $_;
-        my $config = $state->measure_configs->{$measure} // {};
+        my $index = $_;
+        my $measure = $state->measures->[$index];
+        my $config = ($state->measure_config_list // [])->[$index]
+            // $state->measure_configs->{$measure} // {};
+        my $transform = ref($config->{transforms}) eq 'ARRAY'
+            && ref($config->{transforms}[0]) eq 'HASH'
+            ? $config->{transforms}[0] : {};
         _hidden('measure', $measure) .
             _hidden('measure_alias', $config->{alias} // '') .
             _hidden('measure_function', $config->{function} // 'count') .
             _hidden('measure_bucket_ranges', $config->{bucket_ranges} // '') .
-            _hidden('measure_ignore_nulls', $config->{ignore_nulls} ? 1 : 0)
-    } @{$state->measures};
+            _hidden('measure_ignore_nulls', $config->{ignore_nulls} ? 1 : 0) .
+            _hidden('measure_series_id', $config->{series_id} // 'series_' . ($index + 1)) .
+            _hidden('measure_chart_type', $config->{chart_type} // 'auto') .
+            _hidden('measure_axis', $config->{axis} // 'auto') .
+            _hidden('measure_transform', $transform->{type} // '') .
+            _hidden('measure_transform_window', ref($transform->{parameters}) eq 'HASH'
+                ? $transform->{parameters}{window} // '' : '')
+    } 0 .. $#{$state->measures};
 }
 sub _limit_options ($state, $config) {
     my %seen;

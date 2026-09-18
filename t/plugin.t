@@ -1030,11 +1030,13 @@ $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&field_alias=
     ->element_exists('[data-sc-picker-kind="group"] [data-field="unit_price"] input[name="group_bucket_ranges"][value="0-10, 11+"]')
     ->content_like(qr/Price counts: 0-10/);
 
-$t->get_ok('/explore/products?q=1&view=graph&chart_type=area&field=product_name&group=category.category_name&measure=count&measure_function=count&measure=total_price&measure_function=sum&order=product_name&direction=asc&limit=25&page=1')
+$t->get_ok('/explore/products?q=1&view=graph&chart_type=area&field=product_name&group=category.category_name&measure=count&measure_function=count&measure_series_id=volume&measure_chart_type=bar&measure_axis=auto&measure_transform=&measure_transform_window=&measure=total_price&measure_function=sum&measure_series_id=revenue&measure_chart_type=line&measure_axis=auto&measure_transform=moving_average&measure_transform_window=2&order=product_name&direction=asc&limit=25&page=1')
     ->status_is(200)
     ->element_exists('.sc-chart[aria-label="Selected measures by selected groups"]')
     ->element_exists('[data-sc-graph-options]:not([disabled]) select[name="chart_type"] option[value="area"][selected]')
     ->element_exists('[data-sc-chart][data-chart-type="area"][data-chart-data] canvas[role="img"]')
+    ->element_exists('[data-sc-picker-kind="measure"] [data-field="total_price"] select[name="measure_transform"] option[value="moving_average"][selected]')
+    ->element_exists('[data-sc-picker-kind="measure"] [data-field="total_price"] input[name="measure_transform_window"][value="2"]')
     ->element_exists('form[data-sc-graph-drilldown="0"] input[name="view"][value="detail"]')
     ->element_exists('form[data-sc-graph-drilldown="0"] input[name="page"][value="1"]')
     ->content_like(qr/Product count/)
@@ -1049,6 +1051,20 @@ is_deeply [map { $_->{label} } @{$chart_data->{datasets}}],
     ['Product count', 'Total price'], 'every selected measure becomes a chart dataset';
 is_deeply $chart_data->{datasets}[0]{data}, [2, 4],
     'chart dataset carries numeric measure values';
+is_deeply $chart_data->{datasets}[1]{data}, [10, 15],
+    'server-side moving average produces the displayed series values';
+is_deeply $chart_data->{datasets}[1]{rawData}, [10, 20],
+    'transformed chart datasets preserve their raw aggregate values';
+is_deeply $chart_data->{datasets}[1]{transforms}, ['moving_average'],
+    'graph payload describes the applied analytical transform';
+is_deeply [map { $_->{seriesId} } @{$chart_data->{datasets}}],
+    ['volume', 'revenue'], 'chart datasets retain stable series identifiers';
+is_deeply [map { $_->{scType} } @{$chart_data->{datasets}}],
+    ['bar', 'line'], 'a graph frame can mix configured bar and line series';
+is_deeply [map { $_->{yAxisID} } @{$chart_data->{datasets}}],
+    ['y', 'y1'], 'incompatible units are assigned to opposite Y axes';
+is $chart_data->{axes}{y}{label}, 'Count', 'left axis describes its count unit';
+is $chart_data->{axes}{y1}{label}, 'USD', 'right axis describes its currency unit';
 
 for my $chart_type (qw(bar horizontal_bar stacked_bar line pie doughnut scatter)) {
     $t->get_ok('/explore/products?q=1&view=graph&chart_type=' . $chart_type .

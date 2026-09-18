@@ -6,6 +6,7 @@ use Selecto::DateFormat ();
 use Selecto::Components::DateShortcut ();
 use Selecto::Components::I18N ();
 use Selecto::Components::Util qw(humanize);
+use Selecto::Analytics::UnitRegistry ();
 
 has [qw(id title path engine_factory)];
 has views         => sub { return [qw(detail aggregate graph)] };
@@ -400,6 +401,10 @@ sub field_catalog ($self, $domain, $options = undef) {
             type => $fields->{$path},
             association => undef,
             internal => $domain->field_is_public($path) ? 0 : 1,
+            (defined($domain->field_unit($path))
+                ? (unit => $domain->field_unit($path)) : ()),
+            (defined($domain->field_behavior($path))
+                ? (behavior => $domain->field_behavior($path)) : ()),
             (defined($link) ? (link => $link) : ()),
             (defined($html_format) ? (html_format => $html_format) : ()),
             ($dimension ? (dimension => {%$dimension}) : ()),
@@ -447,6 +452,10 @@ sub field_catalog ($self, $domain, $options = undef) {
                 association => $association_name,
                 internal => $domain->field_is_public($path) ? 0 : 1,
                 denormalizing => $association->cardinality eq 'many' ? 1 : 0,
+                (defined($domain->field_unit($path))
+                    ? (unit => $domain->field_unit($path)) : ()),
+                (defined($domain->field_behavior($path))
+                    ? (behavior => $domain->field_behavior($path)) : ()),
                 (defined($link) ? (link => $link) : ()),
                 (defined($html_format) ? (html_format => $html_format) : ()),
                 ($dimension ? (dimension => {%$dimension}) : ()),
@@ -585,6 +594,11 @@ sub measures_for_domain ($self, $domain) {
     my $fields = $self->field_map($domain);
     my @measures = map {
         my $measure = $_;
+        my $source = defined($measure->{field}) ? $fields->{$measure->{field}} : undef;
+        my $source_unit = ref($source) eq 'HASH' ? $source->{unit} : undef;
+        my $unit = Selecto::Analytics::UnitRegistry->aggregate_unit(
+            $source_unit, $measure->{aggregate},
+        );
         +{
             %$measure,
             label => $self->localize(
@@ -593,6 +607,10 @@ sub measures_for_domain ($self, $domain) {
             ),
             type => defined($measure->{field}) ? $fields->{$measure->{field}}{type} : 'rows',
             curated => 1,
+            (defined($source_unit) ? (source_unit => $source_unit) : ()),
+            (ref($source) eq 'HASH' && defined($source->{behavior})
+                ? (source_behavior => $source->{behavior}) : ()),
+            (defined($unit) ? (unit => $unit) : ()),
         }
     } grep {
         !defined($_->{field}) || exists($fields->{$_->{field}})
@@ -607,18 +625,27 @@ sub measures_for_domain ($self, $domain) {
             ),
             aggregate => 'count',
             type => 'rows', curated => 0, builtin => 1,
+            unit => {kind => 'count'},
         };
         $seen{'__row_count__'} = 1;
     }
     for my $column (@{$self->field_catalog($domain)}) {
         my $id = $seen{$column->{path}} ? 'field:' . $column->{path} : $column->{path};
+        my $aggregate = _default_measure_function($column->{type});
+        my $unit = Selecto::Analytics::UnitRegistry->aggregate_unit(
+            $column->{unit}, $aggregate,
+        );
         push @measures, {
             id => $id,
             label => $column->{label},
-            aggregate => _default_measure_function($column->{type}),
+            aggregate => $aggregate,
             field => $column->{path},
             type => $column->{type},
             curated => 0,
+            (defined($column->{unit}) ? (source_unit => $column->{unit}) : ()),
+            (defined($column->{behavior})
+                ? (source_behavior => $column->{behavior}) : ()),
+            (defined($unit) ? (unit => $unit) : ()),
         };
         $seen{$id} = 1;
     }
@@ -641,6 +668,11 @@ sub measure_catalog ($self, $domain) {
             type => $measure->{type},
             field => $measure->{field},
             default_function => $measure->{aggregate},
+            (defined($measure->{source_unit})
+                ? (source_unit => $measure->{source_unit}) : ()),
+            (defined($measure->{source_behavior})
+                ? (source_behavior => $measure->{source_behavior}) : ()),
+            (defined($measure->{unit}) ? (unit => $measure->{unit}) : ()),
         }
     } @{$self->measures_for_domain($domain)}];
 }

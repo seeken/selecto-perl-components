@@ -30,7 +30,7 @@ test("the builder tray collapses and expands in place", async ({page}) => {
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
 });
 
-test("columns and filters can add the same field more than once", async ({page}) => {
+test("columns, measures, and filters can add the same field more than once", async ({page}) => {
   await load(page, `
     <form data-sc-builder>
       <div data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
@@ -51,20 +51,77 @@ test("columns and filters can add the same field more than once", async ({page})
         <span data-sc-filter-available-count></span><span data-sc-filter-set-count></span>
         <div data-sc-filter-set><p class="sc-picker-empty">Choose filters.</p></div>
       </div>
+      <div data-sc-picker-root data-sc-picker-kind="measure" data-sc-picker-max="10">
+        <div data-sc-picker-available>
+          <button type="button" data-sc-picker-action="add" data-sc-picker-available-item
+            data-sc-picker-repeatable data-field="customer_price" data-label="Customer Price"
+            data-type="decimal" data-default-function="sum"
+            data-search="customer price decimal">Add Customer Price</button>
+        </div>
+        <span data-sc-picker-available-count></span><span data-sc-picker-set-count></span>
+        <div data-sc-picker-set><p class="sc-picker-empty">Choose measures.</p></div>
+      </div>
     </form>
   `);
 
-  const addColumn = page.locator('[data-sc-picker-action="add"]');
+  const addColumn = page.locator('[data-sc-picker-kind="field"] [data-sc-picker-action="add"]');
   await addColumn.click();
   await addColumn.click();
   await expect(page.locator('[data-sc-picker-set-item][data-field="created_on"]')).toHaveCount(2);
   await expect(addColumn).toBeVisible();
+
+  const addMeasure = page.locator('[data-sc-picker-kind="measure"] [data-sc-picker-action="add"]');
+  await addMeasure.click();
+  await addMeasure.click();
+  await expect(page.locator(
+    '[data-sc-picker-kind="measure"] [data-sc-picker-set-item][data-field="customer_price"]'
+  )).toHaveCount(2);
+  await expect(page.locator('[data-sc-picker-kind="measure"] select[name="measure_chart_type"]')).toHaveCount(2);
+  await expect(page.locator('[data-sc-picker-kind="measure"] select[name="measure_axis"]')).toHaveCount(2);
+  await expect(page.locator('[data-sc-picker-kind="measure"] select[name="measure_transform"]')).toHaveCount(2);
+  expect(await page.locator('[data-sc-picker-kind="measure"] input[name="measure_series_id"]')
+    .evaluateAll(inputs => inputs.map(input => input.value))).toEqual(["series_1", "series_2"]);
+  await page.locator('[data-sc-picker-kind="measure"] details').first().locator("summary").click();
+  const firstTransform = page.locator('[data-sc-picker-kind="measure"] select[name="measure_transform"]').first();
+  await firstTransform.selectOption("moving_average");
+  await expect(page.locator('[data-sc-picker-kind="measure"] [data-sc-measure-transform-window]').first())
+    .toBeVisible();
+  await expect(addMeasure).toBeVisible();
 
   const addFilter = page.locator('[data-sc-filter-action="add"]');
   await addFilter.click();
   await addFilter.click();
   await expect(page.locator('[data-sc-filter-set-item][data-field="created_on"]')).toHaveCount(2);
   await expect(addFilter).toBeVisible();
+});
+
+test("mixed graph series configure independent left and right axes", async ({page}) => {
+  await page.setContent(`
+    <div data-sc-chart data-chart-type="bar"
+      data-chart-data='{"labels":["Jan","Feb"],"axes":{"y":{"side":"left","label":"Count","unit":{"kind":"count"}},"y1":{"side":"right","label":"USD","unit":{"kind":"currency","code":"USD"}}},"datasets":[{"label":"Loads","data":[2,4],"rawData":[2,4],"unit":{"kind":"count"},"type":"bar","scType":"bar","yAxisID":"y"},{"label":"Revenue","data":[10,15],"rawData":[10,20],"unit":{"kind":"currency","code":"USD"},"transforms":["moving_average"],"type":"line","scType":"line","yAxisID":"y1"}]}'
+    ><canvas></canvas></div>
+  `);
+  await page.evaluate(() => {
+    window.Chart = function (_canvas, config) {
+      window.capturedChartConfig = config;
+      window.capturedCurrencyTick = config.options.scales.y1.ticks.callback(1234.5);
+      window.capturedCurrencyTooltip = config.options.plugins.tooltip.callbacks.label({
+        dataset: config.data.datasets[1], parsed: {y: 15}, raw: 15
+      });
+      this.destroy = function () {};
+    };
+  });
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
+  await expect.poll(() => page.evaluate(() => Boolean(window.capturedChartConfig))).toBe(true);
+  const chart = await page.evaluate(() => window.capturedChartConfig);
+  expect(chart.data.datasets.map(dataset => [dataset.type, dataset.yAxisID]))
+    .toEqual([["bar", "y"], ["line", "y1"]]);
+  expect(chart.options.scales.y.position).toBe("left");
+  expect(chart.options.scales.y1.position).toBe("right");
+  expect(chart.options.scales.y1.grid.drawOnChartArea).toBe(false);
+  expect(await page.evaluate(() => window.capturedCurrencyTick)).toContain("1,234.5");
+  expect(await page.evaluate(() => window.capturedCurrencyTooltip)).toContain("Revenue:");
 });
 
 test("an export uses the columns currently selected in the builder", async ({page}) => {
