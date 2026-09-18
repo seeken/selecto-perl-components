@@ -86,6 +86,7 @@
     if (!root) return;
     if (!root.matches("[data-sc-builder]")) root = root.closest("[data-sc-builder]");
     if (!root) return;
+    root.dataset.scEditGeneration = String(Number(root.dataset.scEditGeneration || "0") + 1);
     root.classList.add("is-dirty");
     var pending = root.querySelector("[data-sc-builder-pending]");
     if (pending) pending.textContent = "Pending changes";
@@ -128,7 +129,7 @@
     summary: ["group", "group_alias", "group_format", "group_bucket_ranges", "group_prefix_length",
       "group_exclude_articles", "measure", "measure_alias", "measure_function", "measure_bucket_ranges",
       "measure_ignore_nulls", "measure_series_id", "measure_chart_type", "measure_axis", "measure_stack",
-      "measure_color", "measure_transform", "measure_transform_window"]
+      "measure_color", "measure_fill_opacity", "measure_transform", "measure_transform_window"]
   };
 
   function viewPanelValues(panel, names) {
@@ -177,6 +178,33 @@
     });
   }
 
+  function syncGraphStateCopies(root, graphActive) {
+    var graph = root.querySelector("[data-sc-graph-options]");
+    if (!graph) return;
+    var copies = root.querySelector("[data-sc-inactive-graph-state]");
+    if (graphActive) {
+      if (copies) copies.querySelectorAll("input").forEach(function (input) { input.disabled = true; });
+      return;
+    }
+    if (!copies) {
+      copies = document.createElement("div");
+      copies.setAttribute("data-sc-inactive-graph-state", "");
+      copies.hidden = true;
+      root.appendChild(copies);
+    }
+    var values = viewPanelValues(graph, ["chart_type", "graph_show_table", "graph_series_group",
+      "graph_palette", "graph_category_field", "graph_category_value", "graph_category_format", "graph_category_color"]);
+    var fragment = document.createDocumentFragment();
+    values.forEach(function (pair) {
+      var input = document.createElement("input");
+      input.type = "hidden";
+      input.name = pair[0];
+      input.value = pair[1];
+      fragment.appendChild(input);
+    });
+    copies.replaceChildren(fragment);
+  }
+
   window.addEventListener("submit", function (event) {
     var form = event.target;
     if (form && form.hasAttribute("data-sc-controls-loading")) {
@@ -186,6 +214,8 @@
     }
     if (form && form.querySelector && form.querySelector("[data-sc-result-view-panel]")) {
       syncViewPanelCopies(form);
+      var selectedView = form.querySelector('input[name="view"]:checked');
+      syncGraphStateCopies(form, selectedView && selectedView.value === "graph");
     }
   }, true);
 
@@ -292,6 +322,7 @@
       panel.disabled = !aggregateActive;
     });
     var graphActive = view === "graph";
+    syncGraphStateCopies(root, graphActive);
     var limitLabel = root.querySelector("[data-sc-limit-label]");
     if (limitLabel) limitLabel.textContent = graphActive ? "Points" : "Rows";
     var pageControl = root.querySelector("[data-sc-page-control]");
@@ -306,14 +337,18 @@
     var limit = root.querySelector("[data-sc-limit]");
     if (limit) {
       var options = Array.from(limit.options);
+      var maximum = options.reduce(function (value, option) {
+        return Math.max(value, Number(option.value) || 0);
+      }, 0);
+      var graphMinimum = Math.min(250, maximum);
       options.forEach(function (option) {
-        var tooSmall = Number(option.value) < 250;
+        var tooSmall = Number(option.value) < graphMinimum;
         option.hidden = graphActive && tooSmall;
         option.disabled = graphActive && tooSmall;
       });
-      if (graphActive && Number(limit.value) < 250) {
+      if (graphActive && Number(limit.value) < graphMinimum) {
         var next = options.find(function (option) { return Number(option.value) >= 500; }) ||
-          options.find(function (option) { return Number(option.value) >= 250; }) ||
+          options.find(function (option) { return Number(option.value) >= graphMinimum; }) ||
           options[options.length - 1];
         if (next) limit.value = next.value;
       }

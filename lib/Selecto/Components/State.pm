@@ -1,7 +1,7 @@
 package Selecto::Components::State;
 
 use Mojo::Base -base, -signatures;
-use Mojo::JSON qw(decode_json);
+use Mojo::JSON qw(decode_json encode_json);
 use Digest::SHA qw(sha256_hex);
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
@@ -15,13 +15,13 @@ use Selecto::Expression ();
 use Selecto::Query ();
 use Selecto::QueryLibrary ();
 
-has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
+        q query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group graph_palette graph_category_field graph_category_value graph_category_format graph_category_color aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_values_json filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
-        measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_transform measure_transform_window
+        measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_fill_opacity measure_transform measure_transform_window
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
         order direction limit page
     )];
@@ -51,8 +51,10 @@ sub from_input ($class, $config, $domain, $input) {
         $query_library = {%$query_library, materialize => 0};
     }
     my $chart_type = _parse_chart_type($input, \@errors);
-    my $graph_show_table = $view eq 'graph'
-        ? _truthy(_first($input, 'graph_show_table'), 0) : 0;
+    my $graph_show_table = _truthy(_first($input, 'graph_show_table'), 0);
+    my ($graph_palette, $graph_category_colors) = _parse_graph_colors(
+        $config, $view, $input, \@errors,
+    );
     my ($aggregate_grid, $aggregate_grid_colorize, $aggregate_grid_color_scale) =
         _parse_aggregate_grid($view, $input);
     my $row_click_action = defined($retarget) ? '' : _parse_row_click_action(
@@ -108,6 +110,8 @@ sub from_input ($class, $config, $domain, $input) {
         chart_type => $chart_type,
         graph_show_table => $graph_show_table,
         graph_series_group => $graph_series_group,
+        graph_palette => $graph_palette,
+        graph_category_colors => $graph_category_colors,
         aggregate_grid => $aggregate_grid,
         aggregate_grid_colorize => $aggregate_grid_colorize,
         aggregate_grid_color_scale => $aggregate_grid_color_scale,
@@ -160,9 +164,17 @@ sub query_pairs ($self) {
             query_library_param_name => $name,
             query_library_param_value => $self->query_library_parameters->{$name};
     }
-    push @pairs, chart_type => $self->chart_type if $self->view eq 'graph';
+    push @pairs, chart_type => $self->chart_type;
     push @pairs, graph_show_table => 1
-        if $self->view eq 'graph' && $self->graph_show_table;
+        if $self->graph_show_table;
+    push @pairs, graph_palette => $self->graph_palette // 'default';
+    for my $override (@{$self->graph_category_colors // []}) {
+        push @pairs,
+            graph_category_field => $override->{field},
+            graph_category_value => $override->{value},
+            graph_category_format => $override->{format} // '',
+            graph_category_color => $override->{color};
+    }
     push @pairs, graph_series_group => $self->graph_series_group
         if $self->view eq 'graph' && length($self->graph_series_group // '');
     if ($self->view eq 'aggregate' && $self->aggregate_grid) {
@@ -189,6 +201,8 @@ sub query_pairs ($self) {
             filter_field => $filter->{field},
             filter_op => $filter->{op},
             filter_value => $filter->{value},
+            filter_values_json => ref($filter->{values}) eq 'ARRAY'
+                ? encode_json($filter->{values}) : '',
             filter_value_end => $filter->{value_end} // '',
             filter_group => $filter->{grouped} ? 1 : 0,
             filter_clause => $filter->{clause} // '';
@@ -227,6 +241,7 @@ sub query_pairs ($self) {
             measure_axis => $measure_config->{axis} // 'auto',
             measure_stack => $measure_config->{stack} // '',
             measure_color => $measure_config->{color} // '',
+            measure_fill_opacity => $measure_config->{fill_opacity} // '',
             measure_transform => $transform->{type} // '',
             measure_transform_window => ref($transform->{parameters}) eq 'HASH'
                 ? $transform->{parameters}{window} // '' : '';
@@ -336,6 +351,8 @@ sub as_hash ($self) {
         chart_type => $self->chart_type,
         graph_show_table => $self->graph_show_table,
         graph_series_group => $self->graph_series_group,
+        graph_palette => $self->graph_palette,
+        graph_category_colors => [map { {%$_} } @{$self->graph_category_colors // []}],
         aggregate_grid => $self->aggregate_grid,
         aggregate_grid_colorize => $self->aggregate_grid_colorize,
         aggregate_grid_color_scale => $self->aggregate_grid_color_scale,
@@ -561,6 +578,7 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows
     my $measure_axes = _values($input, 'measure_axis');
     my $measure_stacks = _values($input, 'measure_stack');
     my $measure_colors = _values($input, 'measure_color');
+    my $measure_fill_opacities = _values($input, 'measure_fill_opacity');
     my $measure_transforms = _values($input, 'measure_transform');
     my $measure_transform_windows = _values($input, 'measure_transform_window');
     my $default_measure = $config->default_measure($domain, $carry ? undef : $rows_of);
@@ -628,7 +646,7 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows
             push @$errors, 'A graph series axis is not available.';
             $axis = 'auto';
         }
-        my $stack = $view eq 'graph' ? lc(_scalar($measure_stacks->[$index])) : '';
+        my $stack = lc(_scalar($measure_stacks->[$index]));
         if (length($stack) && $stack !~ /\A[a-z][a-z0-9_]{0,31}\z/) {
             push @$errors, 'A graph series stack group is not available.';
             $stack = '';
@@ -638,6 +656,13 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows
             push @$errors, 'A graph series color must use #RRGGBB format.';
             $color = '';
         }
+        my $fill_opacity = _scalar($measure_fill_opacities->[$index]);
+        if (length($fill_opacity)
+            && ($fill_opacity !~ /\A(?:0(?:\.\d+)?|1(?:\.0+)?)\z/
+                || $fill_opacity < 0 || $fill_opacity > 1)) {
+            push @$errors, 'A graph fill opacity must be from 0 through 1.';
+            $fill_opacity = '';
+        }
         my $aggregate_unit = Selecto::Analytics::UnitRegistry->aggregate_unit(
             $measure->{source_unit}, $function,
         );
@@ -646,8 +671,7 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows
                 ? 'flow' : $measure->{source_behavior};
         my $unit = $aggregate_unit;
         my @transforms;
-        my $transform = $view eq 'graph'
-            ? lc(_scalar($measure_transforms->[$index])) : '';
+        my $transform = lc(_scalar($measure_transforms->[$index]));
         if (length($transform)) {
             if (!defined($aggregate_unit)
                 || !Selecto::Analytics::TransformRegistry->allows(
@@ -684,6 +708,7 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows
             axis => $axis,
             stack => $stack,
             (length($color) ? (color => $color) : ()),
+            (length($fill_opacity) ? (fill_opacity => 0 + $fill_opacity) : ()),
             transforms => \@transforms,
             (defined($aggregate_unit) ? (raw_unit => $aggregate_unit) : ()),
             (defined($unit) ? (unit => $unit) : ()),
@@ -736,6 +761,48 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows
     }
     my $measure = $valid_measures[0];
     return (\@valid_measures, \%measure_configs, \@measure_config_list, $measure);
+}
+
+sub _parse_graph_colors ($config, $view, $input, $errors) {
+    my $assistant = $config->query_assistant // {};
+    require Selecto::Components::Graph::Colors;
+    my $palettes = Selecto::Components::Graph::Colors->palettes($assistant->{palettes});
+    my $palette = lc(_scalar(_first($input, 'graph_palette')) || 'default');
+    if ($palette ne 'auto' && !exists($palettes->{$palette})) {
+        push @$errors, 'A graph palette is not available.';
+        $palette = 'default';
+    }
+    my $fields = _values($input, 'graph_category_field');
+    my $values = _values($input, 'graph_category_value');
+    my $formats = _values($input, 'graph_category_format');
+    my $colors = _values($input, 'graph_category_color');
+    my $count = @$fields;
+    $count = @$values if @$values > $count;
+    $count = @$colors if @$colors > $count;
+    my @overrides;
+    my %seen;
+    for my $index (0 .. $count - 1) {
+        last if @overrides >= 50;
+        my $field = _scalar($fields->[$index]);
+        my $value = _scalar($values->[$index]);
+        my $format = _scalar($formats->[$index]);
+        my $color = Selecto::Components::Graph::Colors->normalize_hex(
+            _scalar($colors->[$index]),
+        );
+        next unless length($field) || length($value) || defined($color);
+        unless (length($field) && defined($color)) {
+            push @$errors, 'A category color requires a grouping field and #RRGGBB color.';
+            next;
+        }
+        my $key = join "\x1f", $field, $format, $value;
+        if ($seen{$key}++) {
+            push @$errors, 'A category color can be configured only once.';
+            next;
+        }
+        push @overrides, {field => $field, value => $value, format => $format, color => $color};
+    }
+    push @$errors, 'Too many category colors were submitted.' if $count > 50;
+    return ($palette, \@overrides);
 }
 
 sub _parse_orders ($config, $domain, $input, $field_map, $valid_fields, $query_library, $errors, $rows_of = undef) {
@@ -817,6 +884,7 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
     my $filter_fields = _values($input, 'filter_field');
     my $filter_ops = _values($input, 'filter_op');
     my $filter_values = _values($input, 'filter_value');
+    my $filter_values_json = _values($input, 'filter_values_json');
     my $filter_end_values = _values($input, 'filter_value_end');
     my $filter_groups = _values($input, 'filter_group');
     my $filter_clauses = _values($input, 'filter_clause');
@@ -845,6 +913,7 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
     my $filter_count = @$filter_fields;
     $filter_count = @$filter_ops if @$filter_ops > $filter_count;
     $filter_count = @$filter_values if @$filter_values > $filter_count;
+    $filter_count = @$filter_values_json if @$filter_values_json > $filter_count;
     $filter_count = @$filter_end_values if @$filter_end_values > $filter_count;
     $filter_count = @$filter_groups if @$filter_groups > $filter_count;
     $filter_count = @$filter_clauses if @$filter_clauses > $filter_count;
@@ -858,6 +927,7 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
         my $field = _scalar($filter_fields->[$index]);
         my $op = lc(_scalar($filter_ops->[$index]) || 'eq');
         my $value = _scalar($filter_values->[$index]);
+        my $values_json = _scalar($filter_values_json->[$index]);
         my $value_end = _scalar($filter_end_values->[$index]);
         my $group_filter = _truthy($filter_groups->[$index], 0);
         my $clause = _scalar($filter_clauses->[$index]);
@@ -893,22 +963,34 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
             push @$errors, 'A filter operator is not available.';
             next;
         }
-        # A choice filter over an internal field reads it only through the
-        # domain's declared choices: any other value, a range or a null test
-        # would probe it.
-        if ($field_map->{$field}{choices_only} && !_declared_choice($field_map->{$field}, $op, $value)) {
-            push @$errors, 'Choose an available filter value.';
-            next;
-        }
         if ($group_filter && (!$valid_group_field{$field} || ($op ne 'eq' && $op ne 'is_null'))) {
             push @$errors, 'An aggregate drilldown filter is not available.';
             next;
         }
         $regular_filter_count++ unless $group_filter || length($clause);
         ($value, $value_end) = ('', '') if $op =~ /_null\z/;
-        if (($op eq 'in' || $op eq 'not_in') && length($value)
-            && !grep { length } map { _trim($_) } split /,/, $value, -1) {
-            push @$errors, 'Membership filters require at least one value.';
+        my $membership_values;
+        if (($op eq 'in' || $op eq 'not_in') && length($values_json)) {
+            my $decoded = eval { decode_json($values_json) };
+            if (ref($decoded) ne 'ARRAY' || !@$decoded
+                || grep { !defined($_) || ref($_) } @$decoded) {
+                push @$errors, 'Membership filter values must be a non-empty JSON array of scalars.';
+                next;
+            }
+            $membership_values = [map { "$_" } @$decoded];
+            $value = '';
+        } elsif (($op eq 'in' || $op eq 'not_in') && length($value)) {
+            my @legacy = grep { length } map { _trim($_) } split /,/, $value, -1;
+            unless (@legacy) {
+                push @$errors, 'Membership filters require at least one value.';
+                next;
+            }
+        }
+        # A choice filter over an internal field reads it only through the
+        # domain's declared choices: any other value, a range or a null test
+        # would probe it.
+        if ($field_map->{$field}{choices_only} && !_declared_choice($field_map->{$field}, $op, $value, $membership_values)) {
+            push @$errors, 'Choose an available filter value.';
             next;
         }
         if ($op eq 'date_shortcut' && length($value)
@@ -938,12 +1020,14 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
             value => $value,
             value_end => $value_end,
         };
+        $filter->{values} = $membership_values if $membership_values;
         $filter->{grouped} = 1 if $group_filter;
         $filter->{clause} = 0 + $clause if length($clause);
         $filter->{promoted} = 1 if !length($clause)
             && ($promoted_filter_index{$index + 1} || $promoted_filter_field{$field});
         $filter->{draft} = 1 if $op !~ /_null\z/
-            && (!length($value) || ($op eq 'between' && !length($value_end)));
+            && ($op =~ /in\z/ ? !length($value) && !$membership_values
+                : !length($value) || ($op eq 'between' && !length($value_end)));
         push @filters, $filter;
     }
     my %draft_clause = map { $_->{clause} => 1 }
@@ -964,10 +1048,12 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
     return \@filters;
 }
 
-sub _declared_choice ($catalog, $op, $value) {
+sub _declared_choice ($catalog, $op, $value, $membership_values = undef) {
     return 0 unless $op =~ /\A(?:eq|ne|in|not_in)\z/;
     my %declared = map { ("$_->{value}" => 1) } @{$catalog->{filter_choices} // []};
-    my @values = $op =~ /in\z/ ? (map { _trim($_) } split /,/, $value) : ($value);
+    my @values = $op =~ /in\z/
+        ? (ref($membership_values) eq 'ARRAY' ? @$membership_values : (map { _trim($_) } split /,/, $value))
+        : ($value);
     return !grep { length($_) && !$declared{$_} } @values;
 }
 

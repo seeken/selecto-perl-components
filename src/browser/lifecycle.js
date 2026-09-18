@@ -233,6 +233,7 @@
     restoreGridSelections();
     restoreBulkActions();
     restoreResultTableHeaders();
+    initializeQueryAssistants();
   }
 
   function recoverClosedWebSocketChannels() {

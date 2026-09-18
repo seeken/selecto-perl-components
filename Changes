@@ -1,6 +1,11 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Optional WebMCP tools edit validated query-form drafts without running
+      queries. Drafts support revision checks, idempotent apply, manual-edit
+      synchronization, one-step undo, and an optional SQLite store.
+    - Development tasks resolve the pinned relocatable Perl directly, including
+      commands launched through a shell.
     - The explorer retargets its row grain: a detail view whose columns all
       come from one to-many association shows that association's rows, a
       summary that reads one to-many association drills down into the rows

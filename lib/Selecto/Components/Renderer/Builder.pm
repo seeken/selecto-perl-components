@@ -8,6 +8,7 @@ use Selecto::Components::QueryLibrary ();
 use Selecto::Components::RowActions ();
 use Selecto::Components::Renderer::Markup;
 use Selecto::Analytics::TransformRegistry ();
+use Selecto::Components::Graph::Colors ();
 
 sub _form ($class, $model, $catalog, $detail_catalog = undef) {
     my $config = $model->{config};
@@ -91,9 +92,14 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         _hidden('query_signature', $state->query_signature) .
         ($model->{loaded_saved_query} && $model->{loaded_saved_query}{id}
             ? _hidden('saved_query_id', $model->{loaded_saved_query}{id}) : '') .
+        ($state->view eq 'graph' ? '' : _graph_selection_hidden($state)) .
         $query_summary . $view_panel . $filter_panel .
         '<div class="sc-builder-apply-note"><span>Changes apply only when you run the query.</span>' .
         '<strong data-sc-builder-pending role="status" aria-live="polite" aria-atomic="true"></strong></div>' .
+        ($config->query_assistant_enabled
+            ? '<div class="sc-query-assistant-status" data-sc-query-assistant-status role="status" aria-live="polite">Connecting browser assistant…</div>' .
+              '<button class="sc-button sc-secondary" type="button" data-sc-query-assistant-undo hidden>Undo assistant edit</button>'
+            : '') .
         '<div class="sc-control-row"><label><span data-sc-limit-label>' .
         ($state->view eq 'graph' ? 'Points' : 'Rows') .
         '</span><select name="limit" data-sc-limit>' . _limit_options($state, $config) . '</select></label>' .
@@ -123,13 +129,27 @@ sub view_controls ($class, $model, $mode, $catalog = undef, $detail_catalog = un
     }
     die "Unknown view control panel\n" unless $mode eq 'summary';
     return $class->_aggregate_grid_picker($state) .
-        $class->_chart_type_picker($state, $catalog) .
+        $class->_chart_type_picker($state, $catalog, $config) .
         $class->_group_picker($state, $catalog, $config, $root_label) .
         $class->_measure_picker($state, $config->measure_catalog($domain, $grain), $config, $root_label) .
         _selection_hidden('field', $state->fields, $state->field_configs, $state->field_config_list) .
         _hidden('row_click_action', $state->row_click_action // '') .
         join('', map { _hidden('order', $_->{field}) . _hidden('direction', $_->{direction}) }
             @{$state->orders});
+}
+
+sub _graph_selection_hidden ($state) {
+    return '<div data-sc-inactive-graph-state>' .
+        _hidden('chart_type', $state->chart_type // 'bar') .
+        _hidden('graph_series_group', $state->graph_series_group // '') .
+        _hidden('graph_show_table', $state->graph_show_table ? 1 : 0) .
+        _hidden('graph_palette', $state->graph_palette // 'default') .
+        join('', map {
+            _hidden('graph_category_field', $_->{field}) .
+            _hidden('graph_category_value', $_->{value}) .
+            _hidden('graph_category_format', $_->{format} // '') .
+            _hidden('graph_category_color', $_->{color})
+        } @{$state->graph_category_colors // []}) . '</div>';
 }
 
 sub _query_summary_for_model ($class, $model, $catalog) {
@@ -508,7 +528,8 @@ sub _promoted_filter_mode_control ($class, $config, $field, $filter, $clause = u
 
 sub _promoted_filter_value_controls ($class, $config, $field, $filter, $clause = undef) {
     my $operator = $filter->{op};
-    my $value = $filter->{value} // '';
+    my $value = ref($filter->{values}) eq 'ARRAY'
+        ? join(',', @{$filter->{values}}) : $filter->{value} // '';
     my $value_end = $filter->{value_end} // '';
     my $field_name = $field->{path};
     my $label = $field->{label};
@@ -566,6 +587,12 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter, $clause =
             _promoted_filter_input_attributes('value', $field_name, $clause, $filter->{instance}) .
             ' aria-label="Choices for ' . _h($label) . '">' . $options . '</select></label>';
     }
+    if ($operator eq 'in' && ref($filter->{values}) eq 'ARRAY') {
+        return '<label>Values (JSON array)<textarea' .
+            _promoted_filter_input_attributes('values_json', $field_name, $clause, $filter->{instance}) .
+            ' aria-label="Membership values for ' . _h($label) . '">' .
+            _h(encode_json($filter->{values})) . '</textarea></label>';
+    }
     if ($config->boolean_type($type)) {
         return '<label>Value<select' .
             _promoted_filter_input_attributes('value', $field_name, $clause, $filter->{instance}) .
@@ -618,9 +645,12 @@ sub _filter_value_text ($filter, $field = undef) {
         my %labels = map { $_->{value} => $_->{label} } @{$field->{filter_choices}};
         my @values = map { my $id = $_; $id =~ s/\A\s+|\s+\z//g;
             $labels{$id} // 'Unavailable option' }
-            grep { length($_) } split /,/, ($filter->{value} // ''), -1;
+            grep { length($_) } (ref($filter->{values}) eq 'ARRAY'
+                ? @{$filter->{values}} : split(/,/, ($filter->{value} // ''), -1));
         return "$display_operator " . join(', ', @values);
     }
+    return "$display_operator " . join(', ', @{$filter->{values}})
+        if $operator eq 'in' && ref($filter->{values}) eq 'ARRAY';
     return "$display_operator " . ($filter->{value} // '');
 }
 
@@ -631,7 +661,7 @@ sub date_shortcut_label ($id) {
     return $choice ? $choice->{label} : $id;
 }
 
-sub _chart_type_picker ($class, $state, $catalog) {
+sub _chart_type_picker ($class, $state, $catalog, $config) {
     my @types = (
         [bar => 'Bar'],
         [horizontal_bar => 'Horizontal bar'],
@@ -659,13 +689,34 @@ sub _chart_type_picker ($class, $state, $catalog) {
             ($series_group eq $field ? ' selected' : '') . '>' .
             _h($label) . '</option>'
     } @{$state->groups};
+    my $assistant = $config->query_assistant // {};
+    my $palettes = Selecto::Components::Graph::Colors->palettes($assistant->{palettes});
+    my $palette_options = '<option value="auto"' .
+        (($state->graph_palette // 'default') eq 'auto' ? ' selected' : '') . '>Host theme</option>' .
+        join('', map {
+            '<option value="' . _h($_) . '"' .
+            (($state->graph_palette // 'default') eq $_ ? ' selected' : '') . '>' .
+            _h(_humanize($_)) . '</option>'
+        } sort keys %$palettes);
+    my $category_rows = join '', map {
+        '<div class="sc-category-color-row" data-sc-category-color-row>' .
+        '<label>Group field<input name="graph_category_field" value="' . _h($_->{field}) . '"></label>' .
+        '<label>Value<input name="graph_category_value" value="' . _h($_->{value}) . '"></label>' .
+        '<label>Format<input name="graph_category_format" value="' . _h($_->{format} // '') . '"></label>' .
+        '<label>Color<input type="color" name="graph_category_color" value="' . _h($_->{color}) . '"></label>' .
+        '<button type="button" class="sc-button sc-secondary" data-sc-category-color-remove>Remove</button></div>'
+    } @{$state->graph_category_colors // []};
     return '<fieldset class="sc-chart-type-picker" data-sc-graph-options' . $inactive . '>' .
         '<legend>Chart</legend><label>Chart type<select name="chart_type" ' .
         'data-sc-chart-type-picker>' . $options . '</select></label>' .
         '<label>Separate series by<select name="graph_series_group">' .
         $series_options . '</select></label>' .
+        '<label>Palette<select name="graph_palette" data-sc-graph-palette>' .
+        $palette_options . '</select></label>' .
         '<label class="sc-option-check"><input type="checkbox" name="graph_show_table" value="1"' .
         $show_table . '><span>Show aggregate data below the graph</span></label>' .
+        '<div data-sc-category-colors><strong>Category colors</strong>' . $category_rows .
+        '<button type="button" class="sc-button sc-secondary" data-sc-category-color-add>Add category color</button></div>' .
         '<p>Choose a dashboard visualization for the selected groups and measures. A series group draws one line or bar set per value. The optional table shows the underlying aggregate values before graph transforms.</p></fieldset>';
 }
 
@@ -972,6 +1023,8 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
         my $series_stack = $item_config->{stack} // '';
         my $series_color = $item_config->{color} // '';
         my $color_value = length($series_color) ? $series_color : '#55d6be';
+        my $fill_opacity = defined($item_config->{fill_opacity})
+            ? $item_config->{fill_opacity} : 0.22;
         my $chart_options = join '', map {
             '<option value="' . $_->[0] . '"' .
                 ($_->[0] eq $series_chart_type ? ' selected' : '') . '>' . $_->[1] . '</option>'
@@ -1031,6 +1084,8 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
             (length($series_color) ? '' : ' disabled') . '><label class="sc-option-check"><input ' .
             'type="checkbox" data-sc-measure-color-auto' . (length($series_color) ? '' : ' checked') .
             '><span>Automatic contrasting color</span></label></div>' .
+            '<label>Fill opacity<input type="number" name="measure_fill_opacity" min="0" max="1" step="0.01" value="' .
+            _h($fill_opacity) . '" aria-label="Fill opacity for ' . _h($field->{label}) . '"></label>' .
             '<label>Transform<select name="measure_transform" data-sc-measure-transform ' .
             'aria-label="Analytical transform for ' . _h($field->{label}) . '">' .
             $transform_options . '</select></label>' .
@@ -1157,6 +1212,8 @@ sub _filter_clause_picker ($class, $state, $by_path, $config) {
                 ($grid_mode
                     ? _hidden('filter_op', $filter->{op}) .
                       _hidden('filter_value', $filter->{value}) .
+                      _hidden('filter_values_json', ref($filter->{values}) eq 'ARRAY'
+                          ? encode_json($filter->{values}) : '') .
                       _hidden('filter_value_end', $filter->{value_end} // '') .
                       '<strong>' . _h(_filter_summary_text($field->{label}, $filter, $field)) . '</strong>'
                     : '<strong>' . _h($field->{label}) . '</strong>' .
@@ -1209,7 +1266,8 @@ sub _filter_choice_attribute ($field) {
 
 sub _filter_value_controls ($class, $config, $field, $filter) {
     my $operator = $filter->{op};
-    my $value = $filter->{value} // '';
+    my $value = ref($filter->{values}) eq 'ARRAY'
+        ? join(',', @{$filter->{values}}) : $filter->{value} // '';
     my $value_end = $filter->{value_end} // '';
     my $label = $field->{label};
     my $type = $field->{type};
@@ -1220,7 +1278,7 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
     my $controls = '<div class="sc-filter-values" data-sc-filter-values>';
 
     if ($operator =~ /_null\z/) {
-        return $controls . _hidden('filter_value', '') . _hidden('filter_value_end', '') .
+        return $controls . _hidden('filter_value', '') . _hidden('filter_values_json', '') . _hidden('filter_value_end', '') .
             '<p class="sc-filter-value-note">No value needed.</p></div>';
     }
     if ($operator eq 'date_shortcut') {
@@ -1239,12 +1297,12 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
         $options .= '</optgroup>' if length($group);
         return $controls . '<label class="sc-filter-value-wide">Period<select name="filter_value" ' .
             'aria-label="Period for ' . _h($label) . '">' . $options . '</select></label>' .
-            _hidden('filter_value_end', '') . '</div>';
+            _hidden('filter_values_json', '') . _hidden('filter_value_end', '') . '</div>';
     }
     if ($operator eq 'between') {
         return $controls . '<label>Start<input type="' . $input_type . '" name="filter_value" ' .
             'aria-label="Start value for ' . _h($label) . '" value="' . _h($value) . '"' . $step .
-            '></label><label>End<input type="' . $input_type . '" name="filter_value_end" ' .
+            '></label>' . _hidden('filter_values_json', '') . '<label>End<input type="' . $input_type . '" name="filter_value_end" ' .
             'aria-label="End value for ' . _h($label) . '" value="' . _h($value_end) . '"' . $step .
             '></label></div>';
     }
@@ -1273,7 +1331,13 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
             '<select data-sc-filter-choice-select' . ($multiple ? ' multiple size="6"' : '') .
             ' hidden aria-label="Choices for ' . _h($label) . '">' . $options . '</select>' .
             ($multiple ? '<small class="sc-filter-choice-hint">Use Ctrl or Command to select multiple options.</small>' : '') .
-            '</label>' . _hidden('filter_value_end', '') . '</div>';
+            '</label>' . _hidden('filter_values_json', '') . _hidden('filter_value_end', '') . '</div>';
+    }
+    if ($operator eq 'in' && ref($filter->{values}) eq 'ARRAY') {
+        return $controls . '<label class="sc-filter-value-wide">Values (JSON array)<textarea ' .
+            'name="filter_values_json" aria-label="Membership values for ' . _h($label) . '">' .
+            _h(encode_json($filter->{values})) . '</textarea></label>' .
+            _hidden('filter_value', '') . _hidden('filter_value_end', '') . '</div>';
     }
     if ($config->boolean_type($type)) {
         return $controls . '<label class="sc-filter-value-wide">Value<select name="filter_value" ' .
@@ -1281,7 +1345,7 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
             (!length($value) ? ' selected' : '') . '>Choose true or false</option><option value="true"' .
             (lc($value) eq 'true' || $value eq '1' ? ' selected' : '') . '>True</option>' .
             '<option value="false"' . (lc($value) eq 'false' || $value eq '0' ? ' selected' : '') .
-            '>False</option></select></label>' . _hidden('filter_value_end', '') . '</div>';
+            '>False</option></select></label>' . _hidden('filter_values_json', '') . _hidden('filter_value_end', '') . '</div>';
     }
     my $placeholder = $operator eq 'in' ? 'Comma-separated values'
         : $config->temporal_type($type) ? 'Choose a date' : 'Enter a value';
@@ -1290,7 +1354,7 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
     return $controls . '<label class="sc-filter-value-wide">Value<input type="' . $effective_type .
         '" name="filter_value" aria-label="Value for ' . _h($label) . '" value="' . _h($value) .
         '" placeholder="' . _h($placeholder) . '"' . $effective_step . '></label>' .
-        _hidden('filter_value_end', '') . '</div>';
+        _hidden('filter_values_json', '') . _hidden('filter_value_end', '') . '</div>';
 }
 
 sub _temporal_filter_input_type ($config, $type, @values) {

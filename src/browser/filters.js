@@ -159,6 +159,7 @@
     var values = document.createElement("div");
     values.className = "sc-filter-values";
     values.setAttribute("data-sc-filter-values", "");
+    values.appendChild(hiddenFilterValue("filter_values_json", ""));
 
     if (/_null$/.test(operator)) {
       values.appendChild(hiddenFilterValue("filter_value", ""));
@@ -296,7 +297,10 @@
     if (!operator || !value) return;
     var nullOperator = /_null$/.test(operator.value);
     var end = item.querySelector('[name="filter_value_end"]');
-    var draft = !nullOperator && (value.value.length === 0 ||
+    var exactValues = item.querySelector('[name="filter_values_json"]');
+    var hasExactValues = /^(?:in|not_in)$/.test(operator.value)
+      && exactValues && exactValues.value.length > 0;
+    var draft = !nullOperator && ((!hasExactValues && value.value.length === 0) ||
       (operator.value === "between" && (!end || end.value.length === 0)));
     item.classList.toggle("is-draft", draft);
     var note = item.querySelector(".sc-filter-draft-note");
@@ -446,9 +450,9 @@
         input.remove();
         return;
       }
-      if (name === "filter_value" || name === "filter_value_end") {
+      if (name === "filter_value" || name === "filter_value_end" || name === "filter_values_json") {
         input.removeAttribute("name");
-        input.dataset.scPromotedFilterInput = name === "filter_value_end" ? "value_end" : "value";
+        input.dataset.scPromotedFilterInput = name.replace(/^filter_/, "");
         input.dataset.filterField = control.dataset.filterField;
         if (control.dataset.filterInstance) {
           input.dataset.filterInstance = control.dataset.filterInstance;
@@ -510,7 +514,7 @@
       refreshFilterPicker(filterRoot);
       return;
     }
-    if (event.target.matches('[name="filter_value"], [name="filter_value_end"]')) {
+    if (event.target.matches('[name="filter_value"], [name="filter_value_end"], [name="filter_values_json"]')) {
       updateFilterDraft(event.target.closest("[data-sc-filter-set-item], [data-sc-filter-condition]"));
     }
     markBuilderDirty(event.target);
@@ -552,7 +556,7 @@
         currentEnd ? currentEnd.value : ""
       );
       updateFilterDraft(filterItem);
-    } else if (event.target.matches('[name="filter_value"], [name="filter_value_end"]')) {
+    } else if (event.target.matches('[name="filter_value"], [name="filter_value_end"], [name="filter_values_json"]')) {
       updateFilterDraft(event.target.closest("[data-sc-filter-set-item], [data-sc-filter-condition]"));
     } else if (event.target.matches('[name="query_library_view"], [name="query_library_segment"], [data-sc-query-library-group-choice]')) {
       refreshFilterBadge(builder);
@@ -565,6 +569,20 @@
   });
 
   document.addEventListener("click", function (event) {
+    var addCategoryColorButton = event.target.closest("[data-sc-category-color-add]");
+    if (addCategoryColorButton) {
+      var categoryBuilder = addCategoryColorButton.closest("[data-sc-builder]");
+      addCategoryColor(categoryBuilder);
+      markBuilderDirty(categoryBuilder);
+      return;
+    }
+    var removeCategoryColorButton = event.target.closest("[data-sc-category-color-remove]");
+    if (removeCategoryColorButton) {
+      var categoryRoot = removeCategoryColorButton.closest("[data-sc-builder]");
+      removeCategoryColorButton.closest("[data-sc-category-color-row]").remove();
+      markBuilderDirty(categoryRoot);
+      return;
+    }
     var control = event.target.closest("[data-sc-picker-action]");
     if (!control || control.disabled) return;
     var root = control.closest("[data-sc-picker-root]");

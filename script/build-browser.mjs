@@ -20,6 +20,8 @@ const modules = [
   "table-headers.js",
   "explorer-session.js",
   "lifecycle.js",
+  "query-draft.js",
+  "webmcp.js",
   "picker.js",
   "filters.js",
   "actions.js",
