@@ -428,6 +428,8 @@
       refreshFilterBadge(builder);
     } else if (event.target.matches("[data-sc-group-format], [data-sc-measure-function], [data-sc-measure-transform]")) {
       syncPickerConfig(event.target.closest("[data-sc-picker-set-item]"));
+    } else if (event.target.matches("[data-sc-measure-color-auto], [data-sc-measure-color-picker]")) {
+      syncMeasureColor(event.target.closest("[data-sc-picker-set-item]"), event.target);
     }
     markBuilderDirty(builder);
   });

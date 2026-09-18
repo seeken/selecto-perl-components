@@ -667,7 +667,9 @@ sub _graph ($class, $result, $model) {
         my @raw = map { $_->{raw_value} } @{$analysis->{points}};
         $display_values{$measure->{key}} = \@values;
         $raw_values{$measure->{key}} = \@raw;
-        my $color = $palette[$measure_index % @palette];
+        my $configured_color = $series->{color} // '';
+        my $color = length($configured_color)
+            ? $configured_color : $palette[$measure_index % @palette];
         my $data = \@values;
         if ($global_type eq 'scatter') {
             my @points = map {
@@ -686,12 +688,14 @@ sub _graph ($class, $result, $model) {
         $series_type = $global_type if $series_type eq 'auto';
         my $resolved_axis = $series->{axis} // 'left';
         my $axis_id = $resolved_axis eq 'right' ? 'y1' : 'y';
+        my $stack = $series->{stack} // '';
         if ($mixed_series) {
             $axes{$axis_id} //= {
                 side => $resolved_axis,
                 label => _graph_unit_label($series->{unit}),
                 (defined($series->{unit}) ? (unit => $series->{unit}) : ()),
             };
+            $axes{$axis_id}{stacked} = 1 if length($stack);
         }
         push @datasets, {
             label => $measure->{label},
@@ -700,6 +704,7 @@ sub _graph ($class, $result, $model) {
                 ? [map { $palette[$_ % @palette] } 0 .. $#records] : $color,
             borderColor => $color,
             borderWidth => 2,
+            colorAuto => length($configured_color) ? 0 : 1,
             rawData => \@raw,
             transforms => [map { $_->{type} } @{$series->{transforms} // []}],
             unit => $analysis->{unit},
@@ -708,6 +713,7 @@ sub _graph ($class, $result, $model) {
                 scType => $series_type,
                 yAxisID => $axis_id,
                 seriesId => $series->{id} // 'series_' . ($measure_index + 1),
+                (length($stack) ? (stack => $stack) : ()),
             ) : ()),
         };
     }
@@ -758,15 +764,25 @@ sub _graph ($class, $result, $model) {
             $method . '" hx-ws:send data-sc-graph-drilldown="' . _h($record_index) .
             '">' . $hidden . '</form>';
     }
+    my @raw_columns = map {
+        my $column = $_;
+        my $transforms = ref($column->{series}) eq 'HASH'
+            && ref($column->{series}{transforms}) eq 'ARRAY'
+            ? $column->{series}{transforms} : [];
+        @$transforms
+            ? +{%$column, label => $column->{raw_label} // $column->{label}}
+            : $column
+    } @{$result->{columns}};
+    my %raw_result = (%$result, columns => \@raw_columns);
     return '<div class="sc-chart sc-chart-' . _h($model->{state}->chart_type) .
         '" role="group" aria-label="Selected measures by selected groups" data-sc-chart ' .
         'data-chart-type="' . _h($model->{state}->chart_type) . '" data-chart-data="' .
         _h($chart_data) . '"><div class="sc-chart-canvas"><canvas role="img" aria-label="' .
         _h(_humanize($model->{state}->chart_type) . ' chart of selected measures by selected groups') .
         '"></canvas></div><div class="sc-chart-fallback"><ul>' . $bars . '</ul></div>' .
-        '<p class="sc-chart-hint">Click a data point to drill down to detail rows.</p>' .
+        '<p class="sc-chart-hint">Click a data point or horizontal-axis label to drill down to detail rows.</p>' .
         '<div class="sc-chart-drilldowns" hidden>' . $drilldown_forms . '</div></div>' .
-        $class->_table($result, $model);
+        ($model->{state}->graph_show_table ? $class->_table(\%raw_result, $model) : '');
 }
 
 sub _graph_unit_label ($unit) {
@@ -799,7 +815,7 @@ sub _drilldown_control ($class, $model, $pairs, $label_html, $level, $options = 
 
 sub _pagination ($class, $model, $position = 'bottom') {
     my $state = $model->{state};
-    return '' if $model->{result}{grid_data};
+    return '' if $model->{result}{grid_data} || $state->view eq 'graph';
     my $current_page = $state->page;
     my $total_pages = $model->{result}{total_pages};
     my @buttons;

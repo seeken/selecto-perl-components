@@ -78,10 +78,23 @@ test("columns, measures, and filters can add the same field more than once", asy
   )).toHaveCount(2);
   await expect(page.locator('[data-sc-picker-kind="measure"] select[name="measure_chart_type"]')).toHaveCount(2);
   await expect(page.locator('[data-sc-picker-kind="measure"] select[name="measure_axis"]')).toHaveCount(2);
+  await expect(page.locator('[data-sc-picker-kind="measure"] input[name="measure_stack"]')).toHaveCount(2);
+  await expect(page.locator('[data-sc-picker-kind="measure"] input[name="measure_color"]')).toHaveCount(2);
+  expect(await page.locator('[data-sc-picker-kind="measure"] select[name="measure_ignore_nulls"]')
+    .evaluateAll(selects => selects.map(select => select.value))).toEqual(["auto", "auto"]);
   await expect(page.locator('[data-sc-picker-kind="measure"] select[name="measure_transform"]')).toHaveCount(2);
   expect(await page.locator('[data-sc-picker-kind="measure"] input[name="measure_series_id"]')
     .evaluateAll(inputs => inputs.map(input => input.value))).toEqual(["series_1", "series_2"]);
   await page.locator('[data-sc-picker-kind="measure"] details').first().locator("summary").click();
+  const autoColor = page.locator('[data-sc-picker-kind="measure"] [data-sc-measure-color-auto]').first();
+  const colorPicker = page.locator('[data-sc-picker-kind="measure"] [data-sc-measure-color-picker]').first();
+  await expect(autoColor).toBeChecked();
+  await expect(colorPicker).toBeDisabled();
+  await autoColor.uncheck();
+  await expect(colorPicker).toBeEnabled();
+  await colorPicker.fill("#123456");
+  await expect(page.locator('[data-sc-picker-kind="measure"] input[name="measure_color"]').first())
+    .toHaveValue("#123456");
   const firstTransform = page.locator('[data-sc-picker-kind="measure"] select[name="measure_transform"]').first();
   await firstTransform.selectOption("moving_average");
   await expect(page.locator('[data-sc-picker-kind="measure"] [data-sc-measure-transform-window]').first())
@@ -98,8 +111,10 @@ test("columns, measures, and filters can add the same field more than once", asy
 test("mixed graph series configure independent left and right axes", async ({page}) => {
   await page.setContent(`
     <div data-sc-chart data-chart-type="bar"
-      data-chart-data='{"labels":["Jan","Feb"],"axes":{"y":{"side":"left","label":"Count","unit":{"kind":"count"}},"y1":{"side":"right","label":"USD","unit":{"kind":"currency","code":"USD"}}},"datasets":[{"label":"Loads","data":[2,4],"rawData":[2,4],"unit":{"kind":"count"},"type":"bar","scType":"bar","yAxisID":"y"},{"label":"Revenue","data":[10,15],"rawData":[10,20],"unit":{"kind":"currency","code":"USD"},"transforms":["moving_average"],"type":"line","scType":"line","yAxisID":"y1"}]}'
-    ><canvas></canvas></div>
+      data-chart-data='{"labels":["Jan","Feb"],"axes":{"y":{"side":"left","label":"Count","unit":{"kind":"count"}},"y1":{"side":"right","label":"USD","unit":{"kind":"currency","code":"USD"},"stacked":true}},"datasets":[{"label":"Loads","data":[2,4],"rawData":[2,4],"unit":{"kind":"count"},"type":"bar","scType":"bar","yAxisID":"y"},{"label":"Revenue","data":[10,15],"rawData":[10,20],"unit":{"kind":"currency","code":"USD"},"transforms":["moving_average"],"type":"line","scType":"line","yAxisID":"y1"},{"label":"Carrier pay","data":[4,5],"unit":{"kind":"currency","code":"USD"},"type":"bar","scType":"bar","yAxisID":"y1","stack":"expenses"},{"label":"Driver pay","data":[2,3],"unit":{"kind":"currency","code":"USD"},"type":"bar","scType":"bar","yAxisID":"y1","stack":"expenses"}]}'
+    ><canvas></canvas>
+      <form data-sc-graph-drilldown="1"><button>Drill down</button></form>
+    </div>
   `);
   await page.evaluate(() => {
     window.Chart = function (_canvas, config) {
@@ -115,13 +130,64 @@ test("mixed graph series configure independent left and right axes", async ({pag
   await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
   await expect.poll(() => page.evaluate(() => Boolean(window.capturedChartConfig))).toBe(true);
   const chart = await page.evaluate(() => window.capturedChartConfig);
-  expect(chart.data.datasets.map(dataset => [dataset.type, dataset.yAxisID]))
-    .toEqual([["bar", "y"], ["line", "y1"]]);
+  expect(chart.data.datasets.map(dataset => [dataset.type, dataset.yAxisID, dataset.stack || ""]))
+    .toEqual([
+      ["bar", "y", ""], ["line", "y1", ""],
+      ["bar", "y1", "expenses"], ["bar", "y1", "expenses"]
+    ]);
   expect(chart.options.scales.y.position).toBe("left");
   expect(chart.options.scales.y1.position).toBe("right");
+  expect(chart.options.scales.y1.stacked).toBe(true);
+  expect(chart.options.scales.x.stacked).toBe(true);
   expect(chart.options.scales.y1.grid.drawOnChartArea).toBe(false);
   expect(await page.evaluate(() => window.capturedCurrencyTick)).toContain("1,234.5");
   expect(await page.evaluate(() => window.capturedCurrencyTooltip)).toContain("Revenue:");
+  const axisDrilldown = await page.evaluate(() => {
+    const form = document.querySelector('[data-sc-graph-drilldown="1"]');
+    let submitted = false;
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      submitted = true;
+    });
+    const chart = {
+      canvas: {style: {}},
+      scales: {x: {
+        top: 100, bottom: 140, left: 20, right: 220,
+        getValueForPixel: () => 1
+      }}
+    };
+    window.capturedChartConfig.options.onHover({x: 120, y: 120}, [], chart);
+    const cursor = chart.canvas.style.cursor;
+    window.capturedChartConfig.options.onClick({x: 120, y: 120}, [], chart);
+    return {submitted, cursor};
+  });
+  expect(axisDrilldown).toEqual({submitted: true, cursor: "pointer"});
+});
+
+test("switching to graph mode raises the point limit and removes page selection", async ({page}) => {
+  await load(page, `
+    <form data-sc-builder>
+      <input type="radio" name="view" value="detail" checked>
+      <input type="radio" name="view" value="graph">
+      <fieldset data-sc-result-view-panel="detail"></fieldset>
+      <fieldset data-sc-result-view-panel="summary" hidden disabled></fieldset>
+      <fieldset data-sc-graph-options hidden disabled></fieldset>
+      <fieldset data-sc-aggregate-options hidden disabled></fieldset>
+      <label><span data-sc-limit-label>Rows</span>
+        <select name="limit" data-sc-limit>
+          <option value="50" selected>50</option><option value="250">250</option><option value="500">500</option>
+        </select>
+      </label>
+      <label data-sc-page-control>Page<input name="page" value="4"></label>
+    </form>
+  `);
+  await page.locator('input[name="view"][value="graph"]').check();
+  await expect(page.locator('[data-sc-limit-label]')).toHaveText("Points");
+  await expect(page.locator('[data-sc-limit]')).toHaveValue("500");
+  await expect(page.locator('[data-sc-limit] option[value="50"]')).toHaveAttribute("disabled", "");
+  await expect(page.locator('[data-sc-page-control]')).toBeHidden();
+  await expect(page.locator('[data-sc-page-control] input')).toBeDisabled();
+  await expect(page.locator('[data-sc-page-control] input')).toHaveValue("1");
 });
 
 test("an export uses the columns currently selected in the builder", async ({page}) => {

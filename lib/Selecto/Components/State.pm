@@ -13,13 +13,13 @@ use Selecto::Analytics::TransformRegistry ();
 use Selecto::Error ();
 use Selecto::QueryLibrary ();
 
-has [qw(view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(view chart_type graph_show_table aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
+        q query_signature view chart_type graph_show_table aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
-        measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_transform measure_transform_window
+        measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_transform measure_transform_window
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
         order direction limit page
     )];
@@ -35,6 +35,8 @@ sub from_input ($class, $config, $domain, $input) {
     my $query_library = _query_library_state($domain, $input, \@errors);
     my $view = _parse_view($config, $input, $query_library, \@errors);
     my $chart_type = _parse_chart_type($input, \@errors);
+    my $graph_show_table = $view eq 'graph'
+        ? _truthy(_first($input, 'graph_show_table'), 0) : 0;
     my ($aggregate_grid, $aggregate_grid_colorize, $aggregate_grid_color_scale) =
         _parse_aggregate_grid($view, $input);
     my $row_click_action = _parse_row_click_action(
@@ -52,7 +54,7 @@ sub from_input ($class, $config, $domain, $input) {
     my ($orders, $order, $direction) = _parse_orders(
         $config, $domain, $input, $field_map, $valid_fields, $query_library, \@errors,
     );
-    my ($limit, $page) = _parse_pagination($config, $input, \@errors);
+    my ($limit, $page) = _parse_pagination($config, $input, $view, \@errors);
     my $filters = _parse_filters(
         $config, $input, $field_map, $valid_groups, $group_configs, \@errors,
     );
@@ -60,6 +62,7 @@ sub from_input ($class, $config, $domain, $input) {
     my $state = $class->new(
         view => $view,
         chart_type => $chart_type,
+        graph_show_table => $graph_show_table,
         aggregate_grid => $aggregate_grid,
         aggregate_grid_colorize => $aggregate_grid_colorize,
         aggregate_grid_color_scale => $aggregate_grid_color_scale,
@@ -108,6 +111,8 @@ sub query_pairs ($self) {
             query_library_param_value => $self->query_library_parameters->{$name};
     }
     push @pairs, chart_type => $self->chart_type if $self->view eq 'graph';
+    push @pairs, graph_show_table => 1
+        if $self->view eq 'graph' && $self->graph_show_table;
     if ($self->view eq 'aggregate' && $self->aggregate_grid) {
         push @pairs, aggregate_grid => 1;
         push @pairs, aggregate_grid_colorize => 1 if $self->aggregate_grid_colorize;
@@ -163,10 +168,13 @@ sub query_pairs ($self) {
             measure_alias => $measure_config->{alias} // '',
             measure_function => $measure_config->{function} // 'count',
             measure_bucket_ranges => $measure_config->{bucket_ranges} // '',
-            measure_ignore_nulls => $measure_config->{ignore_nulls} ? 1 : 0,
+            measure_ignore_nulls => ($measure_config->{null_handling} // '') eq 'auto'
+                ? 'auto' : ($measure_config->{ignore_nulls} ? 1 : 0),
             measure_series_id => $measure_config->{series_id} // "series_" . ($index + 1),
             measure_chart_type => $measure_config->{chart_type} // 'auto',
             measure_axis => $measure_config->{axis} // 'auto',
+            measure_stack => $measure_config->{stack} // '',
+            measure_color => $measure_config->{color} // '',
             measure_transform => $transform->{type} // '',
             measure_transform_window => ref($transform->{parameters}) eq 'HASH'
                 ? $transform->{parameters}{window} // '' : '';
@@ -196,6 +204,7 @@ sub as_hash ($self) {
     return {
         view => $self->view,
         chart_type => $self->chart_type,
+        graph_show_table => $self->graph_show_table,
         aggregate_grid => $self->aggregate_grid,
         aggregate_grid_colorize => $self->aggregate_grid_colorize,
         aggregate_grid_color_scale => $self->aggregate_grid_color_scale,
@@ -408,6 +417,8 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
     my $measure_series_ids = _values($input, 'measure_series_id');
     my $measure_chart_types = _values($input, 'measure_chart_type');
     my $measure_axes = _values($input, 'measure_axis');
+    my $measure_stacks = _values($input, 'measure_stack');
+    my $measure_colors = _values($input, 'measure_color');
     my $measure_transforms = _values($input, 'measure_transform');
     my $measure_transform_windows = _values($input, 'measure_transform_window');
     my $default_measure = $config->default_measure($domain);
@@ -450,6 +461,14 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
             $function = $measure->{aggregate};
             $bucket_ranges = '';
         }
+        my $null_input = _scalar($measure_ignore_nulls->[$index]);
+        my $null_handling = length($null_input) ? lc($null_input) : 'auto';
+        $null_handling = 'sql' if $null_handling eq '0';
+        $null_handling = 'zero' if $null_handling eq '1';
+        unless ($null_handling =~ /\A(?:auto|sql|zero)\z/) {
+            push @$errors, 'A measure NULL-handling option is not available.';
+            $null_handling = 'auto';
+        }
         my $series_id = _scalar($measure_series_ids->[$index]) || 'series_' . ($index + 1);
         if ($series_id !~ /\A[a-z][a-z0-9_]{0,63}\z/ || $series_ids{$series_id}++) {
             push @$errors, 'A graph series identifier is not available.';
@@ -465,6 +484,16 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
         unless ($axis =~ /\A(?:auto|left|right)\z/) {
             push @$errors, 'A graph series axis is not available.';
             $axis = 'auto';
+        }
+        my $stack = $view eq 'graph' ? lc(_scalar($measure_stacks->[$index])) : '';
+        if (length($stack) && $stack !~ /\A[a-z][a-z0-9_]{0,31}\z/) {
+            push @$errors, 'A graph series stack group is not available.';
+            $stack = '';
+        }
+        my $color = lc(_scalar($measure_colors->[$index]));
+        if (length($color) && $color !~ /\A#[0-9a-f]{6}\z/) {
+            push @$errors, 'A graph series color must use #RRGGBB format.';
+            $color = '';
         }
         my $aggregate_unit = Selecto::Analytics::UnitRegistry->aggregate_unit(
             $measure->{source_unit}, $function,
@@ -501,11 +530,16 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
             alias => $alias,
             function => $function,
             bucket_ranges => $bucket_ranges,
-            ignore_nulls => $function eq 'sum'
-                ? _truthy($measure_ignore_nulls->[$index], 0) : 0,
+            null_handling => $null_handling,
+            ignore_nulls => $function eq 'sum' && (
+                $null_handling eq 'zero'
+                || ($null_handling eq 'auto' && $view =~ /\A(?:aggregate|graph)\z/)
+            ) ? 1 : 0,
             series_id => $series_id,
             chart_type => $series_chart_type,
             axis => $axis,
+            stack => $stack,
+            (length($color) ? (color => $color) : ()),
             transforms => \@transforms,
             (defined($aggregate_unit) ? (raw_unit => $aggregate_unit) : ()),
             (defined($unit) ? (unit => $unit) : ()),
@@ -519,8 +553,11 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
         my $fallback = $default_measure;
         @valid_measures = ($fallback->{id});
         my $normalized = {
-            alias => '', function => $fallback->{aggregate}, bucket_ranges => '', ignore_nulls => 0,
-            series_id => 'series_1', chart_type => 'auto', axis => 'auto',
+            alias => '', function => $fallback->{aggregate}, bucket_ranges => '',
+            null_handling => 'auto',
+            ignore_nulls => $fallback->{aggregate} eq 'sum'
+                && $view =~ /\A(?:aggregate|graph)\z/ ? 1 : 0,
+            series_id => 'series_1', chart_type => 'auto', axis => 'auto', stack => '',
             transforms => [],
             (defined($fallback->{unit}) ? (raw_unit => $fallback->{unit}) : ()),
             (defined($fallback->{unit}) ? (unit => $fallback->{unit}) : ()),
@@ -534,6 +571,20 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
         my $plan = Selecto::Components::Graph::AxisPlanner->plan(\@measure_config_list);
         @measure_config_list = @{$plan->{series}};
         push @$errors, @{$plan->{errors}};
+        my %stack_contract;
+        for my $series (@measure_config_list) {
+            my $stack = $series->{stack} // '';
+            next unless length($stack);
+            my $signature = defined($series->{unit})
+                ? Selecto::Analytics::UnitRegistry->signature($series->{unit}) : '__untyped__';
+            my $contract = join "\x1f", $series->{resolved_axis} // 'left', $signature;
+            if (defined($stack_contract{$stack}) && $stack_contract{$stack} ne $contract) {
+                push @$errors,
+                    "Graph stack group $stack requires compatible units on one Y axis.";
+                next;
+            }
+            $stack_contract{$stack} = $contract;
+        }
         %measure_configs = ();
         for my $index (0 .. $#valid_measures) {
             $measure_configs{$valid_measures[$index]} //= $measure_config_list[$index];
@@ -589,15 +640,24 @@ sub _parse_orders ($config, $domain, $input, $field_map, $valid_fields, $query_l
     return (\@orders, $order, $direction);
 }
 
-sub _parse_pagination ($config, $input, $errors) {
+sub _parse_pagination ($config, $input, $view, $errors) {
     my $limit_input = _first($input, 'limit');
-    push @$errors, 'Row limit must be a positive integer.'
+    my $limit_label = $view eq 'graph' ? 'Point' : 'Row';
+    push @$errors, "$limit_label limit must be a positive integer."
         if defined($limit_input) && $limit_input !~ /\A[1-9]\d*\z/;
-    my $limit = _positive_integer($limit_input, $config->default_limit);
+    my $default_limit = $view eq 'graph'
+        ? ($config->max_limit < 500 ? $config->max_limit : 500)
+        : $config->default_limit;
+    my $limit = _positive_integer($limit_input, $default_limit);
+    if ($view eq 'graph') {
+        my $minimum = $config->max_limit < 250 ? $config->max_limit : 250;
+        $limit = $minimum if $limit < $minimum;
+    }
     if ($limit > $config->max_limit) {
-        push @$errors, 'Row limit is above the configured maximum.';
+        push @$errors, "$limit_label limit is above the configured maximum.";
         $limit = $config->max_limit;
     }
+    return ($limit, 1) if $view eq 'graph';
     my $page_input = _first($input, 'page');
     push @$errors, 'Page must be a positive integer.'
         if defined($page_input) && $page_input !~ /\A[1-9]\d*\z/;

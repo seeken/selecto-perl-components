@@ -84,10 +84,13 @@ sub _measure_selection_hidden ($state) {
             _hidden('measure_alias', $config->{alias} // '') .
             _hidden('measure_function', $config->{function} // 'count') .
             _hidden('measure_bucket_ranges', $config->{bucket_ranges} // '') .
-            _hidden('measure_ignore_nulls', $config->{ignore_nulls} ? 1 : 0) .
+            _hidden('measure_ignore_nulls', ($config->{null_handling} // '') eq 'auto'
+                ? 'auto' : ($config->{ignore_nulls} ? 1 : 0)) .
             _hidden('measure_series_id', $config->{series_id} // 'series_' . ($index + 1)) .
             _hidden('measure_chart_type', $config->{chart_type} // 'auto') .
             _hidden('measure_axis', $config->{axis} // 'auto') .
+            _hidden('measure_stack', $config->{stack} // '') .
+            _hidden('measure_color', $config->{color} // '') .
             _hidden('measure_transform', $transform->{type} // '') .
             _hidden('measure_transform_window', ref($transform->{parameters}) eq 'HASH'
                 ? $transform->{parameters}{window} // '' : '')
@@ -96,7 +99,7 @@ sub _measure_selection_hidden ($state) {
 sub _limit_options ($state, $config) {
     my %seen;
     my @limits = sort { $a <=> $b } grep { $_ <= $config->max_limit && !$seen{$_}++ }
-        (10, 25, 50, 100, $config->default_limit, $state->limit);
+        (10, 25, 50, 100, 250, 500, 1000, $config->default_limit, $state->limit);
     return join '', map {
         '<option value="' . $_ . '"' . ($_ == $state->limit ? ' selected' : '') . '>' . $_ . '</option>'
     } @limits;

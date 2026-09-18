@@ -97,8 +97,12 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $query_summary . $view_panel . $filter_panel .
         '<div class="sc-builder-apply-note"><span>Changes apply only when you run the query.</span>' .
         '<strong data-sc-builder-pending role="status" aria-live="polite" aria-atomic="true"></strong></div>' .
-        '<div class="sc-control-row"><label>Rows<select name="limit">' . _limit_options($state, $config) . '</select></label>' .
-        '<label>Page<input name="page" inputmode="numeric" value="' . _h($state->page) . '"></label></div>' .
+        '<div class="sc-control-row"><label><span data-sc-limit-label>' .
+        ($state->view eq 'graph' ? 'Points' : 'Rows') .
+        '</span><select name="limit" data-sc-limit>' . _limit_options($state, $config) . '</select></label>' .
+        '<label data-sc-page-control' . ($state->view eq 'graph' ? ' hidden' : '') .
+        '>Page<input name="page" inputmode="numeric" value="' . _h($state->page) . '"' .
+        ($state->view eq 'graph' ? ' disabled' : '') . '></label></div>' .
         '<button class="sc-button sc-primary" type="submit">Run query</button>' .
         '<noscript><p class="sc-note">JavaScript is off; this form still runs as a normal GET.</p></noscript></form>' .
         $saved_queries . '</div></aside>';
@@ -455,10 +459,13 @@ sub _chart_type_picker ($class, $state) {
             _h($_->[1]) . '</option>'
     } @types;
     my $inactive = $state->view eq 'graph' ? '' : ' hidden disabled';
+    my $show_table = $state->graph_show_table ? ' checked' : '';
     return '<fieldset class="sc-chart-type-picker" data-sc-graph-options' . $inactive . '>' .
         '<legend>Chart</legend><label>Chart type<select name="chart_type" ' .
         'data-sc-chart-type-picker>' . $options . '</select></label>' .
-        '<p>Choose a dashboard visualization for the selected groups and measures.</p></fieldset>';
+        '<label class="sc-option-check"><input type="checkbox" name="graph_show_table" value="1"' .
+        $show_table . '><span>Show aggregate data below the graph</span></label>' .
+        '<p>Choose a dashboard visualization for the selected groups and measures. The optional table shows the underlying aggregate values before graph transforms.</p></fieldset>';
 }
 
 sub _aggregate_grid_picker ($class, $state) {
@@ -701,9 +708,14 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
         } @{$config->measure_functions($field->{type}, $field->{type} eq 'rows')};
         my $bucket_visible = $function eq 'buckets' || $function eq 'age_buckets';
         my $sum_visible = $function eq 'sum';
+        my $null_handling = $item_config->{null_handling} //
+            ($item_config->{ignore_nulls} ? 'zero' : 'sql');
         my $series_id = $item_config->{series_id} // 'series';
         my $series_chart_type = $item_config->{chart_type} // 'auto';
         my $series_axis = $item_config->{axis} // 'auto';
+        my $series_stack = $item_config->{stack} // '';
+        my $series_color = $item_config->{color} // '';
+        my $color_value = length($series_color) ? $series_color : '#55d6be';
         my $chart_options = join '', map {
             '<option value="' . $_->[0] . '"' .
                 ($_->[0] eq $series_chart_type ? ' selected' : '') . '>' . $_->[1] . '</option>'
@@ -744,13 +756,25 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
             _h($field->{label}) . '"></label><label data-sc-measure-sum' .
             ($sum_visible ? '' : ' hidden') . '>NULL handling<select name="measure_ignore_nulls" ' .
             'aria-label="NULL handling for ' . _h($field->{label}) . '"><option value="0"' .
-            ($item_config->{ignore_nulls} ? '' : ' selected') . '>Keep SQL SUM behavior</option>' .
-            '<option value="1"' . ($item_config->{ignore_nulls} ? ' selected' : '') .
-            '>Treat NULL as 0</option></select></label>' .
+            ($null_handling eq 'sql' ? ' selected' : '') . '>Keep SQL SUM behavior</option>' .
+            '<option value="1"' . ($null_handling eq 'zero' ? ' selected' : '') .
+            '>Always treat NULL as 0</option><option value="auto"' .
+            ($null_handling eq 'auto' ? ' selected' : '') .
+            '>Automatic for view</option></select><small>Automatic treats NULL as 0 in graphs and aggregates.</small></label>' .
             '<label>Series style<select name="measure_chart_type" aria-label="Series style for ' .
             _h($field->{label}) . '">' . $chart_options . '</select></label>' .
             '<label>Y axis<select name="measure_axis" aria-label="Y axis for ' .
             _h($field->{label}) . '">' . $axis_options . '</select></label>' .
+            '<label>Stack group<input name="measure_stack" value="' . _h($series_stack) .
+            '" maxlength="32" pattern="[a-z][a-z0-9_]*" placeholder="e.g. expenses" ' .
+            'aria-label="Stack group for ' . _h($field->{label}) . '"><small>Series with the same group stack together.</small></label>' .
+            '<div class="sc-series-color" data-sc-measure-color-control>' .
+            '<span>Series color</span><input type="hidden" name="measure_color" value="' .
+            _h($series_color) . '"><input type="color" value="' . _h($color_value) .
+            '" data-sc-measure-color-picker aria-label="Color for ' . _h($field->{label}) . '"' .
+            (length($series_color) ? '' : ' disabled') . '><label class="sc-option-check"><input ' .
+            'type="checkbox" data-sc-measure-color-auto' . (length($series_color) ? '' : ' checked') .
+            '><span>Automatic contrasting color</span></label></div>' .
             '<label>Transform<select name="measure_transform" data-sc-measure-transform ' .
             'aria-label="Analytical transform for ' . _h($field->{label}) . '">' .
             $transform_options . '</select></label>' .

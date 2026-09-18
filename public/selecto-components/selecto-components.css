@@ -241,6 +241,11 @@ a { color: inherit; }
 .sc-column-config-grid { display: grid; gap: 7px; grid-template-columns: 1fr 1fr; padding-top: 7px; }
 .sc-column-config-grid label, .sc-order-direction { font-size: .7rem; }
 .sc-column-config-grid input, .sc-column-config-grid select, .sc-order-direction select { margin-top: 4px !important; min-height: 34px !important; }
+.sc-series-color { align-items: center; display: grid; font-size: .7rem; gap: 4px 8px; grid-template-columns: auto 1fr; }
+.sc-series-color > span { grid-column: 1 / -1; }
+.sc-series-color > input[type="color"] { cursor: pointer; height: 34px !important; margin: 0 !important; min-height: 34px !important; padding: 2px; width: 52px; }
+.sc-series-color > input[type="color"]:disabled { cursor: default; opacity: .45; }
+.sc-series-color > .sc-option-check { margin: 0; }
 .sc-picker-empty { align-self: center; color: var(--sc-muted); font-size: .72rem; padding: 14px; text-align: center; }
 .sc-control-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .sc-row-click-control { align-items: center; display: grid; gap: 8px; grid-template-columns: max-content minmax(140px, 1fr); margin: 0 0 10px; }

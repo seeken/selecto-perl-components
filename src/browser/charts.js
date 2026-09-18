@@ -27,6 +27,30 @@
     return unit.code ? formatted + " " + unit.code : formatted;
   }
 
+  function submitGraphDrilldown(root, index) {
+    if (!Number.isInteger(index) || index < 0) return false;
+    var form = root.querySelector('[data-sc-graph-drilldown="' + index + '"]');
+    if (!form) return false;
+    if (typeof form.requestSubmit === "function") form.requestSubmit();
+    else form.submit();
+    return true;
+  }
+
+  function horizontalAxisDrilldownIndex(event, chart, type, data) {
+    if (type === "horizontal_bar" || type === "scatter" || type === "pie" || type === "doughnut") {
+      return null;
+    }
+    var scale = chart && chart.scales && chart.scales.x;
+    if (!scale || !event || typeof scale.getValueForPixel !== "function") return null;
+    if (event.y < scale.top || event.y > scale.bottom || event.x < scale.left || event.x > scale.right) {
+      return null;
+    }
+    var value = Number(scale.getValueForPixel(event.x));
+    var index = Math.round(value);
+    return Number.isFinite(value) && index >= 0 && index < ((data && data.labels) || []).length
+      ? index : null;
+  }
+
   function chartOptions(root, type, data) {
     var styles = window.getComputedStyle(root);
     var ink = styles.getPropertyValue("--sc-ink").trim() || "#dce6e8";
@@ -54,12 +78,15 @@
           return rawValue === null || typeof rawValue === "undefined" ? "Raw: —" : "Raw: " + rawValue;
         }}}
       },
-      onClick: function (_event, elements) {
-        if (!elements.length) return;
-        var form = root.querySelector('[data-sc-graph-drilldown="' + elements[0].index + '"]');
-        if (!form) return;
-        if (typeof form.requestSubmit === "function") form.requestSubmit();
-        else form.submit();
+      onClick: function (event, elements, chart) {
+        if (elements.length && submitGraphDrilldown(root, elements[0].index)) return;
+        var index = horizontalAxisDrilldownIndex(event, chart, type, data);
+        if (index !== null) submitGraphDrilldown(root, index);
+      },
+      onHover: function (event, elements, chart) {
+        if (!chart || !chart.canvas) return;
+        var index = horizontalAxisDrilldownIndex(event, chart, type, data);
+        chart.canvas.style.cursor = elements.length || index !== null ? "pointer" : "default";
       }
     };
     if (type !== "pie" && type !== "doughnut") {
@@ -77,6 +104,7 @@
           position: definition.side === "right" ? "right" : "left",
           title: {display: Boolean(definition.label), text: definition.label || "", color: ink}
         });
+        options.scales[axisId].stacked = Boolean(definition.stacked);
         options.scales[axisId].ticks = Object.assign({}, axis.ticks, {
           callback: function (value) { return formatChartValue(value, definition.unit); }
         });
@@ -84,6 +112,9 @@
           options.scales[axisId].grid = Object.assign({}, axis.grid, {drawOnChartArea: false});
         }
       });
+      if (Object.keys(axes).some(function (axisId) { return Boolean(axes[axisId].stacked); })) {
+        options.scales.x.stacked = true;
+      }
     }
     if (type === "horizontal_bar") options.indexAxis = "y";
     if (type === "stacked_bar") {
@@ -107,7 +138,8 @@
     var styles = window.getComputedStyle(root);
     var brand = styles.getPropertyValue("--sc-brand").trim();
     (data.datasets || []).forEach(function (dataset, index) {
-      if (brand && index === 0 && type !== "pie" && type !== "doughnut") {
+      if (brand && index === 0 && dataset.colorAuto !== 0
+          && type !== "pie" && type !== "doughnut") {
         dataset.borderColor = brand;
         dataset.backgroundColor = brand;
       }

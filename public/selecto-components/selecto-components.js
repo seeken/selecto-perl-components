@@ -145,6 +145,33 @@
       panel.hidden = !aggregateActive;
       panel.disabled = !aggregateActive;
     });
+    var graphActive = view === "graph";
+    var limitLabel = root.querySelector("[data-sc-limit-label]");
+    if (limitLabel) limitLabel.textContent = graphActive ? "Points" : "Rows";
+    var pageControl = root.querySelector("[data-sc-page-control]");
+    if (pageControl) {
+      pageControl.hidden = graphActive;
+      var pageInput = pageControl.querySelector('input[name="page"]');
+      if (pageInput) {
+        pageInput.disabled = graphActive;
+        if (graphActive) pageInput.value = "1";
+      }
+    }
+    var limit = root.querySelector("[data-sc-limit]");
+    if (limit) {
+      var options = Array.from(limit.options);
+      options.forEach(function (option) {
+        var tooSmall = Number(option.value) < 250;
+        option.hidden = graphActive && tooSmall;
+        option.disabled = graphActive && tooSmall;
+      });
+      if (graphActive && Number(limit.value) < 250) {
+        var next = options.find(function (option) { return Number(option.value) >= 500; }) ||
+          options.find(function (option) { return Number(option.value) >= 250; }) ||
+          options[options.length - 1];
+        if (next) limit.value = next.value;
+      }
+    }
     root.querySelectorAll("[data-sc-picker-root]").forEach(refreshColumnPicker);
   }
 
@@ -185,6 +212,30 @@
     return unit.code ? formatted + " " + unit.code : formatted;
   }
 
+  function submitGraphDrilldown(root, index) {
+    if (!Number.isInteger(index) || index < 0) return false;
+    var form = root.querySelector('[data-sc-graph-drilldown="' + index + '"]');
+    if (!form) return false;
+    if (typeof form.requestSubmit === "function") form.requestSubmit();
+    else form.submit();
+    return true;
+  }
+
+  function horizontalAxisDrilldownIndex(event, chart, type, data) {
+    if (type === "horizontal_bar" || type === "scatter" || type === "pie" || type === "doughnut") {
+      return null;
+    }
+    var scale = chart && chart.scales && chart.scales.x;
+    if (!scale || !event || typeof scale.getValueForPixel !== "function") return null;
+    if (event.y < scale.top || event.y > scale.bottom || event.x < scale.left || event.x > scale.right) {
+      return null;
+    }
+    var value = Number(scale.getValueForPixel(event.x));
+    var index = Math.round(value);
+    return Number.isFinite(value) && index >= 0 && index < ((data && data.labels) || []).length
+      ? index : null;
+  }
+
   function chartOptions(root, type, data) {
     var styles = window.getComputedStyle(root);
     var ink = styles.getPropertyValue("--sc-ink").trim() || "#dce6e8";
@@ -212,12 +263,15 @@
           return rawValue === null || typeof rawValue === "undefined" ? "Raw: —" : "Raw: " + rawValue;
         }}}
       },
-      onClick: function (_event, elements) {
-        if (!elements.length) return;
-        var form = root.querySelector('[data-sc-graph-drilldown="' + elements[0].index + '"]');
-        if (!form) return;
-        if (typeof form.requestSubmit === "function") form.requestSubmit();
-        else form.submit();
+      onClick: function (event, elements, chart) {
+        if (elements.length && submitGraphDrilldown(root, elements[0].index)) return;
+        var index = horizontalAxisDrilldownIndex(event, chart, type, data);
+        if (index !== null) submitGraphDrilldown(root, index);
+      },
+      onHover: function (event, elements, chart) {
+        if (!chart || !chart.canvas) return;
+        var index = horizontalAxisDrilldownIndex(event, chart, type, data);
+        chart.canvas.style.cursor = elements.length || index !== null ? "pointer" : "default";
       }
     };
     if (type !== "pie" && type !== "doughnut") {
@@ -235,6 +289,7 @@
           position: definition.side === "right" ? "right" : "left",
           title: {display: Boolean(definition.label), text: definition.label || "", color: ink}
         });
+        options.scales[axisId].stacked = Boolean(definition.stacked);
         options.scales[axisId].ticks = Object.assign({}, axis.ticks, {
           callback: function (value) { return formatChartValue(value, definition.unit); }
         });
@@ -242,6 +297,9 @@
           options.scales[axisId].grid = Object.assign({}, axis.grid, {drawOnChartArea: false});
         }
       });
+      if (Object.keys(axes).some(function (axisId) { return Boolean(axes[axisId].stacked); })) {
+        options.scales.x.stacked = true;
+      }
     }
     if (type === "horizontal_bar") options.indexAxis = "y";
     if (type === "stacked_bar") {
@@ -265,7 +323,8 @@
     var styles = window.getComputedStyle(root);
     var brand = styles.getPropertyValue("--sc-brand").trim();
     (data.datasets || []).forEach(function (dataset, index) {
-      if (brand && index === 0 && type !== "pie" && type !== "doughnut") {
+      if (brand && index === 0 && dataset.colorAuto !== 0
+          && type !== "pie" && type !== "doughnut") {
         dataset.borderColor = brand;
         dataset.backgroundColor = brand;
       }
@@ -1736,7 +1795,10 @@
     var nulls = document.createElement("select");
     nulls.name = "measure_ignore_nulls";
     nulls.setAttribute("aria-label", "NULL handling for " + label);
-    appendOptions(nulls, [["0", "Keep SQL SUM behavior"], ["1", "Treat NULL as 0"]], "0");
+    appendOptions(nulls, [
+      ["0", "Keep SQL SUM behavior"], ["1", "Always treat NULL as 0"],
+      ["auto", "Automatic for view"]
+    ], "auto");
     appendConfigLabel(grid, "NULL handling", nulls, "data-sc-measure-sum");
 
     var chartType = document.createElement("select");
@@ -1752,6 +1814,44 @@
     axis.setAttribute("aria-label", "Y axis for " + label);
     appendOptions(axis, [["auto", "Automatic"], ["left", "Left"], ["right", "Right"]], "auto");
     appendConfigLabel(grid, "Y axis", axis);
+
+    var stack = document.createElement("input");
+    stack.name = "measure_stack";
+    stack.maxLength = 32;
+    stack.pattern = "[a-z][a-z0-9_]*";
+    stack.placeholder = "e.g. expenses";
+    stack.setAttribute("aria-label", "Stack group for " + label);
+    appendConfigLabel(grid, "Stack group", stack);
+
+    var colorControl = document.createElement("div");
+    colorControl.className = "sc-series-color";
+    colorControl.setAttribute("data-sc-measure-color-control", "");
+    var colorTitle = document.createElement("span");
+    colorTitle.textContent = "Series color";
+    colorControl.appendChild(colorTitle);
+    var colorValue = document.createElement("input");
+    colorValue.type = "hidden";
+    colorValue.name = "measure_color";
+    colorControl.appendChild(colorValue);
+    var colorPicker = document.createElement("input");
+    colorPicker.type = "color";
+    colorPicker.value = "#55d6be";
+    colorPicker.disabled = true;
+    colorPicker.setAttribute("data-sc-measure-color-picker", "");
+    colorPicker.setAttribute("aria-label", "Color for " + label);
+    colorControl.appendChild(colorPicker);
+    var autoLabel = document.createElement("label");
+    autoLabel.className = "sc-option-check";
+    var autoColor = document.createElement("input");
+    autoColor.type = "checkbox";
+    autoColor.checked = true;
+    autoColor.setAttribute("data-sc-measure-color-auto", "");
+    autoLabel.appendChild(autoColor);
+    var autoText = document.createElement("span");
+    autoText.textContent = "Automatic contrasting color";
+    autoLabel.appendChild(autoText);
+    colorControl.appendChild(autoLabel);
+    grid.appendChild(colorControl);
 
     var transform = document.createElement("select");
     transform.name = "measure_transform";
@@ -1797,6 +1897,18 @@
         node.hidden = measureTransform.value !== "moving_average";
       });
     }
+  }
+
+  function syncMeasureColor(item, source) {
+    var control = item && item.querySelector("[data-sc-measure-color-control]");
+    if (!control) return;
+    var hidden = control.querySelector('input[name="measure_color"]');
+    var picker = control.querySelector("[data-sc-measure-color-picker]");
+    var automatic = control.querySelector("[data-sc-measure-color-auto]");
+    if (!hidden || !picker || !automatic) return;
+    if (source === picker) automatic.checked = false;
+    picker.disabled = automatic.checked;
+    hidden.value = automatic.checked ? "" : picker.value.toLowerCase();
   }
 
   function refreshColumnPicker(root) {
@@ -2304,6 +2416,8 @@
       refreshFilterBadge(builder);
     } else if (event.target.matches("[data-sc-group-format], [data-sc-measure-function], [data-sc-measure-transform]")) {
       syncPickerConfig(event.target.closest("[data-sc-picker-set-item]"));
+    } else if (event.target.matches("[data-sc-measure-color-auto], [data-sc-measure-color-picker]")) {
+      syncMeasureColor(event.target.closest("[data-sc-picker-set-item]"), event.target);
     }
     markBuilderDirty(builder);
   });
