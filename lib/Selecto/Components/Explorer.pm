@@ -346,12 +346,11 @@ sub _drilldowns ($state, $built, $records) {
 }
 
 sub _drilldown_for_group_indexes ($state, $groups, $record, $indexes) {
-    my %group_field = map {
-        ($_->{field} => 1,
-            (defined($_->{drilldown_field}) ? ($_->{drilldown_field} => 1) : ()))
-    } @$groups;
-    my @filters = map { { %$_ } }
-        grep { !$group_field{$_->{field}} } @{$state->filters};
+    # A grouping predicate narrows the existing query; it does not replace
+    # filters already applied to that field.  This is especially important for
+    # temporal groups: a clicked weekday must remain inside the selected date
+    # range rather than matching that weekday across all history.
+    my @filters = map { { %$_ } } @{$state->filters};
     for my $group_index (@$indexes) {
         my $group = $groups->[$group_index];
         next unless $group;

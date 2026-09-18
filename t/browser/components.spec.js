@@ -108,6 +108,28 @@ test("columns, measures, and filters can add the same field more than once", asy
   await expect(addFilter).toBeVisible();
 });
 
+test("date-only values remain stable for datetime filters", async ({page}) => {
+  await load(page, `
+    <article data-sc-filter-set-item data-field="timestamp" data-label="Created"
+      data-type="utc_datetime">
+      <div class="sc-filter-editor">
+        <select name="filter_op">
+          <option value="gte" selected>on or after</option>
+          <option value="lt">before</option>
+        </select>
+        <div data-sc-filter-values>
+          <input type="date" name="filter_value" value="2024-10-01">
+          <input type="hidden" name="filter_value_end" value="">
+        </div>
+      </div>
+    </article>
+  `);
+
+  await page.locator('[name="filter_op"]').selectOption("lt");
+  await expect(page.locator('[name="filter_value"]')).toHaveAttribute("type", "date");
+  await expect(page.locator('[name="filter_value"]')).toHaveValue("2024-10-01");
+});
+
 test("mixed graph series configure independent left and right axes", async ({page}) => {
   await page.setContent(`
     <div data-sc-chart data-chart-type="bar"
@@ -125,6 +147,9 @@ test("mixed graph series configure independent left and right axes", async ({pag
       });
       this.destroy = function () {};
     };
+    window.Chart.register = function () {};
+    window.Chart.getChart = function () { return null; };
+    window.Chart.version = "test";
   });
   await page.addScriptTag({path: bundle});
   await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
@@ -176,12 +201,77 @@ test("a chart initialization failure reveals the fallback without flashing it fi
   `);
   await page.evaluate(() => {
     window.Chart = function () { throw new Error("chart failed"); };
+    window.Chart.register = function () {};
+    window.Chart.getChart = function () { return null; };
+    window.Chart.version = "test";
   });
   await page.addScriptTag({path: bundle});
   await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
   await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-fallback/);
   await expect(page.locator("[data-sc-chart]")).not.toHaveClass(/is-ready/);
   await expect(page.locator("[data-sc-chart]")).toHaveAttribute("aria-busy", "false");
+  await expect(page.locator("[data-sc-chart-error-notice]")).toBeVisible();
+  await page.evaluate(() => {
+    window.Chart = function () { this.destroy = function () {}; };
+    window.Chart.register = function () {};
+    window.Chart.getChart = function () { return null; };
+    window.Chart.version = "test";
+  });
+  await page.locator("[data-sc-chart-retry]").click();
+  await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-ready/);
+  await expect(page.locator("[data-sc-chart-error-notice]")).toBeHidden();
+});
+
+test("a transient chart initialization failure retries automatically", async ({page}) => {
+  await page.setContent(`
+    <div data-sc-chart data-chart-type="bar" data-chart-data='{"labels":["Jan"],"datasets":[]}'
+      aria-busy="true">
+      <div class="sc-chart-canvas"><canvas></canvas></div>
+      <div class="sc-chart-fallback">Fallback values</div>
+    </div>
+  `);
+  await page.evaluate(() => {
+    window.chartAttempts = 0;
+    window.Chart = function () {
+      window.chartAttempts += 1;
+      if (window.chartAttempts === 1) throw new Error("layout was not ready");
+      this.destroy = function () {};
+    };
+    window.Chart.register = function () {};
+    window.Chart.getChart = function () { return null; };
+    window.Chart.version = "test";
+  });
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
+  await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-ready/);
+  expect(await page.evaluate(() => window.chartAttempts)).toBe(2);
+});
+
+test("a legacy Chart global does not prevent Chart.js from loading", async ({page}) => {
+  await page.setContent(`
+    <section data-sc-chart-src>
+      <div data-sc-chart data-chart-type="bar" data-chart-data='{"labels":["Jan"],"datasets":[]}'
+        aria-busy="true">
+        <div class="sc-chart-canvas"><canvas></canvas></div>
+        <div class="sc-chart-fallback">Fallback values</div>
+      </div>
+    </section>
+  `);
+  await page.evaluate(() => {
+    window.Chart = function LegacyChart() {};
+    const source = [
+      "window.Chart=function(){this.destroy=function(){}}",
+      "window.Chart.register=function(){}",
+      "window.Chart.getChart=function(){return null}",
+      "window.Chart.version='loaded-chartjs'"
+    ].join(";");
+    document.querySelector("[data-sc-chart-src]").dataset.scChartSrc =
+      "data:text/javascript," + encodeURIComponent(source);
+  });
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
+  await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-ready/);
+  expect(await page.evaluate(() => window.Chart.version)).toBe("loaded-chartjs");
 });
 
 test("switching to graph mode raises the point limit and removes page selection", async ({page}) => {
@@ -238,13 +328,30 @@ test("an export uses the columns currently selected in the builder", async ({pag
 });
 
 test("a back-forward cache restore preserves results and reconnects without a query", async ({page}) => {
-  await load(page, `
+  await page.setContent(`
     <section id="selecto-channel-orders" hx-ws:connect="/explore/orders/ws">
       <span data-selecto-connection class="is-live">Live</span>
       <form><input name="query_library_view" value="late-orders"></form>
       <div data-saved-results>Previously loaded rows</div>
+      <div data-sc-chart data-chart-type="bar" data-chart-data='{"labels":["Jan"],"datasets":[]}'
+        aria-busy="true"><div class="sc-chart-canvas"><canvas></canvas></div>
+        <div class="sc-chart-fallback">Fallback</div></div>
     </section>
   `);
+  await page.evaluate(() => {
+    window.chartConstructions = 0;
+    window.chartDestroyCalls = 0;
+    window.Chart = function () {
+      window.chartConstructions += 1;
+      this.destroy = function () { window.chartDestroyCalls += 1; };
+    };
+    window.Chart.register = function () {};
+    window.Chart.getChart = function () { return null; };
+    window.Chart.version = "test";
+  });
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
+  await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-ready/);
 
   const restored = await page.evaluate(() => {
     const originalChannel = document.querySelector("#selecto-channel-orders");
@@ -270,6 +377,11 @@ test("a back-forward cache restore preserves results and reconnects without a qu
     savedView: "late-orders",
     resultsText: "Previously loaded rows",
   });
+  await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-ready/);
+  expect(await page.evaluate(() => ({
+    constructions: window.chartConstructions,
+    destroys: window.chartDestroyCalls,
+  }))).toEqual({constructions: 2, destroys: 1});
   await expect(page.locator("[data-selecto-connection]")).toHaveText("Connecting");
 });
 
@@ -319,6 +431,203 @@ test("Back restores the previous applied query without rerunning it", async ({pa
   expect(documentRequests).toBe(1);
 });
 
+test("Back rebuilds a graph from a clean history snapshot", async ({page}) => {
+  let documentRequests = 0;
+  await page.route("http://selecto.test/**", async route => {
+    documentRequests += 1;
+    await route.fulfill({contentType: "text/html", body: `
+      <nav data-host-menu>Tenant navigation</nav>
+      <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
+        <span data-selecto-connection class="is-live">Live</span>
+        <section id="selecto-surface-loads" data-sc-chart-src="/chart.js">
+          <div data-sc-workspace>
+            <form action="/explorer/load" method="get" data-sc-builder>
+              <input name="view" value="graph">
+            </form>
+            <section class="sc-results">
+              <div data-sc-chart data-chart-type="bar"
+                data-chart-data='{"labels":["Jan"],"datasets":[]}' aria-busy="true">
+                <div class="sc-chart-canvas"><canvas></canvas></div>
+                <div class="sc-chart-fallback">Fallback values</div>
+                <form action="/explorer/load" method="get" hx-ws:send
+                  data-sc-graph-drilldown="0">
+                  <input name="view" value="detail">
+                  <input name="filter_value" value="Jan">
+                </form>
+              </div>
+            </section>
+          </div>
+        </section>
+      </section>
+    `});
+  });
+  await page.goto("http://selecto.test/explorer/load?view=graph");
+  await page.evaluate(() => {
+    window.chartConstructions = 0;
+    window.Chart = function (canvas) {
+      window.chartConstructions += 1;
+      canvas.width = 900;
+      canvas.height = 420;
+      canvas.style.width = "900px";
+      this.destroy = function () {};
+    };
+    window.Chart.register = function () {};
+    window.Chart.getChart = function () { return null; };
+    window.Chart.version = "test";
+    window.htmx = {process() {}};
+  });
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
+  await page.evaluate(() => document.dispatchEvent(
+    new CustomEvent("htmx:ws:after:connection", {bubbles: true})
+  ));
+  await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-ready/);
+  await page.evaluate(() => {
+    const drilldown = document.querySelector('[data-sc-graph-drilldown="0"]');
+    drilldown.addEventListener("submit", event => event.preventDefault(), {once: true});
+    drilldown.requestSubmit();
+    if (!window.history.state.selectoPendingNavigation) {
+      throw new Error("graph drilldown did not reserve its history entry during submit");
+    }
+    if (!window.sessionStorage.getItem(
+      "selecto-history:" + window.history.state.selectoSnapshot
+    )) {
+      throw new Error("graph history snapshot was not persisted for document restoration");
+    }
+    document.dispatchEvent(new CustomEvent("htmx:before:swap", {
+      detail: {target: document.querySelector(".sc-results")}
+    }));
+    document.querySelector("#selecto-surface-loads").outerHTML = `
+      <section id="selecto-surface-loads"><div data-sc-workspace>
+        <section class="sc-results"><div data-detail-results>January loads</div></section>
+      </div></section>`;
+    document.dispatchEvent(new CustomEvent("htmx:ws:after:message:incoming", {
+      detail: {message: {json: () => Promise.resolve({
+        selecto: {url: "/explorer/load?view=detail&filter_value=Jan"}
+      })}}
+    }));
+  });
+  await expect.poll(() => page.url()).toContain("view=detail");
+  await page.goBack();
+  await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-ready/);
+  await expect(page.locator("[data-sc-chart]")).not.toHaveClass(/is-fallback/);
+  await expect(page.locator("[data-sc-builder]")).toBeVisible();
+  await expect(page.locator("[data-host-menu]")).toHaveText("Tenant navigation");
+  expect(await page.evaluate(() => window.chartConstructions)).toBe(2);
+  expect(documentRequests).toBe(1);
+});
+
+test("a reconnecting Explorer keeps drilldown and Back inside browser history", async ({page}) => {
+  let documentRequests = 0;
+  await page.route("http://selecto.test/**", async route => {
+    documentRequests += 1;
+    await route.fulfill({contentType: "text/html", body: `
+      <nav data-host-menu>Tenant navigation</nav>
+      <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
+        <span data-selecto-connection>Reconnecting</span>
+        <section id="selecto-surface-loads">
+          <div data-sc-workspace><section class="sc-results">
+            <div data-aggregate-results>Aggregate results</div>
+            <form action="/explorer/load" method="get" hx-ws:send data-drilldown>
+              <input name="view" value="detail">
+              <input name="filter_value" value="Monday">
+              <button>Open</button>
+            </form>
+          </section></div>
+        </section>
+      </section>
+    `});
+  });
+  await page.goto("http://selecto.test/explorer/load?view=aggregate");
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => {
+    window.nativeSubmitCalled = false;
+    HTMLFormElement.prototype.submit = function () { window.nativeSubmitCalled = true; };
+    const form = document.querySelector("[data-drilldown]");
+    // Model the WebSocket extension's bubbling submit listener while its
+    // connection is reconnecting. It queues the message and prevents HTTP.
+    form.addEventListener("submit", event => event.preventDefault());
+    form.requestSubmit();
+  });
+  await expect.poll(() => page.url()).toContain("view=detail");
+  expect(await page.evaluate(() => window.nativeSubmitCalled)).toBe(false);
+  expect(await page.evaluate(() => window.history.state.selectoPendingNavigation)).toBe(true);
+  await page.goBack();
+  await expect(page.locator("[data-aggregate-results]")).toHaveText("Aggregate results");
+  await expect(page.locator("[data-host-menu]")).toHaveText("Tenant navigation");
+  expect(documentRequests).toBe(1);
+});
+
+test("browser Back restores an Explorer history entry inside a legacy host frame", async ({page}) => {
+  let explorerDocuments = 0;
+  await page.route("http://selecto.test/**", async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/host") {
+      await route.fulfill({contentType: "text/html", body: `
+        <frameset cols="180,*">
+          <frame name="x1" src="/menu">
+          <frame name="x2" src="/explorer/load?view=aggregate">
+        </frameset>
+      `});
+      return;
+    }
+    if (url.pathname === "/menu") {
+      await route.fulfill({contentType: "text/html", body: `
+        <nav data-host-menu>Tenant navigation</nav>
+      `});
+      return;
+    }
+    explorerDocuments += 1;
+    await route.fulfill({contentType: "text/html", body: `
+      <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
+        <span data-selecto-connection>Connecting</span>
+        <section id="selecto-surface-loads">
+          <form action="/explorer/load" method="get" data-sc-builder>
+            <input name="view" value="aggregate">
+          </form>
+          <section class="sc-results">
+            <div data-aggregate-results>Aggregate results</div>
+            <form action="/explorer/load" method="get" hx-ws:send class="sc-drilldown-form">
+              <input name="view" value="detail">
+              <input name="filter_value" value="at">
+              <button>Open</button>
+            </form>
+          </section>
+        </section>
+      </section>
+    `});
+  });
+  await page.goto("http://selecto.test/host");
+  let frame = page.frames().find(candidate => candidate.url().includes("/explorer/load"));
+  await frame.evaluate(() => { window.htmx = {process() {}}; });
+  await frame.addScriptTag({path: bundle});
+  await frame.evaluate(() => {
+    document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true}));
+    document.dispatchEvent(new CustomEvent("htmx:ws:after:connection", {bubbles: true}));
+    const form = document.querySelector(".sc-drilldown-form");
+    form.addEventListener("submit", event => event.preventDefault(), {once: true});
+    form.requestSubmit();
+    document.querySelector("#selecto-surface-loads").outerHTML = `
+      <section id="selecto-surface-loads">
+        <section class="sc-results"><div data-detail-results>Detail results</div></section>
+      </section>`;
+    document.dispatchEvent(new CustomEvent("htmx:ws:after:message:incoming", {
+      detail: {message: {json: () => Promise.resolve({
+        selecto: {url: "/explorer/load?view=detail&filter_value=at"}
+      })}}
+    }));
+  });
+  await expect.poll(() => frame.url()).toContain("view=detail");
+  await page.evaluate(() => window.history.back());
+  await expect.poll(() => page.frames().some(candidate =>
+    candidate.url().includes("/explorer/load?view=aggregate")
+  )).toBe(true);
+  frame = page.frames().find(candidate => candidate.url().includes("/explorer/load"));
+  await expect(frame.locator("[data-aggregate-results]")).toHaveText("Aggregate results");
+  await expect(page.frame({name: "x1"}).locator("[data-host-menu]")).toHaveText("Tenant navigation");
+  expect(explorerDocuments).toBe(1);
+});
+
 test("grid cells, axes, hover, and compact submission stay synchronized", async ({page}) => {
   await load(page, `
     <span data-selecto-connection class="is-live"></span>
@@ -364,12 +673,14 @@ test("grid cells, axes, hover, and compact submission stay synchronized", async 
 
 test("row dialog opens and navigates between result rows", async ({page}) => {
   await load(page, `
+    <title>Load Explorer</title>
     <section class="sc-results">
       <div tabindex="0" data-sc-row-click data-sc-row-click-type="iframe_modal" data-sc-row-dialog-id="details" data-sc-row-click-url="/one" data-sc-row-click-title="First">First row</div>
       <div tabindex="0" data-sc-row-click data-sc-row-click-type="iframe_modal" data-sc-row-dialog-id="details" data-sc-row-click-url="/two" data-sc-row-click-title="Second">Second row</div>
       <dialog id="details" data-sc-row-dialog>
         <h2 data-sc-row-dialog-title></h2><span data-sc-row-dialog-position></span>
         <button data-sc-row-dialog-nav="previous"></button><button data-sc-row-dialog-nav="next"></button>
+        <button data-sc-row-dialog-close>Close</button>
         <a data-sc-row-dialog-open></a><span data-sc-row-dialog-loading></span><iframe data-sc-row-dialog-frame></iframe>
       </dialog>
     </section>
@@ -382,6 +693,13 @@ test("row dialog opens and navigates between result rows", async ({page}) => {
   await page.locator('[data-sc-row-dialog-nav="next"]').click();
   await expect(page.locator("[data-sc-row-dialog-title]")).toHaveText("Second");
   await expect(page.locator("[data-sc-row-dialog-frame]")).toHaveAttribute("src", "/two");
+  await page.evaluate(() => { document.title = "Legacy Load 101"; });
+  await expect(page).toHaveTitle("Load Explorer");
+  await page.evaluate(() => {
+    document.title = "Legacy Load 102";
+    document.querySelector("[data-sc-row-dialog-close]").click();
+  });
+  await expect(page).toHaveTitle("Load Explorer");
 });
 
 test("record editor saves through the governed endpoint and replaces the result row", async ({page}) => {

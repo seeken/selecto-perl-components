@@ -8,6 +8,7 @@ use TestSelectoComponents;
 use Selecto::Components::Config ();
 use Selecto::Components::Explorer ();
 use Selecto::Components::Renderer ();
+use Selecto::Components::Renderer::Builder ();
 use Selecto::Components::Renderer::Results ();
 use Selecto::Components::State ();
 use Selecto::Components::Util qw(html_escape humanize);
@@ -23,6 +24,22 @@ my $config = Selecto::Components::Config->new(
     id => 'products',
     title => q{<img src=x onerror="alert(1)">},
 );
+my $date_only_timestamp_filter = Selecto::Components::Renderer::Builder->_filter_value_controls(
+    $config,
+    {path => 'timestamp', label => 'Created', type => 'utc_datetime'},
+    {op => 'gte', value => '2024-10-01', value_end => ''},
+);
+like $date_only_timestamp_filter,
+    qr{input type="date" name="filter_value"[^>]*value="2024-10-01"},
+    'date-only datetime filters render in a control that retains their value';
+my $timestamp_filter = Selecto::Components::Renderer::Builder->_filter_value_controls(
+    $config,
+    {path => 'timestamp', label => 'Created', type => 'utc_datetime'},
+    {op => 'gte', value => '2024-10-01T13:45', value_end => ''},
+);
+like $timestamp_filter,
+    qr{input type="datetime-local" name="filter_value"[^>]*value="2024-10-01T13:45"},
+    'datetime filters retain datetime-local controls when a time is present';
 my $export_controller = TestSelectoComponents::Controller->new(params => {
     q => 1,
     view => 'detail',

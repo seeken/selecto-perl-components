@@ -6,6 +6,7 @@
   var collapsedBuilderTrays = Object.create(null);
   var connectionStatus = "Connecting";
   var chartInstances = new WeakMap();
+  var chartRetryTimers = new WeakMap();
   var selectoPerformance = null;
   var selectoSwapStarted = 0;
   var selectoHistorySnapshots = new Map();
@@ -189,6 +190,57 @@
     return type;
   }
 
+  function chartLibraryAvailable() {
+    return typeof window.Chart === "function"
+      && typeof window.Chart.register === "function"
+      && typeof window.Chart.getChart === "function"
+      && typeof window.Chart.version === "string";
+  }
+
+  function clearChartRetry(root) {
+    var timer = root && chartRetryTimers.get(root);
+    if (timer) window.clearTimeout(timer);
+    if (root) chartRetryTimers.delete(root);
+  }
+
+  function setChartLoading(root) {
+    if (!root) return;
+    root.classList.remove("is-ready", "is-fallback");
+    root.setAttribute("aria-busy", "true");
+    root.removeAttribute("data-sc-chart-error");
+    var notice = root.querySelector("[data-sc-chart-error-notice]");
+    if (notice) notice.hidden = true;
+  }
+
+  function prepareChartsForSnapshot(node) {
+    if (!node || !node.querySelectorAll) return;
+    var roots = Array.from(node.querySelectorAll("[data-sc-chart]"));
+    if (node.matches && node.matches("[data-sc-chart]")) roots.unshift(node);
+    roots.forEach(function (root) {
+      root.classList.remove("is-ready", "is-fallback");
+      root.setAttribute("aria-busy", "true");
+      root.removeAttribute("data-sc-chart-error");
+      var notice = root.querySelector("[data-sc-chart-error-notice]");
+      if (notice) notice.remove();
+      var canvas = root.querySelector("canvas");
+      if (canvas) {
+        canvas.removeAttribute("width");
+        canvas.removeAttribute("height");
+        canvas.removeAttribute("style");
+      }
+    });
+  }
+
+  function scheduleChartInitialization(root, attempt) {
+    if (!root || !root.isConnected || chartInstances.has(root)) return;
+    clearChartRetry(root);
+    var timer = window.setTimeout(function () {
+      chartRetryTimers.delete(root);
+      if (root.isConnected && !chartInstances.has(root)) initializeChart(root, attempt);
+    }, attempt ? 75 * attempt : 0);
+    chartRetryTimers.set(root, timer);
+  }
+
   function chartColorWithAlpha(color, alpha) {
     var match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color || "");
     if (!match) return color;
@@ -309,8 +361,13 @@
     return options;
   }
 
-  function initializeChart(root) {
-    if (!root || chartInstances.has(root) || !window.Chart) return;
+  function initializeChart(root, attempt) {
+    attempt = Number(attempt) || 0;
+    if (!root || chartInstances.has(root)) return;
+    if (!chartLibraryAvailable()) {
+      showChartFallback(root, new Error("Chart.js is unavailable"));
+      return;
+    }
     var canvas = root.querySelector("canvas");
     if (!canvas) {
       showChartFallback(root);
@@ -320,8 +377,8 @@
     var data;
     try {
       data = JSON.parse(root.dataset.chartData || "{}");
-    } catch (_error) {
-      showChartFallback(root);
+    } catch (error) {
+      showChartFallback(root, error);
       return;
     }
     var styles = window.getComputedStyle(root);
@@ -345,6 +402,10 @@
       }
     });
     try {
+      if (typeof window.Chart.getChart === "function") {
+        var stale = window.Chart.getChart(canvas);
+        if (stale && typeof stale.destroy === "function") stale.destroy();
+      }
       var chart = new window.Chart(canvas, {
         type: chartJsType(type),
         data: data,
@@ -354,30 +415,120 @@
       root.classList.remove("is-fallback");
       root.classList.add("is-ready");
       root.setAttribute("aria-busy", "false");
-    } catch (_error) {
-      showChartFallback(root);
+      root.removeAttribute("data-sc-chart-error");
+    } catch (error) {
+      if (attempt < 2) {
+        setChartLoading(root);
+        scheduleChartInitialization(root, attempt + 1);
+        return;
+      }
+      showChartFallback(root, error);
     }
   }
 
-  function showChartFallback(root) {
+  function showChartFallback(root, error) {
     if (!root) return;
+    clearChartRetry(root);
     root.classList.remove("is-ready");
     root.classList.add("is-fallback");
     root.setAttribute("aria-busy", "false");
+    var message = error && error.message ? String(error.message) : "Chart initialization failed";
+    root.dataset.scChartError = message.slice(0, 240);
+    var fallback = root.querySelector(".sc-chart-fallback");
+    if (fallback) {
+      var notice = fallback.querySelector("[data-sc-chart-error-notice]");
+      var text;
+      if (!notice) {
+        notice = document.createElement("p");
+        notice.className = "sc-chart-error";
+        notice.dataset.scChartErrorNotice = "";
+        text = document.createElement("span");
+        text.dataset.scChartErrorMessage = "";
+        var retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "sc-button sc-secondary";
+        retry.dataset.scChartRetry = "";
+        retry.textContent = "Retry chart";
+        retry.addEventListener("click", function () { retryChart(root); });
+        notice.append(text, retry);
+        fallback.prepend(notice);
+      }
+      text = text || notice.querySelector("[data-sc-chart-error-message]");
+      if (text) text.textContent = "The interactive chart could not be displayed: " + message;
+      notice.hidden = false;
+    }
+    if (window.console && typeof window.console.warn === "function") {
+      window.console.warn("Selecto chart initialization failed", error || message);
+    }
   }
 
-  function restoreCharts() {
-    var roots = Array.from(document.querySelectorAll("[data-sc-chart]"));
+  function retryChart(root) {
+    if (!root) return;
+    clearChartRetry(root);
+    var chart = chartInstances.get(root);
+    if (chart && typeof chart.destroy === "function") chart.destroy();
+    chartInstances.delete(root);
+    setChartLoading(root);
+    if (chartLibraryAvailable()) {
+      scheduleChartInitialization(root, 0);
+      return;
+    }
+    chartLoadPromise = null;
+    loadChartLibrary(root).then(function () {
+      scheduleChartInitialization(root, 0);
+    }).catch(function (error) {
+      showChartFallback(root, error);
+    });
+  }
+
+  function loadChartsForRoots(roots, attempt) {
+    roots = roots.filter(function (root) { return root.isConnected; });
     if (!roots.length) return;
-    if (window.Chart) {
-      roots.forEach(initializeChart);
+    if (chartLibraryAvailable()) {
+      roots.forEach(function (root) { scheduleChartInitialization(root, 0); });
       return;
     }
     loadChartLibrary(roots[0]).then(function () {
-      roots.filter(function (root) { return root.isConnected; }).forEach(initializeChart);
-    }).catch(function () {
-      roots.filter(function (root) { return root.isConnected; }).forEach(showChartFallback);
+      roots.filter(function (root) { return root.isConnected; }).forEach(function (root) {
+        scheduleChartInitialization(root, 0);
+      });
+    }).catch(function (error) {
+      if (attempt < 2) {
+        chartLoadPromise = null;
+        window.setTimeout(function () { loadChartsForRoots(roots, attempt + 1); }, 100 * (attempt + 1));
+        return;
+      }
+      roots.filter(function (root) { return root.isConnected; }).forEach(function (root) {
+        showChartFallback(root, error);
+      });
     });
+  }
+
+  function restoreCharts(refreshExisting) {
+    var roots = Array.from(document.querySelectorAll("[data-sc-chart]"));
+    if (!roots.length) return;
+    var pending = [];
+    roots.forEach(function (root) {
+      var chart = chartInstances.get(root);
+      if (!chart) {
+        setChartLoading(root);
+        pending.push(root);
+        return;
+      }
+      if (!refreshExisting) return;
+      // Browser history can restore the DOM and our WeakMap while discarding
+      // or corrupting the canvas backing store. Chart.js may accept resize()
+      // and update() in that state yet leave only the HTML fallback visible.
+      // Reconstructing from the governed data is deterministic and avoids
+      // carrying a stale canvas across bfcache/frame restoration.
+      try {
+        if (typeof chart.destroy === "function") chart.destroy();
+      } catch (_error) {}
+      chartInstances.delete(root);
+      setChartLoading(root);
+      pending.push(root);
+    });
+    loadChartsForRoots(pending, 0);
   }
 
   function destroyChartsWithin(node) {
@@ -385,6 +536,7 @@
     var roots = Array.from(node.querySelectorAll("[data-sc-chart]"));
     if (node.matches && node.matches("[data-sc-chart]")) roots.unshift(node);
     roots.forEach(function (root) {
+      clearChartRetry(root);
       var chart = chartInstances.get(root);
       if (chart) chart.destroy();
       chartInstances.delete(root);
@@ -420,7 +572,7 @@
   var chartLoadPromise;
 
   function loadChartLibrary(root) {
-    if (window.Chart) return Promise.resolve();
+    if (chartLibraryAvailable()) return Promise.resolve();
     if (chartLoadPromise) return chartLoadPromise;
     var surface = root && root.closest("[data-sc-chart-src]");
     var source = surface && surface.dataset.scChartSrc;
@@ -429,7 +581,14 @@
       var script = document.createElement("script");
       script.src = source;
       script.async = true;
-      script.onload = resolve;
+      script.onload = function () {
+        if (chartLibraryAvailable()) {
+          resolve();
+          return;
+        }
+        chartLoadPromise = null;
+        reject(new Error("Chart library loaded without providing Chart.js"));
+      };
       script.onerror = function () {
         chartLoadPromise = null;
         reject(new Error("Chart library could not be loaded"));
@@ -528,6 +687,35 @@
       || window.confirm("Discard the unsaved changes to this record?");
   }
 
+  function preserveRowDialogHostTitle(dialog) {
+    if (!dialog || !dialog.querySelector("[data-sc-row-dialog-frame]")) return;
+    if (!Object.prototype.hasOwnProperty.call(dialog, "_scHostDocumentTitle")) {
+      dialog._scHostDocumentTitle = document.title;
+      if (typeof MutationObserver === "function" && document.head) {
+        dialog._scHostTitleObserver = new MutationObserver(function () {
+          restoreRowDialogHostTitle(dialog, false);
+        });
+        dialog._scHostTitleObserver.observe(document.head, {
+          childList: true,
+          characterData: true,
+          subtree: true
+        });
+      }
+    }
+  }
+
+  function restoreRowDialogHostTitle(dialog, release) {
+    if (!dialog || !Object.prototype.hasOwnProperty.call(dialog, "_scHostDocumentTitle")) return;
+    if (release && dialog._scHostTitleObserver) {
+      dialog._scHostTitleObserver.disconnect();
+      delete dialog._scHostTitleObserver;
+    }
+    if (document.title !== dialog._scHostDocumentTitle) {
+      document.title = dialog._scHostDocumentTitle;
+    }
+    if (release) delete dialog._scHostDocumentTitle;
+  }
+
   function loadRecordEditor(dialog, url, notice) {
     var body = dialog.querySelector("[data-sc-row-editor-body]");
     var loading = dialog.querySelector("[data-sc-row-dialog-loading]");
@@ -619,6 +807,7 @@
     var rows = rowDialogRows(dialog);
     var index = rows.indexOf(row);
     if (index < 0) return;
+    preserveRowDialogHostTitle(dialog);
     setRowDialogIndex(dialog, index);
     if (!dialog.open) {
       if (typeof dialog.showModal === "function") dialog.showModal();
@@ -646,6 +835,7 @@
       frame.removeAttribute("src");
       frame.classList.remove("is-loading");
     }
+    restoreRowDialogHostTitle(dialog, true);
     if (editorBody) editorBody.replaceChildren();
     if (loading) loading.hidden = true;
     delete dialog.dataset.scRowDialogIndex;
@@ -1168,6 +1358,7 @@
   window.addEventListener("pageshow", function (event) {
     if (!event.persisted) return;
     reconnectRestoredWebSocketChannels();
+    restoreCharts(true);
   });
 
   window.addEventListener("pagehide", function () {
@@ -1178,29 +1369,107 @@
     restoreSelectoHistory(event.state);
   });
 
-  function rememberSelectoHistory(url, push) {
+  function rememberSelectoHistory(url, push, pendingNavigation) {
     var surface = document.querySelector('[id^="selecto-surface-"]');
     if (!surface || !window.history) return;
     var state = window.history.state && typeof window.history.state === "object"
       ? Object.assign({}, window.history.state) : {};
     var key = push ? null : state.selectoSnapshot;
     if (!key) key = "selecto-" + Date.now() + "-" + (++selectoHistoryCounter);
-    selectoHistorySnapshots.delete(key);
-    selectoHistorySnapshots.set(key, surface.outerHTML);
+    var snapshot = surface.cloneNode(true);
+    prepareChartsForSnapshot(snapshot);
+    storeSelectoHistorySnapshot(key, snapshot.outerHTML);
     while (selectoHistorySnapshots.size > 24) {
-      selectoHistorySnapshots.delete(selectoHistorySnapshots.keys().next().value);
+      removeSelectoHistorySnapshot(selectoHistorySnapshots.keys().next().value);
     }
     state.selecto = true;
     state.selectoSnapshot = key;
+    if (pendingNavigation) state.selectoPendingNavigation = true;
+    else delete state.selectoPendingNavigation;
     try {
       if (push) window.history.pushState(state, "", url);
       else window.history.replaceState(state, "", url);
     } catch (_error) {}
   }
 
+  function selectoHistoryStorageKey(key) {
+    return "selecto-history:" + key;
+  }
+
+  function removeSelectoHistorySnapshot(key) {
+    selectoHistorySnapshots.delete(key);
+    try { window.sessionStorage.removeItem(selectoHistoryStorageKey(key)); } catch (_error) {}
+  }
+
+  function storeSelectoHistorySnapshot(key, html) {
+    selectoHistorySnapshots.delete(key);
+    selectoHistorySnapshots.set(key, html);
+    try {
+      window.sessionStorage.setItem(selectoHistoryStorageKey(key), html);
+    } catch (_error) {
+      // A result set can exceed the browser's storage quota. Keep the current
+      // in-memory copy, discard older Selecto snapshots, and retry once so a
+      // document/frame restoration still has the best available snapshot.
+      try {
+        var prefix = "selecto-history:";
+        var storedKeys = [];
+        for (var index = 0; index < window.sessionStorage.length; index += 1) {
+          var storedKey = window.sessionStorage.key(index);
+          if (storedKey && storedKey.indexOf(prefix) === 0
+              && storedKey !== selectoHistoryStorageKey(key)) storedKeys.push(storedKey);
+        }
+        storedKeys.forEach(function (storedKey) { window.sessionStorage.removeItem(storedKey); });
+        window.sessionStorage.setItem(selectoHistoryStorageKey(key), html);
+      } catch (_retryError) {}
+    }
+  }
+
+  function loadSelectoHistorySnapshot(key) {
+    var snapshot = selectoHistorySnapshots.get(key);
+    if (snapshot) return snapshot;
+    try { snapshot = window.sessionStorage.getItem(selectoHistoryStorageKey(key)); }
+    catch (_error) { snapshot = null; }
+    if (snapshot) selectoHistorySnapshots.set(key, snapshot);
+    return snapshot;
+  }
+
+  function formNavigationUrl(form) {
+    if (!form) return null;
+    try {
+      var target = new URL(form.getAttribute("action") || window.location.href, window.location.href);
+      if (target.origin !== window.location.origin) return null;
+      if ((form.getAttribute("method") || "get").toLowerCase() === "get") {
+        var query = new URLSearchParams();
+        new FormData(form).forEach(function (value, name) {
+          if (typeof File !== "undefined" && value instanceof File) return;
+          query.append(name, value);
+        });
+        target.search = query.toString();
+      }
+      return target.pathname + target.search + target.hash;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function beginSelectoNavigation(form) {
+    var url = formNavigationUrl(form);
+    if (!url) return;
+    // Create the joint-history entry while the submit event is still in
+    // progress. Waiting for the asynchronous WebSocket response leaves a
+    // short window in which browser Back exits the Explorer (and, in a
+    // framed host, can also leave the surrounding application shell).
+    rememberSelectoHistory(url, true, true);
+  }
+
+  function usesSelectoWebSocket(form) {
+    return !!(form && form.hasAttribute("hx-ws:send")
+      && form.closest('[hx-ws\\:connect]'));
+  }
+
   function restoreSelectoHistory(state) {
     var key = state && state.selectoSnapshot;
-    var snapshot = key && selectoHistorySnapshots.get(key);
+    var snapshot = key && loadSelectoHistorySnapshot(key);
     if (!snapshot) return;
     var current = document.querySelector('[id^="selecto-surface-"]');
     if (!current) return;
@@ -1208,6 +1477,7 @@
     template.innerHTML = snapshot.trim();
     var restored = template.content.firstElementChild;
     if (!restored) return;
+    prepareChartsForSnapshot(restored);
     destroyChartsWithin(current);
     current.replaceWith(restored);
     selectoPerformance = null;
@@ -1264,10 +1534,12 @@
         setBuilderTrayCollapsed(shell, true);
       }
       var connection = document.querySelector("[data-selecto-connection]");
-      if (connection && connection.classList.contains("is-live")) {
+      if (usesSelectoWebSocket(gridForm)) {
+        beginSelectoNavigation(gridForm);
         window.setTimeout(function () { showWorkspaceResultsLoading(workspace); }, 0);
         return;
       }
+      if (connection && connection.classList.contains("is-live")) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       showWorkspaceResultsLoading(workspace);
@@ -1280,6 +1552,10 @@
       if (!websocketForm || !websocketForm.hasAttribute("hx-ws:send")) return;
       rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
       var websocketConnection = document.querySelector("[data-selecto-connection]");
+      if (usesSelectoWebSocket(websocketForm)) {
+        beginSelectoNavigation(websocketForm);
+        return;
+      }
       if (websocketConnection && websocketConnection.classList.contains("is-live")) return;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -1305,6 +1581,10 @@
     showResultsLoading(form);
     setBuilderTrayCollapsed(form.closest("[data-sc-builder-shell]"), true);
     var connection = document.querySelector("[data-selecto-connection]");
+    if (usesSelectoWebSocket(form)) {
+      beginSelectoNavigation(form);
+      return;
+    }
     if (connection && connection.classList.contains("is-live")) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -1368,7 +1648,9 @@
         }
         if (typeof nextUrl === "string" && nextUrl.charAt(0) === "/") {
           var currentUrl = window.location.pathname + window.location.search + window.location.hash;
-          rememberSelectoHistory(nextUrl, nextUrl !== currentUrl);
+          var pendingNavigation = window.history && window.history.state
+            && window.history.state.selectoPendingNavigation;
+          rememberSelectoHistory(nextUrl, !pendingNavigation && nextUrl !== currentUrl);
         }
       }).catch(function () {});
     }
@@ -1511,6 +1793,7 @@
     var dialog = frame.closest("[data-sc-row-dialog]");
     var loading = dialog && dialog.querySelector("[data-sc-row-dialog-loading]");
     if (loading) loading.hidden = true;
+    restoreRowDialogHostTitle(dialog, false);
   }, true);
 
   document.addEventListener("cancel", function (event) {
@@ -2005,6 +2288,17 @@
     return /(?:date|time)/i.test(type || "");
   }
 
+  function temporalFilterInputType(type, values) {
+    if (String(type || "").toLowerCase() === "date") return "date";
+    var populated = (values || []).filter(function (value) {
+      return String(value || "").length;
+    });
+    if (populated.length && populated.every(function (value) {
+      return /^\d{4}-\d{2}-\d{2}$/.test(String(value));
+    })) return "date";
+    return "datetime-local";
+  }
+
   function numericFilterType(type) {
     return /^(?:integer|decimal|number|numeric|float|double|real)$/i.test(type || "");
   }
@@ -2109,7 +2403,7 @@
       values.appendChild(hiddenFilterValue("filter_value_end", ""));
     } else if (operator === "between") {
       var rangeType = temporalFilterType(type) ?
-        (String(type).toLowerCase() === "date" ? "date" : "datetime-local") :
+        temporalFilterInputType(type, [previousValue, previousEnd]) :
         (numericFilterType(type) ? "number" : "text");
       values.appendChild(labeledFilterControl("Start",
         filterInput(rangeType, "filter_value", previousValue, "Start value for " + label, "Start")));
@@ -2130,7 +2424,7 @@
       values.appendChild(hiddenFilterValue("filter_value_end", ""));
     } else {
       var inputType = operator === "in" ? "text" : temporalFilterType(type) ?
-        (String(type).toLowerCase() === "date" ? "date" : "datetime-local") :
+        temporalFilterInputType(type, [previousValue]) :
         numericFilterType(type) ? "number" : "text";
       var placeholder = operator === "in" ? "Comma-separated values" :
         temporalFilterType(type) ? "Choose a date" : "Enter a value";
