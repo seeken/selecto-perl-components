@@ -117,12 +117,17 @@ sub _field_terms ($domain, $contract, $add) {
 
 sub _star_dimension_labels ($domain) {
     my (%by_key, %by_display);
+    my $contract = $domain->contract // {};
+    my $source = ref($contract->{source}) eq 'HASH' ? $contract->{source} : {};
     for my $name (sort keys %{$domain->associations}) {
         my $association = $domain->associations->{$name};
         next unless $association->can('join_mode') && $association->join_mode eq 'star_dimension';
         my $label = $association->display_name;
         $label = humanize($name) unless defined($label) && length("$label");
-        $by_key{$association->dimension_key} = "$label ID";
+        my $key = $association->dimension_key;
+        my $column = ref($source->{columns}) eq 'HASH'
+            ? $source->{columns}{$key} : undef;
+        $by_key{$key} = _column_label($column, "$label ID");
         $by_display{$name . '.' . $association->display_field} = "$label";
     }
     return (\%by_key, \%by_display);

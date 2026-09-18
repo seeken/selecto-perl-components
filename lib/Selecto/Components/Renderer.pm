@@ -1,6 +1,8 @@
 package Selecto::Components::Renderer;
 
 use Mojo::Base -base, -signatures;
+use Mojo::JSON qw(encode_json);
+use Mojo::Util qw(url_escape);
 use Selecto::Components::AssetManifest qw(asset_revision);
 use Selecto::Components::Util qw(humanize html_escape);
 use Selecto::Components::Renderer::Markup qw(_format_url _html_display);
@@ -77,10 +79,23 @@ sub surface ($class, $model) {
             '" href="' . _h(_format_url($model->{canonical_url}, $format)) . '">' .
             _h($label) . '</a>'
     } ([xlsx => 'Excel'], [csv => 'CSV'], [tsv => 'TSV'], [json => 'JSON']);
+    my $api_link = '';
+    my $api_console_url = $query_params ? $config->api_console_url($model) : '';
+    if (length($api_console_url)) {
+        my $payload = $state->api_query_payload($config, $model->{domain});
+        $api_link = $payload
+            ? '<a class="sc-button sc-secondary" data-sc-api-console ' .
+                'target="_blank" rel="noopener" href="' .
+                _h($api_console_url . '#request=' . url_escape(encode_json($payload))) .
+                '">API</a>'
+            : '<button class="sc-button sc-secondary" type="button" data-sc-api-console ' .
+                'disabled aria-disabled="true" title="This Explorer query cannot yet be represented by the API console.">API</button>';
+    }
     my $hero_actions = $query_params
         ? '<div class="sc-hero-actions"><a class="sc-button sc-secondary" href="' .
           _h($model->{canonical_url}) . '">Permalink</a><div class="sc-export-options" role="group" ' .
-          'aria-label="Export all matched rows"><span>Export all</span>' . $export_links . '</div></div>'
+          'aria-label="Export all matched rows"><span>Export all</span>' . $export_links .
+          '</div>' . $api_link . '</div>'
         : '<div class="sc-hero-actions"><span class="sc-private-mode">Private URL mode</span></div>';
     my $builder_collapsed = _builder_collapsed($model);
     my $localized_title = $config->localize(

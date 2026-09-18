@@ -66,6 +66,48 @@ ok $promoted_filter->filters->[0]{promoted}, 'the selected filter is retained as
 like join('&', @{$promoted_filter->query_pairs}), qr/filter_promote_field&category_id/,
     'canonical query state retains promoted filters';
 
+my $api_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => ['product_name', 'created_on'],
+    field_alias => ['product', 'created_month'],
+    field_format => ['', 'month'],
+    filter_field => ['category_id', 'product_name'],
+    filter_op => ['gte', 'in'],
+    filter_value => ['7', 'Widget, Gizmo'],
+    order => ['created_on'],
+    direction => ['desc'],
+    limit => 25,
+    page => 3,
+});
+is_deeply $api_state->api_query_payload($config, $domain), {
+    select => [
+        {field => 'product_name', alias => 'product'},
+        {field => 'created_on', alias => 'created_month', format => 'month'},
+    ],
+    filters => [
+        {field => 'category_id', op => 'gte', value => '7'},
+        {field => 'product_name', op => 'in', value => ['Widget', 'Gizmo']},
+    ],
+    order_by => [{field => 'created_on', direction => 'desc'}],
+    row_format => 'objects',
+    limit => 25,
+    offset => 50,
+}, 'detail state becomes a canonical API request with columns, formats, filters, and paging';
+
+my $unrepresentable_alias = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'product_name',
+    field_alias => 'Product name', order => 'product_name',
+});
+is $unrepresentable_alias->api_query_payload($config, $domain), undef,
+    'an Explorer-only presentation label is not silently changed into an API alias';
+
+my $aggregate_api_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'aggregate', group => 'category.category_name', measure => 'count',
+});
+is $aggregate_api_state->api_query_payload($config, $domain), undef,
+    'aggregate state is not silently translated into a different detail API query';
+
 my $library_view = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     query_library_view => 'low_stock_products',

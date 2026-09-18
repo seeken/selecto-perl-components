@@ -200,6 +200,80 @@ sub query_signature ($self) {
     return sha256_hex(join('|', @parts));
 }
 
+sub api_query_payload ($self, $config, $domain) {
+    return undef unless $self->valid && $self->view eq 'detail';
+    return undef if grep {
+        !$_->{draft} && ($_->{grouped} || defined($_->{clause}))
+    } @{$self->filters};
+
+    my $detail_map = $config->detail_column_map($domain);
+    my $field_map = $config->field_map($domain);
+    my (@select, %nested);
+    for my $index (0 .. $#{$self->fields}) {
+        my $field = $self->fields->[$index];
+        next if $detail_map->{$field}{action_id};
+        my $column = $self->field_config_list->[$index]
+            // $self->field_configs->{$field} // {};
+        my $alias = $column->{alias} // '';
+        # Explorer presentation labels may contain spaces, while canonical API
+        # aliases are identifiers. Do not silently change a configured alias.
+        return undef if length($alias) && $alias !~ /\A[A-Za-z_][A-Za-z0-9_]*\z/;
+        my $format = $column->{format} // '';
+        my $selection = length($alias) || length($format)
+            ? {
+                field => $field,
+                (length($alias) ? (alias => $alias) : ()),
+                (length($format) ? (format => $format) : ()),
+            }
+            : $field;
+        if ($field_map->{$field}{denormalizing}) {
+            my ($association) = split /\./, $field, 2;
+            unless ($nested{$association}) {
+                $nested{$association} = [];
+                push @select, $nested{$association};
+            }
+            push @{$nested{$association}}, $selection;
+            next;
+        }
+        push @select, $selection;
+    }
+    return undef unless @select;
+
+    my @filters;
+    for my $filter (grep { !$_->{draft} } @{$self->filters}) {
+        my $translated = {field => $filter->{field}, op => $filter->{op}};
+        unless ($filter->{op} =~ /\A(?:is_null|not_null)\z/) {
+            $translated->{value} = $filter->{op} eq 'in'
+                ? [grep { length } map { _trim($_) } split /,/, $filter->{value}, -1]
+                : $filter->{value};
+        }
+        $translated->{end} = $filter->{value_end}
+            if $filter->{op} eq 'between';
+        push @filters, $translated;
+    }
+
+    my @segments = @{$self->query_library_segments // []};
+    if (defined($self->query_library_view) && length($self->query_library_view)) {
+        unshift @segments,
+            @{Selecto::QueryLibrary->view_segments($domain, $self->query_library_view)};
+    }
+    my %seen_segment;
+    @segments = grep { !$seen_segment{$_}++ } @segments;
+
+    return {
+        select => \@select,
+        (@segments ? (segments => \@segments) : ()),
+        (%{$self->query_library_parameters // {}}
+            ? (parameters => {%{$self->query_library_parameters}}) : ()),
+        (@filters ? (filters => \@filters) : ()),
+        (@{$self->orders}
+            ? (order_by => [map { {%$_} } @{$self->orders}]) : ()),
+        row_format => 'objects',
+        limit => 0 + $self->limit,
+        offset => ($self->page - 1) * $self->limit,
+    };
+}
+
 sub as_hash ($self) {
     return {
         view => $self->view,

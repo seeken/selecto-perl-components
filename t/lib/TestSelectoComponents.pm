@@ -142,10 +142,14 @@ sub _domain {
             product_profile => {
                 label => 'Edit product', submit_label => 'Save product',
                 fields => [
-                    {field => 'product_name', required => 1},
-                    {field => 'unit_price', control => 'number', nullable => 1},
-                    {field => 'created_on', control => 'date', nullable => 1},
-                    {field => 'discontinued', required => 1},
+                    {field => 'id', label => 'Product ID', readonly => 1,
+                        section => 'Identity'},
+                    {field => 'product_name', required => 1, section => 'Profile'},
+                    {field => 'unit_price', control => 'number', nullable => 1,
+                        section => 'Profile', help => 'Selling price per unit.'},
+                    {field => 'created_on', control => 'date', nullable => 1,
+                        section => 'Profile'},
+                    {field => 'discontinued', required => 1, section => 'Profile'},
                 ],
                 actions => ['edit_one_product'],
             },
@@ -506,6 +510,7 @@ our (
     $LAST_QUERY, $LAST_COUNT_QUERY, $LAST_COUNT_STATEMENT,
     $LAST_COMPILED_QUERY, $LAST_DATA_QUERY, $COUNT_EXECUTIONS, $LAST_WRITE, $WRITE_ERROR,
 );
+our $RECORD_PRODUCT_NAME = 'Test Widget';
 
 sub name { return 'test'; }
 sub dialect { return __PACKAGE__; }
@@ -540,7 +545,7 @@ sub execute_query ($self, $statement) {
             'id,product_name,unit_price,created_on,discontinued') {
         return {
             columns => $statement->columns,
-            rows => [[101, 'Test Widget', 12.5, '2026-09-15', 0]],
+            rows => [[101, $RECORD_PRODUCT_NAME, 12.5, '2026-09-15', 0]],
         };
     }
     my $rollup = grep { $_ eq '__selecto_rollup_grouping' } @{$statement->columns};

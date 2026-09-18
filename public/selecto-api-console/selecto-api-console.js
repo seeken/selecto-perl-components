@@ -56,6 +56,21 @@
     return candidate;
   }
 
+  function requestPayloadFromLocation(locationLike) {
+    const hash = String(locationLike && locationLike.hash || "").replace(/^#/, "");
+    if (!hash) return null;
+    const encoded = new URLSearchParams(hash).get("request");
+    if (encoded === null) return null;
+    let payload;
+    try {
+      payload = JSON.parse(encoded);
+    } catch (error) {
+      throw new Error(`The Explorer request in this URL is not valid JSON: ${error.message}`);
+    }
+    if (!isPlainObject(payload)) throw new Error("The Explorer request in this URL must be a JSON object.");
+    return payload;
+  }
+
   function normalizeCurlAuth(value, fallback) {
     const candidate = String(value || fallback || "cookie").trim().toLowerCase();
     if (!CURL_AUTH_MODES.has(candidate)) {
@@ -432,7 +447,31 @@
         this.fields = collectFields(discovery.domain);
         this.fieldMap = new Map(this.fields.map((field) => [field.path, field]));
         this.seedState();
+        let initialRequest = null;
+        let initialRequestError = null;
+        try {
+          initialRequest = requestPayloadFromLocation(global.location);
+          if (initialRequest) this.loadPayloadIntoChooser(initialRequest);
+        } catch (error) {
+          initialRequestError = error;
+        }
         this.render();
+        if (initialRequestError) {
+          if (initialRequest) {
+            const editor = this.root.querySelector("[data-sac-request]");
+            editor.value = JSON.stringify(initialRequest, null, 2);
+            this.state.rawDirty = true;
+            this.root.querySelector("[data-sac-edited]").hidden = false;
+            this.updateCurl();
+          }
+          this.setImportMessage(
+            `The chooser cannot represent the Explorer request: ${initialRequestError.message}` +
+              (initialRequest ? " You can still run it in manual JSON mode." : ""),
+            "error",
+          );
+        } else if (initialRequest) {
+          this.setImportMessage("Query form loaded from Explorer.", "success");
+        }
       } catch (error) {
         this.renderFatal(error);
       }
@@ -2953,6 +2992,7 @@
     discoverCanonicalAPI,
     mountAll,
     normalizeAPIBase,
+    requestPayloadFromLocation,
     operatorsForType,
     writeControlKind,
     writeFieldRequired,

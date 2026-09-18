@@ -492,9 +492,20 @@ a { color: inherit; }
 .sc-record-editor-form { display: grid; gap: 14px; padding: 16px; }
 .sc-record-editor-form > footer { align-items: center; border-top: 1px solid var(--sc-border); display: flex; gap: 8px; justify-content: flex-end; margin: 4px -16px -16px; padding: 12px 16px; }
 .sc-record-editor-description, .sc-record-editor-identity { color: var(--sc-muted); }
-.sc-record-editor-fields { align-content: start; display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); max-width: 42rem; width: 100%; }
+.sc-record-editor-fields { align-content: start; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); max-width: 48rem; width: 100%; }
+.sc-record-editor-section { border: 1px solid var(--sc-border); border-radius: 9px; display: grid; gap: 10px; padding: 12px; }
+.sc-record-editor-section > h4 { color: var(--sc-ink); font-size: .9rem; margin: 0; }
+.sc-record-editor-section-fields { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
 .sc-record-editor-field { display: grid; gap: 5px; min-width: 0; }
 .sc-record-editor-field > span { font-size: .8rem; font-weight: 750; }
+.sc-record-editor-help { color: var(--sc-muted); font-size: .72rem; }
+.sc-record-editor-readonly { background: var(--sc-subpanel); border: 1px solid var(--sc-border); border-radius: 6px; box-sizing: border-box; color: var(--sc-ink); display: block; min-height: 36px; padding: 8px 10px; width: 100%; }
+.sc-record-editor-collection { border-top: 1px solid var(--sc-border); display: grid; gap: 8px; padding-top: 14px; }
+.sc-record-editor-collection > h4 { font-size: .9rem; margin: 0; }
+.sc-record-editor-collection table { border-collapse: collapse; font-size: .76rem; width: 100%; }
+.sc-record-editor-collection th, .sc-record-editor-collection td { border-bottom: 1px solid var(--sc-border); padding: 6px 8px; text-align: left; vertical-align: top; }
+.sc-record-editor-collection th { background: var(--sc-table-fixed-bg); font-weight: 750; position: sticky; top: 0; }
+.sc-record-editor-collection-empty { color: var(--sc-muted); font-style: italic; }
 .sc-record-editor-field textarea { min-height: 88px; resize: vertical; }
 .sc-record-editor-field input:not([type="checkbox"]), .sc-record-editor-field select, .sc-record-editor-field textarea { box-sizing: border-box; width: 100%; }
 .sc-record-editor-error { color: var(--sc-danger); font-weight: 700; }
