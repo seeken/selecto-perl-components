@@ -127,12 +127,16 @@
   function initializeChart(root) {
     if (!root || chartInstances.has(root) || !window.Chart) return;
     var canvas = root.querySelector("canvas");
-    if (!canvas) return;
+    if (!canvas) {
+      showChartFallback(root);
+      return;
+    }
     var type = root.dataset.chartType || "bar";
     var data;
     try {
       data = JSON.parse(root.dataset.chartData || "{}");
     } catch (_error) {
+      showChartFallback(root);
       return;
     }
     var styles = window.getComputedStyle(root);
@@ -162,10 +166,19 @@
         options: chartOptions(root, type, data)
       });
       chartInstances.set(root, chart);
+      root.classList.remove("is-fallback");
       root.classList.add("is-ready");
+      root.setAttribute("aria-busy", "false");
     } catch (_error) {
-      root.classList.remove("is-ready");
+      showChartFallback(root);
     }
+  }
+
+  function showChartFallback(root) {
+    if (!root) return;
+    root.classList.remove("is-ready");
+    root.classList.add("is-fallback");
+    root.setAttribute("aria-busy", "false");
   }
 
   function restoreCharts() {
@@ -177,7 +190,9 @@
     }
     loadChartLibrary(roots[0]).then(function () {
       roots.filter(function (root) { return root.isConnected; }).forEach(initializeChart);
-    }).catch(function () {});
+    }).catch(function () {
+      roots.filter(function (root) { return root.isConnected; }).forEach(showChartFallback);
+    });
   }
 
   function destroyChartsWithin(node) {

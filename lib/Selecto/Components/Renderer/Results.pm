@@ -775,11 +775,12 @@ sub _graph ($class, $result, $model) {
     } @{$result->{columns}};
     my %raw_result = (%$result, columns => \@raw_columns);
     return '<div class="sc-chart sc-chart-' . _h($model->{state}->chart_type) .
-        '" role="group" aria-label="Selected measures by selected groups" data-sc-chart ' .
+        '" role="group" aria-label="Selected measures by selected groups" aria-busy="true" data-sc-chart ' .
         'data-chart-type="' . _h($model->{state}->chart_type) . '" data-chart-data="' .
         _h($chart_data) . '"><div class="sc-chart-canvas"><canvas role="img" aria-label="' .
         _h(_humanize($model->{state}->chart_type) . ' chart of selected measures by selected groups') .
         '"></canvas></div><div class="sc-chart-fallback"><ul>' . $bars . '</ul></div>' .
+        '<noscript><style>.sc-chart-canvas{display:none!important}.sc-chart-fallback{display:block!important}</style></noscript>' .
         '<p class="sc-chart-hint">Click a data point or horizontal-axis label to drill down to detail rows.</p>' .
         '<div class="sc-chart-drilldowns" hidden>' . $drilldown_forms . '</div></div>' .
         ($model->{state}->graph_show_table ? $class->_table(\%raw_result, $model) : '');
