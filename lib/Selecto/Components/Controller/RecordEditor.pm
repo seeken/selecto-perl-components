@@ -249,14 +249,24 @@ sub _form ($controller, $context, $record, $snapshot, $signature) {
                     _h("Current value — $value (not in current choices)") .
                     '</option>'
                 : '';
+            my $has_display_value = defined($display_value)
+                && "$display_value" ne '';
+            my $empty_option = '';
+            if ($spec->{nullable} || !$has_display_value) {
+                my $empty_label = $spec->{nullable} ? '— None —'
+                    : $spec->{required} ? '— Select —' : '— Blank —';
+                $empty_option = '<option value=""' .
+                    (!$has_display_value ? ' selected' : '') .
+                    ($spec->{required} ? ' disabled' : '') . '>' .
+                    _h($empty_label) . '</option>';
+            }
             my $option_html = join '', map {
                 '<option value="' . _h($_->{value}) . '"' .
                     (defined($display_value) && "$display_value" eq ("" . $_->{value}) ? ' selected' : '') . '>' .
                     _h($_->{label}) . '</option>'
             } @{$options // []};
             $input = '<select name="editor_field_' . _h($field) . '"' . $required . '>' .
-                ($spec->{nullable} ? '<option value="">— None —</option>' : '') .
-                $current_option . $option_html . '</select>';
+                $empty_option . $current_option . $option_html . '</select>';
         } elsif ($control eq 'checkbox') {
             $input = '<input type="checkbox" name="editor_field_' . _h($field) .
                 '" value="1"' . ($value ? ' checked' : '') . '>';
