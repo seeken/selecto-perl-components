@@ -6,6 +6,7 @@ use Selecto::Components::QueryLibrary ();
 use Selecto::Components::RowActions ();
 use Selecto::Components::Renderer::Markup;
 use Selecto::Analytics::TransformRegistry ();
+use Selecto::Components::Graph::Colors ();
 
 sub _form ($class, $model, $catalog, $detail_catalog = undef) {
     my $config = $model->{config};
@@ -39,7 +40,7 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         _measure_selection_hidden($state) .
         _selection_hidden('group', $state->groups, $state->group_configs);
     my $summary_controls = $class->_aggregate_grid_picker($state) .
-        $class->_chart_type_picker($state) .
+        $class->_chart_type_picker($state, $config) .
         $class->_group_picker($state, $catalog, $config) .
         $class->_measure_picker($state, $measure_catalog, $config) .
         _selection_hidden(
@@ -94,9 +95,14 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         _h(encode_json([map { [$_->{group}, $_->{id}, $_->{label}] } @{$config->date_shortcuts}])) . '">' .
         _hidden('q', 1) .
         _hidden('query_signature', $state->query_signature) .
+        ($state->view eq 'graph' ? '' : _graph_selection_hidden($state)) .
         $query_summary . $view_panel . $filter_panel .
         '<div class="sc-builder-apply-note"><span>Changes apply only when you run the query.</span>' .
         '<strong data-sc-builder-pending role="status" aria-live="polite" aria-atomic="true"></strong></div>' .
+        ($config->query_assistant_enabled
+            ? '<div class="sc-query-assistant-status" data-sc-query-assistant-status role="status" aria-live="polite">Connecting browser assistant…</div>' .
+              '<button class="sc-button sc-secondary" type="button" data-sc-query-assistant-undo hidden>Undo assistant edit</button>'
+            : '') .
         '<div class="sc-control-row"><label><span data-sc-limit-label>' .
         ($state->view eq 'graph' ? 'Points' : 'Rows') .
         '</span><select name="limit" data-sc-limit>' . _limit_options($state, $config) . '</select></label>' .
@@ -106,6 +112,18 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         '<button class="sc-button sc-primary" type="submit">Run query</button>' .
         '<noscript><p class="sc-note">JavaScript is off; this form still runs as a normal GET.</p></noscript></form>' .
         $saved_queries . '</div></aside>';
+}
+
+sub _graph_selection_hidden ($state) {
+    return _hidden('chart_type', $state->chart_type // 'bar') .
+        _hidden('graph_show_table', $state->graph_show_table ? 1 : 0) .
+        _hidden('graph_palette', $state->graph_palette // 'default') .
+        join('', map {
+            _hidden('graph_category_field', $_->{field}) .
+            _hidden('graph_category_value', $_->{value}) .
+            _hidden('graph_category_format', $_->{format} // '') .
+            _hidden('graph_category_color', $_->{color})
+        } @{$state->graph_category_colors // []});
 }
 
 sub _query_summary_for_model ($class, $model, $catalog) {
@@ -437,12 +455,14 @@ sub _filter_value_text ($filter) {
         if $operator eq 'is_null' || $operator eq 'not_null';
     return 'between ' . ($filter->{value} // '') . ' and ' . ($filter->{value_end} // '')
         if $operator eq 'between';
+    return 'one of ' . join(', ', @{$filter->{values}})
+        if $operator eq 'in' && ref($filter->{values}) eq 'ARRAY';
     my %symbols = (eq => '=', ne => '!=', gt => '>', gte => '>=', lt => '<', lte => '<=');
     my $display_operator = $symbols{$operator} // _humanize($operator);
     return "$display_operator " . ($filter->{value} // '');
 }
 
-sub _chart_type_picker ($class, $state) {
+sub _chart_type_picker ($class, $state, $config) {
     my @types = (
         [bar => 'Bar'],
         [horizontal_bar => 'Horizontal bar'],
@@ -460,11 +480,32 @@ sub _chart_type_picker ($class, $state) {
     } @types;
     my $inactive = $state->view eq 'graph' ? '' : ' hidden disabled';
     my $show_table = $state->graph_show_table ? ' checked' : '';
+    my $assistant = $config->query_assistant // {};
+    my $palettes = Selecto::Components::Graph::Colors->palettes($assistant->{palettes});
+    my $palette_options = '<option value="auto"' .
+        (($state->graph_palette // 'default') eq 'auto' ? ' selected' : '') . '>Host theme</option>' .
+        join('', map {
+            '<option value="' . _h($_) . '"' .
+            (($state->graph_palette // 'default') eq $_ ? ' selected' : '') . '>' .
+            _h(_humanize($_)) . '</option>'
+        } sort keys %$palettes);
+    my $category_rows = join '', map {
+        '<div class="sc-category-color-row" data-sc-category-color-row>' .
+        '<label>Group field<input name="graph_category_field" value="' . _h($_->{field}) . '"></label>' .
+        '<label>Value<input name="graph_category_value" value="' . _h($_->{value}) . '"></label>' .
+        '<label>Format<input name="graph_category_format" value="' . _h($_->{format} // '') . '"></label>' .
+        '<label>Color<input type="color" name="graph_category_color" value="' . _h($_->{color}) . '"></label>' .
+        '<button type="button" class="sc-button sc-secondary" data-sc-category-color-remove>Remove</button></div>'
+    } @{$state->graph_category_colors // []};
     return '<fieldset class="sc-chart-type-picker" data-sc-graph-options' . $inactive . '>' .
         '<legend>Chart</legend><label>Chart type<select name="chart_type" ' .
         'data-sc-chart-type-picker>' . $options . '</select></label>' .
+        '<label>Palette<select name="graph_palette" data-sc-graph-palette>' .
+        $palette_options . '</select></label>' .
         '<label class="sc-option-check"><input type="checkbox" name="graph_show_table" value="1"' .
         $show_table . '><span>Show aggregate data below the graph</span></label>' .
+        '<div data-sc-category-colors><strong>Category colors</strong>' . $category_rows .
+        '<button type="button" class="sc-button sc-secondary" data-sc-category-color-add>Add category color</button></div>' .
         '<p>Choose a dashboard visualization for the selected groups and measures. The optional table shows the underlying aggregate values before graph transforms.</p></fieldset>';
 }
 
@@ -716,6 +757,8 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
         my $series_stack = $item_config->{stack} // '';
         my $series_color = $item_config->{color} // '';
         my $color_value = length($series_color) ? $series_color : '#55d6be';
+        my $fill_opacity = defined($item_config->{fill_opacity})
+            ? $item_config->{fill_opacity} : 0.22;
         my $chart_options = join '', map {
             '<option value="' . $_->[0] . '"' .
                 ($_->[0] eq $series_chart_type ? ' selected' : '') . '>' . $_->[1] . '</option>'
@@ -775,6 +818,8 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
             (length($series_color) ? '' : ' disabled') . '><label class="sc-option-check"><input ' .
             'type="checkbox" data-sc-measure-color-auto' . (length($series_color) ? '' : ' checked') .
             '><span>Automatic contrasting color</span></label></div>' .
+            '<label>Fill opacity<input type="number" name="measure_fill_opacity" min="0" max="1" step="0.01" value="' .
+            _h($fill_opacity) . '" aria-label="Fill opacity for ' . _h($field->{label}) . '"></label>' .
             '<label>Transform<select name="measure_transform" data-sc-measure-transform ' .
             'aria-label="Analytical transform for ' . _h($field->{label}) . '">' .
             $transform_options . '</select></label>' .
@@ -925,7 +970,7 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
     my $controls = '<div class="sc-filter-values" data-sc-filter-values>';
 
     if ($operator =~ /_null\z/) {
-        return $controls . _hidden('filter_value', '') . _hidden('filter_value_end', '') .
+        return $controls . _hidden('filter_value', '') . _hidden('filter_values_json', '') . _hidden('filter_value_end', '') .
             '<p class="sc-filter-value-note">No value needed.</p></div>';
     }
     if ($operator eq 'date_shortcut') {
@@ -944,14 +989,20 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
         $options .= '</optgroup>' if length($group);
         return $controls . '<label class="sc-filter-value-wide">Period<select name="filter_value" ' .
             'aria-label="Period for ' . _h($label) . '">' . $options . '</select></label>' .
-            _hidden('filter_value_end', '') . '</div>';
+            _hidden('filter_values_json', '') . _hidden('filter_value_end', '') . '</div>';
     }
     if ($operator eq 'between') {
         return $controls . '<label>Start<input type="' . $input_type . '" name="filter_value" ' .
             'aria-label="Start value for ' . _h($label) . '" value="' . _h($value) . '"' . $step .
-            '></label><label>End<input type="' . $input_type . '" name="filter_value_end" ' .
+            '></label>' . _hidden('filter_values_json', '') . '<label>End<input type="' . $input_type . '" name="filter_value_end" ' .
             'aria-label="End value for ' . _h($label) . '" value="' . _h($value_end) . '"' . $step .
             '></label></div>';
+    }
+    if ($operator eq 'in' && ref($filter->{values}) eq 'ARRAY') {
+        return $controls . '<label class="sc-filter-value-wide">Values (JSON array)<textarea ' .
+            'name="filter_values_json" aria-label="Membership values for ' . _h($label) . '">' .
+            _h(encode_json($filter->{values})) . '</textarea></label>' .
+            _hidden('filter_value', '') . _hidden('filter_value_end', '') . '</div>';
     }
     if ($config->boolean_type($type)) {
         return $controls . '<label class="sc-filter-value-wide">Value<select name="filter_value" ' .
@@ -959,7 +1010,7 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
             (!length($value) ? ' selected' : '') . '>Choose true or false</option><option value="true"' .
             (lc($value) eq 'true' || $value eq '1' ? ' selected' : '') . '>True</option>' .
             '<option value="false"' . (lc($value) eq 'false' || $value eq '0' ? ' selected' : '') .
-            '>False</option></select></label>' . _hidden('filter_value_end', '') . '</div>';
+            '>False</option></select></label>' . _hidden('filter_values_json', '') . _hidden('filter_value_end', '') . '</div>';
     }
     my $placeholder = $operator eq 'in' ? 'Comma-separated values'
         : $config->temporal_type($type) ? 'Choose a date' : 'Enter a value';
@@ -968,7 +1019,7 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
     return $controls . '<label class="sc-filter-value-wide">Value<input type="' . $effective_type .
         '" name="filter_value" aria-label="Value for ' . _h($label) . '" value="' . _h($value) .
         '" placeholder="' . _h($placeholder) . '"' . $effective_step . '></label>' .
-        _hidden('filter_value_end', '') . '</div>';
+        _hidden('filter_values_json', '') . _hidden('filter_value_end', '') . '</div>';
 }
 
 sub _temporal_filter_input_type ($config, $type, @values) {

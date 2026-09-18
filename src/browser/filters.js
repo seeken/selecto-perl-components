@@ -446,6 +446,20 @@
   });
 
   document.addEventListener("click", function (event) {
+    var addCategoryColorButton = event.target.closest("[data-sc-category-color-add]");
+    if (addCategoryColorButton) {
+      var categoryBuilder = addCategoryColorButton.closest("[data-sc-builder]");
+      addCategoryColor(categoryBuilder);
+      markBuilderDirty(categoryBuilder);
+      return;
+    }
+    var removeCategoryColorButton = event.target.closest("[data-sc-category-color-remove]");
+    if (removeCategoryColorButton) {
+      var categoryRoot = removeCategoryColorButton.closest("[data-sc-builder]");
+      removeCategoryColorButton.closest("[data-sc-category-color-row]").remove();
+      markBuilderDirty(categoryRoot);
+      return;
+    }
     var control = event.target.closest("[data-sc-picker-action]");
     if (!control || control.disabled) return;
     var root = control.closest("[data-sc-picker-root]");

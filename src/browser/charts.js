@@ -207,7 +207,10 @@
       if (seriesType === "line" || seriesType === "area") dataset.tension = 0.28;
       if (seriesType === "area") {
         dataset.fill = "origin";
-        dataset.backgroundColor = chartColorWithAlpha(dataset.borderColor, 0.22);
+        dataset.backgroundColor = chartColorWithAlpha(
+          dataset.borderColor,
+          typeof dataset.fillOpacity === "number" ? dataset.fillOpacity : 0.22
+        );
       }
       if (type === "scatter") {
         dataset.pointRadius = 5;

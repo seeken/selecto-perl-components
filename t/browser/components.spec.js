@@ -300,6 +300,29 @@ test("switching to graph mode raises the point limit and removes page selection"
   await expect(page.locator('[data-sc-page-control] input')).toHaveValue("1");
 });
 
+test("a host limit below 250 remains selectable in graph mode", async ({page}) => {
+  await load(page, `
+    <form data-sc-builder>
+      <input type="radio" name="view" value="detail" checked>
+      <input type="radio" name="view" value="graph">
+      <fieldset data-sc-result-view-panel="detail"></fieldset>
+      <fieldset data-sc-result-view-panel="summary" hidden disabled></fieldset>
+      <fieldset data-sc-graph-options hidden disabled></fieldset>
+      <fieldset data-sc-aggregate-options hidden disabled></fieldset>
+      <span data-sc-limit-label>Rows</span>
+      <select name="limit" data-sc-limit>
+        <option value="10">10</option><option value="25" selected>25</option>
+        <option value="50">50</option><option value="100">100</option>
+      </select>
+      <label data-sc-page-control>Page<input name="page" value="2"></label>
+    </form>
+  `);
+  await page.locator('input[name="view"][value="graph"]').check();
+  await expect(page.locator('[data-sc-limit]')).toHaveValue("100");
+  await expect(page.locator('[data-sc-limit] option[value="100"]')).not.toBeDisabled();
+  expect(await page.locator("form").evaluate(form => new FormData(form).get("limit"))).toBe("100");
+});
+
 test("an export uses the columns currently selected in the builder", async ({page}) => {
   await load(page, `
     <section id="selecto-surface-truck">

@@ -197,6 +197,31 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     return $model;
 }
 
+sub prepare ($self, $controller, $input = undef) {
+    my $config = $self->config->for_request($controller);
+    my $engine = $config->engine($controller);
+    $input //= $config->query_params_enabled($engine->domain)
+        ? $self->input_from_controller($controller) : {};
+    my $state = Selecto::Components::State->from_input($config, $engine->domain, $input);
+    my $model = {
+        config => $config,
+        engine => $engine,
+        domain => $engine->domain,
+        input => $input,
+        state => $state,
+        result => undef,
+        runtime_error => undef,
+        canonical_url => $self->canonical_url($state, $engine->domain),
+    };
+    return $model unless $state->valid;
+    my $built = Selecto::Components::QueryBuilder->build(
+        $config, $engine->domain, $state, {paginate => 1},
+    );
+    $model->{prepared} = $built;
+    $model->{statement} = $engine->compile($built->{query});
+    return $model;
+}
+
 sub _elapsed_ms ($started) {
     return int((time - $started) * 1000 + 0.5);
 }
