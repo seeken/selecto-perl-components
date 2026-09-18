@@ -31,12 +31,34 @@ sub load ($class, $engine, $editor, $target) {
         row_format => 'objects',
     });
     return undef unless @{$result->{rows}} == 1;
-    return {%{$result->{rows}[0]}};
+    my $record = {%{$result->{rows}[0]}};
+    my %collections;
+    for my $collection (@{$editor->{collections} // []}) {
+        my @select = map { $_->{field} } @{$collection->{fields}};
+        my $collection_result = Selecto::API::EngineHandler->new(
+            max_fields => scalar(@select) + 5,
+            max_limit => 100, default_limit => $collection->{limit},
+        )->query($engine, {
+            select => \@select,
+            filters => [{field => $primary_key, op => 'eq', value => "$target"}],
+            order_by => $collection->{order_by},
+            limit => $collection->{limit},
+            row_format => 'objects',
+        });
+        my @rows = grep {
+            my $row = $_;
+            grep { defined($row->{$_}) && "$row->{$_}" ne '' } @select;
+        } @{$collection_result->{rows}};
+        $collections{$collection->{id}} = \@rows;
+    }
+    $record->{__selecto_editor_collections} = \%collections;
+    return $record;
 }
 
 sub normalize ($class, $domain, $editor, $params) {
     my (%values, %errors);
     for my $spec (@{$editor->{fields} // []}) {
+        next if $spec->{readonly};
         my $field = $spec->{field};
         my $definition = $domain->resolve($field);
         my $type = lc($definition->{type} // 'string');
@@ -101,6 +123,7 @@ sub normalize ($class, $domain, $editor, $params) {
 sub changed ($class, $editor, $original, $values) {
     my %changed;
     for my $spec (@{$editor->{fields} // []}) {
+        next if $spec->{readonly};
         my $field = $spec->{field};
         my $before = $original->{$field};
         my $after = $values->{$field};

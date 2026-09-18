@@ -146,8 +146,14 @@ my $record_editor_url = '/explore/products/records/101/edit?editor=product_profi
 $t->get_ok($record_editor_url)
     ->status_is(200)
     ->element_exists('form[data-sc-record-editor-form]')
+    ->text_is('.sc-record-editor-section:nth-child(1) h4' => 'Identity')
+    ->text_is('[data-sc-record-editor-field="id"] output' => '101')
+    ->element_exists_not('[name="editor_field_id"]')
+    ->text_is('.sc-record-editor-section:nth-child(2) h4' => 'Profile')
     ->element_exists('input[name="editor_field_product_name"][value="Test Widget"][required]')
     ->element_exists('input[name="editor_field_unit_price"][type="number"]')
+    ->text_is('[data-sc-record-editor-field="unit_price"] .sc-record-editor-help' =>
+        'Selling price per unit.')
     ->element_exists('input[name="editor_field_created_on"][type="date"]')
     ->element_exists('input[name="editor_field_discontinued"][type="checkbox"]' .
         ':not([required]):not([aria-required])')
@@ -166,6 +172,12 @@ my %record_editor_hidden = map {
 } @{$record_editor_form->find('input[type="hidden"]')->to_array};
 is $TestSelectoComponents::ELIGIBILITY_REQUESTS[-1]{phase}, 'display',
     'record editor checks host row eligibility before offering an action';
+my $unicode_record_name = "Test \x{2014} Widget";
+$TestSelectoComponents::Adapter::RECORD_PRODUCT_NAME = $unicode_record_name;
+$t->get_ok($record_editor_url => {'Accept-Encoding' => 'gzip'})
+    ->status_is(200)
+    ->attr_is('input[name="editor_field_product_name"]' => value => $unicode_record_name);
+$TestSelectoComponents::Adapter::RECORD_PRODUCT_NAME = 'Test Widget';
 $t->get_ok('/explore/products/records/102/edit?editor=product_profile')
     ->status_is(200)
     ->element_exists_not('[data-sc-record-editor-action-open]');

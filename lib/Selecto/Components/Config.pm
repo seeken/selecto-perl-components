@@ -36,6 +36,7 @@ has 'saved_query_store';
 has 'localizer';
 has 'theme_resolver';
 has 'page_shell_resolver';
+has 'api_console_resolver';
 has 'websocket_message_cleanup';
 
 my @DATE_FORMATS = @{Selecto::DateFormat->choices};
@@ -84,6 +85,8 @@ sub new ($class, @args) {
         if defined($self->theme_resolver) && ref($self->theme_resolver) ne 'CODE';
     die "page_shell_resolver must be a coderef\n"
         if defined($self->page_shell_resolver) && ref($self->page_shell_resolver) ne 'CODE';
+    die "api_console_resolver must be a coderef\n"
+        if defined($self->api_console_resolver) && ref($self->api_console_resolver) ne 'CODE';
     die "websocket_message_cleanup must be a coderef\n"
         if defined($self->websocket_message_cleanup)
             && ref($self->websocket_message_cleanup) ne 'CODE';
@@ -236,6 +239,16 @@ sub for_request ($self, $controller) {
     # convenience methods, so keep those immutable results on the request copy.
     $copy->{_catalog_cache} = {};
     return $copy;
+}
+
+sub api_console_url ($self, $model = undef) {
+    my $resolver = $self->api_console_resolver;
+    return '' unless $resolver;
+    my $url = $resolver->($self->{_localization_controller}, $self, $model);
+    return '' unless defined($url) && length("$url");
+    die "api_console_resolver must return an absolute same-origin path\n"
+        if ref($url) || "$url" !~ m{\A/(?!/)[A-Za-z0-9/_-]+\z};
+    return "$url";
 }
 
 sub theme_style ($self) {
@@ -484,13 +497,15 @@ sub _star_dimensions ($domain) {
         my $display_type = $association->fields->{$association->display_field};
         my $label = $association->display_name;
         $label = _humanize($name) unless defined($label) && length($label);
+        my $key_metadata = $domain->field_metadata($key_field);
+        my $key_label = _field_label($key_field, $key_metadata, $label . ' ID');
         my $dimension = {
             association => $name,
             key_field => $key_field,
             display_field => $display_field,
             display_type => $display_type,
             label => $label,
-            key_label => $label . ' ID',
+            key_label => $key_label,
         };
         die "more than one star dimension uses key $key_field\n" if $by_key{$key_field};
         $by_key{$key_field} = $dimension;

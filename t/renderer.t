@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use Test::More;
 use Mojo::JSON qw(decode_json);
+use Mojo::Util qw(url_unescape);
 use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::Config ();
@@ -108,6 +109,53 @@ like $html, qr/saved &lt;b&gt;ok&lt;\/b&gt;/,
     'action notices are HTML-escaped';
 like $html, qr/data-selecto-url="\/explore\/products\?q=1&amp;filter_value=&lt;script&gt;"/,
     'canonical URLs are escaped in attributes';
+
+my $api_config = Selecto::Components::Config->new(
+    %{TestSelectoComponents::config()},
+    id => 'api-products',
+    path => '/explore/api-products',
+    api_console_resolver => sub { return '/api2/product/v1/console' },
+);
+my $api_state = Selecto::Components::State->from_input($api_config, $domain, {
+    q => 1, view => 'detail', field => ['product_name', 'created_on'],
+    field_alias => ['name', ''], field_format => ['', 'month'],
+    filter_field => 'category_id', filter_op => 'eq', filter_value => '7',
+    order => 'created_on', direction => 'desc', limit => 25, page => 2,
+});
+my $api_html = Selecto::Components::Renderer->page({
+    config => $api_config,
+    state => $api_state,
+    domain => $domain,
+    canonical_url => '/explore/api-products?q=1',
+});
+like $api_html, qr{data-sc-api-console[^>]+target="_blank"[^>]+href="/api2/product/v1/console#request=},
+    'an enabled API console is linked beside Explorer exports';
+my ($api_request) = $api_html =~ m{data-sc-api-console[^>]+href="/api2/product/v1/console#request=([^"]+)"};
+is_deeply decode_json(url_unescape($api_request)), $api_state->api_query_payload($api_config, $domain),
+    'the API console link carries the normalized Explorer query';
+my $aggregate_api_state = Selecto::Components::State->from_input($api_config, $domain, {
+    q => 1, view => 'aggregate', group => 'category.category_name', measure => 'count',
+});
+my $aggregate_api_html = Selecto::Components::Renderer->page({
+    config => $api_config, state => $aggregate_api_state, domain => $domain,
+    canonical_url => '/explore/api-products?q=1&view=aggregate',
+});
+like $aggregate_api_html, qr{<button[^>]+data-sc-api-console[^>]+disabled[^>]+>API</button>},
+    'an unrepresentable aggregate query keeps a disabled explanatory API control';
+my $unsafe_api_config = Selecto::Components::Config->new(
+    %{TestSelectoComponents::config()}, id => 'unsafe-api-products',
+    path => '/explore/unsafe-api-products',
+    api_console_resolver => sub { return '//outside.example/api' },
+);
+my $unsafe_api_error = eval {
+    Selecto::Components::Renderer->page({
+        config => $unsafe_api_config, state => $api_state, domain => $domain,
+        canonical_url => '/explore/unsafe-api-products?q=1',
+    });
+    '';
+} || $@;
+like $unsafe_api_error, qr/absolute same-origin path/,
+    'an API console resolver cannot emit a cross-origin URL';
 
 my $theme_controller = bless {}, 'TestSelectoComponents::ThemeController';
 my $theme_resolver_controller;

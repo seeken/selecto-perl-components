@@ -67,6 +67,9 @@ like $@, qr/must be vin_last_six/,
 
 my $curated_contract = $domain->contract;
 $curated_contract->{source}{columns}{id}{internal} = 1;
+$curated_contract->{editors}{product_profile}{fields} = [grep {
+    ($_->{field} // '') ne 'id'
+} @{$curated_contract->{editors}{product_profile}{fields}}];
 $curated_contract->{source}{columns}{product_name}{label} = 'Product';
 $curated_contract->{schemas}{categories}{columns}{id}{internal} = 1;
 my $curated_domain = Selecto::Domain->parse($curated_contract, strict => 1);
@@ -275,6 +278,7 @@ is_deeply $aggregate_statement->params, ['12.50'],
 ok $aggregate->{graph}, 'graph uses aggregate query with graph rendering metadata';
 
 my $star_contract = $domain->contract;
+$star_contract->{source}{columns}{category_id}{label} = 'Category Code';
 $star_contract->{joins}{category} = {
     type => 'star_dimension',
     name => 'Category',
@@ -283,8 +287,8 @@ $star_contract->{joins}{category} = {
 };
 my $star_domain = Selecto::Domain->parse($star_contract, strict => 1);
 my $star_map = $config->field_map($star_domain);
-is $star_map->{category_id}{label}, 'Category ID',
-    'a star dimension clearly labels its raw key as an ID';
+is $star_map->{category_id}{label}, 'Category Code',
+    'a star dimension preserves the domain label for its raw key';
 is $star_map->{'category.category_name'}{label}, 'Category',
     'a star dimension keeps its display value semantic label concise';
 is $star_map->{category_id}{dimension}{display_field}, 'category.category_name',

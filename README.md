@@ -159,6 +159,25 @@ canonical API base path:
       data-title="Orders API Console"></main>
 ```
 
+An Explorer can expose a capability-aware `API` control beside its exports by
+supplying an `api_console_resolver`. Return the same-origin console path when
+the current request may read that API domain, or an empty string to hide it.
+
+```perl
+api_console_resolver => sub ($controller, $config, $model) {
+    return '' unless MyApp::Authorization->can_read_orders_api($controller);
+    return '/api2/orders/v1/console';
+},
+```
+
+For detail views, Components translates the normalized columns, aliases,
+formats, filters, named segments, ordering, and current page into a canonical
+API request. The request travels in the URL fragment, so it is not included in
+the HTTP request or server logs, and the API Console loads it into its chooser.
+Aggregate queries and grouped/grid drilldown predicates remain visible as a
+disabled API control because the canonical API does not yet represent those
+semantics.
+
 On startup it reads the base manifest, `domain`, and `openapi.json` resources
 with same-origin credentials. It derives public field and type controls from
 the canonical domain and query-library controls from the domain's named views,
