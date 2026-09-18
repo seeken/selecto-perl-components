@@ -93,6 +93,25 @@ is_deeply(
     {status => 'active'},
     'saving another edit also repairs a recognized wrong-case value',
 );
+my $required_empty_option =
+    Selecto::Components::Controller::RecordEditor::_select_empty_option(
+        {required => 1}, 0,
+    );
+like $required_empty_option, qr/value="" selected disabled/,
+    'an empty required select keeps an explicit disabled placeholder selected';
+like $required_empty_option, qr/Select/,
+    'the empty required select asks the operator to make a selection';
+is Selecto::Components::Controller::RecordEditor::_select_empty_option(
+        {required => 1}, 1,
+    ), '', 'a populated required select does not render an empty placeholder';
+my $nullable_empty_option =
+    Selecto::Components::Controller::RecordEditor::_select_empty_option(
+        {nullable => 1}, 0,
+    );
+like $nullable_empty_option, qr/value="" selected/,
+    'an empty nullable select explicitly selects its none option';
+unlike $nullable_empty_option, qr/disabled/,
+    'a nullable select keeps its none option available';
 
 is Selecto::Components::normalize_export_format('Excel'), 'xlsx',
     'Excel aliases normalize case-insensitively to the governed xlsx format';
@@ -264,16 +283,6 @@ $TestSelectoComponents::Adapter::RECORD_PRODUCT_NAME = 'Test Widget';
 $t->get_ok('/explore/products/records/102/edit?editor=product_profile')
     ->status_is(200)
     ->element_exists_not('[data-sc-record-editor-action-open]');
-
-$t->get_ok('/explore/products/records/101/edit?editor=empty_required_choice')
-    ->status_is(200)
-    ->element_exists('select[name="editor_field_category_id"][required]')
-    ->element_exists('select[name="editor_field_category_id"] > option[value=""]' .
-        '[selected][disabled]')
-    ->text_like('select[name="editor_field_category_id"] > option[value=""]' =>
-        qr/Select/)
-    ->element_exists_not('select[name="editor_field_category_id"] > ' .
-        'option[value="1"][selected]');
 
 $t->post_ok('/explore/products/records/101/edit?editor=product_profile' =>
     {Accept => 'application/json'} => form => {
