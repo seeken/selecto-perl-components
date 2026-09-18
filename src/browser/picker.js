@@ -336,6 +336,16 @@
     colorControl.appendChild(autoLabel);
     grid.appendChild(colorControl);
 
+    var opacity = document.createElement("input");
+    opacity.type = "number";
+    opacity.name = "measure_fill_opacity";
+    opacity.min = "0";
+    opacity.max = "1";
+    opacity.step = "0.01";
+    opacity.value = "0.22";
+    opacity.setAttribute("aria-label", "Fill opacity for " + label);
+    appendConfigLabel(grid, "Fill opacity", opacity);
+
     var transform = document.createElement("select");
     transform.name = "measure_transform";
     transform.setAttribute("data-sc-measure-transform", "");
@@ -392,6 +402,35 @@
     if (source === picker) automatic.checked = false;
     picker.disabled = automatic.checked;
     hidden.value = automatic.checked ? "" : picker.value.toLowerCase();
+  }
+
+  function addCategoryColor(root) {
+    var list = root && root.querySelector("[data-sc-category-colors]");
+    var button = list && list.querySelector("[data-sc-category-color-add]");
+    if (!list || !button || list.querySelectorAll("[data-sc-category-color-row]").length >= 50) return;
+    var row = document.createElement("div");
+    row.className = "sc-category-color-row";
+    row.setAttribute("data-sc-category-color-row", "");
+    [["Group field", "graph_category_field", "text", ""],
+      ["Value", "graph_category_value", "text", ""],
+      ["Format", "graph_category_format", "text", ""],
+      ["Color", "graph_category_color", "color", "#55d6be"]].forEach(function (definition) {
+        var label = document.createElement("label");
+        label.appendChild(document.createTextNode(definition[0]));
+        var input = document.createElement("input");
+        input.name = definition[1];
+        input.type = definition[2];
+        input.value = definition[3];
+        label.appendChild(input);
+        row.appendChild(label);
+      });
+    var remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "sc-button sc-secondary";
+    remove.setAttribute("data-sc-category-color-remove", "");
+    remove.textContent = "Remove";
+    row.appendChild(remove);
+    list.insertBefore(row, button);
   }
 
   function refreshColumnPicker(root) {

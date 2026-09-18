@@ -91,6 +91,7 @@ sub _measure_selection_hidden ($state) {
             _hidden('measure_axis', $config->{axis} // 'auto') .
             _hidden('measure_stack', $config->{stack} // '') .
             _hidden('measure_color', $config->{color} // '') .
+            _hidden('measure_fill_opacity', $config->{fill_opacity} // '') .
             _hidden('measure_transform', $transform->{type} // '') .
             _hidden('measure_transform_window', ref($transform->{parameters}) eq 'HASH'
                 ? $transform->{parameters}{window} // '' : '')

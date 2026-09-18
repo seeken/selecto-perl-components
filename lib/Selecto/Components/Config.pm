@@ -37,6 +37,7 @@ has 'localizer';
 has 'theme_resolver';
 has 'page_shell_resolver';
 has 'websocket_message_cleanup';
+has 'query_assistant';
 
 my @DATE_FORMATS = @{Selecto::DateFormat->choices};
 
@@ -87,6 +88,20 @@ sub new ($class, @args) {
     die "websocket_message_cleanup must be a coderef\n"
         if defined($self->websocket_message_cleanup)
             && ref($self->websocket_message_cleanup) ne 'CODE';
+    if (defined(my $assistant = $self->query_assistant)) {
+        die "query_assistant must be an object\n" unless ref($assistant) eq 'HASH';
+        die "query_assistant store is required\n"
+            unless blessed($assistant->{store})
+                && $assistant->{store}->can('create')
+                && $assistant->{store}->can('get')
+                && $assistant->{store}->can('compare_and_swap');
+        for my $callback (qw(actor context_authorizer choice_resolver)) {
+            die "query_assistant $callback must be a coderef\n"
+                if defined($assistant->{$callback}) && ref($assistant->{$callback}) ne 'CODE';
+        }
+        die "query_assistant choice_fields must be an object\n"
+            if defined($assistant->{choice_fields}) && ref($assistant->{choice_fields}) ne 'HASH';
+    }
     die "default_row_click_action must be empty or a lowercase identifier\n"
         if !defined($self->default_row_click_action)
             || ref($self->default_row_click_action)
@@ -178,6 +193,11 @@ sub engine ($self, $controller) {
     die "engine_factory did not return a Selecto::Engine\n"
         unless blessed($engine) && $engine->isa('Selecto::Engine');
     return $engine;
+}
+
+sub query_assistant_enabled ($self) {
+    return ref($self->query_assistant) eq 'HASH'
+        && ($self->query_assistant->{enabled} // 1) ? 1 : 0;
 }
 
 sub allows_view ($self, $view) {

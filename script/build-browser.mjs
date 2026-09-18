@@ -18,6 +18,8 @@ const modules = [
   "row-dialog.js",
   "grid.js",
   "lifecycle.js",
+  "query-draft.js",
+  "webmcp.js",
   "picker.js",
   "filters.js",
   "actions.js",

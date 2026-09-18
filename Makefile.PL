@@ -21,13 +21,24 @@ WriteMakefile(
         'lib/Selecto/Components/Controller/Explorer.pm' => '$(INST_LIB)/Selecto/Components/Controller/Explorer.pm',
         'lib/Selecto/Components/Controller/Lookups.pm' => '$(INST_LIB)/Selecto/Components/Controller/Lookups.pm',
         'lib/Selecto/Components/Controller/RecordEditor.pm' => '$(INST_LIB)/Selecto/Components/Controller/RecordEditor.pm',
+        'lib/Selecto/Components/Controller/QueryAssistant.pm' => '$(INST_LIB)/Selecto/Components/Controller/QueryAssistant.pm',
         'lib/Selecto/Components/Controller/SavedQueries.pm' => '$(INST_LIB)/Selecto/Components/Controller/SavedQueries.pm',
         'lib/Selecto/Components/DateShortcut.pm' => '$(INST_LIB)/Selecto/Components/DateShortcut.pm',
         'lib/Selecto/Components/Explorer.pm' => '$(INST_LIB)/Selecto/Components/Explorer.pm',
         'lib/Selecto/Components/Graph/AxisPlanner.pm' => '$(INST_LIB)/Selecto/Components/Graph/AxisPlanner.pm',
+        'lib/Selecto/Components/Graph/Capabilities.pm' => '$(INST_LIB)/Selecto/Components/Graph/Capabilities.pm',
+        'lib/Selecto/Components/Graph/Colors.pm' => '$(INST_LIB)/Selecto/Components/Graph/Colors.pm',
         'lib/Selecto/Components/I18N.pm' => '$(INST_LIB)/Selecto/Components/I18N.pm',
         'lib/Selecto/Components/Importer.pm' => '$(INST_LIB)/Selecto/Components/Importer.pm',
         'lib/Selecto/Components/QueryBuilder.pm' => '$(INST_LIB)/Selecto/Components/QueryBuilder.pm',
+        'lib/Selecto/Components/QueryContract.pm' => '$(INST_LIB)/Selecto/Components/QueryContract.pm',
+        'lib/Selecto/Components/QueryAssistant/Diff.pm' => '$(INST_LIB)/Selecto/Components/QueryAssistant/Diff.pm',
+        'lib/Selecto/Components/QueryAssistant/Draft.pm' => '$(INST_LIB)/Selecto/Components/QueryAssistant/Draft.pm',
+        'lib/Selecto/Components/QueryAssistant/Store.pm' => '$(INST_LIB)/Selecto/Components/QueryAssistant/Store.pm',
+        'lib/Selecto/Components/QueryAssistant/Store/SQLite.pm' => '$(INST_LIB)/Selecto/Components/QueryAssistant/Store/SQLite.pm',
+        'lib/Selecto/Components/QueryAssistant/Target.pm' => '$(INST_LIB)/Selecto/Components/QueryAssistant/Target.pm',
+        'lib/Selecto/Components/QueryAssistant/Tools.pm' => '$(INST_LIB)/Selecto/Components/QueryAssistant/Tools.pm',
+        'lib/Selecto/Components/QueryAssistant/Validator.pm' => '$(INST_LIB)/Selecto/Components/QueryAssistant/Validator.pm',
         'lib/Selecto/Components/QueryLibrary.pm' => '$(INST_LIB)/Selecto/Components/QueryLibrary.pm',
         'lib/Selecto/Components/RecordEditor.pm' => '$(INST_LIB)/Selecto/Components/RecordEditor.pm',
         'lib/Selecto/Components/Resource/Composer.pm' => '$(INST_LIB)/Selecto/Components/Resource/Composer.pm',
@@ -67,6 +78,14 @@ WriteMakefile(
     },
     META_MERGE => {
         'meta-spec' => { version => 2 },
+        prereqs => {
+            runtime => {
+                recommends => {
+                    DBI => 0,
+                    'DBD::SQLite' => 0,
+                },
+            },
+        },
         resources => {
             repository => {
                 type => 'git',

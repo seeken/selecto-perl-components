@@ -95,6 +95,7 @@
 
   function markBuilderDirty(root) {
     if (!root) return;
+    root.dataset.scEditGeneration = String(Number(root.dataset.scEditGeneration || "0") + 1);
     if (!root.matches("[data-sc-builder]")) root = root.closest("[data-sc-builder]");
     if (!root) return;
     root.classList.add("is-dirty");
@@ -161,14 +162,18 @@
     var limit = root.querySelector("[data-sc-limit]");
     if (limit) {
       var options = Array.from(limit.options);
+      var maximum = options.reduce(function (value, option) {
+        return Math.max(value, Number(option.value) || 0);
+      }, 0);
+      var graphMinimum = Math.min(250, maximum);
       options.forEach(function (option) {
-        var tooSmall = Number(option.value) < 250;
+        var tooSmall = Number(option.value) < graphMinimum;
         option.hidden = graphActive && tooSmall;
         option.disabled = graphActive && tooSmall;
       });
-      if (graphActive && Number(limit.value) < 250) {
+      if (graphActive && Number(limit.value) < graphMinimum) {
         var next = options.find(function (option) { return Number(option.value) >= 500; }) ||
-          options.find(function (option) { return Number(option.value) >= 250; }) ||
+          options.find(function (option) { return Number(option.value) >= graphMinimum; }) ||
           options[options.length - 1];
         if (next) limit.value = next.value;
       }
@@ -393,7 +398,10 @@
       if (seriesType === "line" || seriesType === "area") dataset.tension = 0.28;
       if (seriesType === "area") {
         dataset.fill = "origin";
-        dataset.backgroundColor = chartColorWithAlpha(dataset.borderColor, 0.22);
+        dataset.backgroundColor = chartColorWithAlpha(
+          dataset.borderColor,
+          typeof dataset.fillOpacity === "number" ? dataset.fillOpacity : 0.22
+        );
       }
       if (type === "scatter") {
         dataset.pointRadius = 5;
@@ -1819,6 +1827,226 @@
     }
   }, true);
 
+  // Source: query-draft.js
+  var queryAssistantSessions = new Map();
+
+  function assistantFormInput(form) {
+    var input = Object.create(null);
+    new FormData(form).forEach(function (value, name) {
+      if (typeof File !== "undefined" && value instanceof File) return;
+      if (Object.prototype.hasOwnProperty.call(input, name)) {
+        if (!Array.isArray(input[name])) input[name] = [input[name]];
+        input[name].push(String(value));
+      } else {
+        input[name] = String(value);
+      }
+    });
+    return input;
+  }
+
+  async function assistantRequest(session, tool, payload) {
+    var response = await fetch(session.endpoint + "/" + encodeURIComponent(session.draftId)
+      + "/tools/" + encodeURIComponent(tool), {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {"Content-Type": "application/json", "X-CSRF-Token": session.csrf},
+      body: JSON.stringify(Object.assign({}, payload, {draft_id: session.draftId}))
+    });
+    var body = await response.json().catch(function () {
+      return {ok: false, code: "invalid_response"};
+    });
+    if (!response.ok && body.ok !== false) body.ok = false;
+    return body;
+  }
+
+  async function syncAssistantSession(session, form) {
+    var generation = form ? String(form.dataset.scEditGeneration || "0") : "0";
+    if (generation === String(session.syncedGeneration || "0")) return;
+    var response = await fetch(session.endpoint + "/" + encodeURIComponent(session.draftId) + "/sync", {
+      method: "POST", credentials: "same-origin",
+      headers: {"Content-Type": "application/json", "X-CSRF-Token": session.csrf},
+      body: JSON.stringify({base_revision: session.revision, input: assistantFormInput(form)})
+    });
+    var result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.code || "draft synchronization failed");
+    session.revision = result.revision;
+    session.undoToken = "";
+    session.syncedGeneration = generation;
+  }
+
+  function assistantStatus(session, message, error) {
+    var surface = session.surface && session.surface.isConnected ? session.surface
+      : document.querySelector('[data-sc-query-assistant="' + CSS.escape(session.endpoint) + '"]');
+    var status = surface && surface.querySelector("[data-sc-query-assistant-status]");
+    if (status) {
+      status.textContent = message;
+      status.classList.toggle("is-error", Boolean(error));
+    }
+  }
+
+  function applyAssistantBuilder(session, result, generation) {
+    if (!result || !result.ok) return result;
+    session.revision = result.revision;
+    if (result.undo_token) session.undoToken = result.undo_token;
+    if (!result.builder_html) return result;
+    var current = document.querySelector('[data-sc-query-assistant="' + CSS.escape(session.endpoint) + '"]');
+    var form = current && current.querySelector("[data-sc-builder]");
+    if (!form || String(form.dataset.scEditGeneration || "0") !== String(generation)) {
+      result.ui_applied = false;
+      result.ui_message = "The validated draft was not inserted because the form changed locally.";
+      assistantStatus(session, result.ui_message, true);
+      return result;
+    }
+    var shell = form.closest("[data-sc-builder-shell]");
+    var template = document.createElement("template");
+    template.innerHTML = result.builder_html.trim();
+    var replacement = template.content.firstElementChild;
+    if (!shell || !replacement) return result;
+    shell.replaceWith(replacement);
+    if (window.htmx && typeof window.htmx.process === "function") window.htmx.process(replacement);
+    var nextForm = replacement.querySelector("[data-sc-builder]");
+    if (nextForm) {
+      nextForm.dataset.scEditGeneration = String(Number(generation) + 1);
+      nextForm.classList.add("is-dirty");
+      session.syncedGeneration = nextForm.dataset.scEditGeneration;
+    }
+    restoreBuilderTabs();
+    restoreBuilderTrays();
+    restoreResultViews();
+    var undo = replacement.querySelector("[data-sc-query-assistant-undo]");
+    if (undo) undo.hidden = !session.undoToken;
+    assistantStatus(session, result.no_op ? "No query changes needed." : "Assistant changes ready. Review them, then run the query.", false);
+    result.ui_applied = true;
+    return result;
+  }
+
+  async function initializeQueryAssistantSurface(surface) {
+    var endpoint = surface && surface.dataset.scQueryAssistant;
+    if (!endpoint) return;
+    var existing = queryAssistantSessions.get(endpoint);
+    if (existing && existing.surface === surface && surface.isConnected) return;
+    if (existing) {
+      existing.controller.abort();
+      queryAssistantSessions.delete(endpoint);
+    }
+    var form = surface.querySelector("[data-sc-builder]");
+    if (!form) return;
+    var session = {
+      endpoint: endpoint,
+      surface: surface,
+      csrf: surface.dataset.scQueryAssistantCsrf || "",
+      controller: new AbortController(),
+      revision: 0,
+      contextVersion: "",
+      undoToken: "",
+      syncedGeneration: String(form.dataset.scEditGeneration || "0")
+    };
+    queryAssistantSessions.set(endpoint, session);
+    try {
+      var response = await fetch(endpoint, {
+        method: "POST", credentials: "same-origin",
+        headers: {"Content-Type": "application/json", "X-CSRF-Token": session.csrf},
+        body: JSON.stringify({input: assistantFormInput(form)})
+      });
+      var bootstrap = await response.json();
+      if (!response.ok || !bootstrap.ok) throw new Error(bootstrap.code || "draft bootstrap failed");
+      session.draftId = bootstrap.draft_id;
+      session.revision = bootstrap.revision;
+      session.contextVersion = bootstrap.context_version;
+      session.tools = bootstrap.tools || [];
+      assistantStatus(session, "Browser assistant tools are ready.", false);
+      await registerQueryAssistantTools(session);
+    } catch (error) {
+      session.controller.abort();
+      queryAssistantSessions.delete(endpoint);
+      assistantStatus(session, "Browser assistant is unavailable: " + error.message, true);
+    }
+  }
+
+  function initializeQueryAssistants() {
+    document.querySelectorAll("[data-sc-query-assistant]").forEach(initializeQueryAssistantSurface);
+  }
+
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-sc-query-assistant-undo]");
+    if (!button) return;
+    var surface = button.closest("[data-sc-query-assistant]");
+    var session = surface && queryAssistantSessions.get(surface.dataset.scQueryAssistant);
+    if (!session || !session.undoToken) return;
+    var form = surface.querySelector("[data-sc-builder]");
+    var generation = form ? form.dataset.scEditGeneration || "0" : "0";
+    button.disabled = true;
+    syncAssistantSession(session, form).then(function () {
+      if (!session.undoToken) throw new Error("The form changed after the assistant edit.");
+      return assistantRequest(session, "undo_query_draft", {
+        base_revision: session.revision, undo_token: session.undoToken
+      });
+    }).then(function (result) {
+      if (result.ok) session.undoToken = "";
+      applyAssistantBuilder(session, result, generation);
+    }).catch(function (error) {
+      assistantStatus(session, "Undo could not be completed: " + error.message, true);
+    }).finally(function () { button.disabled = false; });
+  });
+
+  document.addEventListener("DOMContentLoaded", initializeQueryAssistants);
+  document.addEventListener("htmx:after:swap", initializeQueryAssistants);
+  window.addEventListener("pageshow", initializeQueryAssistants);
+
+  // Source: webmcp.js
+  function browserToolDefinition(definition) {
+    var schema = JSON.parse(JSON.stringify(definition.inputSchema || {type: "object"}));
+    var internal = ["draft_id", "base_revision", "context_version"];
+    internal.forEach(function (name) {
+      if (schema.properties) delete schema.properties[name];
+      if (Array.isArray(schema.required)) schema.required = schema.required.filter(function (item) {
+        return item !== name;
+      });
+    });
+    return Object.assign({}, definition, {inputSchema: schema});
+  }
+
+  async function registerQueryAssistantTools(session) {
+    var context = document.modelContext;
+    if (!context || typeof context.registerTool !== "function") {
+      assistantStatus(session, "Query draft is ready; this browser does not expose WebMCP.", false);
+      return;
+    }
+    for (const source of session.tools) {
+      var definition = browserToolDefinition(source);
+      definition.execute = async function (argumentsObject) {
+        var form = document.querySelector('[data-sc-query-assistant="'
+          + CSS.escape(session.endpoint) + '"] [data-sc-builder]');
+        var generation = form ? form.dataset.scEditGeneration || "0" : "0";
+        await syncAssistantSession(session, form);
+        generation = form ? form.dataset.scEditGeneration || "0" : "0";
+        var payload = Object.assign({}, argumentsObject || {});
+        if (source.name === "validate_query_target" || source.name === "apply_query_draft") {
+          payload.base_revision = session.revision;
+          payload.context_version = session.contextVersion;
+        }
+        if (source.name === "undo_query_draft") {
+          payload.base_revision = session.revision;
+          payload.undo_token = session.undoToken;
+        }
+        var result = await assistantRequest(session, source.name, payload);
+        if (source.name === "apply_query_draft" || source.name === "undo_query_draft") {
+          applyAssistantBuilder(session, result, generation);
+        }
+        if (result.context_version) session.contextVersion = result.context_version;
+        if (typeof result.revision === "number") session.revision = result.revision;
+        return result;
+      };
+      await context.registerTool(definition, {signal: session.controller.signal});
+    }
+    assistantStatus(session, "WebMCP query tools are registered.", false);
+  }
+
+  window.addEventListener("pagehide", function () {
+    queryAssistantSessions.forEach(function (session) { session.controller.abort(); });
+    queryAssistantSessions.clear();
+  });
+
   // Source: picker.js
   function setItems(root) {
     return Array.from(root.querySelectorAll("[data-sc-picker-set-item]"));
@@ -2158,6 +2386,16 @@
     colorControl.appendChild(autoLabel);
     grid.appendChild(colorControl);
 
+    var opacity = document.createElement("input");
+    opacity.type = "number";
+    opacity.name = "measure_fill_opacity";
+    opacity.min = "0";
+    opacity.max = "1";
+    opacity.step = "0.01";
+    opacity.value = "0.22";
+    opacity.setAttribute("aria-label", "Fill opacity for " + label);
+    appendConfigLabel(grid, "Fill opacity", opacity);
+
     var transform = document.createElement("select");
     transform.name = "measure_transform";
     transform.setAttribute("data-sc-measure-transform", "");
@@ -2214,6 +2452,35 @@
     if (source === picker) automatic.checked = false;
     picker.disabled = automatic.checked;
     hidden.value = automatic.checked ? "" : picker.value.toLowerCase();
+  }
+
+  function addCategoryColor(root) {
+    var list = root && root.querySelector("[data-sc-category-colors]");
+    var button = list && list.querySelector("[data-sc-category-color-add]");
+    if (!list || !button || list.querySelectorAll("[data-sc-category-color-row]").length >= 50) return;
+    var row = document.createElement("div");
+    row.className = "sc-category-color-row";
+    row.setAttribute("data-sc-category-color-row", "");
+    [["Group field", "graph_category_field", "text", ""],
+      ["Value", "graph_category_value", "text", ""],
+      ["Format", "graph_category_format", "text", ""],
+      ["Color", "graph_category_color", "color", "#55d6be"]].forEach(function (definition) {
+        var label = document.createElement("label");
+        label.appendChild(document.createTextNode(definition[0]));
+        var input = document.createElement("input");
+        input.name = definition[1];
+        input.type = definition[2];
+        input.value = definition[3];
+        label.appendChild(input);
+        row.appendChild(label);
+      });
+    var remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "sc-button sc-secondary";
+    remove.setAttribute("data-sc-category-color-remove", "");
+    remove.textContent = "Remove";
+    row.appendChild(remove);
+    list.insertBefore(row, button);
   }
 
   function refreshColumnPicker(root) {
@@ -2739,6 +3006,20 @@
   });
 
   document.addEventListener("click", function (event) {
+    var addCategoryColorButton = event.target.closest("[data-sc-category-color-add]");
+    if (addCategoryColorButton) {
+      var categoryBuilder = addCategoryColorButton.closest("[data-sc-builder]");
+      addCategoryColor(categoryBuilder);
+      markBuilderDirty(categoryBuilder);
+      return;
+    }
+    var removeCategoryColorButton = event.target.closest("[data-sc-category-color-remove]");
+    if (removeCategoryColorButton) {
+      var categoryRoot = removeCategoryColorButton.closest("[data-sc-builder]");
+      removeCategoryColorButton.closest("[data-sc-category-color-row]").remove();
+      markBuilderDirty(categoryRoot);
+      return;
+    }
     var control = event.target.closest("[data-sc-picker-action]");
     if (!control || control.disabled) return;
     var root = control.closest("[data-sc-picker-root]");

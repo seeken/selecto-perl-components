@@ -831,6 +831,79 @@ formats are selected from a closed catalog; Aggregate formatting is part of the
 group expression itself, so choosing Month produces month buckets rather than
 merely changing the display label.
 
+## WebMCP query form editor
+
+An explorer can opt in to a browser-integrated AI editing surface. The browser
+registers five governed tools with the current
+[WebMCP imperative API](https://github.com/webmachinelearning/webmcp/blob/main/index.bs):
+`get_query_context`, `search_choices`, `validate_query_target`,
+`apply_query_draft`, and `undo_query_draft`. If `document.modelContext` is not
+available, the ordinary Selecto form continues to work unchanged.
+
+```perl
+use Selecto::Components::QueryAssistant::Store;
+
+my $drafts = Selecto::Components::QueryAssistant::Store->new(
+    idle_ttl => 1800,
+    maximum_lifetime => 7200,
+);
+
+plugin 'Selecto::Components' => {
+    explorers => {
+        products => {
+            # path, engine_factory, fields, groups, and measures ...
+            query_assistant => {
+                store => $drafts,
+                policy_version => 'products-v1',
+                actor => sub ($controller) { $controller->current_user->id },
+                context_authorizer => sub ($controller, $config) {
+                    return $controller->current_user->can('edit_reports');
+                },
+                palettes => {
+                    brand => ['#2563eb', '#f97316', '#16a34a', '#9333ea'],
+                },
+            },
+        },
+    },
+};
+```
+
+The contract describes only domain-authorized fields, filters, measures,
+formats, graph types, point limits, palettes, and category/series color
+controls. The AI submits a complete Detail, Aggregate, or Graph target. Selecto
+then normalizes it through ordinary state parsing, compiles it through the
+configured engine without executing it, and atomically replaces only the form.
+The user must still press **Run query**. Revisions, context versions,
+idempotency receipts, a one-step undo token, CSRF, same-origin checks, request
+size limits, expiry, and per-owner quotas protect the draft boundary. Manual
+form edits are synchronized before a tool call and invalidate an older undo.
+
+Choice lookup is disabled unless both `choice_fields` and `choice_resolver` are
+configured. The resolver is called again for exact validation before a target
+using a governed choice is accepted. Browser-supplied SQL, adapter names,
+unpublished identifiers, and query execution are not part of the tool surface.
+
+The in-memory store is suitable for one process and is used by the Northwind
+example. Multi-worker deployments can use the optional SQLite store:
+
+```perl
+use Selecto::Components::QueryAssistant::Store::SQLite;
+my $drafts = Selecto::Components::QueryAssistant::Store::SQLite->new(
+    path => '/var/lib/myapp/selecto-query-drafts.sqlite',
+);
+```
+
+Both stores enforce revision compare-and-swap, idle and absolute expiry,
+payload bounds, and per-owner draft quotas. Use an application-owned protected
+path for SQLite and the `actor` callback for stable ownership across workers.
+
+Graph targets support mixed bar/line/area series, axes, stacks, transforms,
+NULL policy, explicit series colors, fill opacity, named palettes,
+category color overrides, and the optional raw aggregate table. Explicit
+series/category colors win over a selected palette; the selected palette wins
+over host theme defaults. Graph settings remain in the editable form state when
+the user switches to another view.
+
 ## htmx 4 boundary
 
 The vendored assets are exactly `htmx.org@4.0.0`:
