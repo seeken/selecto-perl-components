@@ -55,14 +55,18 @@ sub load ($class, $engine, $editor, $target) {
     return $record;
 }
 
-sub normalize ($class, $domain, $editor, $params) {
+sub normalize ($class, $domain, $editor, $params, $original = undef) {
     my (%values, %errors);
     for my $spec (@{$editor->{fields} // []}) {
         next if $spec->{readonly};
         my $field = $spec->{field};
         my $definition = $domain->resolve($field);
         my $type = lc($definition->{type} // 'string');
-        my $control = $spec->{control} // _control_for_type($type);
+        my $options = $spec->{options}
+            // $domain->field_metadata($field)->{options};
+        my $control = $spec->{control}
+            // (ref($options) eq 'ARRAY' && @$options
+                ? 'select' : _control_for_type($type));
         my $present = exists $params->{$field};
         my $value = $present ? $params->{$field} : undef;
         $value = $value->[-1] if ref($value) eq 'ARRAY';
@@ -72,6 +76,8 @@ sub normalize ($class, $domain, $editor, $params) {
             $value = "$value";
             $value =~ s/\A\s+|\s+\z//g unless $control eq 'textarea';
         }
+        my $submitted_value = $value;
+        $value = $domain->normalize_field_value($field, $value);
 
         if (!defined($value) || (!ref($value) && $value =~ /\A\s*\z/)) {
             if ($spec->{required}) {
@@ -86,9 +92,16 @@ sub normalize ($class, $domain, $editor, $params) {
             $errors{$field} = 'Enter a single value.';
             next;
         }
-        if ($control eq 'select' && ref($spec->{options}) eq 'ARRAY') {
-            my %allowed = map { ("" . $_->{value}) => 1 } @{$spec->{options}};
-            unless ($allowed{"$value"}) {
+        if ($control eq 'select' && ref($options) eq 'ARRAY') {
+            my %allowed = map { ("" . $_->{value}) => 1 } @$options;
+            my $unchanged_legacy = ref($original) eq 'HASH'
+                && exists($original->{$field})
+                && defined($original->{$field})
+                && defined($submitted_value)
+                && "$submitted_value" eq "$original->{$field}";
+            $value = $original->{$field}
+                if !$allowed{"$value"} && $unchanged_legacy;
+            unless ($allowed{"$value"} || $unchanged_legacy) {
                 $errors{$field} = 'Choose an available value.';
                 next;
             }
