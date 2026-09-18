@@ -146,6 +146,8 @@ sub websocket_message ($class, $model) {
         swap => 'outerHTML',
         selecto => {
             url => $model->{canonical_url},
+            (defined($model->{selecto_request_id})
+                ? (request_id => $model->{selecto_request_id}) : ()),
             (defined($query_summary) ? (query_summary => $query_summary) : ()),
             performance => {
                 render_ms => $render_ms,

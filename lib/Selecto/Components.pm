@@ -230,7 +230,14 @@ sub _routes (
             my $processed = eval {
                 my %input = %$envelope;
                 delete $input{headers};
-                my $model = Selecto::Components::Controller::Explorer::_decorate_model($socket, $explorer->model($socket, \%input));
+                my $request_id = delete $input{selecto_request_id};
+                $request_id = undef
+                    unless defined($request_id) && !ref($request_id)
+                        && $request_id =~ /\A[a-zA-Z0-9_.:-]{1,128}\z/;
+                my $model = Selecto::Components::Controller::Explorer::_decorate_model(
+                    $socket, $explorer->model($socket, \%input),
+                );
+                $model->{selecto_request_id} = $request_id if defined $request_id;
                 $response = Selecto::Components::Renderer->websocket_message($model);
                 1;
             };
