@@ -390,9 +390,14 @@ a { color: inherit; }
 .sc-empty { display: grid; min-height: 520px; place-content: center; text-align: center; }
 .sc-empty p { color: var(--sc-muted); }
 .sc-chart { border-top: 1px solid var(--sc-border); padding: 20px; }
-.sc-chart-canvas { display: none; height: 420px; min-height: 320px; position: relative; }
-.sc-chart.is-ready .sc-chart-canvas { display: block; }
-.sc-chart.is-ready .sc-chart-fallback { display: none; }
+.sc-chart-canvas { display: block; height: 420px; min-height: 320px; overflow: hidden; position: relative; }
+.sc-chart-canvas::before { align-items: center; background: var(--sc-panel); color: var(--sc-muted); content: "Loading chart…"; display: flex; font-size: .78rem; inset: 0; justify-content: center; position: absolute; z-index: 1; }
+.sc-chart-canvas canvas { visibility: hidden; }
+.sc-chart.is-ready .sc-chart-canvas::before { display: none; }
+.sc-chart.is-ready .sc-chart-canvas canvas { visibility: visible; }
+.sc-chart-fallback { display: none; }
+.sc-chart.is-fallback .sc-chart-canvas { display: none; }
+.sc-chart.is-fallback .sc-chart-fallback { display: block; }
 .sc-chart-fallback ul { display: grid; gap: 9px; list-style: none; margin: 0; padding: 0; }
 .sc-chart-fallback li { align-items: center; display: grid; grid-template-columns: minmax(110px, 220px) minmax(120px, 1fr) 72px; gap: 12px; }
 .sc-chart-fallback meter { height: 20px; width: 100%; }

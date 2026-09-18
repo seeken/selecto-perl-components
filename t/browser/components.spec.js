@@ -129,6 +129,8 @@ test("mixed graph series configure independent left and right axes", async ({pag
   await page.addScriptTag({path: bundle});
   await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
   await expect.poll(() => page.evaluate(() => Boolean(window.capturedChartConfig))).toBe(true);
+  await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-ready/);
+  await expect(page.locator("[data-sc-chart]")).toHaveAttribute("aria-busy", "false");
   const chart = await page.evaluate(() => window.capturedChartConfig);
   expect(chart.data.datasets.map(dataset => [dataset.type, dataset.yAxisID, dataset.stack || ""]))
     .toEqual([
@@ -162,6 +164,24 @@ test("mixed graph series configure independent left and right axes", async ({pag
     return {submitted, cursor};
   });
   expect(axisDrilldown).toEqual({submitted: true, cursor: "pointer"});
+});
+
+test("a chart initialization failure reveals the fallback without flashing it first", async ({page}) => {
+  await page.setContent(`
+    <div data-sc-chart data-chart-type="bar" data-chart-data='{"labels":["Jan"],"datasets":[]}'
+      aria-busy="true">
+      <div class="sc-chart-canvas"><canvas></canvas></div>
+      <div class="sc-chart-fallback">Fallback values</div>
+    </div>
+  `);
+  await page.evaluate(() => {
+    window.Chart = function () { throw new Error("chart failed"); };
+  });
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
+  await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-fallback/);
+  await expect(page.locator("[data-sc-chart]")).not.toHaveClass(/is-ready/);
+  await expect(page.locator("[data-sc-chart]")).toHaveAttribute("aria-busy", "false");
 });
 
 test("switching to graph mode raises the point limit and removes page selection", async ({page}) => {
