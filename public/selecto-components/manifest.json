@@ -1,9 +1,9 @@
 {
   "package": "@selecto/perl-components-browser",
   "version": "0.1.0",
-  "revision": "0.1.0-3c52f0dacd01",
+  "revision": "0.1.0-c8cda6caeccb",
   "assets": {
-    "selecto-components.css": "aad953cc3809038811fa7e7a85f8d22a623885add8255d61c405e903eee8483e",
+    "selecto-components.css": "ad6ab1af35d50b4caf9d8f7e4626642ebcf0dd370f5ecb1e8c9aa2d8aec68233",
     "selecto-components.js": "660a286026e6ba29dab9d07a76b6c4e2d30b2bdc58fc552d73361e41504f9704",
     "htmx.min.js": "e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f",
     "hx-ws.min.js": "a7c11e4eca05417d6299bb40aaacca01572e44605389fc4d5ef12be408a4d03b",

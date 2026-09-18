@@ -153,6 +153,8 @@
           this.updateSelectionSummary();
         }
         if (event.target.matches("[data-sai-config]")) this.loadJSON(event.target.value);
+        if (event.target.matches("[data-sai-static]")) this.mappings.get(event.target.dataset.saiStatic).value = event.target.value;
+        if (event.target.matches("[data-sai-action-static]")) this.actionMappings.get(event.target.dataset.saiActionStatic).value = event.target.value;
       });
       this.root.addEventListener("input", (event) => {
         if (event.target.matches("[data-sai-static]")) this.mappings.get(event.target.dataset.saiStatic).value = event.target.value;
@@ -165,6 +167,30 @@
       const node = this.root.querySelector("[data-sai-message]");
       node.textContent = text || "";
       node.classList.toggle("is-error", Boolean(error));
+    }
+
+    staticValueControl(spec, value, datasetName, datasetValue) {
+      const choices = Array.isArray(spec && spec.options)
+        ? spec.options : Array.isArray(spec && spec.enum) ? spec.enum : null;
+      let control;
+      if (choices) {
+        control = element("select", "");
+        control.add(new Option("Choose…", ""));
+        choices.forEach((choice) => {
+          const optionValue = choice && typeof choice === "object"
+            ? choice.value : choice;
+          const optionLabel = choice && typeof choice === "object"
+            ? (choice.label || optionValue) : optionValue;
+          control.add(new Option(String(optionLabel), String(optionValue)));
+        });
+      } else {
+        control = element("input", "");
+        control.type = this.inputType((spec || {}).type);
+        control.placeholder = "Value";
+      }
+      control.value = value === undefined || value === null ? "" : String(value);
+      control.dataset[datasetName] = datasetValue;
+      return control;
     }
 
     async uploadFile() {
@@ -399,7 +425,15 @@
         if ((spec.sources || []).includes("trusted")) source.add(new Option("Current trusted context", "trusted", false, mapping.kind === "trusted"));
         row.append(copy, source);
         if (mapping.kind === "static" || mapping.kind === "parameter") {
-          const input = element("input", ""); input.type = mapping.kind === "static" ? this.inputType((this.domain.source.columns[field] || {}).type) : "text"; input.value = mapping.value || mapping.name || ""; input.placeholder = mapping.kind === "parameter" ? "Parameter name" : "Value"; input.dataset.saiStatic = field; row.append(input);
+          const column = this.domain.source.columns[field] || {};
+          const input = mapping.kind === "static"
+            ? this.staticValueControl(column, mapping.value, "saiStatic", field)
+            : element("input", "");
+          if (mapping.kind === "parameter") {
+            input.type = "text"; input.value = mapping.name || "";
+            input.placeholder = "Parameter name"; input.dataset.saiStatic = field;
+          }
+          row.append(input);
         }
         body.append(row);
       });
@@ -420,7 +454,15 @@
         if ((spec.sources || []).includes("trusted")) source.add(new Option("Current trusted context", "trusted", false, mapping.kind === "trusted"));
         row.append(copy, source);
         if (mapping.kind === "static" || mapping.kind === "parameter") {
-          const value = element("input", ""); value.type = mapping.kind === "static" ? this.inputType(spec.type) : "text"; value.value = mapping.value || mapping.name || ""; value.placeholder = mapping.kind === "parameter" ? "Parameter name" : "Value"; value.dataset.saiActionStatic = key; row.append(value);
+          const value = mapping.kind === "static"
+            ? this.staticValueControl(spec, mapping.value, "saiActionStatic", key)
+            : element("input", "");
+          if (mapping.kind === "parameter") {
+            value.type = "text"; value.value = mapping.name || "";
+            value.placeholder = "Parameter name";
+            value.dataset.saiActionStatic = key;
+          }
+          row.append(value);
         }
         body.append(row);
       });
