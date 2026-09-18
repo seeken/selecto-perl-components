@@ -251,15 +251,9 @@ sub _form ($controller, $context, $record, $snapshot, $signature) {
                 : '';
             my $has_display_value = defined($display_value)
                 && "$display_value" ne '';
-            my $empty_option = '';
-            if ($spec->{nullable} || !$has_display_value) {
-                my $empty_label = $spec->{nullable} ? '— None —'
-                    : $spec->{required} ? '— Select —' : '— Blank —';
-                $empty_option = '<option value=""' .
-                    (!$has_display_value ? ' selected' : '') .
-                    ($spec->{required} ? ' disabled' : '') . '>' .
-                    _h($empty_label) . '</option>';
-            }
+            my $empty_option = _select_empty_option(
+                $spec, $has_display_value,
+            );
             my $option_html = join '', map {
                 '<option value="' . _h($_->{value}) . '"' .
                     (defined($display_value) && "$display_value" eq ("" . $_->{value}) ? ' selected' : '') . '>' .
@@ -425,6 +419,16 @@ sub _input_value ($value, $control) {
     $text =~ s/ /T/ if $control eq 'datetime-local';
     $text =~ s/(?:Z|[+-]\d\d:?\d\d)\z// if $control eq 'datetime-local';
     return $text;
+}
+
+sub _select_empty_option ($spec, $has_display_value) {
+    return '' unless $spec->{nullable} || !$has_display_value;
+    my $empty_label = $spec->{nullable} ? '— None —'
+        : $spec->{required} ? '— Select —' : '— Blank —';
+    return '<option value=""' .
+        (!$has_display_value ? ' selected' : '') .
+        ($spec->{required} ? ' disabled' : '') . '>' .
+        _h($empty_label) . '</option>';
 }
 
 sub _signature ($controller, $editor, $target, $snapshot) {

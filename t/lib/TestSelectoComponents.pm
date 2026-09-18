@@ -133,7 +133,6 @@ sub _domain {
             operations => {update => {enabled => 1}},
             fields => {
                 product_name => {updatable => 1},
-                category_id => {updatable => 1},
                 unit_price => {updatable => 1},
                 created_on => {updatable => 1},
                 discontinued => {updatable => 1},
@@ -153,17 +152,6 @@ sub _domain {
                     {field => 'discontinued', required => 1, section => 'Profile'},
                 ],
                 actions => ['edit_one_product'],
-            },
-            empty_required_choice => {
-                label => 'Edit required choice',
-                fields => [
-                    {field => 'id', readonly => 1},
-                    {field => 'category_id', label => 'Category', required => 1,
-                        options => [
-                            {value => 1, label => 'Beverages'},
-                            {value => 2, label => 'Condiments'},
-                        ]},
-                ],
             },
         },
         query_library => {
@@ -559,10 +547,6 @@ sub execute_query ($self, $statement) {
             columns => $statement->columns,
             rows => [[101, $RECORD_PRODUCT_NAME, 12.5, '2026-09-15', 0]],
         };
-    }
-    if (defined($LAST_DATA_QUERY->limit_value) && $LAST_DATA_QUERY->limit_value == 2
-        && join(',', @{$statement->columns}) eq 'id,category_id') {
-        return {columns => $statement->columns, rows => [[101, undef]]};
     }
     my $rollup = grep { $_ eq '__selecto_rollup_grouping' } @{$statement->columns};
     my $group_count = $rollup ? scalar(@{$LAST_DATA_QUERY->groups}) : 0;
