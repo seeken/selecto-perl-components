@@ -265,6 +265,16 @@ $t->get_ok('/explore/products/records/102/edit?editor=product_profile')
     ->status_is(200)
     ->element_exists_not('[data-sc-record-editor-action-open]');
 
+$t->get_ok('/explore/products/records/101/edit?editor=empty_required_choice')
+    ->status_is(200)
+    ->element_exists('select[name="editor_field_category_id"][required]')
+    ->element_exists('select[name="editor_field_category_id"] > option[value=""]' .
+        '[selected][disabled]')
+    ->text_like('select[name="editor_field_category_id"] > option[value=""]' =>
+        qr/Select/)
+    ->element_exists_not('select[name="editor_field_category_id"] > ' .
+        'option[value="1"][selected]');
+
 $t->post_ok('/explore/products/records/101/edit?editor=product_profile' =>
     {Accept => 'application/json'} => form => {
         %record_editor_hidden,
