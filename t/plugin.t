@@ -1155,6 +1155,7 @@ $t->get_ok($export_url . '&format=Excel')
 
 $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({
     headers => {},
+    selecto_request_id => 'selecto-test-1',
     q => 1,
     view => 'graph',
     field => ['product_name', 'unit_price'],
@@ -1176,6 +1177,8 @@ like $message->{selecto}{url}, qr{\A/explore/products\?}, 'WebSocket response su
 like $message->{selecto}{url}, qr/(?:\?|&)view=graph(?:&|\z)/, 'canonical URL records the graph view';
 like $message->{selecto}{url}, qr/(?:\?|&)chart_type=bar(?:&|\z)/,
     'canonical URL records the selected chart type';
+is $message->{selecto}{request_id}, 'selecto-test-1',
+    'WebSocket response echoes the validated client request identifier';
 $t->finish_ok;
 
 $t->get_ok($message->{selecto}{url})

@@ -385,6 +385,62 @@ test("a back-forward cache restore preserves results and reconnects without a qu
   await expect(page.locator("[data-selecto-connection]")).toHaveText("Connecting");
 });
 
+test("a toolbar-hosted popstate reloads the exact Explorer history URL", async ({page}) => {
+  let documentRequests = 0;
+  await page.route("http://selecto.test/**", async route => {
+    documentRequests += 1;
+    await route.fulfill({contentType: "text/html", body: `
+      <body class="sc-host-menu-toolbar">
+        <toolbar-menu data-host-menu sidebar-always-open>Tenant navigation</toolbar-menu>
+        <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
+          <section id="selecto-surface-loads"><div data-graph>Monthly loads</div></section>
+        </section>
+      </body>
+    `});
+  });
+  const url = "http://selecto.test/explorer/load?view=graph&page=3&filter_value=2024-10-01";
+  await page.goto(url);
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded")));
+  await expect(page.locator("body")).toHaveClass(/toolbar-left-menu-open/);
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new PopStateEvent("popstate", {state: window.history.state}));
+  });
+
+  await expect.poll(() => documentRequests).toBe(2);
+  await expect(page).toHaveURL(url);
+  await expect(page.locator("[data-host-menu]")).toHaveText("Tenant navigation");
+  await expect(page.locator("[data-graph]")).toHaveText("Monthly loads");
+});
+
+test("a legacy-menu popstate reloads the complete Explorer document", async ({page}) => {
+  let documentRequests = 0;
+  await page.route("http://selecto.test/**", async route => {
+    documentRequests += 1;
+    await route.fulfill({contentType: "text/html", body: `
+      <body class="sc-host-menu-dynamic menu_adjusted_left">
+        <nav data-host-menu>Legacy tenant navigation</nav>
+        <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
+          <section id="selecto-surface-loads"><div data-graph>Monthly loads</div></section>
+        </section>
+      </body>
+    `});
+  });
+  const url = "http://selecto.test/explorer/load?view=graph&page=2";
+  await page.goto(url);
+  await page.addScriptTag({path: bundle});
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new PopStateEvent("popstate", {state: window.history.state}));
+  });
+
+  await expect.poll(() => documentRequests).toBe(2);
+  await expect(page).toHaveURL(url);
+  await expect(page.locator("[data-host-menu]")).toHaveText("Legacy tenant navigation");
+  await expect(page.locator("[data-graph]")).toHaveText("Monthly loads");
+});
+
 test("Back restores the previous applied query without rerunning it", async ({page}) => {
   let documentRequests = 0;
   await page.route("http://selecto.test/**", async route => {
@@ -552,7 +608,27 @@ test("a reconnecting Explorer keeps drilldown and Back inside browser history", 
   await expect.poll(() => page.url()).toContain("view=detail");
   expect(await page.evaluate(() => window.nativeSubmitCalled)).toBe(false);
   expect(await page.evaluate(() => window.history.state.selectoPendingNavigation)).toBe(true);
+  const pendingRequestId = await page.evaluate(() => window.history.state.selectoRequestId);
+  expect(pendingRequestId).toMatch(/^selecto-/);
+  expect(page.url()).not.toContain("selecto_request_id");
+  expect(await page.evaluate(() => window.sessionStorage.getItem(
+    "selecto-history:" + window.history.state.selectoSnapshot
+  ))).not.toContain("selecto_request_id");
   await page.goBack();
+  await expect(page.locator("[data-aggregate-results]")).toHaveText("Aggregate results");
+  await expect(page.locator("[data-host-menu]")).toHaveText("Tenant navigation");
+  const staleResponseCancelled = await page.evaluate(async requestId => {
+    let waiting;
+    const detail = {
+      message: {json: () => Promise.resolve({selecto: {request_id: requestId}})},
+      cancelled: false,
+      waitUntil(promise) { waiting = promise; },
+    };
+    document.dispatchEvent(new CustomEvent("htmx:ws:before:message:incoming", {detail}));
+    await waiting;
+    return detail.cancelled;
+  }, pendingRequestId);
+  expect(staleResponseCancelled).toBe(true);
   await expect(page.locator("[data-aggregate-results]")).toHaveText("Aggregate results");
   await expect(page.locator("[data-host-menu]")).toHaveText("Tenant navigation");
   expect(documentRequests).toBe(1);

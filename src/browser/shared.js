@@ -7,6 +7,8 @@
   var selectoSwapStarted = 0;
   var selectoHistorySnapshots = new Map();
   var selectoHistoryCounter = 0;
+  var selectoRequestCounter = 0;
+  var activeSelectoRequestId = null;
   var dateFormats = [
     ["day", "Day"], ["day_hour", "Day + Hour"], ["week", "Week"],
     ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"],

@@ -11,6 +11,8 @@
   var selectoSwapStarted = 0;
   var selectoHistorySnapshots = new Map();
   var selectoHistoryCounter = 0;
+  var selectoRequestCounter = 0;
+  var activeSelectoRequestId = null;
   var dateFormats = [
     ["day", "Day"], ["day_hour", "Day + Hour"], ["week", "Week"],
     ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"],
@@ -1346,6 +1348,7 @@
 
   // Source: lifecycle.js
   document.addEventListener("DOMContentLoaded", function () {
+    restoreHostMenuLayout();
     rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
     renderConnectionStatus();
     restoreBuilderTabs();
@@ -1357,6 +1360,17 @@
 
   window.addEventListener("pageshow", function (event) {
     if (!event.persisted) return;
+    // Chrome can restore the Explorer document from bfcache while leaving the
+    // host toolbar custom element disconnected from its internal menu state.
+    // Rebuilding only the Selecto channel cannot repair an element outside
+    // that channel, and Chart.js can retain a similarly stale canvas backing
+    // store. Reload the exact history URL so both host chrome and results are
+    // constructed from a clean document. A reload is not itself a persisted
+    // pageshow, so this cannot loop.
+    if (usesSelectoHostMenu()) {
+      window.location.reload();
+      return;
+    }
     reconnectRestoredWebSocketChannels();
     restoreCharts(true);
   });
@@ -1366,10 +1380,36 @@
   });
 
   window.addEventListener("popstate", function (event) {
+    // Selecto's surface snapshot deliberately excludes the host navigation.
+    // A toolbar or legacy dynamic menu can still mutate its own body classes
+    // while the detail entry is active, so restoring only the surface leaves
+    // the graph beneath an absent/overlapping menu. Re-render the exact joint
+    // history entry as a complete document for hosted pages.
+    if (usesSelectoHostMenu()) {
+      window.location.reload();
+      return;
+    }
+    activeSelectoRequestId = event.state && event.state.selectoPendingNavigation
+      ? event.state.selectoRequestId || null : null;
     restoreSelectoHistory(event.state);
   });
 
-  function rememberSelectoHistory(url, push, pendingNavigation) {
+  function usesSelectoHostMenu() {
+    return !!(document.body && document.body.matches(
+      ".sc-host-menu-toolbar, .cgt-host-menu-toolbar, " +
+      ".sc-host-menu-dynamic, .cgt-host-menu-dynamic"
+    ));
+  }
+
+  function restoreHostMenuLayout() {
+    if (!document.body || !document.querySelector("toolbar-menu[sidebar-always-open]")) return;
+    // The toolbar component normally owns this class. Chrome history can
+    // retain the element while restoring an older body class list, placing
+    // application content underneath the visible sidebar.
+    document.body.classList.add("toolbar-left-menu-open");
+  }
+
+  function rememberSelectoHistory(url, push, pendingNavigation, requestId) {
     var surface = document.querySelector('[id^="selecto-surface-"]');
     if (!surface || !window.history) return;
     var state = window.history.state && typeof window.history.state === "object"
@@ -1378,14 +1418,22 @@
     if (!key) key = "selecto-" + Date.now() + "-" + (++selectoHistoryCounter);
     var snapshot = surface.cloneNode(true);
     prepareChartsForSnapshot(snapshot);
+    snapshot.querySelectorAll('input[name="selecto_request_id"]').forEach(function (input) {
+      input.remove();
+    });
     storeSelectoHistorySnapshot(key, snapshot.outerHTML);
     while (selectoHistorySnapshots.size > 24) {
       removeSelectoHistorySnapshot(selectoHistorySnapshots.keys().next().value);
     }
     state.selecto = true;
     state.selectoSnapshot = key;
-    if (pendingNavigation) state.selectoPendingNavigation = true;
-    else delete state.selectoPendingNavigation;
+    if (pendingNavigation) {
+      state.selectoPendingNavigation = true;
+      state.selectoRequestId = requestId;
+    } else {
+      delete state.selectoPendingNavigation;
+      delete state.selectoRequestId;
+    }
     try {
       if (push) window.history.pushState(state, "", url);
       else window.history.replaceState(state, "", url);
@@ -1442,6 +1490,7 @@
         var query = new URLSearchParams();
         new FormData(form).forEach(function (value, name) {
           if (typeof File !== "undefined" && value instanceof File) return;
+          if (name === "selecto_request_id") return;
           query.append(name, value);
         });
         target.search = query.toString();
@@ -1455,11 +1504,21 @@
   function beginSelectoNavigation(form) {
     var url = formNavigationUrl(form);
     if (!url) return;
+    var requestId = "selecto-" + Date.now() + "-" + (++selectoRequestCounter);
     // Create the joint-history entry while the submit event is still in
     // progress. Waiting for the asynchronous WebSocket response leaves a
     // short window in which browser Back exits the Explorer (and, in a
     // framed host, can also leave the surrounding application shell).
-    rememberSelectoHistory(url, true, true);
+    rememberSelectoHistory(url, true, true, requestId);
+    activeSelectoRequestId = requestId;
+    var input = form.querySelector('input[name="selecto_request_id"]');
+    if (!input) {
+      input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "selecto_request_id";
+      form.appendChild(input);
+    }
+    input.value = requestId;
   }
 
   function usesSelectoWebSocket(form) {
@@ -1639,10 +1698,26 @@
     } catch (_error) {}
   });
 
+  document.addEventListener("htmx:ws:before:message:incoming", function (event) {
+    var detail = event.detail;
+    var incoming = detail && detail.message;
+    if (!incoming || typeof incoming.json !== "function"
+        || typeof detail.waitUntil !== "function") return;
+    // A request queued during reconnect can finish after Back has restored an
+    // older snapshot. Reject it before hx-ws swaps that stale surface into the
+    // current history entry.
+    detail.waitUntil(incoming.json().then(function (message) {
+      var requestId = message && message.selecto && message.selecto.request_id;
+      if (requestId && requestId !== activeSelectoRequestId) detail.cancelled = true;
+    }).catch(function () {}));
+  });
+
   document.addEventListener("htmx:ws:after:message:incoming", function (event) {
     var incoming = event.detail && event.detail.message;
     if (incoming && typeof incoming.json === "function") {
       incoming.json().then(function (message) {
+        var requestId = message && message.selecto && message.selecto.request_id;
+        if (requestId && requestId === activeSelectoRequestId) activeSelectoRequestId = null;
         var nextUrl = message && message.selecto && message.selecto.url;
         if (message && message.selecto && message.selecto.performance) {
           selectoPerformance = message.selecto.performance;
