@@ -15,6 +15,7 @@ lib/Selecto/Components/Controller/RecordEditor.pm
 lib/Selecto/Components/Controller/SavedQueries.pm
 lib/Selecto/Components/DateShortcut.pm
 lib/Selecto/Components/Explorer.pm
+lib/Selecto/Components/Graph/AxisPlanner.pm
 lib/Selecto/Components/Importer.pm
 lib/Selecto/Components/I18N.pm
 lib/Selecto/Components/QueryBuilder.pm
@@ -73,6 +74,7 @@ t/api_console.t
 t/browser/components.spec.js
 t/bucket_parser.t
 t/date_shortcut.t
+t/graph_axis_planner.t
 t/i18n.t
 t/lib/TestSelectoComponents.pm
 t/plugin.t

@@ -14,6 +14,7 @@ use_ok 'Selecto::Components::Controller::Lookups';
 use_ok 'Selecto::Components::Controller::RecordEditor';
 use_ok 'Selecto::Components::Controller::SavedQueries';
 use_ok 'Selecto::Components::Explorer';
+use_ok 'Selecto::Components::Graph::AxisPlanner';
 use_ok 'Selecto::Components::QueryBuilder';
 use_ok 'Selecto::Components::QueryLibrary';
 use_ok 'Selecto::Components::RecordEditor';

@@ -426,7 +426,7 @@
       updateFilterDraft(event.target.closest("[data-sc-filter-set-item], [data-sc-filter-condition]"));
     } else if (event.target.matches('[name="query_library_view"], [name="query_library_segment"]')) {
       refreshFilterBadge(builder);
-    } else if (event.target.matches("[data-sc-group-format], [data-sc-measure-function]")) {
+    } else if (event.target.matches("[data-sc-group-format], [data-sc-measure-function], [data-sc-measure-transform]")) {
       syncPickerConfig(event.target.closest("[data-sc-picker-set-item]"));
     }
     markBuilderDirty(builder);

@@ -5,6 +5,7 @@ use Mojo::JSON qw(encode_json);
 use Selecto::Components::QueryLibrary ();
 use Selecto::Components::RowActions ();
 use Selecto::Components::Renderer::Markup;
+use Selecto::Analytics::TransformRegistry ();
 
 sub _form ($class, $model, $catalog, $detail_catalog = undef) {
     my $config = $model->{config};
@@ -521,6 +522,7 @@ sub _measure_picker ($class, $state, $catalog, $config) {
         legend => 'Measures',
         selected => $state->measures,
         configs => $state->measure_configs,
+        config_list => $state->measure_config_list,
         maximum => $config->max_measures,
         search_label => 'Filter available aggregate columns',
         hint => 'Choose domain columns or curated presets, then configure functions, aliases, and buckets.',
@@ -554,6 +556,7 @@ sub _selection_picker ($class, $state, $catalog, %options) {
     my %selected = map { $_ => 1 } @$selected_values;
     my @available = $kind eq 'field'
         ? grep { ($_->{type} // '') ne 'action' || !$selected{$_->{path}} } @$catalog
+        : $kind eq 'measure' ? @$catalog
         : grep { !$selected{$_->{path}} } @$catalog;
     my $at_limit = @$selected_values >= $options{maximum};
     my $available_items = join '', map {
@@ -564,7 +567,8 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         _h(lc($_->{label} . ' ' . $_->{type})) . '" data-default-function="' .
         _h($_->{default_function} // '') . '" data-measure-field="' .
         _h($_->{field} // '') . '"' .
-        ($kind eq 'field' && ($_->{type} // '') ne 'action' ? ' data-sc-picker-repeatable' : '') .
+        (($kind eq 'field' && ($_->{type} // '') ne 'action') || $kind eq 'measure'
+            ? ' data-sc-picker-repeatable' : '') .
         '><span><strong>' . _h($_->{label}) .
         '</strong><small>' . _h($_->{type}) . '</small></span><span aria-hidden="true">+</span></button>'
     } @available;
@@ -600,7 +604,7 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         _h($path) . '" data-label="' . _h($field->{label}) . '" data-type="' . _h($field->{type}) .
         '" data-default-function="' . _h($field->{default_function} // '') .
         '" data-measure-field="' . _h($field->{field} // '') .
-        '"' . ($kind eq 'field' && ($field->{type} // '') ne 'action'
+        '"' . (($kind eq 'field' && ($field->{type} // '') ne 'action') || $kind eq 'measure'
             ? ' data-sc-picker-repeatable' : '') .
         '><input type="hidden" name="' . _h($kind) . '" value="' . _h($path) . '">' .
         '<button class="sc-picker-grip" type="button" title="Drag to reorder" aria-label="Drag ' .
@@ -697,7 +701,41 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
         } @{$config->measure_functions($field->{type}, $field->{type} eq 'rows')};
         my $bucket_visible = $function eq 'buckets' || $function eq 'age_buckets';
         my $sum_visible = $function eq 'sum';
-        $controls .= '<label>Function<select name="measure_function" data-sc-measure-function ' .
+        my $series_id = $item_config->{series_id} // 'series';
+        my $series_chart_type = $item_config->{chart_type} // 'auto';
+        my $series_axis = $item_config->{axis} // 'auto';
+        my $chart_options = join '', map {
+            '<option value="' . $_->[0] . '"' .
+                ($_->[0] eq $series_chart_type ? ' selected' : '') . '>' . $_->[1] . '</option>'
+        } ([auto => 'Use chart default'], [bar => 'Bar'], [line => 'Line'], [area => 'Area']);
+        my $axis_options = join '', map {
+            '<option value="' . $_->[0] . '"' .
+                ($_->[0] eq $series_axis ? ' selected' : '') . '>' . $_->[1] . '</option>'
+        } ([auto => 'Automatic'], [left => 'Left'], [right => 'Right']);
+        my %safe_transform = map { $_ => 1 } qw(
+            percent_of_total percent_change index_to_first cumulative moving_average
+        );
+        my $transform_config = ref($item_config->{transforms}) eq 'ARRAY'
+            && ref($item_config->{transforms}[0]) eq 'HASH'
+            ? $item_config->{transforms}[0] : {};
+        my $selected_transform = $transform_config->{type} // '';
+        my $transform_options = '<option value=""' .
+            ($selected_transform eq '' ? ' selected' : '') . '>None</option>';
+        if (defined($item_config->{raw_unit})) {
+            $transform_options .= join '', map {
+                '<option value="' . _h($_->{id}) . '"' .
+                    ($_->{id} eq $selected_transform ? ' selected' : '') . '>' .
+                    _h($_->{label}) . '</option>'
+            } grep { $safe_transform{$_->{id}} }
+                @{Selecto::Analytics::TransformRegistry->catalog(
+                    $item_config->{raw_unit}, $item_config->{behavior},
+                )};
+        }
+        my $transform_window = ref($transform_config->{parameters}) eq 'HASH'
+            ? $transform_config->{parameters}{window} // 3 : 3;
+        my $window_visible = $selected_transform eq 'moving_average';
+        $controls .= _hidden('measure_series_id', $series_id) .
+            '<label>Function<select name="measure_function" data-sc-measure-function ' .
             'aria-label="Measure function for ' . _h($field->{label}) . '">' . $functions .
             '</select></label><label data-sc-measure-buckets' . ($bucket_visible ? '' : ' hidden') .
             '>Bucket ranges<input name="measure_bucket_ranges" value="' .
@@ -708,7 +746,18 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
             'aria-label="NULL handling for ' . _h($field->{label}) . '"><option value="0"' .
             ($item_config->{ignore_nulls} ? '' : ' selected') . '>Keep SQL SUM behavior</option>' .
             '<option value="1"' . ($item_config->{ignore_nulls} ? ' selected' : '') .
-            '>Treat NULL as 0</option></select></label>';
+            '>Treat NULL as 0</option></select></label>' .
+            '<label>Series style<select name="measure_chart_type" aria-label="Series style for ' .
+            _h($field->{label}) . '">' . $chart_options . '</select></label>' .
+            '<label>Y axis<select name="measure_axis" aria-label="Y axis for ' .
+            _h($field->{label}) . '">' . $axis_options . '</select></label>' .
+            '<label>Transform<select name="measure_transform" data-sc-measure-transform ' .
+            'aria-label="Analytical transform for ' . _h($field->{label}) . '">' .
+            $transform_options . '</select></label>' .
+            '<label data-sc-measure-transform-window' . ($window_visible ? '' : ' hidden') .
+            '>Moving window<input type="number" min="2" max="365" ' .
+            'name="measure_transform_window" value="' . _h($transform_window) .
+            '" aria-label="Moving-average window for ' . _h($field->{label}) . '"></label>';
     }
 
     return '<details class="sc-column-config"><summary>Configure</summary>' .

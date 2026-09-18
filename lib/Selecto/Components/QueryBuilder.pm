@@ -330,12 +330,17 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
     }
     my @selections = (@group_selections, @group_sort_selections);
     my @measure_columns;
-    for my $measure_id (@{$state->measures}) {
+    my %measure_occurrence;
+    for my $measure_index (0 .. $#{$state->measures}) {
+        my $measure_id = $state->measures->[$measure_index];
         my $measure = $config->measure($measure_id, $domain);
-        my $measure_config = $state->measure_configs->{$measure_id} // {};
+        my $measure_config = ($state->measure_config_list // [])->[$measure_index]
+            // $state->measure_configs->{$measure_id} // {};
         my $function = $measure_config->{function} // $measure->{aggregate};
         my $alias = $measure_config->{alias} // '';
-        my $measure_key = _measure_key($measure_id);
+        my $measure_key = _measure_key(
+            $measure_id, ++$measure_occurrence{$measure_id},
+        );
         if ($function eq 'buckets' || $function eq 'age_buckets') {
             my $ranges = Selecto::Components::BucketParser->parse($measure_config->{bucket_ranges});
             my $index = 0;
@@ -353,6 +358,16 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                 push @measure_columns, {
                     key => $key, field => $measure->{field}, label => $label,
                     type => 'integer', measure => 1,
+                    series => {
+                        id => ($measure_config->{series_id} // 'series_' . ($measure_index + 1)) .
+                            '_bucket_' . $index,
+                        chart_type => $measure_config->{chart_type} // 'auto',
+                        axis => $measure_config->{resolved_axis} // 'left',
+                        transforms => $measure_config->{transforms} // [],
+                        raw_unit => {kind => 'count'},
+                        unit => $measure_config->{unit} // {kind => 'count'},
+                        behavior => 'flow',
+                    },
                 };
                 push @selections, $expression->as($key);
             }
@@ -367,6 +382,18 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             type => $function =~ /\A(?:count|count_distinct|true_count|false_count)\z/
                 ? 'integer' : $field_map->{$measure->{field}}{type},
             measure => 1,
+            series => {
+                id => $measure_config->{series_id} // 'series_' . ($measure_index + 1),
+                chart_type => $measure_config->{chart_type} // 'auto',
+                axis => $measure_config->{resolved_axis} // 'left',
+                transforms => $measure_config->{transforms} // [],
+                (defined($measure_config->{raw_unit})
+                    ? (raw_unit => $measure_config->{raw_unit}) : ()),
+                (defined($measure_config->{unit})
+                    ? (unit => $measure_config->{unit}) : ()),
+                (defined($measure_config->{behavior})
+                    ? (behavior => $measure_config->{behavior}) : ()),
+            },
         };
         push @selections, $expression->as($measure_key);
     }
@@ -425,9 +452,10 @@ sub _measure_label ($measure, $function, $field_map) {
     return $field_label . ' ' . ($labels{$function} // $function);
 }
 
-sub _measure_key ($measure_id) {
-    return $measure_id if $measure_id =~ /\A[A-Za-z][A-Za-z0-9_]*\z/;
-    return 'measure__' . _field_alias($measure_id);
+sub _measure_key ($measure_id, $occurrence = 1) {
+    my $key = $measure_id =~ /\A[A-Za-z][A-Za-z0-9_]*\z/
+        ? $measure_id : 'measure__' . _field_alias($measure_id);
+    return $occurrence > 1 ? $key . '__' . $occurrence : $key;
 }
 
 sub _bucket_measure_label ($label, $function, $alias, $index) {

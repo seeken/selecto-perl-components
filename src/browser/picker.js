@@ -249,6 +249,17 @@
   }
 
   function appendMeasureConfig(grid, type, label, selected) {
+    var seriesId = document.createElement("input");
+    seriesId.type = "hidden";
+    seriesId.name = "measure_series_id";
+    var usedSeriesIds = new Set(Array.from(
+      document.querySelectorAll('input[name="measure_series_id"]'),
+      function (input) { return input.value; }
+    ));
+    var nextSeries = 1;
+    while (usedSeriesIds.has("series_" + nextSeries)) nextSeries += 1;
+    seriesId.value = "series_" + nextSeries;
+    grid.appendChild(seriesId);
     var functions = measureFunctionsForType(type);
     if (!functions.some(function (entry) { return entry[0] === selected; })) selected = functions[0][0];
     var functionSelect = document.createElement("select");
@@ -269,6 +280,40 @@
     nulls.setAttribute("aria-label", "NULL handling for " + label);
     appendOptions(nulls, [["0", "Keep SQL SUM behavior"], ["1", "Treat NULL as 0"]], "0");
     appendConfigLabel(grid, "NULL handling", nulls, "data-sc-measure-sum");
+
+    var chartType = document.createElement("select");
+    chartType.name = "measure_chart_type";
+    chartType.setAttribute("aria-label", "Series style for " + label);
+    appendOptions(chartType, [
+      ["auto", "Use chart default"], ["bar", "Bar"], ["line", "Line"], ["area", "Area"]
+    ], "auto");
+    appendConfigLabel(grid, "Series style", chartType);
+
+    var axis = document.createElement("select");
+    axis.name = "measure_axis";
+    axis.setAttribute("aria-label", "Y axis for " + label);
+    appendOptions(axis, [["auto", "Automatic"], ["left", "Left"], ["right", "Right"]], "auto");
+    appendConfigLabel(grid, "Y axis", axis);
+
+    var transform = document.createElement("select");
+    transform.name = "measure_transform";
+    transform.setAttribute("data-sc-measure-transform", "");
+    transform.setAttribute("aria-label", "Analytical transform for " + label);
+    appendOptions(transform, [
+      ["", "None"], ["percent_of_total", "Percent of total"],
+      ["percent_change", "Percent change"], ["index_to_first", "Index to first value"],
+      ["cumulative", "Cumulative total"], ["moving_average", "Moving average"]
+    ], "");
+    appendConfigLabel(grid, "Transform", transform);
+
+    var windowInput = document.createElement("input");
+    windowInput.type = "number";
+    windowInput.name = "measure_transform_window";
+    windowInput.min = "2";
+    windowInput.max = "365";
+    windowInput.value = "3";
+    windowInput.setAttribute("aria-label", "Moving-average window for " + label);
+    appendConfigLabel(grid, "Moving window", windowInput, "data-sc-measure-transform-window");
   }
 
   function syncPickerConfig(item) {
@@ -286,6 +331,12 @@
       item.querySelectorAll("[data-sc-measure-buckets]").forEach(function (node) { node.hidden = !measureBuckets; });
       item.querySelectorAll("[data-sc-measure-sum]").forEach(function (node) {
         node.hidden = measureFunction.value !== "sum";
+      });
+    }
+    var measureTransform = item.querySelector("[data-sc-measure-transform]");
+    if (measureTransform) {
+      item.querySelectorAll("[data-sc-measure-transform-window]").forEach(function (node) {
+        node.hidden = measureTransform.value !== "moving_average";
       });
     }
   }

@@ -91,7 +91,11 @@ sub _domain {
                     },
                 },
                 category_id => { type => 'integer' },
-                unit_price => { type => 'decimal' },
+                unit_price => {
+                    type => 'decimal',
+                    unit => {kind => 'currency', code => 'USD'},
+                    behavior => 'flow',
+                },
                 units_in_stock => { type => 'integer' },
                 created_on => { type => 'date' },
                 discontinued => { type => 'boolean' },

@@ -499,6 +499,34 @@ is_deeply [map { $_->{label} } @{$multi_measure->{columns}}],
     ['Price band', 'Products', 'Price counts: 0-10', '11+'],
     'multiple measures and expanded bucket columns preserve configured display order';
 
+my $repeated_measure_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
+    measure => ['total_price', 'total_price'],
+    measure_alias => ['Revenue', 'Average revenue'],
+    measure_function => ['sum', 'avg'],
+});
+my $repeated_measure_result = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $repeated_measure_state,
+);
+my $repeated_measure_statement = $postgresql->compile(
+    $domain, $repeated_measure_result->{query},
+);
+like $repeated_measure_statement->sql,
+    qr/SUM\("s0"\."unit_price"\) AS "total_price"/,
+    'the first repeated measure retains its established result key';
+like $repeated_measure_statement->sql,
+    qr/AVG\("s0"\."unit_price"\) AS "total_price__2"/,
+    'a repeated measure receives a stable distinct result key';
+is_deeply [map { $_->{label} } @{$repeated_measure_result->{columns}}],
+    ['Category - Category Name', 'Revenue', 'Average revenue'],
+    'repeated measure instances retain independent labels and order';
+is_deeply [map { $_->{series}{id} } @{$repeated_measure_result->{columns}}[1, 2]],
+    ['series_1', 'series_2'],
+    'repeated measure result columns retain stable positional series identifiers';
+is_deeply [map { $_->{series}{unit} } @{$repeated_measure_result->{columns}}[1, 2]],
+    [{kind => 'currency', code => 'USD'}, {kind => 'currency', code => 'USD'}],
+    'each result series carries its aggregate-derived unit';
+
 my $column_measure_config = Selecto::Components::Config->new(
     %{TestSelectoComponents::config()}, id => 'column_products', measures => []
 );

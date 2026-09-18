@@ -5,18 +5,21 @@ use Mojo::JSON qw(decode_json);
 use Digest::SHA qw(sha256_hex);
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
+use Selecto::Components::Graph::AxisPlanner ();
 use Selecto::Components::RowActions ();
 use Selecto::Components::Util qw(trim);
+use Selecto::Analytics::UnitRegistry ();
+use Selecto::Analytics::TransformRegistry ();
 use Selecto::Error ();
 use Selecto::QueryLibrary ();
 
-has [qw(view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
         q query_signature view chart_type aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
-        measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls
+        measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_transform measure_transform_window
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
         order direction limit page
     )];
@@ -43,8 +46,8 @@ sub from_input ($class, $config, $domain, $input) {
     my ($valid_groups, $group_configs) = _parse_groups(
         $config, $domain, $input, $field_map, $view, $configured, \@errors,
     );
-    my ($valid_measures, $measure_configs, $measure) = _parse_measures(
-        $config, $domain, $input, $field_map, \@errors,
+    my ($valid_measures, $measure_configs, $measure_config_list, $measure) = _parse_measures(
+        $config, $domain, $input, $field_map, $view, \@errors,
     );
     my ($orders, $order, $direction) = _parse_orders(
         $config, $domain, $input, $field_map, $valid_fields, $query_library, \@errors,
@@ -69,6 +72,7 @@ sub from_input ($class, $config, $domain, $input) {
         group_configs => $group_configs,
         measures => $valid_measures,
         measure_configs => $measure_configs,
+        measure_config_list => $measure_config_list,
         measure => $measure,
         orders => $orders,
         order => $order,
@@ -147,14 +151,25 @@ sub query_pairs ($self) {
             group_prefix_length => $column->{prefix_length} // 2,
             group_exclude_articles => $column->{exclude_articles} ? 1 : 0;
     }
-    for my $measure (@{$self->measures}) {
-        my $measure_config = $self->measure_configs->{$measure} // {};
+    for my $index (0 .. $#{$self->measures}) {
+        my $measure = $self->measures->[$index];
+        my $measure_config = ($self->measure_config_list // [])->[$index]
+            // $self->measure_configs->{$measure} // {};
+        my $transform = ref($measure_config->{transforms}) eq 'ARRAY'
+            && ref($measure_config->{transforms}[0]) eq 'HASH'
+            ? $measure_config->{transforms}[0] : {};
         push @pairs,
             measure => $measure,
             measure_alias => $measure_config->{alias} // '',
             measure_function => $measure_config->{function} // 'count',
             measure_bucket_ranges => $measure_config->{bucket_ranges} // '',
-            measure_ignore_nulls => $measure_config->{ignore_nulls} ? 1 : 0;
+            measure_ignore_nulls => $measure_config->{ignore_nulls} ? 1 : 0,
+            measure_series_id => $measure_config->{series_id} // "series_" . ($index + 1),
+            measure_chart_type => $measure_config->{chart_type} // 'auto',
+            measure_axis => $measure_config->{axis} // 'auto',
+            measure_transform => $transform->{type} // '',
+            measure_transform_window => ref($transform->{parameters}) eq 'HASH'
+                ? $transform->{parameters}{window} // '' : '';
     }
     for my $order (@{$self->orders}) {
         push @pairs, order => $order->{field}, direction => $order->{direction};
@@ -193,6 +208,7 @@ sub as_hash ($self) {
         group_configs => { map { $_ => { %{$self->group_configs->{$_}} } } keys %{$self->group_configs} },
         measures => [@{$self->measures}],
         measure_configs => { map { $_ => { %{$self->measure_configs->{$_}} } } keys %{$self->measure_configs} },
+        measure_config_list => [map { {%$_} } @{$self->measure_config_list // []}],
         measure => $self->measure,
         orders => [map { { %$_ } } @{$self->orders}],
         order => $self->order,
@@ -383,18 +399,24 @@ sub _parse_groups ($config, $domain, $input, $field_map, $view, $configured, $er
     return (\@valid_groups, \%group_configs);
 }
 
-sub _parse_measures ($config, $domain, $input, $field_map, $errors) {
+sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
     my $measure_values = _values($input, 'measure');
     my $measure_aliases = _values($input, 'measure_alias');
     my $measure_functions = _values($input, 'measure_function');
     my $measure_bucket_ranges = _values($input, 'measure_bucket_ranges');
     my $measure_ignore_nulls = _values($input, 'measure_ignore_nulls');
+    my $measure_series_ids = _values($input, 'measure_series_id');
+    my $measure_chart_types = _values($input, 'measure_chart_type');
+    my $measure_axes = _values($input, 'measure_axis');
+    my $measure_transforms = _values($input, 'measure_transform');
+    my $measure_transform_windows = _values($input, 'measure_transform_window');
     my $default_measure = $config->default_measure($domain);
     $measure_values = [$default_measure->{id}]
         unless grep { length(_scalar($_)) } @$measure_values;
     my @valid_measures;
     my %measure_configs;
-    my %seen_measure;
+    my @measure_config_list;
+    my %series_ids;
     for my $index (0 .. $#$measure_values) {
         my $measure_id = _scalar($measure_values->[$index]);
         next unless length($measure_id);
@@ -405,10 +427,6 @@ sub _parse_measures ($config, $domain, $input, $field_map, $errors) {
         my $measure = $config->measure($measure_id, $domain);
         unless ($measure) {
             push @$errors, 'Choose an available measure.';
-            next;
-        }
-        if ($seen_measure{$measure_id}++) {
-            push @$errors, 'A measure can be set only once.';
             next;
         }
         my $alias = _trim($measure_aliases->[$index]);
@@ -432,24 +450,97 @@ sub _parse_measures ($config, $domain, $input, $field_map, $errors) {
             $function = $measure->{aggregate};
             $bucket_ranges = '';
         }
-        push @valid_measures, $measure_id;
-        $measure_configs{$measure_id} = {
+        my $series_id = _scalar($measure_series_ids->[$index]) || 'series_' . ($index + 1);
+        if ($series_id !~ /\A[a-z][a-z0-9_]{0,63}\z/ || $series_ids{$series_id}++) {
+            push @$errors, 'A graph series identifier is not available.';
+            $series_id = 'series_' . ($index + 1);
+            $series_id .= '_' while $series_ids{$series_id}++;
+        }
+        my $series_chart_type = lc(_scalar($measure_chart_types->[$index]) || 'auto');
+        unless ($series_chart_type =~ /\A(?:auto|bar|line|area)\z/) {
+            push @$errors, 'A graph series chart type is not available.';
+            $series_chart_type = 'auto';
+        }
+        my $axis = lc(_scalar($measure_axes->[$index]) || 'auto');
+        unless ($axis =~ /\A(?:auto|left|right)\z/) {
+            push @$errors, 'A graph series axis is not available.';
+            $axis = 'auto';
+        }
+        my $aggregate_unit = Selecto::Analytics::UnitRegistry->aggregate_unit(
+            $measure->{source_unit}, $function,
+        );
+        my $behavior = $function =~ /\A(?:count|count_distinct|true_count|false_count|buckets|age_buckets)\z/
+            ? 'flow' : $measure->{source_behavior};
+        my $unit = $aggregate_unit;
+        my @transforms;
+        my $transform = $view eq 'graph'
+            ? lc(_scalar($measure_transforms->[$index])) : '';
+        if (length($transform)) {
+            if (!defined($aggregate_unit)
+                || !Selecto::Analytics::TransformRegistry->allows(
+                    $transform, $aggregate_unit, $behavior,
+                )) {
+                push @$errors, 'A measure transform is not available for its result unit.';
+            } else {
+                my %parameters;
+                if ($transform eq 'moving_average') {
+                    my $window = _scalar($measure_transform_windows->[$index]) || 3;
+                    if ($window !~ /\A\d+\z/ || $window < 2 || $window > 365) {
+                        push @$errors, 'A moving-average window must be from 2 through 365.';
+                        $window = 3;
+                    }
+                    $parameters{window} = 0 + $window;
+                }
+                push @transforms, {type => $transform, parameters => \%parameters};
+                $unit = Selecto::Analytics::TransformRegistry->result_unit(
+                    $transform, $aggregate_unit, $behavior,
+                );
+            }
+        }
+        my $normalized = {
             alias => $alias,
             function => $function,
             bucket_ranges => $bucket_ranges,
             ignore_nulls => $function eq 'sum'
                 ? _truthy($measure_ignore_nulls->[$index], 0) : 0,
+            series_id => $series_id,
+            chart_type => $series_chart_type,
+            axis => $axis,
+            transforms => \@transforms,
+            (defined($aggregate_unit) ? (raw_unit => $aggregate_unit) : ()),
+            (defined($unit) ? (unit => $unit) : ()),
+            (defined($behavior) ? (behavior => $behavior) : ()),
         };
+        push @valid_measures, $measure_id;
+        push @measure_config_list, $normalized;
+        $measure_configs{$measure_id} //= $normalized;
     }
     unless (@valid_measures) {
         my $fallback = $default_measure;
         @valid_measures = ($fallback->{id});
-        $measure_configs{$fallback->{id}} = {
+        my $normalized = {
             alias => '', function => $fallback->{aggregate}, bucket_ranges => '', ignore_nulls => 0,
+            series_id => 'series_1', chart_type => 'auto', axis => 'auto',
+            transforms => [],
+            (defined($fallback->{unit}) ? (raw_unit => $fallback->{unit}) : ()),
+            (defined($fallback->{unit}) ? (unit => $fallback->{unit}) : ()),
+            behavior => $fallback->{aggregate} eq 'count'
+                ? 'flow' : $fallback->{source_behavior},
         };
+        $measure_configs{$fallback->{id}} = $normalized;
+        @measure_config_list = ($normalized);
+    }
+    if ($view eq 'graph') {
+        my $plan = Selecto::Components::Graph::AxisPlanner->plan(\@measure_config_list);
+        @measure_config_list = @{$plan->{series}};
+        push @$errors, @{$plan->{errors}};
+        %measure_configs = ();
+        for my $index (0 .. $#valid_measures) {
+            $measure_configs{$valid_measures[$index]} //= $measure_config_list[$index];
+        }
     }
     my $measure = $valid_measures[0];
-    return (\@valid_measures, \%measure_configs, $measure);
+    return (\@valid_measures, \%measure_configs, \@measure_config_list, $measure);
 }
 
 sub _parse_orders ($config, $domain, $input, $field_map, $valid_fields, $query_library, $errors) {
