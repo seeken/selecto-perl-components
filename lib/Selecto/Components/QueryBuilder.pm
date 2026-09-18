@@ -357,12 +357,17 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                 );
                 push @measure_columns, {
                     key => $key, field => $measure->{field}, label => $label,
+                    raw_label => _bucket_measure_label(
+                        $range->{label}, $function, '', $index,
+                    ),
                     type => 'integer', measure => 1,
                     series => {
                         id => ($measure_config->{series_id} // 'series_' . ($measure_index + 1)) .
                             '_bucket_' . $index,
                         chart_type => $measure_config->{chart_type} // 'auto',
                         axis => $measure_config->{resolved_axis} // 'left',
+                        stack => $measure_config->{stack} // '',
+                        color => $measure_config->{color} // '',
                         transforms => $measure_config->{transforms} // [],
                         raw_unit => {kind => 'count'},
                         unit => $measure_config->{unit} // {kind => 'count'},
@@ -379,6 +384,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             key => $measure_key,
             field => $measure->{field},
             label => $label,
+            raw_label => _measure_label($measure, $function, $field_map),
             type => $function =~ /\A(?:count|count_distinct|true_count|false_count)\z/
                 ? 'integer' : $field_map->{$measure->{field}}{type},
             measure => 1,
@@ -386,6 +392,8 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                 id => $measure_config->{series_id} // 'series_' . ($measure_index + 1),
                 chart_type => $measure_config->{chart_type} // 'auto',
                 axis => $measure_config->{resolved_axis} // 'left',
+                stack => $measure_config->{stack} // '',
+                color => $measure_config->{color} // '',
                 transforms => $measure_config->{transforms} // [],
                 (defined($measure_config->{raw_unit})
                     ? (raw_unit => $measure_config->{raw_unit}) : ()),

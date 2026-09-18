@@ -278,7 +278,10 @@
     var nulls = document.createElement("select");
     nulls.name = "measure_ignore_nulls";
     nulls.setAttribute("aria-label", "NULL handling for " + label);
-    appendOptions(nulls, [["0", "Keep SQL SUM behavior"], ["1", "Treat NULL as 0"]], "0");
+    appendOptions(nulls, [
+      ["0", "Keep SQL SUM behavior"], ["1", "Always treat NULL as 0"],
+      ["auto", "Automatic for view"]
+    ], "auto");
     appendConfigLabel(grid, "NULL handling", nulls, "data-sc-measure-sum");
 
     var chartType = document.createElement("select");
@@ -294,6 +297,44 @@
     axis.setAttribute("aria-label", "Y axis for " + label);
     appendOptions(axis, [["auto", "Automatic"], ["left", "Left"], ["right", "Right"]], "auto");
     appendConfigLabel(grid, "Y axis", axis);
+
+    var stack = document.createElement("input");
+    stack.name = "measure_stack";
+    stack.maxLength = 32;
+    stack.pattern = "[a-z][a-z0-9_]*";
+    stack.placeholder = "e.g. expenses";
+    stack.setAttribute("aria-label", "Stack group for " + label);
+    appendConfigLabel(grid, "Stack group", stack);
+
+    var colorControl = document.createElement("div");
+    colorControl.className = "sc-series-color";
+    colorControl.setAttribute("data-sc-measure-color-control", "");
+    var colorTitle = document.createElement("span");
+    colorTitle.textContent = "Series color";
+    colorControl.appendChild(colorTitle);
+    var colorValue = document.createElement("input");
+    colorValue.type = "hidden";
+    colorValue.name = "measure_color";
+    colorControl.appendChild(colorValue);
+    var colorPicker = document.createElement("input");
+    colorPicker.type = "color";
+    colorPicker.value = "#55d6be";
+    colorPicker.disabled = true;
+    colorPicker.setAttribute("data-sc-measure-color-picker", "");
+    colorPicker.setAttribute("aria-label", "Color for " + label);
+    colorControl.appendChild(colorPicker);
+    var autoLabel = document.createElement("label");
+    autoLabel.className = "sc-option-check";
+    var autoColor = document.createElement("input");
+    autoColor.type = "checkbox";
+    autoColor.checked = true;
+    autoColor.setAttribute("data-sc-measure-color-auto", "");
+    autoLabel.appendChild(autoColor);
+    var autoText = document.createElement("span");
+    autoText.textContent = "Automatic contrasting color";
+    autoLabel.appendChild(autoText);
+    colorControl.appendChild(autoLabel);
+    grid.appendChild(colorControl);
 
     var transform = document.createElement("select");
     transform.name = "measure_transform";
@@ -339,6 +380,18 @@
         node.hidden = measureTransform.value !== "moving_average";
       });
     }
+  }
+
+  function syncMeasureColor(item, source) {
+    var control = item && item.querySelector("[data-sc-measure-color-control]");
+    if (!control) return;
+    var hidden = control.querySelector('input[name="measure_color"]');
+    var picker = control.querySelector("[data-sc-measure-color-picker]");
+    var automatic = control.querySelector("[data-sc-measure-color-auto]");
+    if (!hidden || !picker || !automatic) return;
+    if (source === picker) automatic.checked = false;
+    picker.disabled = automatic.checked;
+    hidden.value = automatic.checked ? "" : picker.value.toLowerCase();
   }
 
   function refreshColumnPicker(root) {

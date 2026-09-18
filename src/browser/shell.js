@@ -125,6 +125,33 @@
       panel.hidden = !aggregateActive;
       panel.disabled = !aggregateActive;
     });
+    var graphActive = view === "graph";
+    var limitLabel = root.querySelector("[data-sc-limit-label]");
+    if (limitLabel) limitLabel.textContent = graphActive ? "Points" : "Rows";
+    var pageControl = root.querySelector("[data-sc-page-control]");
+    if (pageControl) {
+      pageControl.hidden = graphActive;
+      var pageInput = pageControl.querySelector('input[name="page"]');
+      if (pageInput) {
+        pageInput.disabled = graphActive;
+        if (graphActive) pageInput.value = "1";
+      }
+    }
+    var limit = root.querySelector("[data-sc-limit]");
+    if (limit) {
+      var options = Array.from(limit.options);
+      options.forEach(function (option) {
+        var tooSmall = Number(option.value) < 250;
+        option.hidden = graphActive && tooSmall;
+        option.disabled = graphActive && tooSmall;
+      });
+      if (graphActive && Number(limit.value) < 250) {
+        var next = options.find(function (option) { return Number(option.value) >= 500; }) ||
+          options.find(function (option) { return Number(option.value) >= 250; }) ||
+          options[options.length - 1];
+        if (next) limit.value = next.value;
+      }
+    }
     root.querySelectorAll("[data-sc-picker-root]").forEach(refreshColumnPicker);
   }
 

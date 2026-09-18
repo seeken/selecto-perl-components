@@ -150,6 +150,7 @@ my $configured = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'graph',
     chart_type => 'area',
+    graph_show_table => 1,
     field => ['product_name', 'unit_price'],
     group => ['category.category_name'],
     measure => 'total_price',
@@ -163,8 +164,13 @@ my $configured = Selecto::Components::State->from_input($config, $domain, {
 });
 ok $configured->valid, 'configured graph state is valid';
 is $configured->chart_type, 'area', 'configured chart type is retained';
+ok $configured->graph_show_table, 'the optional graph aggregate table is retained';
 is $configured->measure, 'total_price', 'configured measure is retained';
-is $configured->page, 3, 'page is retained';
+is $configured->limit, $config->max_limit,
+    'graph point limits are raised to the largest configured test limit';
+is $configured->page, 1, 'graph results always use their first point set';
+like join('&', @{$configured->query_pairs}), qr/graph_show_table&1/,
+    'canonical graph state retains the aggregate-table preference';
 is_deeply $configured->filters, [
     { field => 'unit_price', op => 'gte', value => '12.50', value_end => '' },
     { field => 'category.category_name', op => 'in', value => 'Tools, Produce', value_end => '' },
@@ -310,6 +316,8 @@ for my $chart_type (qw(bar horizontal_bar stacked_bar line area pie doughnut sca
     });
     ok $chart->valid, "$chart_type is an available dashboard chart type";
     is $chart->chart_type, $chart_type, "$chart_type survives state normalization";
+    ok !$chart->graph_show_table, 'the aggregate table is off by default for graphs';
+    is $chart->page, 1, 'graphs do not expose paged result sets';
 }
 
 my $invalid_chart = Selecto::Components::State->from_input($config, $domain, {
@@ -453,8 +461,9 @@ ok $multiple_measures->valid, 'multiple configured measures and a numeric group 
 is_deeply $multiple_measures->measures, ['count', 'total_price'],
     'measure order is retained';
 is_deeply $multiple_measures->measure_configs->{total_price}, {
-    alias => 'Average price', function => 'avg', bucket_ranges => '', ignore_nulls => 0,
-    series_id => 'series_2', chart_type => 'auto', axis => 'auto',
+    alias => 'Average price', function => 'avg', bucket_ranges => '',
+    null_handling => 'sql', ignore_nulls => 0,
+    series_id => 'series_2', chart_type => 'auto', axis => 'auto', stack => '',
     raw_unit => {kind => 'currency', code => 'USD'},
     unit => {kind => 'currency', code => 'USD'}, behavior => 'flow', transforms => [],
 }, 'each selected measure retains independent configuration';
@@ -468,15 +477,33 @@ ok $repeated_measure->valid, 'the same measure can be selected more than once';
 is_deeply $repeated_measure->measures, ['total_price', 'total_price'],
     'repeated measure order is retained';
 is_deeply $repeated_measure->measure_config_list, [
-    {alias => 'Revenue', function => 'sum', bucket_ranges => '', ignore_nulls => 0,
-        series_id => 'series_1', chart_type => 'auto', axis => 'auto',
+    {alias => 'Revenue', function => 'sum', bucket_ranges => '',
+        null_handling => 'auto', ignore_nulls => 1,
+        series_id => 'series_1', chart_type => 'auto', axis => 'auto', stack => '',
         resolved_axis => 'left', raw_unit => {kind => 'currency', code => 'USD'},
         unit => {kind => 'currency', code => 'USD'}, behavior => 'flow', transforms => []},
-    {alias => 'Average revenue', function => 'avg', bucket_ranges => '', ignore_nulls => 0,
-        series_id => 'series_2', chart_type => 'auto', axis => 'auto',
+    {alias => 'Average revenue', function => 'avg', bucket_ranges => '',
+        null_handling => 'auto', ignore_nulls => 0,
+        series_id => 'series_2', chart_type => 'auto', axis => 'auto', stack => '',
         resolved_axis => 'left', raw_unit => {kind => 'currency', code => 'USD'},
         unit => {kind => 'currency', code => 'USD'}, behavior => 'flow', transforms => []},
 ], 'each repeated measure retains independent positional configuration';
+my @repeated_null_modes;
+my $repeated_query_pairs = $repeated_measure->query_pairs;
+for (my $index = 0; $index < @$repeated_query_pairs; $index += 2) {
+    push @repeated_null_modes, $repeated_query_pairs->[$index + 1]
+        if $repeated_query_pairs->[$index] eq 'measure_ignore_nulls';
+}
+is_deeply \@repeated_null_modes, ['auto', 'auto'],
+    'automatic NULL handling remains explicit in canonical graph state';
+my $graph_sql_nulls = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
+    measure => 'total_price', measure_function => 'sum', measure_ignore_nulls => 0,
+});
+ok !$graph_sql_nulls->measure_config_list->[0]{ignore_nulls},
+    'a graph can explicitly retain SQL SUM NULL behavior';
+is $graph_sql_nulls->measure_config_list->[0]{null_handling}, 'sql',
+    'an explicit SQL NULL policy remains distinguishable from the graph default';
 my @repeated_pairs = @{$repeated_measure->query_pairs};
 is scalar(grep { $_ eq 'total_price' } @repeated_pairs), 2,
     'canonical state serializes both repeated measure instances';
@@ -538,10 +565,15 @@ ok $column_measures->valid, 'domain columns can construct independently configur
 is_deeply $column_measures->measures, ['unit_price', 'category.category_name'],
     'column-derived measure order is retained';
 is_deeply $column_measures->measure_configs->{'category.category_name'}, {
-    alias => 'Named categories', function => 'count_distinct', bucket_ranges => '', ignore_nulls => 0,
-    series_id => 'series_2', chart_type => 'auto', axis => 'auto',
+    alias => 'Named categories', function => 'count_distinct', bucket_ranges => '',
+    null_handling => 'auto', ignore_nulls => 0,
+    series_id => 'series_2', chart_type => 'auto', axis => 'auto', stack => '',
     raw_unit => {kind => 'count'}, unit => {kind => 'count'}, behavior => 'flow', transforms => [],
 }, 'relationship-column aggregate configuration is retained';
+is $column_measures->measure_config_list->[0]{null_handling}, 'auto',
+    'aggregate sums use the automatic NULL policy by default';
+ok $column_measures->measure_config_list->[0]{ignore_nulls},
+    'automatic aggregate sums treat NULL values as zero';
 
 my $dual_axis_graph = Selecto::Components::State->from_input($config, $domain, {
     q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
@@ -566,6 +598,44 @@ my $bad_axis_graph = Selecto::Components::State->from_input($config, $domain, {
 ok !$bad_axis_graph->valid, 'an explicit axis rejects incompatible units';
 like join(' ', @{$bad_axis_graph->errors}), qr/incompatible units/,
     'manual axis conflict explains the unit incompatibility';
+
+my $stacked_expenses = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
+    measure => ['total_price', 'total_price'],
+    measure_function => ['sum', 'sum'],
+    measure_series_id => ['carrier_expense', 'driver_expense'],
+    measure_chart_type => ['bar', 'bar'],
+    measure_stack => ['expenses', 'expenses'],
+});
+ok $stacked_expenses->valid, 'compatible series can share a named stack group';
+is_deeply [map { $_->{stack} } @{$stacked_expenses->measure_config_list}],
+    ['expenses', 'expenses'], 'stack group remains positional for repeated measures';
+
+my $bad_stack = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
+    measure => ['count', 'total_price'],
+    measure_function => ['count', 'sum'],
+    measure_stack => ['mixed', 'mixed'],
+});
+ok !$bad_stack->valid, 'one stack cannot combine incompatible count and currency units';
+like join(' ', @{$bad_stack->errors}), qr/stack group mixed requires compatible units/,
+    'invalid stack names the affected group and correction';
+
+my $colored_graph = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
+    measure => 'total_price', measure_function => 'sum', measure_color => '#A1B2C3',
+});
+ok $colored_graph->valid, 'a six-digit custom graph color is valid';
+is $colored_graph->measure_config_list->[0]{color}, '#a1b2c3',
+    'custom graph colors normalize for stable saved URLs';
+
+my $bad_color_graph = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
+    measure => 'total_price', measure_function => 'sum', measure_color => 'red; background:url(x)',
+});
+ok !$bad_color_graph->valid, 'arbitrary CSS is rejected as a graph color';
+like join(' ', @{$bad_color_graph->errors}), qr/#RRGGBB/,
+    'invalid color reports the required safe format';
 
 my $transformed_graph = Selecto::Components::State->from_input($config, $domain, {
     q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',

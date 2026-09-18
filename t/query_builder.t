@@ -264,7 +264,9 @@ my $aggregate_state = Selecto::Components::State->from_input($config, $domain, {
 });
 my $aggregate = Selecto::Components::QueryBuilder->build($config, $domain, $aggregate_state);
 my $aggregate_statement = $postgresql->compile($domain, $aggregate->{query});
-like $aggregate_statement->sql, qr/SUM\("s0"\."unit_price"\) AS "total_price"/, 'configured aggregate compiles';
+like $aggregate_statement->sql,
+    qr/SUM\(COALESCE\("s0"\."unit_price", 0\)\) AS "total_price"/,
+    'graph sums treat NULL values as zero by default';
 like $aggregate_statement->sql, qr/GROUP BY "j_category"\."category_name"/, 'configured group compiles';
 like $aggregate_statement->sql, qr/WHERE "s0"\."unit_price" >= \$1/,
     'aggregate queries apply the configured filters before grouping';
@@ -512,8 +514,8 @@ my $repeated_measure_statement = $postgresql->compile(
     $domain, $repeated_measure_result->{query},
 );
 like $repeated_measure_statement->sql,
-    qr/SUM\("s0"\."unit_price"\) AS "total_price"/,
-    'the first repeated measure retains its established result key';
+    qr/SUM\(COALESCE\("s0"\."unit_price", 0\)\) AS "total_price"/,
+    'the first repeated graph sum defaults to zero-valued NULL handling';
 like $repeated_measure_statement->sql,
     qr/AVG\("s0"\."unit_price"\) AS "total_price__2"/,
     'a repeated measure receives a stable distinct result key';
@@ -550,8 +552,9 @@ my $column_measure_result = Selecto::Components::QueryBuilder->build(
 my $column_measure_statement = $postgresql->compile(
     $domain, $column_measure_result->{query}
 );
-like $column_measure_statement->sql, qr/SUM\("s0"\."unit_price"\) AS "unit_price"/,
-    'a numeric domain column compiles with its selected aggregate function';
+like $column_measure_statement->sql,
+    qr/SUM\(COALESCE\("s0"\."unit_price", 0\)\) AS "unit_price"/,
+    'an aggregate sum defaults to zero-valued NULL handling';
 like $column_measure_statement->sql,
     qr/COUNT\(DISTINCT "j_category"\."category_name"\) AS "measure__category__category_name"/,
     'a relationship column compiles as a governed aggregate with a safe result alias';
