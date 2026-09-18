@@ -86,6 +86,35 @@
       || window.confirm("Discard the unsaved changes to this record?");
   }
 
+  function preserveRowDialogHostTitle(dialog) {
+    if (!dialog || !dialog.querySelector("[data-sc-row-dialog-frame]")) return;
+    if (!Object.prototype.hasOwnProperty.call(dialog, "_scHostDocumentTitle")) {
+      dialog._scHostDocumentTitle = document.title;
+      if (typeof MutationObserver === "function" && document.head) {
+        dialog._scHostTitleObserver = new MutationObserver(function () {
+          restoreRowDialogHostTitle(dialog, false);
+        });
+        dialog._scHostTitleObserver.observe(document.head, {
+          childList: true,
+          characterData: true,
+          subtree: true
+        });
+      }
+    }
+  }
+
+  function restoreRowDialogHostTitle(dialog, release) {
+    if (!dialog || !Object.prototype.hasOwnProperty.call(dialog, "_scHostDocumentTitle")) return;
+    if (release && dialog._scHostTitleObserver) {
+      dialog._scHostTitleObserver.disconnect();
+      delete dialog._scHostTitleObserver;
+    }
+    if (document.title !== dialog._scHostDocumentTitle) {
+      document.title = dialog._scHostDocumentTitle;
+    }
+    if (release) delete dialog._scHostDocumentTitle;
+  }
+
   function loadRecordEditor(dialog, url, notice) {
     var body = dialog.querySelector("[data-sc-row-editor-body]");
     var loading = dialog.querySelector("[data-sc-row-dialog-loading]");
@@ -177,6 +206,7 @@
     var rows = rowDialogRows(dialog);
     var index = rows.indexOf(row);
     if (index < 0) return;
+    preserveRowDialogHostTitle(dialog);
     setRowDialogIndex(dialog, index);
     if (!dialog.open) {
       if (typeof dialog.showModal === "function") dialog.showModal();
@@ -204,6 +234,7 @@
       frame.removeAttribute("src");
       frame.classList.remove("is-loading");
     }
+    restoreRowDialogHostTitle(dialog, true);
     if (editorBody) editorBody.replaceChildren();
     if (loading) loading.hidden = true;
     delete dialog.dataset.scRowDialogIndex;

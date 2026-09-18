@@ -402,6 +402,9 @@ a { color: inherit; }
 .sc-chart-fallback li { align-items: center; display: grid; grid-template-columns: minmax(110px, 220px) minmax(120px, 1fr) 72px; gap: 12px; }
 .sc-chart-fallback meter { height: 20px; width: 100%; }
 .sc-chart-fallback strong { text-align: right; }
+.sc-chart-error { align-items: center; background: var(--sc-subpanel); border: 1px solid var(--sc-border); border-radius: 8px; display: flex; gap: 12px; justify-content: space-between; margin: 0 0 14px; padding: 10px 12px; }
+.sc-chart-error[hidden] { display: none; }
+.sc-chart-error span { color: var(--sc-muted); font-size: .78rem; }
 .sc-chart-hint { color: var(--sc-muted); font-size: .72rem; margin: 12px 0 0; text-align: right; }
 .sc-graph-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-pagination { align-items: center; display: flex; gap: 14px; justify-content: space-between; padding: 11px 18px; }

@@ -11,6 +11,7 @@
   window.addEventListener("pageshow", function (event) {
     if (!event.persisted) return;
     reconnectRestoredWebSocketChannels();
+    restoreCharts(true);
   });
 
   window.addEventListener("pagehide", function () {
@@ -21,29 +22,107 @@
     restoreSelectoHistory(event.state);
   });
 
-  function rememberSelectoHistory(url, push) {
+  function rememberSelectoHistory(url, push, pendingNavigation) {
     var surface = document.querySelector('[id^="selecto-surface-"]');
     if (!surface || !window.history) return;
     var state = window.history.state && typeof window.history.state === "object"
       ? Object.assign({}, window.history.state) : {};
     var key = push ? null : state.selectoSnapshot;
     if (!key) key = "selecto-" + Date.now() + "-" + (++selectoHistoryCounter);
-    selectoHistorySnapshots.delete(key);
-    selectoHistorySnapshots.set(key, surface.outerHTML);
+    var snapshot = surface.cloneNode(true);
+    prepareChartsForSnapshot(snapshot);
+    storeSelectoHistorySnapshot(key, snapshot.outerHTML);
     while (selectoHistorySnapshots.size > 24) {
-      selectoHistorySnapshots.delete(selectoHistorySnapshots.keys().next().value);
+      removeSelectoHistorySnapshot(selectoHistorySnapshots.keys().next().value);
     }
     state.selecto = true;
     state.selectoSnapshot = key;
+    if (pendingNavigation) state.selectoPendingNavigation = true;
+    else delete state.selectoPendingNavigation;
     try {
       if (push) window.history.pushState(state, "", url);
       else window.history.replaceState(state, "", url);
     } catch (_error) {}
   }
 
+  function selectoHistoryStorageKey(key) {
+    return "selecto-history:" + key;
+  }
+
+  function removeSelectoHistorySnapshot(key) {
+    selectoHistorySnapshots.delete(key);
+    try { window.sessionStorage.removeItem(selectoHistoryStorageKey(key)); } catch (_error) {}
+  }
+
+  function storeSelectoHistorySnapshot(key, html) {
+    selectoHistorySnapshots.delete(key);
+    selectoHistorySnapshots.set(key, html);
+    try {
+      window.sessionStorage.setItem(selectoHistoryStorageKey(key), html);
+    } catch (_error) {
+      // A result set can exceed the browser's storage quota. Keep the current
+      // in-memory copy, discard older Selecto snapshots, and retry once so a
+      // document/frame restoration still has the best available snapshot.
+      try {
+        var prefix = "selecto-history:";
+        var storedKeys = [];
+        for (var index = 0; index < window.sessionStorage.length; index += 1) {
+          var storedKey = window.sessionStorage.key(index);
+          if (storedKey && storedKey.indexOf(prefix) === 0
+              && storedKey !== selectoHistoryStorageKey(key)) storedKeys.push(storedKey);
+        }
+        storedKeys.forEach(function (storedKey) { window.sessionStorage.removeItem(storedKey); });
+        window.sessionStorage.setItem(selectoHistoryStorageKey(key), html);
+      } catch (_retryError) {}
+    }
+  }
+
+  function loadSelectoHistorySnapshot(key) {
+    var snapshot = selectoHistorySnapshots.get(key);
+    if (snapshot) return snapshot;
+    try { snapshot = window.sessionStorage.getItem(selectoHistoryStorageKey(key)); }
+    catch (_error) { snapshot = null; }
+    if (snapshot) selectoHistorySnapshots.set(key, snapshot);
+    return snapshot;
+  }
+
+  function formNavigationUrl(form) {
+    if (!form) return null;
+    try {
+      var target = new URL(form.getAttribute("action") || window.location.href, window.location.href);
+      if (target.origin !== window.location.origin) return null;
+      if ((form.getAttribute("method") || "get").toLowerCase() === "get") {
+        var query = new URLSearchParams();
+        new FormData(form).forEach(function (value, name) {
+          if (typeof File !== "undefined" && value instanceof File) return;
+          query.append(name, value);
+        });
+        target.search = query.toString();
+      }
+      return target.pathname + target.search + target.hash;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function beginSelectoNavigation(form) {
+    var url = formNavigationUrl(form);
+    if (!url) return;
+    // Create the joint-history entry while the submit event is still in
+    // progress. Waiting for the asynchronous WebSocket response leaves a
+    // short window in which browser Back exits the Explorer (and, in a
+    // framed host, can also leave the surrounding application shell).
+    rememberSelectoHistory(url, true, true);
+  }
+
+  function usesSelectoWebSocket(form) {
+    return !!(form && form.hasAttribute("hx-ws:send")
+      && form.closest('[hx-ws\\:connect]'));
+  }
+
   function restoreSelectoHistory(state) {
     var key = state && state.selectoSnapshot;
-    var snapshot = key && selectoHistorySnapshots.get(key);
+    var snapshot = key && loadSelectoHistorySnapshot(key);
     if (!snapshot) return;
     var current = document.querySelector('[id^="selecto-surface-"]');
     if (!current) return;
@@ -51,6 +130,7 @@
     template.innerHTML = snapshot.trim();
     var restored = template.content.firstElementChild;
     if (!restored) return;
+    prepareChartsForSnapshot(restored);
     destroyChartsWithin(current);
     current.replaceWith(restored);
     selectoPerformance = null;
@@ -107,10 +187,12 @@
         setBuilderTrayCollapsed(shell, true);
       }
       var connection = document.querySelector("[data-selecto-connection]");
-      if (connection && connection.classList.contains("is-live")) {
+      if (usesSelectoWebSocket(gridForm)) {
+        beginSelectoNavigation(gridForm);
         window.setTimeout(function () { showWorkspaceResultsLoading(workspace); }, 0);
         return;
       }
+      if (connection && connection.classList.contains("is-live")) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       showWorkspaceResultsLoading(workspace);
@@ -123,6 +205,10 @@
       if (!websocketForm || !websocketForm.hasAttribute("hx-ws:send")) return;
       rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
       var websocketConnection = document.querySelector("[data-selecto-connection]");
+      if (usesSelectoWebSocket(websocketForm)) {
+        beginSelectoNavigation(websocketForm);
+        return;
+      }
       if (websocketConnection && websocketConnection.classList.contains("is-live")) return;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -148,6 +234,10 @@
     showResultsLoading(form);
     setBuilderTrayCollapsed(form.closest("[data-sc-builder-shell]"), true);
     var connection = document.querySelector("[data-selecto-connection]");
+    if (usesSelectoWebSocket(form)) {
+      beginSelectoNavigation(form);
+      return;
+    }
     if (connection && connection.classList.contains("is-live")) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -211,7 +301,9 @@
         }
         if (typeof nextUrl === "string" && nextUrl.charAt(0) === "/") {
           var currentUrl = window.location.pathname + window.location.search + window.location.hash;
-          rememberSelectoHistory(nextUrl, nextUrl !== currentUrl);
+          var pendingNavigation = window.history && window.history.state
+            && window.history.state.selectoPendingNavigation;
+          rememberSelectoHistory(nextUrl, !pendingNavigation && nextUrl !== currentUrl);
         }
       }).catch(function () {});
     }
@@ -354,6 +446,7 @@
     var dialog = frame.closest("[data-sc-row-dialog]");
     var loading = dialog && dialog.querySelector("[data-sc-row-dialog-loading]");
     if (loading) loading.hidden = true;
+    restoreRowDialogHostTitle(dialog, false);
   }, true);
 
   document.addEventListener("cancel", function (event) {

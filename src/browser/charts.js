@@ -4,6 +4,57 @@
     return type;
   }
 
+  function chartLibraryAvailable() {
+    return typeof window.Chart === "function"
+      && typeof window.Chart.register === "function"
+      && typeof window.Chart.getChart === "function"
+      && typeof window.Chart.version === "string";
+  }
+
+  function clearChartRetry(root) {
+    var timer = root && chartRetryTimers.get(root);
+    if (timer) window.clearTimeout(timer);
+    if (root) chartRetryTimers.delete(root);
+  }
+
+  function setChartLoading(root) {
+    if (!root) return;
+    root.classList.remove("is-ready", "is-fallback");
+    root.setAttribute("aria-busy", "true");
+    root.removeAttribute("data-sc-chart-error");
+    var notice = root.querySelector("[data-sc-chart-error-notice]");
+    if (notice) notice.hidden = true;
+  }
+
+  function prepareChartsForSnapshot(node) {
+    if (!node || !node.querySelectorAll) return;
+    var roots = Array.from(node.querySelectorAll("[data-sc-chart]"));
+    if (node.matches && node.matches("[data-sc-chart]")) roots.unshift(node);
+    roots.forEach(function (root) {
+      root.classList.remove("is-ready", "is-fallback");
+      root.setAttribute("aria-busy", "true");
+      root.removeAttribute("data-sc-chart-error");
+      var notice = root.querySelector("[data-sc-chart-error-notice]");
+      if (notice) notice.remove();
+      var canvas = root.querySelector("canvas");
+      if (canvas) {
+        canvas.removeAttribute("width");
+        canvas.removeAttribute("height");
+        canvas.removeAttribute("style");
+      }
+    });
+  }
+
+  function scheduleChartInitialization(root, attempt) {
+    if (!root || !root.isConnected || chartInstances.has(root)) return;
+    clearChartRetry(root);
+    var timer = window.setTimeout(function () {
+      chartRetryTimers.delete(root);
+      if (root.isConnected && !chartInstances.has(root)) initializeChart(root, attempt);
+    }, attempt ? 75 * attempt : 0);
+    chartRetryTimers.set(root, timer);
+  }
+
   function chartColorWithAlpha(color, alpha) {
     var match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color || "");
     if (!match) return color;
@@ -124,8 +175,13 @@
     return options;
   }
 
-  function initializeChart(root) {
-    if (!root || chartInstances.has(root) || !window.Chart) return;
+  function initializeChart(root, attempt) {
+    attempt = Number(attempt) || 0;
+    if (!root || chartInstances.has(root)) return;
+    if (!chartLibraryAvailable()) {
+      showChartFallback(root, new Error("Chart.js is unavailable"));
+      return;
+    }
     var canvas = root.querySelector("canvas");
     if (!canvas) {
       showChartFallback(root);
@@ -135,8 +191,8 @@
     var data;
     try {
       data = JSON.parse(root.dataset.chartData || "{}");
-    } catch (_error) {
-      showChartFallback(root);
+    } catch (error) {
+      showChartFallback(root, error);
       return;
     }
     var styles = window.getComputedStyle(root);
@@ -160,6 +216,10 @@
       }
     });
     try {
+      if (typeof window.Chart.getChart === "function") {
+        var stale = window.Chart.getChart(canvas);
+        if (stale && typeof stale.destroy === "function") stale.destroy();
+      }
       var chart = new window.Chart(canvas, {
         type: chartJsType(type),
         data: data,
@@ -169,30 +229,120 @@
       root.classList.remove("is-fallback");
       root.classList.add("is-ready");
       root.setAttribute("aria-busy", "false");
-    } catch (_error) {
-      showChartFallback(root);
+      root.removeAttribute("data-sc-chart-error");
+    } catch (error) {
+      if (attempt < 2) {
+        setChartLoading(root);
+        scheduleChartInitialization(root, attempt + 1);
+        return;
+      }
+      showChartFallback(root, error);
     }
   }
 
-  function showChartFallback(root) {
+  function showChartFallback(root, error) {
     if (!root) return;
+    clearChartRetry(root);
     root.classList.remove("is-ready");
     root.classList.add("is-fallback");
     root.setAttribute("aria-busy", "false");
+    var message = error && error.message ? String(error.message) : "Chart initialization failed";
+    root.dataset.scChartError = message.slice(0, 240);
+    var fallback = root.querySelector(".sc-chart-fallback");
+    if (fallback) {
+      var notice = fallback.querySelector("[data-sc-chart-error-notice]");
+      var text;
+      if (!notice) {
+        notice = document.createElement("p");
+        notice.className = "sc-chart-error";
+        notice.dataset.scChartErrorNotice = "";
+        text = document.createElement("span");
+        text.dataset.scChartErrorMessage = "";
+        var retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "sc-button sc-secondary";
+        retry.dataset.scChartRetry = "";
+        retry.textContent = "Retry chart";
+        retry.addEventListener("click", function () { retryChart(root); });
+        notice.append(text, retry);
+        fallback.prepend(notice);
+      }
+      text = text || notice.querySelector("[data-sc-chart-error-message]");
+      if (text) text.textContent = "The interactive chart could not be displayed: " + message;
+      notice.hidden = false;
+    }
+    if (window.console && typeof window.console.warn === "function") {
+      window.console.warn("Selecto chart initialization failed", error || message);
+    }
   }
 
-  function restoreCharts() {
-    var roots = Array.from(document.querySelectorAll("[data-sc-chart]"));
+  function retryChart(root) {
+    if (!root) return;
+    clearChartRetry(root);
+    var chart = chartInstances.get(root);
+    if (chart && typeof chart.destroy === "function") chart.destroy();
+    chartInstances.delete(root);
+    setChartLoading(root);
+    if (chartLibraryAvailable()) {
+      scheduleChartInitialization(root, 0);
+      return;
+    }
+    chartLoadPromise = null;
+    loadChartLibrary(root).then(function () {
+      scheduleChartInitialization(root, 0);
+    }).catch(function (error) {
+      showChartFallback(root, error);
+    });
+  }
+
+  function loadChartsForRoots(roots, attempt) {
+    roots = roots.filter(function (root) { return root.isConnected; });
     if (!roots.length) return;
-    if (window.Chart) {
-      roots.forEach(initializeChart);
+    if (chartLibraryAvailable()) {
+      roots.forEach(function (root) { scheduleChartInitialization(root, 0); });
       return;
     }
     loadChartLibrary(roots[0]).then(function () {
-      roots.filter(function (root) { return root.isConnected; }).forEach(initializeChart);
-    }).catch(function () {
-      roots.filter(function (root) { return root.isConnected; }).forEach(showChartFallback);
+      roots.filter(function (root) { return root.isConnected; }).forEach(function (root) {
+        scheduleChartInitialization(root, 0);
+      });
+    }).catch(function (error) {
+      if (attempt < 2) {
+        chartLoadPromise = null;
+        window.setTimeout(function () { loadChartsForRoots(roots, attempt + 1); }, 100 * (attempt + 1));
+        return;
+      }
+      roots.filter(function (root) { return root.isConnected; }).forEach(function (root) {
+        showChartFallback(root, error);
+      });
     });
+  }
+
+  function restoreCharts(refreshExisting) {
+    var roots = Array.from(document.querySelectorAll("[data-sc-chart]"));
+    if (!roots.length) return;
+    var pending = [];
+    roots.forEach(function (root) {
+      var chart = chartInstances.get(root);
+      if (!chart) {
+        setChartLoading(root);
+        pending.push(root);
+        return;
+      }
+      if (!refreshExisting) return;
+      // Browser history can restore the DOM and our WeakMap while discarding
+      // or corrupting the canvas backing store. Chart.js may accept resize()
+      // and update() in that state yet leave only the HTML fallback visible.
+      // Reconstructing from the governed data is deterministic and avoids
+      // carrying a stale canvas across bfcache/frame restoration.
+      try {
+        if (typeof chart.destroy === "function") chart.destroy();
+      } catch (_error) {}
+      chartInstances.delete(root);
+      setChartLoading(root);
+      pending.push(root);
+    });
+    loadChartsForRoots(pending, 0);
   }
 
   function destroyChartsWithin(node) {
@@ -200,6 +350,7 @@
     var roots = Array.from(node.querySelectorAll("[data-sc-chart]"));
     if (node.matches && node.matches("[data-sc-chart]")) roots.unshift(node);
     roots.forEach(function (root) {
+      clearChartRetry(root);
       var chart = chartInstances.get(root);
       if (chart) chart.destroy();
       chartInstances.delete(root);
@@ -235,7 +386,7 @@
   var chartLoadPromise;
 
   function loadChartLibrary(root) {
-    if (window.Chart) return Promise.resolve();
+    if (chartLibraryAvailable()) return Promise.resolve();
     if (chartLoadPromise) return chartLoadPromise;
     var surface = root && root.closest("[data-sc-chart-src]");
     var source = surface && surface.dataset.scChartSrc;
@@ -244,7 +395,14 @@
       var script = document.createElement("script");
       script.src = source;
       script.async = true;
-      script.onload = resolve;
+      script.onload = function () {
+        if (chartLibraryAvailable()) {
+          resolve();
+          return;
+        }
+        chartLoadPromise = null;
+        reject(new Error("Chart library loaded without providing Chart.js"));
+      };
       script.onerror = function () {
         chartLoadPromise = null;
         reject(new Error("Chart library could not be loaded"));

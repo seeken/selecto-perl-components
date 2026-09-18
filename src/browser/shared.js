@@ -2,6 +2,7 @@
   var collapsedBuilderTrays = Object.create(null);
   var connectionStatus = "Connecting";
   var chartInstances = new WeakMap();
+  var chartRetryTimers = new WeakMap();
   var selectoPerformance = null;
   var selectoSwapStarted = 0;
   var selectoHistorySnapshots = new Map();

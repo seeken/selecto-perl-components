@@ -389,7 +389,7 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter, $clause =
     }
     if ($operator eq 'between') {
         my $input_type = $config->temporal_type($type)
-            ? (lc($type) eq 'date' ? 'date' : 'datetime-local')
+            ? _temporal_filter_input_type($config, $type, $value, $value_end)
             : ($config->numeric_type($type) ? 'number' : 'text');
         my $step = $input_type eq 'number' ? ' step="any"' : '';
         return '<div class="sc-promoted-filter-range"><label>Start<input type="' . $input_type . '"' . $step .
@@ -409,7 +409,7 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter, $clause =
             (lc($value) eq 'false' || $value eq '0' ? ' selected' : '') . '>False</option></select></label>';
     }
     my $input_type = $operator eq 'in' ? 'text' : $config->temporal_type($type)
-        ? (lc($type) eq 'date' ? 'date' : 'datetime-local')
+        ? _temporal_filter_input_type($config, $type, $value)
         : ($config->numeric_type($type) ? 'number' : 'text');
     my $step = $input_type eq 'number' ? ' step="any"' : '';
     my $placeholder = $operator eq 'in' ? 'Comma-separated values'
@@ -918,7 +918,9 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
     my $value_end = $filter->{value_end} // '';
     my $label = $field->{label};
     my $type = $field->{type};
-    my $input_type = $config->filter_input_type($type);
+    my $input_type = $config->temporal_type($type)
+        ? _temporal_filter_input_type($config, $type, $value, $value_end)
+        : $config->filter_input_type($type);
     my $step = $input_type eq 'number' ? ' step="any"' : '';
     my $controls = '<div class="sc-filter-values" data-sc-filter-values>';
 
@@ -967,6 +969,13 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
         '" name="filter_value" aria-label="Value for ' . _h($label) . '" value="' . _h($value) .
         '" placeholder="' . _h($placeholder) . '"' . $effective_step . '></label>' .
         _hidden('filter_value_end', '') . '</div>';
+}
+
+sub _temporal_filter_input_type ($config, $type, @values) {
+    return 'date' if defined($type) && !ref($type) && lc("$type") eq 'date';
+    my @populated = grep { defined($_) && !ref($_) && length("$_") } @values;
+    return 'date' if @populated && !grep { "$_" !~ /\A\d{4}-\d{2}-\d{2}\z/ } @populated;
+    return $config->filter_input_type($type);
 }
 
 1;

@@ -2,6 +2,17 @@
     return /(?:date|time)/i.test(type || "");
   }
 
+  function temporalFilterInputType(type, values) {
+    if (String(type || "").toLowerCase() === "date") return "date";
+    var populated = (values || []).filter(function (value) {
+      return String(value || "").length;
+    });
+    if (populated.length && populated.every(function (value) {
+      return /^\d{4}-\d{2}-\d{2}$/.test(String(value));
+    })) return "date";
+    return "datetime-local";
+  }
+
   function numericFilterType(type) {
     return /^(?:integer|decimal|number|numeric|float|double|real)$/i.test(type || "");
   }
@@ -106,7 +117,7 @@
       values.appendChild(hiddenFilterValue("filter_value_end", ""));
     } else if (operator === "between") {
       var rangeType = temporalFilterType(type) ?
-        (String(type).toLowerCase() === "date" ? "date" : "datetime-local") :
+        temporalFilterInputType(type, [previousValue, previousEnd]) :
         (numericFilterType(type) ? "number" : "text");
       values.appendChild(labeledFilterControl("Start",
         filterInput(rangeType, "filter_value", previousValue, "Start value for " + label, "Start")));
@@ -127,7 +138,7 @@
       values.appendChild(hiddenFilterValue("filter_value_end", ""));
     } else {
       var inputType = operator === "in" ? "text" : temporalFilterType(type) ?
-        (String(type).toLowerCase() === "date" ? "date" : "datetime-local") :
+        temporalFilterInputType(type, [previousValue]) :
         numericFilterType(type) ? "number" : "text";
       var placeholder = operator === "in" ? "Comma-separated values" :
         temporalFilterType(type) ? "Choose a date" : "Enter a value";

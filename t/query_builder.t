@@ -694,6 +694,47 @@ is $formatted_drilldown{filter_group}, 1,
 is $formatted_drilldown{filter_promote_field}, 'created_on',
     'formatted aggregate drill-down filters are automatically promoted';
 
+my $filtered_weekday_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'graph',
+    chart_type => 'bar',
+    field => 'created_on',
+    group => 'created_on',
+    group_format => 'day_of_week',
+    measure => 'count',
+    filter_field => 'created_on',
+    filter_op => 'gte',
+    filter_value => '2026-01-01',
+    filter_promote_field => 'created_on',
+    order => 'created_on',
+});
+my $filtered_weekday_drilldowns = Selecto::Components::Explorer::_drilldowns(
+    $filtered_weekday_state,
+    $weekday_aggregate,
+    [{created_on => 'Monday', __selecto_rollup_level => 1}],
+);
+my (@weekday_filter_fields, @weekday_filter_ops, @weekday_filter_values,
+    @weekday_filter_groups, @weekday_promoted_indexes);
+my $filtered_weekday_pairs = $filtered_weekday_drilldowns->[0][0];
+for (my $index = 0; $index < @$filtered_weekday_pairs; $index += 2) {
+    my ($name, $value) = @$filtered_weekday_pairs[$index, $index + 1];
+    push @weekday_filter_fields, $value if $name eq 'filter_field';
+    push @weekday_filter_ops, $value if $name eq 'filter_op';
+    push @weekday_filter_values, $value if $name eq 'filter_value';
+    push @weekday_filter_groups, $value if $name eq 'filter_group';
+    push @weekday_promoted_indexes, $value if $name eq 'filter_promote_index';
+}
+is_deeply \@weekday_filter_fields, [qw(created_on created_on)],
+    'a drill-down retains an existing filter on the grouped field';
+is_deeply \@weekday_filter_ops, [qw(gte eq)],
+    'the original range predicate and clicked group predicate remain distinct';
+is_deeply \@weekday_filter_values, ['2026-01-01', 'Monday'],
+    'a weekday drill-down remains bounded by the original date range';
+is_deeply \@weekday_filter_groups, [0, 1],
+    'only the clicked formatted value is evaluated as a grouping expression';
+is_deeply \@weekday_promoted_indexes, [1, 2],
+    'both same-field predicates remain visible as promoted filters';
+
 my $drilldown_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'detail',
