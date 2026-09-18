@@ -188,6 +188,11 @@
       }
       var connection = document.querySelector("[data-selecto-connection]");
       if (usesSelectoWebSocket(gridForm)) {
+        // Do not depend on the WebSocket extension's form listener to cancel
+        // native navigation. Freshly swapped forms can be submitted before
+        // HTMX has initialized them; the event must still bubble so an
+        // initialized/queued WebSocket transport can send it.
+        event.preventDefault();
         beginSelectoNavigation(gridForm);
         window.setTimeout(function () { showWorkspaceResultsLoading(workspace); }, 0);
         return;
@@ -206,6 +211,7 @@
       rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
       var websocketConnection = document.querySelector("[data-selecto-connection]");
       if (usesSelectoWebSocket(websocketForm)) {
+        event.preventDefault();
         beginSelectoNavigation(websocketForm);
         return;
       }
@@ -235,6 +241,7 @@
     setBuilderTrayCollapsed(form.closest("[data-sc-builder-shell]"), true);
     var connection = document.querySelector("[data-selecto-connection]");
     if (usesSelectoWebSocket(form)) {
+      event.preventDefault();
       beginSelectoNavigation(form);
       return;
     }
