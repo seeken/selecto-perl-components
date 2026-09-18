@@ -112,7 +112,7 @@ sub save ($class, $controller, $explorer) {
         $params{$field} = @values > 1 ? \@values : $values[0];
     }
     my $normalized = Selecto::Components::RecordEditor->normalize(
-        $context->{domain}, $context->{editor}, \%params,
+        $context->{domain}, $context->{editor}, \%params, $original,
     );
     return Selecto::Components::_action_response($controller, $return_to, {
         ok => 0, status => 422,
@@ -213,7 +213,12 @@ sub _form ($controller, $context, $record, $snapshot, $signature) {
         my $field = $spec->{field};
         my $label = $spec->{label} // $field_map->{$field}{label} // $field;
         my $type = lc($context->{domain}->resolve($field)->{type} // 'string');
-        my $control = $spec->{control} // Selecto::Components::RecordEditor::_control_for_type($type);
+        my $options = $spec->{options}
+            // $context->{domain}->field_metadata($field)->{options};
+        my $control = $spec->{control}
+            // (ref($options) eq 'ARRAY' && @$options
+                ? 'select'
+                : Selecto::Components::RecordEditor::_control_for_type($type));
         my $value = $record->{$field};
         my $required = $spec->{required} ? ' required aria-required="true"' : '';
         my $marker = $spec->{required} ? ' <span aria-hidden="true">*</span>' : '';
@@ -228,14 +233,30 @@ sub _form ($controller, $context, $record, $snapshot, $signature) {
                 _h($spec->{rows} // 4) . '"' . $required . $placeholder . '>' .
                 _h($value // '') . '</textarea>';
         } elsif ($control eq 'select') {
-            my $options = join '', map {
+            my %available = map {
+                defined($_->{value}) && !ref($_->{value})
+                    ? (("" . $_->{value}) => 1) : ()
+            } @{$options // []};
+            my $display_value = $context->{domain}->normalize_field_value(
+                $field, $value,
+            );
+            $display_value = $value unless defined($display_value)
+                && $available{"$display_value"};
+            my $current_option = defined($display_value) && "$display_value" ne ''
+                    && !$available{"$display_value"}
+                ? '<option value="' . _h($value) .
+                    '" selected data-sc-legacy-current-value>' .
+                    _h("Current value — $value (not in current choices)") .
+                    '</option>'
+                : '';
+            my $option_html = join '', map {
                 '<option value="' . _h($_->{value}) . '"' .
-                    (defined($value) && "$value" eq ("" . $_->{value}) ? ' selected' : '') . '>' .
+                    (defined($display_value) && "$display_value" eq ("" . $_->{value}) ? ' selected' : '') . '>' .
                     _h($_->{label}) . '</option>'
-            } @{$spec->{options} // []};
+            } @{$options // []};
             $input = '<select name="editor_field_' . _h($field) . '"' . $required . '>' .
                 ($spec->{nullable} ? '<option value="">— None —</option>' : '') .
-                $options . '</select>';
+                $current_option . $option_html . '</select>';
         } elsif ($control eq 'checkbox') {
             $input = '<input type="checkbox" name="editor_field_' . _h($field) .
                 '" value="1"' . ($value ? ' checked' : '') . '>';

@@ -9,7 +9,90 @@ use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::DateShortcut ();
 use Selecto::Components::AssetManifest qw(asset_revision);
+use Selecto::Components::RecordEditor ();
 use Selecto::Error ();
+
+my $legacy_choice_domain = Selecto::Domain->parse({
+    schema_version => 1, name => 'Legacy choices',
+    source => {
+        source_table => 'legacy_choices', primary_key => 'id',
+        fields => [qw(id status)],
+        columns => {
+            id => {type => 'integer'},
+            status => {type => 'string', text_case => 'lowercase'},
+        },
+        associations => {
+            status_value => {
+                queryable => 'status_values',
+                owner_key => 'status', related_key => 'id',
+            },
+        },
+    },
+    schemas => {
+        status_values => {
+            values => [
+                {id => 'active', descr => 'Active'},
+                {id => 'inactive', descr => 'Inactive'},
+            ],
+            primary_key => 'id', fields => [qw(id descr)],
+            columns => {
+                id => {type => 'string'},
+                descr => {type => 'string'},
+            },
+            associations => {},
+        },
+    },
+    joins => {
+        status_value => {
+            type => 'star_dimension', name => 'Status',
+            display_field => 'descr', dimension_key => 'status',
+        },
+    },
+    writes => {
+        operations => {update => {enabled => 1}},
+        fields => {status => {updatable => 1}},
+    },
+    editors => {
+        profile => {
+            label => 'Edit legacy choice',
+            fields => [{field => 'status'}],
+        },
+    },
+}, strict => 1);
+my $legacy_editor = $legacy_choice_domain->editors->{profile};
+my $kept_legacy_choice = Selecto::Components::RecordEditor->normalize(
+    $legacy_choice_domain, $legacy_editor,
+    {status => 'retired'}, {status => 'retired'},
+);
+ok $kept_legacy_choice->{valid},
+    'record editors allow an unchanged current value outside the current choices';
+my $new_invalid_choice = Selecto::Components::RecordEditor->normalize(
+    $legacy_choice_domain, $legacy_editor,
+    {status => 'unknown'}, {status => 'retired'},
+);
+is $new_invalid_choice->{errors}{status}, 'Choose an available value.',
+    'record editors reject changing a values foreign key to another unknown value';
+my $new_valid_choice = Selecto::Components::RecordEditor->normalize(
+    $legacy_choice_domain, $legacy_editor,
+    {status => 'active'}, {status => 'retired'},
+);
+ok $new_valid_choice->{valid},
+    'record editors allow replacing a legacy value with a current choice';
+my $wrong_case_current_choice = Selecto::Components::RecordEditor->normalize(
+    $legacy_choice_domain, $legacy_editor,
+    {status => 'ACTIVE'}, {status => 'ACTIVE'},
+);
+ok $wrong_case_current_choice->{valid},
+    'record editors recognize a current choice written in noncanonical case';
+is $wrong_case_current_choice->{values}{status}, 'active',
+    'record editors canonicalize the case of a recognized current choice';
+is_deeply(
+    Selecto::Components::RecordEditor->changed(
+        $legacy_editor, {status => 'ACTIVE'}, $wrong_case_current_choice->{values},
+    ),
+    {status => 'active'},
+    'saving another edit also repairs a recognized wrong-case value',
+);
 
 is Selecto::Components::normalize_export_format('Excel'), 'xlsx',
     'Excel aliases normalize case-insensitively to the governed xlsx format';
