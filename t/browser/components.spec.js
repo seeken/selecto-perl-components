@@ -141,6 +141,48 @@ test("a message error does not mark an open WebSocket as reconnecting", async ({
   await expect(page.locator("[data-selecto-connection]")).toHaveClass(/is-live/);
 });
 
+test("a closed hosted channel is rebuilt without rerunning its query", async ({page}) => {
+  await load(page, `
+    <section id="selecto-channel-trucks" hx-ext="ws" hx-ws:connect="/explorer/truck/ws">
+      <span data-selecto-connection class="is-live">Live</span>
+      <form action="/explorer/truck" method="get" hx-ws:send data-sc-builder>
+        <input name="field" value="id">
+        <button type="submit">Run query</button>
+      </form>
+    </section>
+  `);
+  await page.evaluate(() => {
+    window.selectoRecoveryProcessCalls = 0;
+    window.selectoUnexpectedSubmits = 0;
+    window.htmx = {
+      process(channel) {
+        window.selectoRecoveryProcessCalls += 1;
+        const connection = {socket: {readyState: WebSocket.OPEN}};
+        channel._htmx = {ws: {connection}};
+        channel.dispatchEvent(new CustomEvent("htmx:ws:after:connection", {
+          bubbles: true,
+          detail: {connection},
+        }));
+      },
+    };
+    document.querySelector("form").addEventListener("submit", () => {
+      window.selectoUnexpectedSubmits += 1;
+    });
+    const channel = document.querySelector("#selecto-channel-trucks");
+    const connection = {socket: {readyState: WebSocket.CLOSED}};
+    channel._htmx = {ws: {connection}};
+    channel.dispatchEvent(new CustomEvent("htmx:ws:close", {
+      bubbles: true,
+      detail: {connection, code: 1000},
+    }));
+  });
+
+  await expect.poll(() => page.evaluate(() => window.selectoRecoveryProcessCalls)).toBe(1);
+  await expect(page.locator("[data-selecto-connection]")).toHaveText("Live");
+  await expect(page.locator('input[name="field"]')).toHaveValue("id");
+  expect(await page.evaluate(() => window.selectoUnexpectedSubmits)).toBe(0);
+});
+
 test("a completed query refreshes the API console link outside the results swap", async ({page}) => {
   await load(page, `
     <section id="selecto-surface-loads">
