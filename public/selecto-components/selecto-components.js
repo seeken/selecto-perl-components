@@ -1576,6 +1576,22 @@
     renderConnectionStatus();
   });
 
+  document.addEventListener("htmx:ws:error", function (event) {
+    connectionStatus = "Reconnecting";
+    renderConnectionStatus();
+    var target = event.target instanceof Element ? event.target : null;
+    var form = target && (target.matches("form") ? target : target.closest("form"));
+    if (!form || !form.hasAttribute("hx-ws:send")) return;
+    // A channel can be present in the DOM while its HTMX connection object is
+    // absent (for example after browser restoration or a reconnect race).
+    // Explorer queries are ordinary GET/POST forms, so preserve the user's
+    // submitted state and finish through the equivalent HTTP route.
+    submitWithoutWebSocket(
+      form,
+      form.matches("[data-sc-builder]") ? "Running…" : "Opening…"
+    );
+  });
+
   document.addEventListener("htmx:after:swap", renderConnectionStatus);
 
   window.addEventListener("submit", function (event) {
@@ -1660,6 +1676,8 @@
   function submitWithoutWebSocket(form, buttonLabel) {
     if (!form || form.dataset.scHttpSubmitting === "true") return;
     form.dataset.scHttpSubmitting = "true";
+    var requestId = form.querySelector('input[name="selecto_request_id"]');
+    if (requestId) requestId.disabled = true;
     var button = form.querySelector('button[type="submit"]');
     if (button) {
       button.disabled = true;
