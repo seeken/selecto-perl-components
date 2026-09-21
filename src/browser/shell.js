@@ -66,6 +66,16 @@
   }
 
   function renderConnectionStatus() {
+    // HTMX can report a message/swap error while the underlying transport is
+    // still healthy, and a very fast connection can open before this bundle's
+    // lifecycle listeners are installed. Prefer the socket's current state so
+    // the badge describes connectivity instead of the last event observed.
+    var liveSocket = Array.from(document.querySelectorAll('[hx-ws\\:connect]')).some(function (channel) {
+      var connection = channel._htmx && channel._htmx.ws && channel._htmx.ws.connection;
+      return connection && connection.socket
+        && connection.socket.readyState === WebSocket.OPEN;
+    });
+    if (liveSocket) connectionStatus = "Live";
     document.querySelectorAll("[data-selecto-connection]").forEach(function (node) {
       node.textContent = connectionStatus;
       node.classList.toggle("is-live", connectionStatus === "Live");
