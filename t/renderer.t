@@ -110,6 +110,22 @@ like $html, qr/saved &lt;b&gt;ok&lt;\/b&gt;/,
 like $html, qr/data-selecto-url="\/explore\/products\?q=1&amp;filter_value=&lt;script&gt;"/,
     'canonical URLs are escaped in attributes';
 
+my $saved_title_html = Selecto::Components::Renderer->page({
+    config => $config,
+    state => $state,
+    domain => $domain,
+    canonical_url => '/explore/products?q=1',
+    page_title => q{Saved <script>alert(1)</script>},
+});
+unlike $saved_title_html, qr{<title>Saved <script>},
+    'a saved query name cannot inject markup into the document title';
+like $saved_title_html,
+    qr{<title>Saved &lt;script&gt;alert\(1\)&lt;/script&gt;</title>},
+    'a saved query name becomes the escaped document title';
+like $saved_title_html,
+    qr{<h1>Saved &lt;script&gt;alert\(1\)&lt;/script&gt;</h1>},
+    'a saved query name becomes the escaped Explorer heading';
+
 my $api_config = Selecto::Components::Config->new(
     %{TestSelectoComponents::config()},
     id => 'api-products',

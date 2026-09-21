@@ -242,6 +242,21 @@ is $t->tx->res->dom
 is $t->tx->res->dom
     ->at('[data-sc-saved-queries] .sc-saved-query-list li:nth-child(2) a')->all_text,
     'Zulu inventory', 'second saved query follows in alphabetical order';
+my $alpha_saved_query_link = $t->tx->res->dom
+    ->at('[data-sc-saved-queries] .sc-saved-query-list li:nth-child(1) a')
+    ->attr('href');
+like $alpha_saved_query_link, qr/[?&]saved_query_name=alpha(?:%20|\+)inventory(?:&|\z)/,
+    'saved query links carry the selected view name';
+$t->get_ok($alpha_saved_query_link)
+    ->status_is(200)
+    ->text_is('title' => 'alpha inventory')
+    ->text_is('h1' => 'alpha inventory');
+my $changed_saved_query_url = Mojo::URL->new($alpha_saved_query_link);
+$changed_saved_query_url->query->param(field => 'unit_price');
+$t->get_ok($changed_saved_query_url)
+    ->status_is(200)
+    ->text_is('title' => 'Product Explorer')
+    ->text_is('h1' => 'Product Explorer');
 
 my $record_editor_url = '/explore/products/records/101/edit?editor=product_profile' .
     '&return_to=%2Fexplore%2Fproducts';
