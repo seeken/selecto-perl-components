@@ -79,18 +79,7 @@ sub surface ($class, $model) {
             '" href="' . _h(_format_url($model->{canonical_url}, $format)) . '">' .
             _h($label) . '</a>'
     } ([xlsx => 'Excel'], [csv => 'CSV'], [tsv => 'TSV'], [json => 'JSON']);
-    my $api_link = '';
-    my $api_console_url = $query_params ? $config->api_console_url($model) : '';
-    if (length($api_console_url)) {
-        my $payload = $state->api_query_payload($config, $model->{domain});
-        $api_link = $payload
-            ? '<a class="sc-button sc-secondary" data-sc-api-console ' .
-                'target="_blank" rel="noopener" href="' .
-                _h($api_console_url . '#request=' . url_escape(encode_json($payload))) .
-                '">API</a>'
-            : '<button class="sc-button sc-secondary" type="button" data-sc-api-console ' .
-                'disabled aria-disabled="true" title="This Explorer query cannot yet be represented by the API console.">API</button>';
-    }
+    my $api_link = $class->_api_console_control($model);
     my $hero_actions = $query_params
         ? '<div class="sc-hero-actions"><a class="sc-button sc-secondary" href="' .
           _h($model->{canonical_url}) . '">Permalink</a><div class="sc-export-options" role="group" ' .
@@ -161,6 +150,7 @@ sub websocket_message ($class, $model) {
         swap => 'outerHTML',
         selecto => {
             url => $model->{canonical_url},
+            api_console_control => $class->_api_console_control($model),
             (defined($model->{selecto_request_id})
                 ? (request_id => $model->{selecto_request_id}) : ()),
             (defined($query_summary) ? (query_summary => $query_summary) : ()),
@@ -173,6 +163,23 @@ sub websocket_message ($class, $model) {
             },
         },
     };
+}
+
+sub _api_console_control ($class, $model) {
+    my $config = $model->{config};
+    my $state = $model->{state};
+    return '' unless $state && $model->{domain}
+        && $config->query_params_enabled($model->{domain});
+    my $api_console_url = $config->api_console_url($model);
+    return '' unless length($api_console_url);
+    my $payload = $state->api_query_payload($config, $model->{domain});
+    return $payload
+        ? '<a class="sc-button sc-secondary" data-sc-api-console ' .
+            'target="_blank" rel="noopener" href="' .
+            _h($api_console_url . '#request=' . url_escape(encode_json($payload))) .
+            '">API</a>'
+        : '<button class="sc-button sc-secondary" type="button" data-sc-api-console ' .
+            'disabled aria-disabled="true" title="This Explorer query cannot yet be represented by the API console.">API</button>';
 }
 
 sub _form ($class, @args) { return Selecto::Components::Renderer::Builder->_form(@args); }

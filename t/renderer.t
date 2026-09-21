@@ -120,6 +120,8 @@ my $api_state = Selecto::Components::State->from_input($api_config, $domain, {
     q => 1, view => 'detail', field => ['product_name', 'created_on'],
     field_alias => ['name', ''], field_format => ['', 'month'],
     filter_field => 'category_id', filter_op => 'eq', filter_value => '7',
+    query_library_segment => 'low_stock',
+    query_library_param_name => 'threshold', query_library_param_value => '10',
     order => 'created_on', direction => 'desc', limit => 25, page => 2,
 });
 my $api_html = Selecto::Components::Renderer->page({
@@ -133,6 +135,20 @@ like $api_html, qr{data-sc-api-console[^>]+target="_blank"[^>]+href="/api2/produ
 my ($api_request) = $api_html =~ m{data-sc-api-console[^>]+href="/api2/product/v1/console#request=([^"]+)"};
 is_deeply decode_json(url_unescape($api_request)), $api_state->api_query_payload($api_config, $domain),
     'the API console link carries the normalized Explorer query';
+my $api_message = Selecto::Components::Renderer->websocket_message({
+    config => $api_config,
+    state => $api_state,
+    domain => $domain,
+    canonical_url => '/explore/api-products?q=1&query_library_segment=low_stock',
+    input => {},
+});
+my ($updated_api_request) = $api_message->{selecto}{api_console_control}
+    =~ m{data-sc-api-console[^>]+href="/api2/product/v1/console#request=([^"]+)"};
+my $updated_api_payload = decode_json(url_unescape($updated_api_request));
+is_deeply $updated_api_payload->{segments}, ['low_stock'],
+    'a WebSocket response refreshes the API control with submitted segments';
+is_deeply $updated_api_payload->{parameters}, {threshold => 10},
+    'the refreshed API control retains segment parameters';
 my $aggregate_api_state = Selecto::Components::State->from_input($api_config, $domain, {
     q => 1, view => 'aggregate', group => 'category.category_name', measure => 'count',
 });

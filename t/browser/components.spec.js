@@ -120,6 +120,53 @@ test("a missing WebSocket connection falls back to the complete HTTP query", asy
   await expect(page.locator("[data-selecto-connection]")).toHaveText("Reconnecting");
 });
 
+test("a message error does not mark an open WebSocket as reconnecting", async ({page}) => {
+  await load(page, `
+    <section hx-ws:connect="/explorer/truck/ws">
+      <span data-selecto-connection>Connecting</span>
+      <form hx-ws:send><button>Run</button></form>
+    </section>
+  `);
+  await page.evaluate(() => {
+    const connection = {socket: {readyState: WebSocket.OPEN}};
+    const channel = document.querySelector('[hx-ws\\:connect]');
+    channel._htmx = {ws: {connection}};
+    channel.querySelector("form").dispatchEvent(new CustomEvent("htmx:ws:error", {
+      bubbles: true,
+      detail: {connection, error: new Error("response swap failed")},
+    }));
+  });
+
+  await expect(page.locator("[data-selecto-connection]")).toHaveText("Live");
+  await expect(page.locator("[data-selecto-connection]")).toHaveClass(/is-live/);
+});
+
+test("a completed query refreshes the API console link outside the results swap", async ({page}) => {
+  await load(page, `
+    <section id="selecto-surface-loads">
+      <a data-sc-api-console href="/api2/load/v1/console#request=old">API</a>
+      <section id="selecto-results-loads">Rows</section>
+    </section>
+  `);
+  await page.evaluate(() => {
+    document.dispatchEvent(new CustomEvent("htmx:ws:after:message:incoming", {
+      detail: {message: {json: () => Promise.resolve({
+        selecto: {
+          url: "/explorer/load?q=1&query_library_segment=unassigned",
+          api_console_control: '<a class="sc-button sc-secondary" data-sc-api-console ' +
+            'target="_blank" rel="noopener" ' +
+            'href="/api2/load/v1/console#request=with-segment">API</a>',
+        },
+      })}},
+    }));
+  });
+
+  await expect(page.locator("[data-sc-api-console]"))
+    .toHaveAttribute("href", "/api2/load/v1/console#request=with-segment");
+  await expect(page.locator("[data-sc-api-console]"))
+    .toHaveAttribute("target", "_blank");
+});
+
 test("the builder tray collapses and expands in place", async ({page}) => {
   await load(page, `
     <div data-sc-workspace>

@@ -228,8 +228,12 @@
   });
 
   document.addEventListener("htmx:ws:error", function (event) {
-    connectionStatus = "Reconnecting";
+    var detail = event.detail || {};
+    var socket = detail.connection && detail.connection.socket;
+    connectionStatus = socket && socket.readyState === WebSocket.OPEN
+      ? "Live" : "Reconnecting";
     renderConnectionStatus();
+    if (connectionStatus === "Live") return;
     var target = event.target instanceof Element ? event.target : null;
     var form = target && (target.matches("form") ? target : target.closest("form"));
     if (!form || !form.hasAttribute("hx-ws:send")) return;
@@ -351,6 +355,20 @@
     return target.pathname + target.search + target.hash;
   }
 
+  function replaceApiConsoleControl(html) {
+    if (typeof html !== "string") return;
+    document.querySelectorAll("[data-sc-api-console]").forEach(function (current) {
+      if (!html.length) {
+        current.remove();
+        return;
+      }
+      var template = document.createElement("template");
+      template.innerHTML = html.trim();
+      var replacement = template.content.firstElementChild;
+      if (replacement) current.replaceWith(replacement.cloneNode(true));
+    });
+  }
+
   // Export links are rendered from the last completed query.  The picker can
   // be edited locally immediately before a download, so rebuild the link from
   // the live form as it is clicked. This keeps the export projection, filters,
@@ -388,6 +406,10 @@
         var requestId = message && message.selecto && message.selecto.request_id;
         if (requestId && requestId === activeSelectoRequestId) activeSelectoRequestId = null;
         var nextUrl = message && message.selecto && message.selecto.url;
+        if (message && message.selecto
+            && typeof message.selecto.api_console_control === "string") {
+          replaceApiConsoleControl(message.selecto.api_console_control);
+        }
         if (message && message.selecto && message.selecto.performance) {
           selectoPerformance = message.selecto.performance;
           if (typeof message.selecto.query_summary === "string") {
