@@ -3,11 +3,122 @@ import path from "node:path";
 import {fileURLToPath} from "node:url";
 
 const bundle = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/selecto-components/selecto-components.js");
+const htmxBundle = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/selecto-components/htmx.min.js");
+const websocketBundle = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/selecto-components/hx-ws.min.js");
 
 async function load(page, html) {
   await page.setContent(html);
   await page.addScriptTag({path: bundle});
 }
+
+test("a live Explorer builder sends its complete query over the WebSocket", async ({page}) => {
+  await page.route("http://selecto.test/**", route => route.fulfill({
+    contentType: "text/html",
+    body: `
+      <section id="selecto-channel-quotes" hx-ext="ws" hx-ws:connect="/explorer/quote/ws">
+        <span data-selecto-connection>Connecting</span>
+        <section id="selecto-surface-quotes">
+          <div data-sc-workspace>
+            <aside data-sc-builder-shell="quotes" data-sc-builder-collapsed="false">
+              <form action="/explorer/quote" method="get" hx-ws:send hx-trigger="submit"
+                data-sc-builder="quotes">
+                <input name="q" value="1">
+                <input name="view" value="detail">
+                <input name="field" value="id">
+                <input name="query_library_segment" value="active">
+                <input name="page" value="1">
+                <button type="submit">Run query</button>
+              </form>
+            </aside>
+            <section id="selecto-results-quotes" class="sc-results">Quote rows</section>
+          </div>
+        </section>
+      </section>
+    `,
+  }));
+  await page.addInitScript(() => {
+    class FakeWebSocket extends EventTarget {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      constructor(url) {
+        super();
+        this.url = url;
+        this.readyState = FakeWebSocket.CONNECTING;
+        window.fakeSelectoSocket = this;
+        queueMicrotask(() => {
+          this.readyState = FakeWebSocket.OPEN;
+          this.dispatchEvent(new Event("open"));
+        });
+      }
+      send(message) {
+        window.fakeSelectoMessages ||= [];
+        window.fakeSelectoMessages.push(message);
+      }
+      close() {
+        this.readyState = FakeWebSocket.CLOSED;
+        this.dispatchEvent(new CloseEvent("close", {code: 1000}));
+      }
+    }
+    window.WebSocket = FakeWebSocket;
+  });
+  await page.goto("http://selecto.test/explorer/quote");
+  await page.addScriptTag({path: htmxBundle});
+  await page.addScriptTag({path: websocketBundle});
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => {
+    window.htmx.process(document.body);
+    document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true}));
+  });
+  await expect(page.locator("[data-selecto-connection]")).toHaveText("Live");
+
+  await page.locator('button[type="submit"]').click();
+
+  await expect.poll(() => page.evaluate(() => window.fakeSelectoMessages?.length || 0)).toBe(1);
+  const payload = await page.evaluate(() => JSON.parse(window.fakeSelectoMessages[0]));
+  expect(payload).toMatchObject({
+    q: "1",
+    view: "detail",
+    field: "id",
+    query_library_segment: "active",
+    render_scope: "results",
+  });
+});
+
+test("a missing WebSocket connection falls back to the complete HTTP query", async ({page}) => {
+  await load(page, `
+    <section hx-ws:connect="/explorer/truck/ws">
+      <span data-selecto-connection class="is-live">Live</span>
+      <form action="/explorer/truck" method="get" hx-ws:send data-sc-builder>
+        <input name="q" value="1">
+        <input name="field" value="id">
+        <input name="selecto_request_id" value="selecto-stale-request">
+        <button type="submit">Run query</button>
+      </form>
+    </section>
+  `);
+  await page.evaluate(() => {
+    HTMLFormElement.prototype.submit = function () {
+      window.selectoHttpFallback = {
+        action: this.getAttribute("action"),
+        values: Array.from(new FormData(this).entries()),
+      };
+    };
+    const form = document.querySelector("[data-sc-builder]");
+    form.dispatchEvent(new CustomEvent("htmx:ws:error", {
+      bubbles: true,
+      detail: {error: "Connection not open"},
+    }));
+  });
+
+  await expect.poll(() => page.evaluate(() => window.selectoHttpFallback)).not.toBeNull();
+  expect(await page.evaluate(() => window.selectoHttpFallback)).toEqual({
+    action: "/explorer/truck",
+    values: [["q", "1"], ["field", "id"]],
+  });
+  await expect(page.locator("[data-selecto-connection]")).toHaveText("Reconnecting");
+});
 
 test("the builder tray collapses and expands in place", async ({page}) => {
   await load(page, `
