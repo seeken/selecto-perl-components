@@ -2,6 +2,7 @@ package Selecto::Components::Renderer::Builder;
 
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(encode_json);
+use Mojo::URL ();
 use Selecto::Components::QueryLibrary ();
 use Selecto::Components::RowActions ();
 use Selecto::Components::Renderer::Markup;
@@ -137,7 +138,9 @@ sub _saved_queries ($class, $model, $panel_id, $tab_id) {
     my $csrf = _h($model->{csrf_token} // '');
     my $current_url = _h($model->{canonical_url});
     my $items = join '', map {
-        '<li><a href="' . _h($_->{url}) . '">' . _h($_->{name}) . '</a>' .
+        my $saved_url = Mojo::URL->new($_->{url});
+        $saved_url->query->param(saved_query_name => $_->{name});
+        '<li><a href="' . _h($saved_url->to_string) . '">' . _h($_->{name}) . '</a>' .
         '<form method="post" action="' . _h($config->path) . '/saved-queries/delete">' .
         '<input type="hidden" name="csrf_token" value="' . $csrf . '">' .
         '<input type="hidden" name="saved_query_name" value="' . _h($_->{name}) . '">' .

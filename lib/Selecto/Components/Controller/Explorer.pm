@@ -23,6 +23,7 @@ sub _decorate_model ($controller, $model) {
             );
             die "saved query store returned an invalid list\n" unless ref($queries) eq 'ARRAY';
             $model->{saved_queries} = Selecto::Components::Controller::SavedQueries::_normalize_saved_queries($model->{config}, $queries);
+            _apply_saved_query_title($controller, $model);
             1;
         };
         unless ($ok) {
@@ -61,6 +62,23 @@ sub _decorate_model ($controller, $model) {
             = int((time - $started) * 1000 + 0.5);
     }
     return $model;
+}
+
+sub _apply_saved_query_title ($controller, $model) {
+    my $requested_name = $controller->param('saved_query_name');
+    return unless defined($requested_name) && !ref($requested_name)
+        && length("$requested_name");
+
+    my $requested_url = $controller->req->url->clone;
+    $requested_url->query->remove('saved_query_name');
+    my $target = $requested_url->to_string;
+    for my $query (@{$model->{saved_queries} // []}) {
+        next unless $query->{name} eq "$requested_name";
+        next unless $query->{url} eq $target;
+        $model->{saved_query_name} = $query->{name};
+        $model->{page_title} = $query->{name};
+        return;
+    }
 }
 
 sub _apply_action_row_eligibility ($controller, $model) {

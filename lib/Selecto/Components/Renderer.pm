@@ -13,16 +13,14 @@ use Time::HiRes qw(time);
 
 sub page ($class, $model) {
     my $config = $model->{config};
-    my $localized_title = $config->localize(
-        $model->{domain}, 'domain.title', $config->title,
-        {kind => 'domain', id => $config->id, attribute => 'title'},
-    );
-    my $title = _h($localized_title);
+    my $title = _h($class->_page_title($model));
     my $surface = $class->surface($model);
     my $ws_path = _h($config->path . '/ws');
+    # Resolve the shell first because a host may resolve and cache its shell
+    # and theme together.  The shell needs the model's effective page title.
+    my $page_shell = $config->page_shell($model);
     my $theme_style = $config->theme_style;
     my $theme_scheme = $config->theme_scheme;
-    my $page_shell = $config->page_shell($model);
     my $theme_attribute = length($theme_style)
         ? ' style="' . _h($theme_style) . '"' : '';
     my $scheme_attribute = length($theme_scheme)
@@ -87,10 +85,7 @@ sub surface ($class, $model) {
           '</div>' . $api_link . '</div>'
         : '<div class="sc-hero-actions"><span class="sc-private-mode">Private URL mode</span></div>';
     my $builder_collapsed = _builder_collapsed($model);
-    my $localized_title = $config->localize(
-        $model->{domain}, 'domain.title', $config->title,
-        {kind => 'domain', id => $config->id, attribute => 'title'},
-    );
+    my $page_title = $class->_page_title($model);
     my $builder_id = _h($config->id);
     my $tray_content_id = 'selecto-builder-tray-content-' . $builder_id;
     my $builder_toggle = '<button class="sc-builder-toggle" type="button" data-sc-builder-toggle ' .
@@ -106,13 +101,26 @@ sub surface ($class, $model) {
         ($query_params ? 'enabled' : 'disabled') . '" data-sc-chart-src="' .
         _h('/selecto-components/chart.umd.min.js?v=' . asset_revision()) . '">' .
         '<header class="sc-hero"><div class="sc-hero-heading">' . $builder_toggle .
-        '<h1>' . _h($localized_title) . '</h1>' . $connection . '</div>' .
+        '<h1>' . _h($page_title) . '</h1>' . $connection . '</div>' .
         $hero_actions . '</header>' .
         $alert . '<div class="sc-workspace' . ($builder_collapsed ? ' is-builder-collapsed' : '') .
         '" data-sc-workspace>' .
         $class->_form($model, $field_catalog, $detail_catalog) .
         $class->results_fragment($model, $field_catalog) .
         '</div></section>';
+}
+
+sub _page_title ($class, $model) {
+    my $page_title = $model->{page_title};
+    if (defined($page_title)) {
+        die "Explorer page title must be a scalar\n" if ref($page_title);
+        return "$page_title" if length("$page_title");
+    }
+    my $config = $model->{config};
+    return $config->localize(
+        $model->{domain}, 'domain.title', $config->title,
+        {kind => 'domain', id => $config->id, attribute => 'title'},
+    );
 }
 
 sub results_fragment ($class, $model, $field_catalog = undef) {
