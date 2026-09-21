@@ -13,6 +13,7 @@
   var selectoHistoryCounter = 0;
   var selectoRequestCounter = 0;
   var activeSelectoRequestId = null;
+  var selectoWebSocketRecoveryTimer = null;
   var dateFormats = [
     ["day", "Day"], ["day_hour", "Day + Hour"], ["week", "Week"],
     ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"],
@@ -1366,10 +1367,17 @@
     restoreResultViews();
     restoreCharts();
     restoreGridSelections();
+    scheduleSelectoWebSocketRecovery(750);
   });
 
   window.addEventListener("pageshow", function (event) {
-    if (!event.persisted) return;
+    if (!event.persisted) {
+      // A hosted Explorer can be reactivated with a closed htmx channel even
+      // when the browser does not label the pageshow as a bfcache restore.
+      // Verify the channel after htmx has had a chance to process the page.
+      scheduleSelectoWebSocketRecovery(750);
+      return;
+    }
     // Chrome can restore the Explorer document from bfcache while leaving the
     // host toolbar custom element disconnected from its internal menu state.
     // Rebuilding only the Selecto channel cannot repair an element outside
@@ -1381,7 +1389,7 @@
       window.location.reload();
       return;
     }
-    reconnectRestoredWebSocketChannels();
+    recoverClosedWebSocketChannels();
     restoreCharts(true);
   });
 
@@ -1563,20 +1571,40 @@
     restoreBulkActions();
   }
 
-  function reconnectRestoredWebSocketChannels() {
-    connectionStatus = "Connecting";
+  function recoverClosedWebSocketChannels() {
+    selectoWebSocketRecoveryTimer = null;
+    if (!window.htmx || typeof window.htmx.process !== "function") return;
+    var recovering = false;
     document.querySelectorAll('[id^="selecto-channel-"][hx-ws\\:connect]').forEach(function (channel) {
+      var connection = channel._htmx && channel._htmx.ws && channel._htmx.ws.connection;
+      var socket = connection && connection.socket;
+      if (socket && (socket.readyState === WebSocket.OPEN
+          || socket.readyState === WebSocket.CONNECTING)) return;
+      recovering = true;
       var replacement = channel.cloneNode(false);
       while (channel.firstChild) replacement.appendChild(channel.firstChild);
       channel.replaceWith(replacement);
-      if (window.htmx && typeof window.htmx.process === "function") {
-        window.htmx.process(replacement);
-      }
+      window.htmx.process(replacement);
     });
+    if (recovering) connectionStatus = "Connecting";
     renderConnectionStatus();
   }
 
+  function scheduleSelectoWebSocketRecovery(delay) {
+    if (selectoWebSocketRecoveryTimer !== null) {
+      window.clearTimeout(selectoWebSocketRecoveryTimer);
+    }
+    selectoWebSocketRecoveryTimer = window.setTimeout(
+      recoverClosedWebSocketChannels,
+      delay === undefined ? 750 : delay
+    );
+  }
+
   document.addEventListener("htmx:ws:after:connection", function () {
+    if (selectoWebSocketRecoveryTimer !== null) {
+      window.clearTimeout(selectoWebSocketRecoveryTimer);
+      selectoWebSocketRecoveryTimer = null;
+    }
     connectionStatus = "Live";
     renderConnectionStatus();
   });
@@ -1584,6 +1612,7 @@
   document.addEventListener("htmx:ws:close", function () {
     connectionStatus = "Reconnecting";
     renderConnectionStatus();
+    scheduleSelectoWebSocketRecovery(750);
   });
 
   document.addEventListener("htmx:ws:error", function (event) {
@@ -1593,6 +1622,7 @@
       ? "Live" : "Reconnecting";
     renderConnectionStatus();
     if (connectionStatus === "Live") return;
+    scheduleSelectoWebSocketRecovery(750);
     var target = event.target instanceof Element ? event.target : null;
     var form = target && (target.matches("form") ? target : target.closest("form"));
     if (!form || !form.hasAttribute("hx-ws:send")) return;
