@@ -1,6 +1,6 @@
 package Selecto::Components;
 
-use Digest::SHA qw(sha256_hex);
+use Mojolicious 9.49 ();
 use Mojo::Base 'Mojolicious::Plugin', -signatures;
 use Encode qw(encode);
 use Mojo::File qw(path);
@@ -296,18 +296,19 @@ sub _action_response ($controller, $return_to, $result) {
 }
 
 sub _csrf_token ($controller) {
-    my $token = $controller->session('selecto_components_csrf');
-    return $token if defined($token) && !ref($token) && "$token" =~ /\A[0-9a-f]{64}\z/;
-    my $secret = $controller->app->secrets->[0] // 'selecto-components';
-    $token = sha256_hex(join(':', $secret, $$, time, rand(), $controller->stash('request_id') // ''));
-    $controller->session(selecto_components_csrf => $token);
-    return $token;
+    return $controller->csrf_token;
+}
+
+sub _csrf_valid ($controller) {
+    return !$controller->validation->csrf_protect->has_error('csrf_token');
 }
 
 sub _safe_return_to ($config, $value) {
     return $config->path unless defined($value) && !ref($value) && length($value);
     my $url = Mojo::URL->new("$value");
-    return $config->path if defined($url->host) || $url->path->to_string ne $config->path;
+    return $config->path if $url->is_abs || defined($url->host)
+        || defined($url->userinfo) || $value =~ /[\x00-\x1f\x7f]/
+        || $url->path->to_string ne $config->path;
     return $url->to_string;
 }
 
@@ -414,10 +415,23 @@ sub _same_origin ($controller) {
     my $origin = $controller->req->headers->origin;
     return 1 unless defined($origin) && length($origin);
     my $origin_url = Mojo::URL->new($origin);
+    my $scheme = lc($origin_url->scheme // '');
+    return 0 unless $scheme eq 'http' || $scheme eq 'https';
     return 0 unless defined($origin_url->host) && length($origin_url->host);
-    my $origin_host = lc($origin_url->host_port // '');
-    my $request_host = lc($controller->req->headers->host // '');
-    return $origin_host eq $request_host ? 1 : 0;
+    return 0 if defined($origin_url->userinfo) || defined($origin_url->fragment)
+        || length($origin_url->query->to_string)
+        || $origin_url->path->to_string !~ m{\A/?\z};
+    my $request_scheme = lc($controller->req->url->to_abs->scheme // '');
+    $request_scheme = 'http' if $request_scheme eq 'ws';
+    $request_scheme = 'https' if $request_scheme eq 'wss';
+    return 0 unless $scheme eq $request_scheme;
+    my $request_url = Mojo::URL->new(
+        $request_scheme . '://' . ($controller->req->headers->host // ''),
+    );
+    return 0 unless lc($origin_url->host) eq lc($request_url->host // '');
+    my $default_port = $scheme eq 'https' ? 443 : 80;
+    return ($origin_url->port // $default_port)
+        eq ($request_url->port // $default_port) ? 1 : 0;
 }
 
 sub _humanize ($value) { return humanize($value); }

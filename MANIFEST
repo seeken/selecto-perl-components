@@ -84,5 +84,7 @@ t/renderer.t
 t/resource_composer.t
 t/route_bridge.t
 t/row_actions.t
+t/security_boundaries.t
 t/state.t
 THIRD_PARTY_NOTICES.md
+SECURITY_REVIEW_2026-09-21.md

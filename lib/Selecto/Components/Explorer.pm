@@ -928,7 +928,7 @@ sub _public_error ($error) {
 
 sub _delimited_cell ($value) {
     $value = _flat_value($value);
-    $value = "'$value" if $value =~ /\A[=+\-@]/;
+    $value = "'$value" if $value =~ /\A[=+\-@\t\r\n]/;
     $value =~ s/"/""/g;
     return qq{"$value"};
 }

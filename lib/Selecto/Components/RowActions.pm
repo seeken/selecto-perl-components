@@ -154,7 +154,7 @@ sub safe_url ($class, $value) {
     return undef if !defined($value) || ref($value);
     my $url = trim("$value");
     return undef unless length($url);
-    return undef if $url =~ /\x00/ || $url =~ m{\A//}
+    return undef if $url =~ /[\x00-\x20\x7f\\]/ || $url =~ m{\A//}
         || $url =~ /\A(?:javascript|data|vbscript):/i
         || $url =~ /\A(?!https?:)[A-Za-z][A-Za-z0-9+.-]*:/i;
     return $url;
