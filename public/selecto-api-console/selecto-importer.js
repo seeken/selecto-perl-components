@@ -16,6 +16,7 @@
       this.root = root;
       this.base = String(root.dataset.apiBase || "").replace(/\/+$/, "");
       this.curlAuth = root.dataset.curlAuth || "cookie";
+      this.csrfToken = String(root.dataset.csrfToken || "");
       this.domain = null;
       this.upload = null;
       this.profiles = [];
@@ -32,7 +33,14 @@
     }
 
     async fetchJSON(path, options) {
-      const response = await fetch(path, Object.assign({headers: {Accept: "application/json"}}, options || {}));
+      const request = Object.assign({credentials: "same-origin"}, options || {});
+      request.headers = Object.assign({Accept: "application/json"}, options && options.headers || {});
+      if (String(request.method || "GET").toUpperCase() !== "GET") {
+        request.headers["X-CSRF-Token"] = this.csrfToken;
+      }
+      const response = await fetch(path, request);
+      const refreshedCSRF = response.headers.get("X-CSRF-Token");
+      if (refreshedCSRF) this.csrfToken = refreshedCSRF;
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload.ok === false) {
         const apiError = payload.error || {};
@@ -200,7 +208,7 @@
       try {
         const form = new FormData();
         form.append("file", file);
-        const response = await fetch(apiPath(this.base, "/imports/uploads"), {method: "POST", body: form, headers: {Accept: "application/json"}});
+        const response = await fetch(apiPath(this.base, "/imports/uploads"), {method: "POST", credentials: "same-origin", body: form, headers: {Accept: "application/json", "X-CSRF-Token": this.csrfToken}});
         const payload = await response.json();
         if (!response.ok || payload.ok === false) throw new Error(payload.error && payload.error.message || "Upload failed");
         this.upload = payload.data.upload;

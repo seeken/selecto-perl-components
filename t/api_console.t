@@ -10,10 +10,12 @@ use Selecto::Components::Importer ();
 my $page = Selecto::Components::APIConsole->page(
     base_path => '/api2/load/v1/',
     title => 'Load API Console',
+    csrf_token => 'test-csrf-token',
 );
 like $page, qr{data-selecto-api-console}, 'page exposes the framework-neutral mount point';
 like $page, qr{data-api-base="/api2/load/v1"}, 'page normalizes the API base path';
 like $page, qr{data-curl-auth="cookie"}, 'page defaults generated cURL to cookie auth';
+like $page, qr{data-csrf-token="test-csrf-token"}, 'page supplies the host CSRF token';
 like $page, qr{<html lang="en" data-sac-color-scheme="light">},
     'console pages use the shared light operational palette by default';
 like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.5\.4},
@@ -24,6 +26,7 @@ like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.5\.4},
 $page = Selecto::Components::APIConsole->page(
     base_path => '/api2/load/v1',
     title => 'Load API Console',
+    csrf_token => 'test-csrf-token',
     curl_auth => 'basic',
     theme => {
         scheme => 'light', primary => '#cc5500', secondary => '#dc8b52',
@@ -53,6 +56,7 @@ like $page, qr{data-curl-auth="basic"},
 
 my $importer_page = Selecto::Components::Importer->page(
     base_path => '/api2/load/v1',
+    csrf_token => 'test-csrf-token',
     page_shell => {
         head_start_html => '<meta name="import-start" content="1">',
         head_html => '<meta name="import-end" content="1">',
@@ -73,18 +77,19 @@ like $importer_page,
 $page = Selecto::Components::APIConsole->page(
     base_path => '/api2/client/v1',
     title => '<Client & API>',
+    csrf_token => 'test-csrf-token',
 );
 unlike $page, qr{<Client & API>}, 'console title is not emitted as executable markup';
 like $page, qr{&lt;Client &amp; API&gt;}, 'console title is HTML escaped';
 
 for my $invalid ('api2/load/v1', '/api2//load/v1', '/api2/load/v1?x=1', '/api2/../admin') {
-    eval { Selecto::Components::APIConsole->page(base_path => $invalid) };
+    eval { Selecto::Components::APIConsole->page(base_path => $invalid, csrf_token => 'test-csrf-token') };
     like "$@", qr/base_path/, "invalid base path $invalid is rejected";
 }
 
 eval {
     Selecto::Components::APIConsole->page(
-        base_path => '/api2/load/v1', theme => {primary => 'red;display:none'},
+        base_path => '/api2/load/v1', csrf_token => 'test-csrf-token', theme => {primary => 'red;display:none'},
     );
 };
 like "$@", qr/theme primary must be a hexadecimal color/,
@@ -92,6 +97,7 @@ like "$@", qr/theme primary must be a hexadecimal color/,
 eval {
     Selecto::Components::APIConsole->page(
         base_path => '/api2/load/v1',
+        csrf_token => 'test-csrf-token',
         page_shell => {content_class => 'ok" onclick="bad'},
     );
 };
@@ -99,11 +105,13 @@ like "$@", qr/page_shell content_class must contain CSS class names/,
     'unsafe host content classes cannot inject HTML attributes';
 eval {
     Selecto::Components::APIConsole->page(
-        base_path => '/api2/load/v1', curl_auth => 'oauth<script>',
+        base_path => '/api2/load/v1', csrf_token => 'test-csrf-token', curl_auth => 'oauth<script>',
     );
 };
 like "$@", qr/curl_auth must be basic, cookie, or none/,
     'unknown cURL authentication modes are rejected';
+eval { Selecto::Components::APIConsole->page(base_path => '/api2/load/v1') };
+like "$@", qr/csrf_token/, 'API console requires a host CSRF token';
 
 my $app = Mojolicious->new;
 my $asset_path = Selecto::Components::APIConsole->install_assets($app);

@@ -93,8 +93,8 @@
       };
     }
     return {
-      args: ["  --cookie 'YOUR_SESSION_COOKIE'"],
-      help: "The browser uses your current authenticated session. Supply the corresponding session cookie when running cURL separately.",
+      args: ["  --cookie 'YOUR_SESSION_COOKIE'", "  --header 'X-CSRF-Token: YOUR_CSRF_TOKEN'"],
+      help: "The browser uses your current authenticated session. Supply the corresponding session cookie and a CSRF token from the console page when running cURL separately.",
     };
   }
 
@@ -384,6 +384,7 @@
       this.base = root.dataset.apiBase || standaloneOption("api");
       this.title = root.dataset.title || standaloneOption("title") || "API Console";
       this.curlAuth = normalizeCurlAuth(root.dataset.curlAuth, standaloneOption("curl_auth"));
+      this.csrfToken = String(root.dataset.csrfToken || "");
       this.domain = null;
       this.manifest = null;
       this.openapi = null;
@@ -478,7 +479,14 @@
     }
 
     async fetchJSON(url, options) {
-      const response = await fetch(url, Object.assign({credentials: "same-origin"}, options || {}));
+      const request = Object.assign({credentials: "same-origin"}, options || {});
+      request.headers = Object.assign({}, options && options.headers || {});
+      if (String(request.method || "GET").toUpperCase() !== "GET") {
+        request.headers["X-CSRF-Token"] = this.csrfToken;
+      }
+      const response = await fetch(url, request);
+      const refreshedCSRF = response.headers.get("X-CSRF-Token");
+      if (refreshedCSRF) this.csrfToken = refreshedCSRF;
       const text = await response.text();
       let payload;
       try {
@@ -2466,7 +2474,7 @@
       try {
         const response = await fetch(path, {
           method: "POST", credentials: "same-origin",
-          headers: {"Content-Type": "application/json", Accept: "application/json"},
+          headers: {"Content-Type": "application/json", Accept: "application/json", "X-CSRF-Token": this.csrfToken},
           body: JSON.stringify(model.payload),
         });
         const text = await response.text();
@@ -2848,7 +2856,7 @@
         response = await fetch(requestPath, {
           method: "POST",
           credentials: "same-origin",
-          headers: {"Content-Type": "application/json", Accept: format.mediaType},
+          headers: {"Content-Type": "application/json", Accept: format.mediaType, "X-CSRF-Token": this.csrfToken},
           body: JSON.stringify(request),
         });
         if (response.ok && format.id !== "json") {
