@@ -26,6 +26,9 @@ sub page ($class, %options) {
     my $curl_auth = $options{curl_auth} // 'cookie';
     die "curl_auth must be basic, cookie, or none\n"
         unless $curl_auth =~ /\A(?:basic|cookie|none)\z/;
+    my $csrf_token = $options{csrf_token};
+    die "csrf_token must be a non-empty scalar\n"
+        unless defined($csrf_token) && !ref($csrf_token) && length("$csrf_token");
     my $presentation = Selecto::Components::APIConsole->page_presentation(%options);
     my $theme = $presentation->{theme};
     my $shell = $presentation->{page_shell};
@@ -45,7 +48,8 @@ sub page ($class, %options) {
         ($shell->{body_start_html} // '') . '<main class="' . html_escape($content_classes) .
         '" data-selecto-importer data-api-base="' .
         html_escape($base_path) . '" data-title="' . html_escape($title) . '" data-curl-auth="' .
-        html_escape($curl_auth) . '"><div role="status">Loading importer&hellip;</div></main></body></html>';
+        html_escape($curl_auth) . '" data-csrf-token="' . html_escape($csrf_token) .
+        '"><div role="status">Loading importer&hellip;</div></main></body></html>';
 }
 
 1;
