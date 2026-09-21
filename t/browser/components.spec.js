@@ -183,6 +183,29 @@ test("a closed hosted channel is rebuilt without rerunning its query", async ({p
   expect(await page.evaluate(() => window.selectoUnexpectedSubmits)).toBe(0);
 });
 
+test("a policy-rejected WebSocket does not enter a reconnect storm", async ({page}) => {
+  await load(page, `
+    <section id="selecto-channel-trucks" hx-ext="ws" hx-ws:connect="/explorer/truck/ws">
+      <span data-selecto-connection>Live</span>
+    </section>
+  `);
+  await page.evaluate(() => {
+    window.selectoRecoveryProcessCalls = 0;
+    window.htmx = {process() { window.selectoRecoveryProcessCalls += 1; }};
+    const channel = document.querySelector("#selecto-channel-trucks");
+    const connection = {socket: {readyState: WebSocket.CLOSED}};
+    channel._htmx = {ws: {connection}};
+    channel.dispatchEvent(new CustomEvent("htmx:ws:close", {
+      bubbles: true,
+      detail: {connection, code: 1008},
+    }));
+  });
+
+  await expect(page.locator("[data-selecto-connection]")).toHaveText("Unavailable");
+  await page.waitForTimeout(1000);
+  expect(await page.evaluate(() => window.selectoRecoveryProcessCalls)).toBe(0);
+});
+
 test("a completed query refreshes the API console link outside the results swap", async ({page}) => {
   await load(page, `
     <section id="selecto-surface-loads">

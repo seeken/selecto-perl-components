@@ -249,9 +249,11 @@
     renderConnectionStatus();
   });
 
-  document.addEventListener("htmx:ws:close", function () {
-    connectionStatus = "Reconnecting";
+  document.addEventListener("htmx:ws:close", function (event) {
+    var closeCode = event.detail && event.detail.code;
+    connectionStatus = closeCode === 1008 ? "Unavailable" : "Reconnecting";
     renderConnectionStatus();
+    if (closeCode === 1008) return;
     scheduleSelectoWebSocketRecovery(750);
   });
 
