@@ -1,19 +1,15 @@
 package Selecto::Components::Controller::Actions;
 
 use Mojo::Base -base, -signatures;
-use Mojo::Util qw(secure_compare);
 use Selecto::Components::Actions ();
 
 sub _run_action ($controller, $explorer) {
     my $config = $explorer->config->for_request($controller);
     my $return_to = Selecto::Components::_safe_return_to($config, scalar $controller->param('return_to'));
-    my $submitted_token = $controller->param('csrf_token') // '';
-    my $expected_token = $controller->session('selecto_components_csrf') // '';
     return Selecto::Components::_action_response($controller, $return_to, {
         ok => 0, status => 403,
         message => 'The action form expired. Reload the explorer and try again.',
-    }) unless length($submitted_token) && length($expected_token)
-        && secure_compare("$submitted_token", "$expected_token");
+    }) unless Selecto::Components::_csrf_valid($controller);
 
     my $selected_values = $controller->every_param('selected_id');
     my @selected_ids = ref($selected_values) eq 'ARRAY' ? @$selected_values : ();

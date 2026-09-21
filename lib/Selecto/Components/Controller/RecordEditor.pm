@@ -58,13 +58,10 @@ sub save ($class, $controller, $explorer) {
         ok => 0, %$error,
     }) if $error;
 
-    my $submitted_token = $controller->param('csrf_token') // '';
-    my $expected_token = $controller->session('selecto_components_csrf') // '';
     return Selecto::Components::_action_response($controller, $return_to, {
         ok => 0, status => 403,
         message => 'The edit form expired. Reload the row and try again.',
-    }) unless length($submitted_token) && length($expected_token)
-        && secure_compare("$submitted_token", "$expected_token");
+    }) unless Selecto::Components::_csrf_valid($controller);
 
     my $snapshot_json = $controller->param('record_snapshot') // '';
     my $submitted_signature = $controller->param('record_signature') // '';

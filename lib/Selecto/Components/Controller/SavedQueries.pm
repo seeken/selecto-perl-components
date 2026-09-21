@@ -2,7 +2,6 @@ package Selecto::Components::Controller::SavedQueries;
 
 use Mojo::Base -base, -signatures;
 use Mojo::URL ();
-use Mojo::Util qw(secure_compare);
 use Selecto::Components::State ();
 
 sub _save_query ($controller, $explorer) {
@@ -88,10 +87,7 @@ sub _saved_query_unavailable ($controller, $config, $return_to) {
 }
 
 sub _saved_query_csrf_error ($controller, $return_to) {
-    my $submitted = $controller->param('csrf_token') // '';
-    my $expected = $controller->session('selecto_components_csrf') // '';
-    return undef if length($submitted) && length($expected)
-        && secure_compare("$submitted", "$expected");
+    return undef if Selecto::Components::_csrf_valid($controller);
     return _saved_query_response($controller, $return_to, {
         ok => 0, status => 403,
         message => 'The saved query form expired. Reload the explorer and try again.',

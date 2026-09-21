@@ -878,9 +878,12 @@ message and tests.
 - Selected-row action IDs must be declared by the domain and registered by the
   host. Action targets are deduplicated and bounded, action choices are
   re-resolved, authorization is repeated for execute, and POSTs require the
-  session-bound CSRF token. An action that declares a capability stays hidden
+  session-bound, per-render masked Mojolicious CSRF token. Previously opened
+  forms must be reloaded after upgrading from the custom token implementation.
+  An action that declares a capability stays hidden
   unless the explorer registers an `action_authorizer`.
-- WebSocket handshakes with an `Origin` header default to same-host only. A host
+- WebSocket handshakes with an `Origin` header require matching scheme, host,
+  and effective port. Requests without an Origin remain supported for native clients. A host
   behind unusual proxy or multi-origin routing can provide an explicit
   `origin_check` callback to the plugin.
 - WebSocket frames are capped at 128 KiB and invalid envelopes close with a
@@ -904,7 +907,7 @@ base-uri 'none'; frame-ancestors 'none'
 
 ## Development
 
-Perl 5.34+, Mojolicious 9.40+, and the native `selecto-perl` sibling are
+Perl 5.34+, Mojolicious 9.49+, and the native `selecto-perl` sibling are
 required. The workspace development toolchain pins Perl 5.40.2.
 
 ```sh

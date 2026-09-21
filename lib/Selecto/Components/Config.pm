@@ -521,7 +521,7 @@ sub _field_link ($domain, $path, $column) {
     my $template = $link->{url_template};
     die "link URL template for $path must be a safe application path containing {{id}}\n"
         unless defined($template) && !ref($template)
-            && "$template" =~ m{\A/(?!/)[^\x00-\x20\x7f]*\{\{id\}\}[^\x00-\x20\x7f]*\z}
+            && "$template" =~ m{\A/(?!/)[^\x00-\x20\x7f\\]*\{\{id\}\}[^\x00-\x20\x7f\\]*\z}
             && do { my $rest = "$template"; $rest =~ s/\{\{id\}\}//g; $rest !~ /[{}]/ };
     my $id_field = exists($link->{id_field}) ? $link->{id_field} : 'id';
     die "link id field for $path must be a relative field name\n"

@@ -58,7 +58,7 @@ WriteMakefile(
     PREREQ_PM        => {
         'Excel::Writer::XLSX' => '1.10',
         'JSON::PP'    => '4.06',
-        'Mojolicious' => '9.40',
+        'Mojolicious' => '9.49',
         'Selecto'     => '0.2.0',
         'Time::HiRes' => 0,
     },
