@@ -35,6 +35,42 @@ is $mounted->{observation}{snapshot}{state_revision}, 0, 'runtime begins at revi
 is scalar(@{$mounted->{observation}{effects}}), 1, 'mount returns its initial source effect';
 
 my $instance_id = $mounted->{instance_id};
+my $initial_effect = $mounted->{observation}{effects}[0];
+my $first_claim = $dispatcher->claim_effect(
+    owner_scope => $owner,
+    instance_id => $instance_id,
+    effect => $initial_effect,
+    lease_seconds => 5,
+);
+is $first_claim->{status}, 'claimed', 'a source generation can be claimed';
+my $duplicate_claim = $dispatcher->claim_effect(
+    owner_scope => $owner,
+    instance_id => $instance_id,
+    effect => $initial_effect,
+    lease_seconds => 5,
+);
+is $duplicate_claim->{status}, 'busy', 'a live claim rejects duplicate execution';
+$now = 106;
+my $replacement_claim = $dispatcher->claim_effect(
+    owner_scope => $owner,
+    instance_id => $instance_id,
+    effect => $initial_effect,
+    lease_seconds => 5,
+);
+is $replacement_claim->{status}, 'claimed', 'an expired claim can be replaced';
+isnt $replacement_claim->{claim_token}, $first_claim->{claim_token},
+    'a replacement receives a new claim token';
+is(
+    $dispatcher->release_effect_claim(
+        owner_scope => $owner,
+        instance_id => $instance_id,
+        effect => $initial_effect,
+        claim_token => $replacement_claim->{claim_token},
+    )->{status},
+    'ok',
+    'the current worker can release its claim',
+);
+
 my $wrong_owner = $dispatcher->load(
     owner_scope => {%$owner, actor_id => 'actor-2'},
     instance_id => $instance_id,
@@ -149,6 +185,48 @@ is $completion->{status}, 'ok', 'current completion succeeds';
 is $completion->{store_revision}, 2, 'accepted completion advances the CAS revision';
 is $completion->{observation}{snapshot}{sources}{orders}{status}, 'ready',
     'accepted completion updates source state';
+
+my $claimed_mount = $dispatcher->mount(
+    owner_scope => $owner,
+    manifest => $manifest,
+    release_id => 'release-perl-1',
+    inputs => {},
+    expires_at => 200,
+);
+my $claimed_effect = $claimed_mount->{observation}{effects}[0];
+my $claimed = $dispatcher->claim_effect(
+    owner_scope => $owner,
+    instance_id => $claimed_mount->{instance_id},
+    effect => $claimed_effect,
+    lease_seconds => 10,
+);
+my $claimed_completion = $dispatcher->complete_claimed_effect(
+    owner_scope => $owner,
+    instance_id => $claimed_mount->{instance_id},
+    manifest => $manifest,
+    claim_token => $claimed->{claim_token},
+    completion => _completion(
+        $claimed_mount->{instance_id}, 1, [{id => 2, order_number => 'PO-200'}],
+    ),
+);
+is $claimed_completion->{status}, 'ok', 'a claimed completion succeeds';
+is $claimed_completion->{store_revision}, 1,
+    'a claimed completion atomically advances storage';
+is $claimed_completion->{observation}{snapshot}{sources}{orders}{status}, 'ready',
+    'a claimed completion updates source state';
+is(
+    $dispatcher->complete_claimed_effect(
+        owner_scope => $owner,
+        instance_id => $claimed_mount->{instance_id},
+        manifest => $manifest,
+        claim_token => $claimed->{claim_token},
+        completion => _completion(
+            $claimed_mount->{instance_id}, 1, [{id => 3, order_number => 'PO-300'}],
+        ),
+    )->{status},
+    'claim_lost',
+    'a consumed claim token cannot complete twice',
+);
 
 my $conflict = $store->compare_and_set(
     owner_scope => $owner,

@@ -84,6 +84,71 @@ sub transition {
     return $self->_commit_observation($loaded, \%args, $runtime->{observation});
 }
 
+sub claim_effect {
+    my ($self, %args) = @_;
+    return _unsupported_claims()
+        unless $self->{store}->can('claim_effect');
+    my $claimed = _store(sub { $self->{store}->claim_effect(%args) });
+    return $claimed->{status} eq 'ok' ? $claimed->{value} : $claimed;
+}
+
+sub claimed_transition {
+    my ($self, %args) = @_;
+    my $transition = delete $args{transition};
+    return _invalid_transition() unless ref($transition) eq 'CODE';
+    return _unsupported_claims()
+        unless $self->{store}->can('commit_claimed_effect')
+        && $self->{store}->can('release_effect_claim');
+
+    my $loaded = $self->load(%args);
+    return $loaded unless $loaded->{status} eq 'ok';
+    my $runtime = _runtime(sub { $transition->($loaded->{snapshot}) });
+    if ($runtime->{status} ne 'ok') {
+        $self->release_effect_claim(%args);
+        return $runtime;
+    }
+
+    my $observation = $runtime->{observation};
+    if (($observation->{outcome} // '') ne 'accepted') {
+        my $released = $self->release_effect_claim(%args);
+        return $released unless $released->{status} eq 'ok';
+        return {
+            status => 'ok',
+            store_revision => $loaded->{revision},
+            observation => $observation,
+        };
+    }
+
+    my $committed = _store(sub {
+        $self->{store}->commit_claimed_effect(
+            owner_scope => $args{owner_scope},
+            instance_id => $args{instance_id},
+            source => $args{source},
+            generation => $args{generation},
+            effect_id => $args{effect_id},
+            claim_token => $args{claim_token},
+            revision => $loaded->{revision},
+            next_snapshot => $observation->{snapshot},
+        );
+    });
+    return $committed unless $committed->{status} eq 'ok';
+    my $stored = $committed->{value};
+    return $stored unless $stored->{status} eq 'ok';
+    return {
+        status => 'ok',
+        store_revision => $stored->{revision},
+        observation => $observation,
+    };
+}
+
+sub release_effect_claim {
+    my ($self, %args) = @_;
+    return _unsupported_claims()
+        unless $self->{store}->can('release_effect_claim');
+    my $released = _store(sub { $self->{store}->release_effect_claim(%args) });
+    return $released->{status} eq 'ok' ? $released->{value} : $released;
+}
+
 sub dispose {
     my ($self, %args) = @_;
     my $stored = _store(sub {
@@ -144,6 +209,14 @@ sub _invalid_transition {
         status => 'error',
         code => 'invalid_instance_transition',
         message => 'template instance transition is invalid',
+    };
+}
+
+sub _unsupported_claims {
+    return {
+        status => 'error',
+        code => 'effect_claiming_unavailable',
+        message => 'template effect claiming is unavailable',
     };
 }
 

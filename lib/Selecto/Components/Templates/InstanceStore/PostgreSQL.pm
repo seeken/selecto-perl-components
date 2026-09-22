@@ -19,22 +19,31 @@ sub new {
     my $max_snapshot_bytes = $args{max_snapshot_bytes} // 1_048_576;
     my $max_owner_scope_bytes = $args{max_owner_scope_bytes} // 4_096;
     my $max_ttl_seconds = $args{max_ttl_seconds} // 86_400;
+    my $max_effect_lease_seconds = $args{max_effect_lease_seconds} // 60;
     my $cleanup_limit = $args{cleanup_limit} // 1_000;
+    my $claims_table = $args{claims_table} // _claims_table_name($table);
 
     _positive_integer('max_snapshot_bytes', $max_snapshot_bytes, 16_777_216);
     _positive_integer('max_owner_scope_bytes', $max_owner_scope_bytes, 65_536);
     _positive_integer('max_ttl_seconds', $max_ttl_seconds, 2_592_000);
+    _positive_integer('max_effect_lease_seconds', $max_effect_lease_seconds, 300);
     _positive_integer('cleanup_limit', $cleanup_limit, 10_000);
 
     return bless {
         dbh_provider => $args{dbh_provider},
         table => _qualified_identifier($table),
-        index => _quoted_identifier(_index_name($table)),
+        index => _quoted_identifier(_index_name($table, '_expires_at_idx')),
+        claims_table => _qualified_identifier($claims_table),
+        claims_index => _quoted_identifier(
+            _index_name($claims_table, '_lease_expires_at_idx')
+        ),
         clock => $args{clock} // sub { time() },
         id_generator => $args{id_generator} // \&_opaque_id,
+        claim_token_generator => $args{claim_token_generator} // \&_opaque_id,
         max_snapshot_bytes => 0 + $max_snapshot_bytes,
         max_owner_scope_bytes => 0 + $max_owner_scope_bytes,
         max_ttl_seconds => 0 + $max_ttl_seconds,
+        max_effect_lease_seconds => 0 + $max_effect_lease_seconds,
         cleanup_limit => 0 + $cleanup_limit,
         json => JSON::PP->new->canonical(1)->ascii(1)->allow_nonref(1),
     }, $class;
@@ -44,6 +53,8 @@ sub schema_sql {
     my ($self) = @_;
     my $table = $self->{table};
     my $index = $self->{index};
+    my $claims_table = $self->{claims_table};
+    my $claims_index = $self->{claims_index};
     return (
         qq{CREATE TABLE IF NOT EXISTS $table (
             instance_id text PRIMARY KEY,
@@ -56,6 +67,19 @@ sub schema_sql {
             updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
         )},
         qq{CREATE INDEX IF NOT EXISTS $index ON $table (expires_at)},
+        qq{CREATE TABLE IF NOT EXISTS $claims_table (
+            instance_id text NOT NULL REFERENCES $table (instance_id) ON DELETE CASCADE,
+            source_id text NOT NULL,
+            generation bigint NOT NULL CHECK (generation > 0),
+            effect_id text NOT NULL,
+            claim_token text NOT NULL,
+            lease_expires_at timestamptz NOT NULL,
+            created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            PRIMARY KEY (instance_id, source_id, generation)
+        )},
+        qq{CREATE INDEX IF NOT EXISTS $claims_index
+            ON $claims_table (lease_expires_at)},
     );
 }
 
@@ -186,6 +210,185 @@ sub compare_and_set {
     return {status => 'conflict', revision => $current->{revision}};
 }
 
+sub claim_effect {
+    my ($self, %args) = @_;
+    my $validated = $self->_claim_args(\%args);
+    return $validated unless $validated->{status} eq 'ok';
+
+    my $scope_digest = $self->_scope_digest($args{owner_scope});
+    my $claim_token = $self->{claim_token_generator}->();
+    die "claim_token_unavailable: could not allocate a template effect claim token\n"
+        unless _valid_scalar($claim_token, 256);
+
+    my $claimed = $self->_dbh->selectrow_hashref(qq{
+        INSERT INTO $self->{claims_table} AS claims
+            (instance_id, source_id, generation, effect_id, claim_token,
+             lease_expires_at)
+        SELECT instances.instance_id, ?, ?, ?, ?,
+               LEAST(
+                   instances.expires_at,
+                   clock_timestamp() + (? * interval '1 second')
+               )
+          FROM $self->{table} AS instances
+         WHERE instances.instance_id = ?
+           AND instances.owner_scope_digest = ?
+           AND instances.expires_at > clock_timestamp()
+           AND jsonb_extract_path_text(
+                   instances.snapshot, 'sources', ?, 'generation'
+               ) = ?
+           AND jsonb_extract_path_text(
+                   instances.snapshot, 'sources', ?, 'status'
+               ) = 'loading'
+        ON CONFLICT (instance_id, source_id, generation) DO UPDATE
+                SET effect_id = EXCLUDED.effect_id,
+                    claim_token = EXCLUDED.claim_token,
+                    lease_expires_at = EXCLUDED.lease_expires_at,
+                    updated_at = clock_timestamp()
+              WHERE claims.lease_expires_at <= clock_timestamp()
+        RETURNING claim_token,
+                  extract(epoch FROM lease_expires_at) AS lease_expires_at
+    }, undef,
+        "$args{source}", 0 + $args{generation}, "$args{effect_id}", "$claim_token",
+        $validated->{lease_seconds}, "$args{instance_id}", $scope_digest,
+        "$args{source}", "$args{generation}", "$args{source}");
+    return {
+        status => 'claimed',
+        claim_token => "$claimed->{claim_token}",
+        lease_expires_at => 0 + $claimed->{lease_expires_at},
+    } if $claimed;
+
+    my $loaded = $self->load(
+        owner_scope => $args{owner_scope},
+        instance_id => $args{instance_id},
+    );
+    return $loaded unless $loaded->{status} eq 'ok';
+    return {status => 'stale'}
+        unless _effect_is_current($loaded->{snapshot}, \%args);
+
+    my $current = $self->_dbh->selectrow_hashref(qq{
+        SELECT extract(epoch FROM claims.lease_expires_at) AS lease_expires_at
+          FROM $self->{claims_table} AS claims
+          JOIN $self->{table} AS instances
+            ON instances.instance_id = claims.instance_id
+         WHERE claims.instance_id = ?
+           AND claims.source_id = ?
+           AND claims.generation = ?
+           AND instances.owner_scope_digest = ?
+           AND claims.lease_expires_at > clock_timestamp()
+    }, undef, "$args{instance_id}", "$args{source}", 0 + $args{generation},
+        $scope_digest);
+    return {
+        status => 'busy',
+        lease_expires_at => 0 + $current->{lease_expires_at},
+    } if $current;
+    return {status => 'busy'};
+}
+
+sub commit_claimed_effect {
+    my ($self, %args) = @_;
+    return {status => 'invalid_claim'}
+        unless _valid_claim_identity(\%args)
+        && defined($args{revision}) && !ref($args{revision})
+        && "$args{revision}" =~ /\A[0-9]+\z/
+        && _valid_scalar($args{claim_token}, 256);
+
+    my $loaded = $self->load(
+        owner_scope => $args{owner_scope},
+        instance_id => $args{instance_id},
+    );
+    return $loaded unless $loaded->{status} eq 'ok';
+    my $snapshot = $args{next_snapshot};
+    return {status => 'invalid_snapshot'}
+        unless _snapshot_matches($snapshot, $args{instance_id}, $loaded->{release});
+    my $snapshot_json = $self->_snapshot_json($snapshot);
+    my $scope_digest = $self->_scope_digest($args{owner_scope});
+
+    my $updated = $self->_dbh->selectrow_hashref(qq{
+        WITH updated AS (
+            UPDATE $self->{table} AS instances
+               SET snapshot = ?::jsonb,
+                   revision = instances.revision + 1,
+                   updated_at = clock_timestamp()
+              FROM $self->{claims_table} AS claims
+             WHERE instances.instance_id = ?
+               AND instances.owner_scope_digest = ?
+               AND instances.release_id = ?
+               AND instances.revision = ?
+               AND instances.expires_at > clock_timestamp()
+               AND claims.instance_id = instances.instance_id
+               AND claims.source_id = ?
+               AND claims.generation = ?
+               AND claims.effect_id = ?
+               AND claims.claim_token = ?
+               AND claims.lease_expires_at > clock_timestamp()
+         RETURNING instances.instance_id, instances.revision
+        ), deleted AS (
+            DELETE FROM $self->{claims_table} AS claims
+             USING updated
+             WHERE claims.instance_id = updated.instance_id
+               AND claims.source_id = ?
+               AND claims.generation = ?
+               AND claims.claim_token = ?
+         RETURNING claims.instance_id
+        )
+        SELECT revision FROM updated
+    }, undef,
+        $snapshot_json, "$args{instance_id}", $scope_digest, $loaded->{release},
+        0 + $args{revision}, "$args{source}", 0 + $args{generation},
+        "$args{effect_id}", "$args{claim_token}", "$args{source}",
+        0 + $args{generation}, "$args{claim_token}");
+    return {status => 'ok', revision => 0 + $updated->{revision}} if $updated;
+
+    my $current_claim = $self->_dbh->selectrow_hashref(qq{
+        SELECT 1
+          FROM $self->{claims_table} AS claims
+          JOIN $self->{table} AS instances
+            ON instances.instance_id = claims.instance_id
+         WHERE claims.instance_id = ?
+           AND claims.source_id = ?
+           AND claims.generation = ?
+           AND claims.effect_id = ?
+           AND claims.claim_token = ?
+           AND claims.lease_expires_at > clock_timestamp()
+           AND instances.owner_scope_digest = ?
+           AND instances.expires_at > clock_timestamp()
+    }, undef,
+        "$args{instance_id}", "$args{source}", 0 + $args{generation},
+        "$args{effect_id}", "$args{claim_token}", $scope_digest);
+    return {status => 'claim_lost'} unless $current_claim;
+
+    my $current = $self->load(
+        owner_scope => $args{owner_scope},
+        instance_id => $args{instance_id},
+    );
+    return $current unless $current->{status} eq 'ok';
+    return {status => 'conflict', revision => $current->{revision}};
+}
+
+sub release_effect_claim {
+    my ($self, %args) = @_;
+    return {status => 'invalid_claim'}
+        unless _valid_claim_identity(\%args)
+        && _valid_scalar($args{claim_token}, 256);
+    my $scope_digest = $self->_scope_digest($args{owner_scope});
+    my $released = $self->_dbh->selectrow_hashref(qq{
+        DELETE FROM $self->{claims_table} AS claims
+         USING $self->{table} AS instances
+         WHERE claims.instance_id = instances.instance_id
+           AND claims.instance_id = ?
+           AND claims.source_id = ?
+           AND claims.generation = ?
+           AND claims.effect_id = ?
+           AND claims.claim_token = ?
+           AND instances.owner_scope_digest = ?
+     RETURNING claims.instance_id
+    }, undef,
+        "$args{instance_id}", "$args{source}", 0 + $args{generation},
+        "$args{effect_id}", "$args{claim_token}", $scope_digest);
+    return {status => 'ok'} if $released;
+    return {status => 'claim_lost'};
+}
+
 sub dispose {
     my ($self, %args) = @_;
     my $scope_digest = $self->_scope_digest($args{owner_scope});
@@ -220,6 +423,31 @@ sub cleanup_expired {
          USING doomed
          WHERE instances.instance_id = doomed.instance_id
      RETURNING instances.instance_id
+    });
+    $statement->execute(0 + $limit);
+    my $rows = $statement->fetchall_arrayref;
+    return scalar(@$rows);
+}
+
+sub cleanup_expired_claims {
+    my ($self, %args) = @_;
+    my $limit = $args{limit} // $self->{cleanup_limit};
+    _positive_integer('claim cleanup limit', $limit, $self->{cleanup_limit});
+
+    my $statement = $self->_dbh->prepare(qq{
+        WITH doomed AS (
+            SELECT instance_id, source_id, generation
+              FROM $self->{claims_table}
+             WHERE lease_expires_at <= clock_timestamp()
+             ORDER BY lease_expires_at, instance_id, source_id, generation
+             LIMIT ?
+        )
+        DELETE FROM $self->{claims_table} AS claims
+         USING doomed
+         WHERE claims.instance_id = doomed.instance_id
+           AND claims.source_id = doomed.source_id
+           AND claims.generation = doomed.generation
+     RETURNING claims.instance_id
     });
     $statement->execute(0 + $limit);
     my $rows = $statement->fetchall_arrayref;
@@ -266,6 +494,38 @@ sub _snapshot_matches {
         && "$snapshot->{release_id}" eq "$release";
 }
 
+sub _claim_args {
+    my ($self, $args) = @_;
+    return {status => 'invalid_effect'} unless _valid_claim_identity($args);
+    my $lease_seconds = $args->{lease_seconds} // $self->{max_effect_lease_seconds};
+    return {status => 'invalid_lease'}
+        unless defined($lease_seconds) && !ref($lease_seconds)
+        && "$lease_seconds" =~ /\A[1-9][0-9]*\z/
+        && $lease_seconds <= $self->{max_effect_lease_seconds};
+    return {status => 'ok', lease_seconds => 0 + $lease_seconds};
+}
+
+sub _valid_claim_identity {
+    my ($args) = @_;
+    return _valid_scalar($args->{instance_id}, 256)
+        && _valid_scalar($args->{source}, 256)
+        && defined($args->{generation}) && !ref($args->{generation})
+        && "$args->{generation}" =~ /\A[1-9][0-9]*\z/
+        && _valid_scalar($args->{effect_id}, 768)
+        && "$args->{effect_id}" eq
+            "$args->{instance_id}:source:$args->{source}:$args->{generation}";
+}
+
+sub _effect_is_current {
+    my ($snapshot, $args) = @_;
+    my $source = ref($snapshot->{sources}) eq 'HASH'
+        ? $snapshot->{sources}{$args->{source}} : undef;
+    return ref($source) eq 'HASH'
+        && defined($source->{generation}) && !ref($source->{generation})
+        && $source->{generation} == $args->{generation}
+        && ($source->{status} // '') eq 'loading';
+}
+
 sub _qualified_identifier {
     my ($value) = @_;
     die "invalid_table: PostgreSQL instance-store table is invalid\n"
@@ -282,10 +542,19 @@ sub _quoted_identifier {
     return qq{"$value"};
 }
 
-sub _index_name {
+sub _claims_table_name {
     my ($table) = @_;
+    my @parts = split /\./, "$table", -1;
+    my $name = pop @parts;
+    my $suffix = '_effect_claims';
+    $name =~ s/_instances\z//;
+    $name = substr($name, 0, 63 - length($suffix)) . $suffix;
+    return join '.', @parts, $name;
+}
+
+sub _index_name {
+    my ($table, $suffix) = @_;
     my ($name) = "$table" =~ /([^.]+)\z/;
-    my $suffix = '_expires_at_idx';
     $name = substr($name, 0, 63 - length($suffix));
     return $name . $suffix;
 }
