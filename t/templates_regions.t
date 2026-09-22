@@ -23,14 +23,14 @@ is_deeply(
     Selecto::Components::Templates::Regions->for_event(
         $manifest, 'order_selected',
     ),
-    ['root.children.6', 'root.children.7'],
-    'selection event refreshes its emitter metadata and conditional include region',
+    ['root.children.5', 'root.children.6', 'root.children.7'],
+    'selection event refreshes every form revision and its conditional include region',
 );
 
 is_deeply(
     Selecto::Components::Templates::Regions->for_source($manifest, 'orders'),
-    ['root.children.6'],
-    'source completion updates only the region bound to its rows',
+    ['root.children.5', 'root.children.6'],
+    'source completion updates its data region and every event-form lifetime',
 );
 
 is_deeply(

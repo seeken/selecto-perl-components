@@ -88,6 +88,9 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
               <input type="hidden" name="event" value="search_changed">
               <input type="hidden" name="event_id" value="event-one">
               <input type="hidden" name="state_revision" value="0">
+              <input type="hidden" name="component_id" value="root.children.5">
+              <input type="hidden" name="component_lifetime" value="lifetime-one">
+              <input type="hidden" name="form_revision" value="0">
               <input id="template-search" name="value" value="PO-100">
               <button type="submit">Search</button>
             </form>
@@ -153,6 +156,9 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
     event: "search_changed",
     event_id: "event-one",
     state_revision: "0",
+    component_id: "root.children.5",
+    component_lifetime: "lifetime-one",
+    form_revision: "0",
     value: "PO-200",
   });
   expect(outgoing).not.toHaveProperty("selecto_request_id");
@@ -177,6 +183,9 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
             <input type="hidden" name="event" value="search_changed">
             <input type="hidden" name="event_id" value="event-two">
             <input type="hidden" name="state_revision" value="2">
+            <input type="hidden" name="component_id" value="root.children.5">
+            <input type="hidden" name="component_lifetime" value="lifetime-two">
+            <input type="hidden" name="form_revision" value="2">
             <input id="template-search" name="value" value="Server search">
             <button type="submit">Search</button>
           </form>
@@ -188,6 +197,8 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
       selecto: {
         instance_id: "one", state_revision: 2, store_revision: 2,
         event_id: "event-one",
+        component_id: "root.children.5",
+        component_lifetime: "lifetime-one", form_revision: 0,
       },
     })}));
   });
@@ -203,6 +214,9 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
     event: "search_changed",
     event_id: "event-two",
     state_revision: "2",
+    component_id: "root.children.5",
+    component_lifetime: "lifetime-two",
+    form_revision: "2",
     value: "PO-300",
   });
 
@@ -217,6 +231,9 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
             <input type="hidden" name="event" value="search_changed">
             <input type="hidden" name="event_id" value="event-three">
             <input type="hidden" name="state_revision" value="3">
+            <input type="hidden" name="component_id" value="root.children.5">
+            <input type="hidden" name="component_lifetime" value="lifetime-three">
+            <input type="hidden" name="form_revision" value="3">
             <input id="template-search" name="value" value="Second server search">
             <button type="submit">Search</button>
           </form>
@@ -228,6 +245,8 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
       selecto: {
         instance_id: "one", state_revision: 3, store_revision: 3,
         event_id: "event-two",
+        component_id: "root.children.5",
+        component_lifetime: "lifetime-two", form_revision: 2,
       },
     })}));
   });
@@ -242,6 +261,27 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
     start: document.activeElement.selectionStart,
     end: document.activeElement.selectionEnd,
   }))).toEqual({id: "template-note", start: 2, end: 6});
+
+  await page.evaluate(async () => {
+    window.fakeTemplateSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
+      content: `<main id="template-root" data-selecto-template-instance="one"
+        data-selecto-state-revision="4" data-selecto-store-revision="4">
+        Resurrected component
+      </main>`,
+      target: "#template-root",
+      swap: "outerHTML",
+      selecto: {
+        instance_id: "one", state_revision: 4, store_revision: 4,
+        event_id: "event-one", component_id: "root.children.5",
+        component_lifetime: "lifetime-one", form_revision: 0,
+      },
+    })}));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+  await expect(page.locator("#template-root")).toHaveAttribute(
+    "data-selecto-state-revision", "3",
+  );
+  await expect(page.locator("#template-root")).toContainText("Second update");
 
   await page.evaluate(async () => {
     window.fakeTemplateSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
@@ -372,6 +412,10 @@ test("HTTP template events wait per form and rebuild queued requests from fresh 
           "X-Selecto-State-Revision": next.revision,
           "X-Selecto-Store-Revision": next.revision,
           "X-Selecto-Event-ID": requestNumber === 1 ? "event-one" : "event-two",
+          "X-Selecto-Component-ID": "root.children.5",
+          "X-Selecto-Component-Lifetime": requestNumber === 1
+            ? "lifetime-one" : "lifetime-two",
+          "X-Selecto-Form-Revision": requestNumber === 1 ? "0" : "1",
         },
         body: `<template hx type="partial" hx-target="#search-region" hx-swap="outerHTML">
           <div id="search-region" data-selecto-template-node="root.children.5">
@@ -383,6 +427,10 @@ test("HTTP template events wait per form and rebuild queued requests from fresh 
               <input type="hidden" name="event" value="search_changed">
               <input type="hidden" name="event_id" value="${next.eventId}">
               <input type="hidden" name="state_revision" value="${next.revision}">
+              <input type="hidden" name="component_id" value="root.children.5">
+              <input type="hidden" name="component_lifetime"
+                value="${requestNumber === 1 ? "lifetime-two" : "lifetime-three"}">
+              <input type="hidden" name="form_revision" value="${next.revision}">
               <input id="template-search" name="value" value="${next.value}">
               <button type="submit">Search</button>
             </form>
@@ -405,6 +453,9 @@ test("HTTP template events wait per form and rebuild queued requests from fresh 
               <input type="hidden" name="event" value="search_changed">
               <input type="hidden" name="event_id" value="event-one">
               <input type="hidden" name="state_revision" value="0">
+              <input type="hidden" name="component_id" value="root.children.5">
+              <input type="hidden" name="component_lifetime" value="lifetime-one">
+              <input type="hidden" name="form_revision" value="0">
               <input id="template-search" name="value" value="PO-100">
               <button type="submit">Search</button>
             </form>
@@ -436,9 +487,13 @@ test("HTTP template events wait per form and rebuild queued requests from fresh 
   const secondBody = new URLSearchParams(requests[1].postData());
   expect(Object.fromEntries(firstBody)).toMatchObject({
     csrf_token: "csrf-one", event_id: "event-one", state_revision: "0", value: "PO-200",
+    component_id: "root.children.5", component_lifetime: "lifetime-one",
+    form_revision: "0",
   });
   expect(Object.fromEntries(secondBody)).toMatchObject({
     csrf_token: "csrf-two", event_id: "event-two", state_revision: "1", value: "PO-300",
+    component_id: "root.children.5", component_lifetime: "lifetime-two",
+    form_revision: "1",
   });
   await expect(page.locator("#template-root")).toHaveAttribute(
     "data-selecto-state-revision", "2",

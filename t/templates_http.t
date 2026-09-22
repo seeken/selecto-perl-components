@@ -195,7 +195,12 @@ my $event_path = $event_form->attr('action');
 my %event_params = map {
     $_->attr('name') => $_->attr('value')
 } $event_form->find('input[type="hidden"]')->each;
-$event_params{value} = 'PO-200';
+is $event_params{component_id}, 'root.children.5',
+    'event form names its compiled component identity';
+like $event_params{component_lifetime}, qr/\A[0-9a-f]{64}\z/,
+    'event form carries a server-generated component lifetime';
+is $event_params{form_revision}, 0, 'event form begins at revision zero';
+my $initial_component_lifetime = $event_params{component_lifetime};
 
 $t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})->status_is(200);
 my $second_tab_id = $t->tx->res->dom->at('main.selecto-template-instance')
@@ -265,10 +270,18 @@ $t->post_ok(
     ->header_is('X-Selecto-Source-Generation' => 1)
     ->content_like(qr{<template hx type="partial"})
     ->element_exists('[data-selecto-template-node="root.children.6"]')
-    ->element_exists_not('[data-selecto-template-node="root.children.5"]')
+    ->element_exists('[data-selecto-template-node="root.children.5"]')
     ->element_exists_not('html')
     ->element_exists('[data-order-number="PO-100"]')
     ->element_exists_not('form.selecto-template-source');
+my $refreshed_event_form = $t->tx->res->dom
+    ->at('form[data-template-event="search_changed"]');
+%event_params = map {
+    $_->attr('name') => $_->attr('value')
+} $refreshed_event_form->find('input[type="hidden"]')->each;
+isnt $event_params{component_lifetime}, $initial_component_lifetime,
+    'source completion advances the event component lifetime';
+$event_params{value} = 'PO-200';
 is $source_context_calls, 1,
     'request authority is reduced to source context for the initial generation';
 my @worker_audit = _worker_audit($worker_audit_path);
@@ -286,9 +299,20 @@ $t->status_is(200)
     ->header_is('X-Selecto-State-Revision' => 1)
     ->header_is('X-Selecto-Store-Revision' => 2)
     ->header_is('X-Selecto-Event-ID' => $event_params{event_id})
+    ->header_is('X-Selecto-Component-ID' => $event_params{component_id})
+    ->header_is('X-Selecto-Component-Lifetime' =>
+        $event_params{component_lifetime})
+    ->header_is('X-Selecto-Form-Revision' => 0)
     ->element_exists('input[name="value"][value="PO-200"]')
     ->element_exists('form.selecto-template-source[data-selecto-template-source="orders"]')
     ->element_exists_not('[data-order-number]');
+my $next_event_form = $t->tx->res->dom
+    ->at('form[data-template-event="search_changed"]');
+is $next_event_form->at('input[name="form_revision"]')->attr('value'), 1,
+    'accepted event renders the next form revision';
+isnt $next_event_form->at('input[name="component_lifetime"]')->attr('value'),
+    $event_params{component_lifetime},
+    'accepted event advances the component lifetime';
 my $pending_source_form = $t->tx->res->dom->at('form.selecto-template-source');
 my $pending_source_path = $pending_source_form->attr('action');
 my $pending_source_csrf =
@@ -311,6 +335,36 @@ $t->post_ok(
         form => \%unsafe_event_id,
 )->status_is(422)
     ->element_exists('[data-selecto-template-error="invalid_event_params"]');
+my %wrong_component = (
+    %event_params,
+    event_id => 'wrong-component-event',
+    component_id => 'root.children.6',
+);
+$t->post_ok(
+    $event_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => \%wrong_component,
+)->status_is(422)
+    ->element_exists('[data-selecto-template-error="invalid_event_component"]');
+my %stale_lifetime = (
+    %event_params,
+    event_id => 'stale-lifetime-event',
+    component_lifetime => '0' x 64,
+);
+$t->post_ok(
+    $event_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => \%stale_lifetime,
+)->status_is(409)
+    ->element_exists('[data-selecto-template-error="stale_component_lifetime"]');
+my %stale_form = (
+    %event_params,
+    event_id => 'stale-form-event',
+    form_revision => 1,
+);
+$t->post_ok(
+    $event_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => \%stale_form,
+)->status_is(409)
+    ->element_exists('[data-selecto-template-error="stale_form_revision"]');
 
 $t->post_ok(
     $pending_source_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
@@ -391,6 +445,12 @@ is $ws_response->{selecto}{state_revision}, 1,
     'WebSocket response carries the accepted state revision';
 is $ws_response->{selecto}{event_id}, $ws_event{event_id},
     'WebSocket response identifies the accepted event';
+is $ws_response->{selecto}{component_id}, $ws_event{component_id},
+    'WebSocket response identifies the originating component';
+is $ws_response->{selecto}{component_lifetime}, $ws_event{component_lifetime},
+    'WebSocket response echoes the accepted component lifetime';
+is $ws_response->{selecto}{form_revision}, 0,
+    'WebSocket response echoes the submitted form revision';
 like $ws_response->{content}, qr/value="PO-WS"/,
     'WebSocket response renders the accepted event state';
 unlike $ws_response->{content}, qr/selecto-template-channel/,
