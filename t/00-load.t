@@ -27,6 +27,8 @@ use_ok 'Selecto::Components::Renderer::Markup';
 use_ok 'Selecto::Components::Renderer::Results';
 use_ok 'Selecto::Components::RowActions';
 use_ok 'Selecto::Components::State';
+use_ok 'Selecto::Components::Templates::Dispatcher';
+use_ok 'Selecto::Components::Templates::InstanceStore::Memory';
 use_ok 'Selecto::Components::Util';
 
 done_testing;

@@ -3,7 +3,9 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
-if [ "${SELECTO_ECOSYSTEM_USE_LOCAL:-1}" = "0" ] && [ -z "${SELECTO_LIVE_SELECTO_PERL:-}" ]; then
+if [ "${SELECTO_ECOSYSTEM_USE_LOCAL:-1}" = "0" ] \
+  && [ -z "${SELECTO_LIVE_SELECTO_PERL:-}" ] \
+  && [ -z "${SELECTO_LIVE_SELECTO_PERL_TEMPLATES:-}" ]; then
   exec "$@"
 fi
 
@@ -15,7 +17,15 @@ fi
 
 selecto_local_lib="$selecto_dir/local/lib/perl5"
 component_local_lib="$repo_dir/local/lib/perl5"
-perl_paths="$repo_dir/lib:$component_local_lib:$selecto_local_lib:$selecto_dir/lib"
+
+templates_dir=${SELECTO_LIVE_SELECTO_PERL_TEMPLATES:-"$repo_dir/../selecto-perl-templates"}
+if [ ! -f "$templates_dir/lib/Selecto/Templates.pm" ]; then
+  echo "selecto-perl-templates was not found at $templates_dir" >&2
+  exit 1
+fi
+
+templates_local_lib="$templates_dir/local/lib/perl5"
+perl_paths="$repo_dir/lib:$component_local_lib:$templates_local_lib:$templates_dir/lib:$selecto_local_lib:$selecto_dir/lib"
 
 northwind_dir=${SELECTO_LIVE_SELECTO_PERL_NORTHWIND:-"$repo_dir/../selecto-perl-northwind"}
 if [ -f "$northwind_dir/lib/Selecto/Perl/Northwind.pm" ]; then

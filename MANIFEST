@@ -30,6 +30,8 @@ lib/Selecto/Components/Renderer/Markup.pm
 lib/Selecto/Components/Renderer/Results.pm
 lib/Selecto/Components/RowActions.pm
 lib/Selecto/Components/State.pm
+lib/Selecto/Components/Templates/Dispatcher.pm
+lib/Selecto/Components/Templates/InstanceStore/Memory.pm
 lib/Selecto/Components/Util.pm
 LICENSE
 Makefile.PL
@@ -86,5 +88,6 @@ t/route_bridge.t
 t/row_actions.t
 t/security_boundaries.t
 t/state.t
+t/templates_runtime_host.t
 THIRD_PARTY_NOTICES.md
 SECURITY_REVIEW_2026-09-21.md

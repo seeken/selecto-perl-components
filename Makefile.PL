@@ -39,6 +39,8 @@ WriteMakefile(
         'lib/Selecto/Components/Renderer/Results.pm' => '$(INST_LIB)/Selecto/Components/Renderer/Results.pm',
         'lib/Selecto/Components/RowActions.pm' => '$(INST_LIB)/Selecto/Components/RowActions.pm',
         'lib/Selecto/Components/State.pm' => '$(INST_LIB)/Selecto/Components/State.pm',
+        'lib/Selecto/Components/Templates/Dispatcher.pm' => '$(INST_LIB)/Selecto/Components/Templates/Dispatcher.pm',
+        'lib/Selecto/Components/Templates/InstanceStore/Memory.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceStore/Memory.pm',
         'lib/Selecto/Components/Util.pm' => '$(INST_LIB)/Selecto/Components/Util.pm',
         'public/selecto-components/chart.umd.min.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/chart.umd.min.js',
         'public/selecto-api-console/index.html' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-api-console/index.html',
@@ -60,6 +62,7 @@ WriteMakefile(
         'JSON::PP'    => '4.06',
         'Mojolicious' => '9.49',
         'Selecto'     => '0.2.0',
+        'Selecto::Templates' => '0.001000',
         'Time::HiRes' => 0,
     },
     TEST_REQUIRES => {
