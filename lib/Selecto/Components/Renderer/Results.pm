@@ -631,10 +631,41 @@ sub _graph ($class, $result, $model) {
     my @measures = grep { $_->{measure} } @{$result->{columns}};
     my @dimensions = grep { !$_->{measure} } @{$result->{columns}};
     my @records = @{$result->{records}};
-    my @labels = map {
-        my $record = $_;
-        join(' · ', map { _display($record->{$_->{key}}) } @dimensions)
-    } @records;
+    my $series_group = $model->{state}->graph_series_group // '';
+    my ($series_dimension) = grep {
+        length($series_group) && ($_->{field} // '') eq $series_group
+    } @dimensions;
+    my @axis_dimensions = $series_dimension
+        ? grep { ($_->{field} // '') ne $series_group } @dimensions
+        : @dimensions;
+    my (@points, %point_index, @series_values, %series_seen, %record_for);
+    for my $record_index (0 .. $#records) {
+        my $record = $records[$record_index];
+        my @axis_values = map { $record->{$_->{key}} } @axis_dimensions;
+        my $point_key = encode_json(\@axis_values);
+        unless (exists $point_index{$point_key}) {
+            $point_index{$point_key} = scalar @points;
+            push @points, {
+                key => $point_key,
+                label => join(' · ', map { _display($_) } @axis_values),
+                record_index => $record_index,
+            };
+        }
+        my $series_key = '__all';
+        if ($series_dimension) {
+            my $series_value = $record->{$series_dimension->{key}};
+            $series_key = encode_json([$series_value]);
+            unless ($series_seen{$series_key}++) {
+                push @series_values, {
+                    key => $series_key,
+                    label => _display($series_value),
+                };
+            }
+        }
+        $record_for{$point_key}{$series_key} = $record_index;
+    }
+    @series_values = ({key => '__all', label => ''}) unless $series_dimension;
+    my @labels = map { $_->{label} } @points;
     my @palette = (
         '#55d6be', '#5b8ff9', '#f6bd16', '#e8684a', '#9270ca', '#6dc8ec',
         '#ff9d4d', '#269a99', '#ff99c3', '#5d7092', '#f08bb4', '#78d3f8',
@@ -644,82 +675,108 @@ sub _graph ($class, $result, $model) {
     my %axes;
     my $global_type = $model->{state}->chart_type;
     my $mixed_series = $global_type =~ /\A(?:bar|line|area)\z/ ? 1 : 0;
+    my $dataset_index = 0;
     for my $measure_index (0 .. $#measures) {
         my $measure = $measures[$measure_index];
-        my @aggregate_values = map { $_->{$measure->{key}} } @records;
-        my $series = $measure->{series} // {};
-        my $transforms = $series->{transforms} // [];
-        my $analysis = @$transforms
-            ? Selecto::Analytics::Pipeline->apply(
-                \@aggregate_values,
-                $transforms,
-                $series->{raw_unit},
-                $series->{behavior},
-            )
-            : {
-                unit => $series->{unit},
-                points => [map {
-                    my $value = _number($_);
-                    +{raw_value => $value, value => $value, derivation => []}
-                } @aggregate_values],
+        for my $series_index (0 .. $#series_values) {
+            my $breakout = $series_values[$series_index];
+            my @record_indices = map {
+                $record_for{$_->{key}}{$breakout->{key}}
+            } @points;
+            my @aggregate_values = map {
+                defined($_) ? $records[$_]{$measure->{key}} : undef
+            } @record_indices;
+            my $series = $measure->{series} // {};
+            my $transforms = $series->{transforms} // [];
+            my $analysis = @$transforms
+                ? Selecto::Analytics::Pipeline->apply(
+                    \@aggregate_values,
+                    $transforms,
+                    $series->{raw_unit},
+                    $series->{behavior},
+                )
+                : {
+                    unit => $series->{unit},
+                    points => [map {
+                        my $value = defined($_) ? _number($_) : undef;
+                        +{raw_value => $value, value => $value, derivation => []}
+                    } @aggregate_values],
+                };
+            my @values = map { $_->{value} } @{$analysis->{points}};
+            my @raw = map { $_->{raw_value} } @{$analysis->{points}};
+            for my $point_index (0 .. $#record_indices) {
+                my $record_index = $record_indices[$point_index];
+                next unless defined $record_index;
+                $display_values{$measure->{key}}[$record_index] = $values[$point_index];
+                $raw_values{$measure->{key}}[$record_index] = $raw[$point_index];
+            }
+            my $configured_color = $series->{color} // '';
+            my $color = length($configured_color) && !$series_dimension
+                ? $configured_color : $palette[$dataset_index % @palette];
+            my $data = \@values;
+            if ($global_type eq 'scatter') {
+                my @scatter_points = map {
+                    my $index = $_;
+                    my $record_index = $record_indices[$index];
+                    my $raw_x = defined($record_index) && @axis_dimensions
+                        ? $records[$record_index]{$axis_dimensions[0]{key}} : $index + 1;
+                    +{
+                        x => _numeric($raw_x) ? 0 + $raw_x : $index + 1,
+                        y => $values[$index],
+                        label => $labels[$index],
+                    }
+                } 0 .. $#points;
+                $data = \@scatter_points;
+            }
+            my $series_type = $series->{chart_type} // 'auto';
+            $series_type = $global_type if $series_type eq 'auto';
+            my $resolved_axis = $series->{axis} // 'left';
+            my $axis_id = $resolved_axis eq 'right' ? 'y1' : 'y';
+            my $stack = $series->{stack} // '';
+            if ($mixed_series) {
+                $axes{$axis_id} //= {
+                    side => $resolved_axis,
+                    label => _graph_unit_label($series->{unit}),
+                    (defined($series->{unit}) ? (unit => $series->{unit}) : ()),
+                };
+                $axes{$axis_id}{stacked} = 1 if length($stack);
+            }
+            my $dataset_label = $series_dimension
+                ? (@measures > 1
+                    ? $measure->{label} . ' · ' . $breakout->{label}
+                    : $breakout->{label})
+                : $measure->{label};
+            push @datasets, {
+                label => $dataset_label,
+                data => $data,
+                backgroundColor => $global_type =~ /\A(?:pie|doughnut)\z/
+                    ? [map { $palette[$_ % @palette] } 0 .. $#points] : $color,
+                borderColor => $color,
+                borderWidth => 2,
+                colorAuto => length($configured_color) && !$series_dimension ? 0 : 1,
+                rawData => \@raw,
+                drilldownIndices => \@record_indices,
+                transforms => [map { $_->{type} } @{$series->{transforms} // []}],
+                unit => $analysis->{unit},
+                ($mixed_series ? (
+                    type => $series_type eq 'area' ? 'line' : $series_type,
+                    scType => $series_type,
+                    yAxisID => $axis_id,
+                    seriesId => ($series->{id} // 'series_' . ($measure_index + 1)) .
+                        ($series_dimension ? '_breakout_' . ($series_index + 1) : ''),
+                    (length($stack) ? (stack => $stack) : ()),
+                ) : ()),
             };
-        my @values = map { $_->{value} } @{$analysis->{points}};
-        my @raw = map { $_->{raw_value} } @{$analysis->{points}};
-        $display_values{$measure->{key}} = \@values;
-        $raw_values{$measure->{key}} = \@raw;
-        my $configured_color = $series->{color} // '';
-        my $color = length($configured_color)
-            ? $configured_color : $palette[$measure_index % @palette];
-        my $data = \@values;
-        if ($global_type eq 'scatter') {
-            my @points = map {
-                my $index = $_;
-                my $raw_x = @dimensions
-                    ? $records[$index]{$dimensions[0]{key}} : $index + 1;
-                +{
-                    x => _numeric($raw_x) ? 0 + $raw_x : $index + 1,
-                    y => $values[$index],
-                    label => $labels[$index],
-                }
-            } 0 .. $#records;
-            $data = \@points;
+            $dataset_index++;
         }
-        my $series_type = $series->{chart_type} // 'auto';
-        $series_type = $global_type if $series_type eq 'auto';
-        my $resolved_axis = $series->{axis} // 'left';
-        my $axis_id = $resolved_axis eq 'right' ? 'y1' : 'y';
-        my $stack = $series->{stack} // '';
-        if ($mixed_series) {
-            $axes{$axis_id} //= {
-                side => $resolved_axis,
-                label => _graph_unit_label($series->{unit}),
-                (defined($series->{unit}) ? (unit => $series->{unit}) : ()),
-            };
-            $axes{$axis_id}{stacked} = 1 if length($stack);
-        }
-        push @datasets, {
-            label => $measure->{label},
-            data => $data,
-            backgroundColor => $global_type =~ /\A(?:pie|doughnut)\z/
-                ? [map { $palette[$_ % @palette] } 0 .. $#records] : $color,
-            borderColor => $color,
-            borderWidth => 2,
-            colorAuto => length($configured_color) ? 0 : 1,
-            rawData => \@raw,
-            transforms => [map { $_->{type} } @{$series->{transforms} // []}],
-            unit => $analysis->{unit},
-            ($mixed_series ? (
-                type => $series_type eq 'area' ? 'line' : $series_type,
-                scType => $series_type,
-                yAxisID => $axis_id,
-                seriesId => $series->{id} // 'series_' . ($measure_index + 1),
-                (length($stack) ? (stack => $stack) : ()),
-            ) : ()),
-        };
     }
+    my @axis_drilldown_indices = $series_dimension
+        ? map { scalar(@records) + $_ } 0 .. $#points
+        : map { $_ } 0 .. $#points;
     my $chart_data = encode_json({
         labels => \@labels,
         datasets => \@datasets,
+        axisDrilldownIndices => \@axis_drilldown_indices,
         ($mixed_series ? (axes => \%axes) : ()),
     });
     my @values = map {
@@ -763,6 +820,20 @@ sub _graph ($class, $result, $model) {
         $drilldown_forms .= '<form action="' . _h($model->{config}->path) . '" method="' .
             $method . '" hx-ws:send data-sc-graph-drilldown="' . _h($record_index) .
             '">' . $hidden . '</form>';
+    }
+    if ($series_dimension) {
+        for my $point_index (0 .. $#points) {
+            my $record_index = $points[$point_index]{record_index};
+            my $pairs = $result->{graph_axis_drilldowns}[$record_index] // [];
+            next unless @$pairs;
+            my $hidden = '';
+            for (my $pair_index = 0; $pair_index < @$pairs; $pair_index += 2) {
+                $hidden .= _hidden($pairs->[$pair_index], $pairs->[$pair_index + 1]);
+            }
+            $drilldown_forms .= '<form action="' . _h($model->{config}->path) . '" method="' .
+                $method . '" hx-ws:send data-sc-graph-drilldown="' .
+                _h(scalar(@records) + $point_index) . '">' . $hidden . '</form>';
+        }
     }
     my @raw_columns = map {
         my $column = $_;

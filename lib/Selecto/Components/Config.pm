@@ -160,7 +160,7 @@ sub new ($class, @args) {
         die "measure id must be an identifier\n" unless $id =~ /\A[A-Za-z][A-Za-z0-9_]*\z/;
         die "duplicate measure id $id\n" if $seen_measure{$id}++;
         die "unsupported aggregate $aggregate\n" unless grep { $_ eq $aggregate } qw(
-            count count_distinct avg sum min max true_count false_count buckets age_buckets
+            count count_distinct avg sum min max true_count false_count true_percentage buckets age_buckets
         );
         die "$aggregate measure $id requires a field\n"
             if $aggregate ne 'count' && (!defined($measure->{field}) || ref($measure->{field}));
@@ -446,7 +446,8 @@ sub field_catalog ($self, $domain, $options = undef) {
                 $path,
                 ref($schema) eq 'HASH' ? $schema->{columns}{$field} : undef,
             );
-            my $dimension = $dimensions_by_display->{$path};
+            my $dimension = $dimensions_by_key->{$path}
+                // $dimensions_by_display->{$path};
             my $field_label = _field_label(
                 $path,
                 ref($schema) eq 'HASH' ? $schema->{columns}{$field} : undef,
@@ -475,6 +476,35 @@ sub field_catalog ($self, $domain, $options = undef) {
             };
         }
     }
+    # A filtered relationship may itself contain a star dimension.  These
+    # paths are especially useful for tenant-defined option groups: the
+    # relationship holds the stable ID, while Explorer presents only the
+    # dimension's descriptive value.  Direct star dimensions were already
+    # added by the loop above; add only nested display paths here.
+    for my $path (sort keys %$dimensions_by_display) {
+        next unless $path =~ /\A[^.]+\.[^.]+\.[^.]+\z/;
+        my $dimension = $dimensions_by_display->{$path};
+        next if !$include_internal && (
+            !$domain->field_is_public($path) || $dimension->{denormalizing}
+        );
+        my $label = $self->localize(
+            $domain, "fields.$path.label", $dimension->{label},
+            {kind => 'field', path => $path, attribute => 'label'},
+        );
+        push @catalog, {
+            path => $path,
+            label => $label,
+            type => $dimension->{display_type},
+            association => $dimension->{association},
+            internal => $domain->field_is_public($path) ? 0 : 1,
+            denormalizing => $dimension->{denormalizing} ? 1 : 0,
+            (defined($domain->field_unit($path))
+                ? (unit => $domain->field_unit($path)) : ()),
+            (defined($domain->field_behavior($path))
+                ? (behavior => $domain->field_behavior($path)) : ()),
+            dimension => {%$dimension},
+        };
+    }
     @catalog = sort {
         lc($a->{label}) cmp lc($b->{label})
             || $a->{label} cmp $b->{label}
@@ -488,30 +518,72 @@ sub field_catalog ($self, $domain, $options = undef) {
 sub _star_dimensions ($domain) {
     my (%by_key, %by_display);
     my $associations = $domain->associations;
+    my $contract = $domain->contract;
+    my $source_associations = ref($contract) eq 'HASH'
+        && ref($contract->{source}) eq 'HASH'
+        && ref($contract->{source}{associations}) eq 'HASH'
+        ? $contract->{source}{associations} : {};
+    my $schemas = ref($contract) eq 'HASH'
+        && ref($contract->{schemas}) eq 'HASH' ? $contract->{schemas} : {};
     for my $name (sort keys %$associations) {
         my $association = $associations->{$name};
-        next unless $association->can('join_mode')
-            && $association->join_mode eq 'star_dimension';
-        my $key_field = $association->dimension_key;
-        my $display_field = $name . '.' . $association->display_field;
-        my $display_type = $association->fields->{$association->display_field};
-        my $label = $association->display_name;
-        $label = _humanize($name) unless defined($label) && length($label);
-        my $key_metadata = $domain->field_metadata($key_field);
-        my $key_label = _field_label($key_field, $key_metadata, $label . ' ID');
-        my $dimension = {
-            association => $name,
-            key_field => $key_field,
-            display_field => $display_field,
-            display_type => $display_type,
-            label => $label,
-            key_label => $key_label,
+        _record_star_dimension(
+            $domain, \%by_key, \%by_display, $association, $name, '', 0,
+        );
+        my %nested_names = map { $_ => 1 } keys %{$association->associations};
+        my $association_spec = $source_associations->{$name};
+        my $queryable = ref($association_spec) eq 'HASH'
+            ? $association_spec->{queryable} : undef;
+        my $schema = defined($queryable) ? $schemas->{$queryable} : undef;
+        $nested_names{$_} = 1 for keys %{
+            ref($schema) eq 'HASH' && ref($schema->{associations}) eq 'HASH'
+                ? $schema->{associations} : {}
         };
-        die "more than one star dimension uses key $key_field\n" if $by_key{$key_field};
-        $by_key{$key_field} = $dimension;
-        $by_display{$display_field} = $dimension;
+        for my $nested_name (sort keys %nested_names) {
+            my $resolved = eval {
+                $domain->resolve_association("$name.$nested_name")
+            };
+            next unless $resolved && $resolved->{association};
+            _record_star_dimension(
+                $domain, \%by_key, \%by_display, $resolved->{association},
+                "$name.$nested_name", $name,
+                $association->cardinality eq 'many' ? 1 : 0,
+            );
+        }
     }
     return (\%by_key, \%by_display);
+}
+
+sub _record_star_dimension (
+    $domain, $by_key, $by_display, $association, $association_path,
+    $parent_path, $ancestor_denormalizing
+) {
+    return unless $association->can('join_mode')
+        && $association->join_mode eq 'star_dimension';
+    my $key_field = length($parent_path)
+        ? "$parent_path." . $association->dimension_key
+        : $association->dimension_key;
+    my $display_field = $association_path . '.' . $association->display_field;
+    my $display_type = $association->fields->{$association->display_field};
+    my $label = $association->display_name;
+    $label = _humanize($association_path =~ s/.*\.//r)
+        unless defined($label) && length($label);
+    my $key_metadata = $domain->field_metadata($key_field);
+    my $key_label = _field_label($key_field, $key_metadata, $label . ' ID');
+    my $dimension = {
+        association => $association_path,
+        key_field => $key_field,
+        display_field => $display_field,
+        display_type => $display_type,
+        label => $label,
+        key_label => $key_label,
+        denormalizing => (
+            $ancestor_denormalizing || $association->cardinality eq 'many'
+        ) ? 1 : 0,
+    };
+    die "more than one star dimension uses key $key_field\n" if $by_key->{$key_field};
+    $by_key->{$key_field} = $dimension;
+    $by_display->{$display_field} = $dimension;
 }
 
 sub _field_link ($domain, $path, $column) {
@@ -705,6 +777,7 @@ sub measure_functions ($self, $type, $row_count = 0) {
     ] if $self->temporal_type($type);
     return [
         [count => 'Count'], [true_count => 'True count'], [false_count => 'False count'],
+        [true_percentage => 'Percent true'],
     ] if $self->boolean_type($type);
     return [
         [count => 'Count'], [count_distinct => 'Count distinct'],

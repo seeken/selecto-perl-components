@@ -679,6 +679,33 @@ ok !$bad_color_graph->valid, 'arbitrary CSS is rejected as a graph color';
 like join(' ', @{$bad_color_graph->errors}), qr/#RRGGBB/,
     'invalid color reports the required safe format';
 
+my $breakout_graph = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', chart_type => 'line',
+    field => 'product_name',
+    group => ['created_on', 'category.category_name'],
+    group_format => ['month', ''],
+    graph_series_group => 'category.category_name',
+    measure => 'discontinued', measure_function => 'true_percentage',
+});
+ok $breakout_graph->valid, 'a selected graph group can split a measure into series';
+is $breakout_graph->graph_series_group, 'category.category_name',
+    'the graph series group is retained';
+is_deeply $breakout_graph->measure_config_list->[0]{unit},
+    {kind => 'percentage', scale => 'whole'},
+    'percent-true measures carry percentage units';
+like join('&', @{$breakout_graph->query_pairs}),
+    qr/graph_series_group&category\.category_name/,
+    'canonical graph state saves the series-group selection';
+
+my $bad_breakout_graph = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'created_on',
+    graph_series_group => 'category.category_name', measure => 'count',
+});
+ok !$bad_breakout_graph->valid,
+    'a graph cannot split by a field that is not one of its selected groups';
+like join(' ', @{$bad_breakout_graph->errors}), qr/series group must be one of/,
+    'an invalid graph series group has an actionable error';
+
 my $transformed_graph = Selecto::Components::State->from_input($config, $domain, {
     q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
     measure => ['count', 'total_price'],

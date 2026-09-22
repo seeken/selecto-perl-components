@@ -823,18 +823,25 @@ $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_unlike(qr/\.sc-nested-table th[^}]*text-overflow/s)
     ->content_like(qr/\.sc-table-wrap\s*>\s*table\s*>\s*thead\s*>\s*tr\s*>\s*th:first-child/)
     ->content_like(qr/\.sc-table-wrap\s*>\s*table\s*>\s*tbody\s*>\s*tr\s*>\s*td:first-child/)
-    ->content_like(qr/\.sc-results\s*\{[^}]*overflow:\s*visible/s)
+    ->content_like(qr/\.sc-results\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden/s)
     ->content_like(qr/\.sc-results-loading/)
     ->content_like(qr/\.sc-results-spinner/)
     ->content_like(qr/animation:\s*sc-results-spin/)
-    ->content_like(qr/\.sc-table-wrap\s*\{[^}]*overflow:\s*visible/s)
+    ->content_like(qr/\.sc-table-wrap\s*\{[^}]*max-width:\s*100%;[^}]*overflow-x:\s*auto/s)
     ->content_like(qr/\.sc-table-wrap\s*>\s*table\s*\{[^}]*width:\s*max-content/s)
     ->content_like(qr/\.sc-sql-keyword/)
     ->content_like(qr/\.sc-sql-parameter/)
     ->content_unlike(qr/\.sc-group-marker-glyph[^}]*font-family/s)
     ->content_like(qr/\.sc-workspace\.is-builder-collapsed/)
     ->content_like(qr/\.sc-builder\.is-collapsed/)
-    ->content_like(qr/margin-left:\s*calc\(50%\s*-\s*50vw\)/)
+    ->content_like(qr/\.sc-workspace\s*\{[^}]*max-width:\s*100%;[^}]*min-width:\s*0;[^}]*width:\s*100%/s)
+    ->content_unlike(qr/margin-left:\s*calc\(50%\s*-\s*50vw\)/)
+    ->content_unlike(qr/\.sc-workspace\s*\{[^}]*width:\s*100vw/s)
+    ->content_like(qr/\.sc-workspace\s*>\s*\*\s*\{[^}]*min-width:\s*0/s)
+    ->content_like(qr/\@container\s*\(max-width:\s*880px\)/)
+    ->content_like(qr/\.sc-builder form\s*\{[^}]*max-width:\s*100%;[^}]*min-width:\s*0/s)
+    ->content_like(qr/\.sc-query-summary-chips span\s*\{[^}]*flex:\s*0\s+1\s+auto;[^}]*min-width:\s*0/s)
+    ->content_like(qr/\.sc-list-picker\s*\{[^}]*max-width:\s*100%;[^}]*min-width:\s*0/s)
     ->content_like(qr/border-left:\s*0/)
     ->content_like(qr/\.sc-builder\s*\{[^}]*padding:\s*8px\s+16px\s+16px\s+8px/)
     ->content_like(qr/\.sc-hero-heading\s*\{[^}]*display:\s*flex/)
@@ -1209,6 +1216,32 @@ is $chart_data->{axes}{y}{label}, 'Count', 'left axis describes its count unit';
 is $chart_data->{axes}{y1}{label}, 'USD', 'right axis describes its currency unit';
 is $t->tx->res->dom->at('.sc-chart + .sc-table-wrap thead th:last-child')->text,
     'Total price', 'raw graph table labels the aggregate value it actually presents';
+
+$t->get_ok('/explore/products?q=1&view=graph&chart_type=line' .
+    '&field=product_name&group=category.category_name&group=product_name' .
+    '&graph_series_group=product_name&measure=count&measure_alias=Products' .
+    '&measure_function=count&order=product_name&direction=asc&limit=25&page=1')
+    ->status_is(200)
+    ->element_exists('[data-sc-graph-options] select[name="graph_series_group"] ' .
+        'option[value="product_name"][selected]')
+    ->element_exists('form[data-sc-graph-drilldown="2"]')
+    ->element_exists('form[data-sc-graph-drilldown="3"]');
+my $breakout_chart_data = decode_json(
+    $t->tx->res->dom->at('[data-sc-chart]')->attr('data-chart-data')
+);
+is_deeply $breakout_chart_data->{labels}, ['Value 1', 'Value 2'],
+    'a series breakout removes that group from the horizontal-axis labels';
+is_deeply [map { $_->{label} } @{$breakout_chart_data->{datasets}}],
+    ['=2+2', 'Value 2'],
+    'each breakout group value becomes a separately labelled dataset';
+is_deeply $breakout_chart_data->{datasets}[0]{data}, [2, undef],
+    'the first breakout series aligns values to the shared horizontal axis';
+is_deeply $breakout_chart_data->{datasets}[1]{data}, [undef, 4],
+    'the second breakout series preserves gaps rather than inventing zero values';
+is_deeply $breakout_chart_data->{datasets}[0]{drilldownIndices}, [0, undef],
+    'breakout points retain their full row-specific drill-down target';
+is_deeply $breakout_chart_data->{axisDrilldownIndices}, [2, 3],
+    'horizontal-axis labels use drill-downs that exclude the breakout group';
 
 for my $chart_type (qw(bar horizontal_bar stacked_bar line pie doughnut scatter)) {
     $t->get_ok('/explore/products?q=1&view=graph&chart_type=' . $chart_type .

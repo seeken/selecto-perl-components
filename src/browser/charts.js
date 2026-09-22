@@ -130,9 +130,22 @@
         }}}
       },
       onClick: function (event, elements, chart) {
-        if (elements.length && submitGraphDrilldown(root, elements[0].index)) return;
+        if (elements.length) {
+          var element = elements[0];
+          var dataset = data.datasets && data.datasets[element.datasetIndex] || {};
+          var drilldownIndex = dataset.drilldownIndices
+            ? dataset.drilldownIndices[element.index] : element.index;
+          if (drilldownIndex !== null && typeof drilldownIndex !== "undefined"
+              && submitGraphDrilldown(root, Number(drilldownIndex))) return;
+        }
         var index = horizontalAxisDrilldownIndex(event, chart, type, data);
-        if (index !== null) submitGraphDrilldown(root, index);
+        if (index !== null) {
+          var axisIndex = data.axisDrilldownIndices
+            ? data.axisDrilldownIndices[index] : index;
+          if (axisIndex !== null && typeof axisIndex !== "undefined") {
+            submitGraphDrilldown(root, Number(axisIndex));
+          }
+        }
       },
       onHover: function (event, elements, chart) {
         if (!chart || !chart.canvas) return;
