@@ -296,6 +296,41 @@ is $star_map->{category_id}{dimension}{display_field}, 'category.category_name',
 is $star_map->{'category.category_name'}{dimension}{key_field}, 'category_id',
     'the dimension display field points back to its stable fact key';
 
+my $nested_star_contract = $domain->contract;
+push @{$nested_star_contract->{schemas}{categories}{fields}}, 'option_item_id';
+$nested_star_contract->{schemas}{categories}{columns}{option_item_id} = {
+    type => 'integer', internal => 1,
+};
+$nested_star_contract->{schemas}{categories}{associations}{selected_item} = {
+    queryable => 'option_items', owner_key => 'option_item_id', related_key => 'id',
+};
+$nested_star_contract->{schemas}{option_items} = {
+    source_table => 'option_item', primary_key => 'id',
+    fields => [qw(id name)],
+    columns => {id => {type => 'integer'}, name => {type => 'string'}},
+    associations => {},
+};
+$nested_star_contract->{joins}{'category.selected_item'} = {
+    type => 'star_dimension', name => 'Selected Option',
+    display_field => 'name', dimension_key => 'option_item_id',
+};
+my $nested_star_domain = Selecto::Domain->parse($nested_star_contract, strict => 1);
+my $nested_star_map = $config->field_map($nested_star_domain);
+ok !$nested_star_map->{'category.option_item_id'},
+    'an internal nested star key is omitted from the public field catalog';
+is $nested_star_map->{'category.selected_item.name'}{label}, 'Selected Option',
+    'a nested star contributes its descriptive field to the public catalog';
+ok !$nested_star_map->{'category.selected_item.name'}{denormalizing},
+    'a nested star below singular relationships remains a flat field';
+is $nested_star_map->{'category.selected_item.name'}{dimension}{key_field},
+    'category.option_item_id',
+    'a nested star display points to its stable key on the parent relationship';
+my $nested_many_contract = $nested_star_domain->contract;
+$nested_many_contract->{source}{associations}{category}{cardinality} = 'many';
+my $nested_many_domain = Selecto::Domain->parse($nested_many_contract, strict => 1);
+ok !$config->field_map($nested_many_domain)->{'category.selected_item.name'},
+    'a nested star below a plural relationship is not presented as a flat field';
+
 my $star_state = Selecto::Components::State->from_input($config, $star_domain, {
     q => 1,
     view => 'aggregate',
@@ -532,6 +567,26 @@ is_deeply [map { $_->{series}{id} } @{$repeated_measure_result->{columns}}[1, 2]
 is_deeply [map { $_->{series}{unit} } @{$repeated_measure_result->{columns}}[1, 2]],
     [{kind => 'currency', code => 'USD'}, {kind => 'currency', code => 'USD'}],
     'each result series carries its aggregate-derived unit';
+
+my $percentage_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'graph', field => 'product_name', group => 'created_on',
+    group_format => 'month', measure => 'discontinued',
+    measure_alias => 'Discontinued rate', measure_function => 'true_percentage',
+});
+my $percentage_result = Selecto::Components::QueryBuilder->build(
+    $config, $domain, $percentage_state,
+);
+my $percentage_statement = $postgresql->compile(
+    $domain, $percentage_result->{query},
+);
+like $percentage_statement->sql,
+    qr/100\.0 \* COUNT\(CASE WHEN "s0"\."discontinued" = TRUE THEN 1 END\) \/ NULLIF\(COUNT\("s0"\."discontinued"\), 0\)/,
+    'percent-true measures compile as a zero-safe grouped percentage';
+is $percentage_result->{columns}[1]{label}, 'Discontinued rate',
+    'percent-true measures retain their configured graph label';
+is_deeply $percentage_result->{columns}[1]{series}{unit},
+    {kind => 'percentage', scale => 'whole'},
+    'percent-true query results carry whole-percent units into graph rendering';
 
 my $column_measure_config = Selecto::Components::Config->new(
     %{TestSelectoComponents::config()}, id => 'column_products', measures => []

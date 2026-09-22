@@ -40,7 +40,7 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         _measure_selection_hidden($state) .
         _selection_hidden('group', $state->groups, $state->group_configs);
     my $summary_controls = $class->_aggregate_grid_picker($state) .
-        $class->_chart_type_picker($state) .
+        $class->_chart_type_picker($state, $catalog) .
         $class->_group_picker($state, $catalog, $config) .
         $class->_measure_picker($state, $measure_catalog, $config) .
         _selection_hidden(
@@ -447,7 +447,7 @@ sub _filter_value_text ($filter) {
     return "$display_operator " . ($filter->{value} // '');
 }
 
-sub _chart_type_picker ($class, $state) {
+sub _chart_type_picker ($class, $state, $catalog) {
     my @types = (
         [bar => 'Bar'],
         [horizontal_bar => 'Horizontal bar'],
@@ -465,12 +465,24 @@ sub _chart_type_picker ($class, $state) {
     } @types;
     my $inactive = $state->view eq 'graph' ? '' : ' hidden disabled';
     my $show_table = $state->graph_show_table ? ' checked' : '';
+    my %field_labels = map { ($_->{path} => $_->{label}) } @$catalog;
+    my $series_group = $state->graph_series_group // '';
+    my $series_options = '<option value="">One series per measure</option>' . join '', map {
+        my $field = $_;
+        my $label = $state->group_configs->{$field}{alias}
+            || $field_labels{$field} || _humanize($field);
+        '<option value="' . _h($field) . '"' .
+            ($series_group eq $field ? ' selected' : '') . '>' .
+            _h($label) . '</option>'
+    } @{$state->groups};
     return '<fieldset class="sc-chart-type-picker" data-sc-graph-options' . $inactive . '>' .
         '<legend>Chart</legend><label>Chart type<select name="chart_type" ' .
         'data-sc-chart-type-picker>' . $options . '</select></label>' .
+        '<label>Separate series by<select name="graph_series_group">' .
+        $series_options . '</select></label>' .
         '<label class="sc-option-check"><input type="checkbox" name="graph_show_table" value="1"' .
         $show_table . '><span>Show aggregate data below the graph</span></label>' .
-        '<p>Choose a dashboard visualization for the selected groups and measures. The optional table shows the underlying aggregate values before graph transforms.</p></fieldset>';
+        '<p>Choose a dashboard visualization for the selected groups and measures. A series group draws one line or bar set per value. The optional table shows the underlying aggregate values before graph transforms.</p></fieldset>';
 }
 
 sub _aggregate_grid_picker ($class, $state) {

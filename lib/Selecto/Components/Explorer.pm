@@ -119,6 +119,9 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         _prepend_continued_rollup_records($built, \@records)
             if !$all_rows && !$grid_all_rows && $state->page > 1;
         my $drilldowns = _drilldowns($state, $built, \@records);
+        my $graph_axis_drilldowns = _graph_axis_drilldowns(
+            $state, $built, \@records,
+        );
         my $grid_data = _aggregate_grid_data(
             $state, $built, \@records, $drilldowns,
             $config->max_grid_result_cells,
@@ -133,6 +136,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             columns => $built->{columns},
             records => \@records,
             drilldowns => $drilldowns,
+            graph_axis_drilldowns => $graph_axis_drilldowns,
             (defined($grid_data) ? (grid_data => $grid_data) : ()),
             grid_limit_exceeded => $grid_limit_exceeded,
             count => $returned_count,
@@ -376,6 +380,19 @@ sub _drilldown_for_group_indexes ($state, $groups, $record, $indexes) {
         errors => [],
     );
     return $drilldown->query_pairs;
+}
+
+sub _graph_axis_drilldowns ($state, $built, $records) {
+    return [] unless $state->view eq 'graph'
+        && length($state->graph_series_group // '');
+    my @groups = grep { !$_->{measure} } @{$built->{columns}};
+    my @indexes = grep {
+        ($groups[$_]{field} // '') ne $state->graph_series_group
+    } 0 .. $#groups;
+    return [] unless @indexes;
+    return [map {
+        _drilldown_for_group_indexes($state, \@groups, $_, \@indexes)
+    } @$records];
 }
 
 sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells = undef) {

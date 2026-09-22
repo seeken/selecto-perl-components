@@ -13,11 +13,11 @@ use Selecto::Analytics::TransformRegistry ();
 use Selecto::Error ();
 use Selecto::QueryLibrary ();
 
-has [qw(view chart_type graph_show_table aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(view chart_type graph_show_table graph_series_group aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature view chart_type graph_show_table aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
+        q query_signature view chart_type graph_show_table graph_series_group aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_transform measure_transform_window
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
@@ -48,6 +48,9 @@ sub from_input ($class, $config, $domain, $input) {
     my ($valid_groups, $group_configs) = _parse_groups(
         $config, $domain, $input, $field_map, $view, $configured, \@errors,
     );
+    my $graph_series_group = _parse_graph_series_group(
+        $view, $input, $valid_groups, \@errors,
+    );
     my ($valid_measures, $measure_configs, $measure_config_list, $measure) = _parse_measures(
         $config, $domain, $input, $field_map, $view, \@errors,
     );
@@ -63,6 +66,7 @@ sub from_input ($class, $config, $domain, $input) {
         view => $view,
         chart_type => $chart_type,
         graph_show_table => $graph_show_table,
+        graph_series_group => $graph_series_group,
         aggregate_grid => $aggregate_grid,
         aggregate_grid_colorize => $aggregate_grid_colorize,
         aggregate_grid_color_scale => $aggregate_grid_color_scale,
@@ -113,6 +117,8 @@ sub query_pairs ($self) {
     push @pairs, chart_type => $self->chart_type if $self->view eq 'graph';
     push @pairs, graph_show_table => 1
         if $self->view eq 'graph' && $self->graph_show_table;
+    push @pairs, graph_series_group => $self->graph_series_group
+        if $self->view eq 'graph' && length($self->graph_series_group // '');
     if ($self->view eq 'aggregate' && $self->aggregate_grid) {
         push @pairs, aggregate_grid => 1;
         push @pairs, aggregate_grid_colorize => 1 if $self->aggregate_grid_colorize;
@@ -279,6 +285,7 @@ sub as_hash ($self) {
         view => $self->view,
         chart_type => $self->chart_type,
         graph_show_table => $self->graph_show_table,
+        graph_series_group => $self->graph_series_group,
         aggregate_grid => $self->aggregate_grid,
         aggregate_grid_colorize => $self->aggregate_grid_colorize,
         aggregate_grid_color_scale => $self->aggregate_grid_color_scale,
@@ -482,6 +489,17 @@ sub _parse_groups ($config, $domain, $input, $field_map, $view, $configured, $er
     return (\@valid_groups, \%group_configs);
 }
 
+sub _parse_graph_series_group ($view, $input, $groups, $errors) {
+    return '' unless $view eq 'graph';
+    my $field = _scalar(_first($input, 'graph_series_group'));
+    return '' unless length($field);
+    unless (grep { $_ eq $field } @$groups) {
+        push @$errors, 'The graph series group must be one of the selected group fields.';
+        return '';
+    }
+    return $field;
+}
+
 sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
     my $measure_values = _values($input, 'measure');
     my $measure_aliases = _values($input, 'measure_alias');
@@ -572,8 +590,9 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
         my $aggregate_unit = Selecto::Analytics::UnitRegistry->aggregate_unit(
             $measure->{source_unit}, $function,
         );
-        my $behavior = $function =~ /\A(?:count|count_distinct|true_count|false_count|buckets|age_buckets)\z/
-            ? 'flow' : $measure->{source_behavior};
+        my $behavior = $function eq 'true_percentage' ? 'ratio'
+            : $function =~ /\A(?:count|count_distinct|true_count|false_count|buckets|age_buckets)\z/
+                ? 'flow' : $measure->{source_behavior};
         my $unit = $aggregate_unit;
         my @transforms;
         my $transform = $view eq 'graph'

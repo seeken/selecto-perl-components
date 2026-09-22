@@ -386,7 +386,8 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             label => $label,
             raw_label => _measure_label($measure, $function, $field_map),
             type => $function =~ /\A(?:count|count_distinct|true_count|false_count)\z/
-                ? 'integer' : $field_map->{$measure->{field}}{type},
+                ? 'integer' : $function eq 'true_percentage'
+                    ? 'decimal' : $field_map->{$measure->{field}}{type},
             measure => 1,
             series => {
                 id => $measure_config->{series_id} // 'series_' . ($measure_index + 1),
@@ -456,6 +457,7 @@ sub _measure_label ($measure, $function, $field_map) {
     my %labels = (
         count => 'Count', count_distinct => 'Count distinct', avg => 'Average', sum => 'Sum',
         min => 'Minimum', max => 'Maximum', true_count => 'True count', false_count => 'False count',
+        true_percentage => 'Percent true',
     );
     return $field_label . ' ' . ($labels{$function} // $function);
 }

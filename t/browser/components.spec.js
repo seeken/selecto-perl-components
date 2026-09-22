@@ -5,11 +5,87 @@ import {fileURLToPath} from "node:url";
 const bundle = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/selecto-components/selecto-components.js");
 const htmxBundle = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/selecto-components/htmx.min.js");
 const websocketBundle = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/selecto-components/hx-ws.min.js");
+const stylesheet = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/selecto-components/selecto-components.css");
 
 async function load(page, html) {
   await page.setContent(html);
   await page.addScriptTag({path: bundle});
 }
+
+test("wide detail results remain inside a bounded host layout", async ({page}) => {
+  await page.setViewportSize({width: 1400, height: 900});
+  await page.setContent(`
+    <main data-test-host style="width:1000px;margin:0 20px;overflow:hidden">
+      <section class="sc-surface">
+        <div class="sc-workspace">
+          <aside class="sc-builder"><div data-sc-builder-content>
+            <div class="sc-builder-tabs"><button class="sc-builder-tab">View</button></div>
+            <form>
+              <section class="sc-query-summary">
+                <div class="sc-query-summary-heading"><strong>Detail results</strong></div>
+                <div class="sc-query-summary-chips">
+                  <span>Primary Representative User ID In 25330,25558,26107,25605,26198,26293,25862,25352,25749,25341</span>
+                </div>
+              </section>
+              <section class="sc-query-library"><label>Named view<select><option>LHF quote callbacks</option></select></label></section>
+              <fieldset class="sc-result-view-controls">
+                <label class="sc-row-click-control"><span>Row click</span><select><option>No row action</option></select></label>
+                <fieldset class="sc-picker-fieldset"><legend>Columns</legend><div class="sc-list-picker">
+                  <section class="sc-picker-pane">Available</section>
+                  <section class="sc-picker-pane sc-picker-set-pane">Set</section>
+                </div></fieldset>
+              </fieldset>
+            </form>
+          </div></aside>
+          <section class="sc-results">
+            <header class="sc-result-meta"><h2>Detail results</h2></header>
+            <div class="sc-table-wrap">
+              <table style="min-width:1400px"><thead><tr>
+                <th>Identifier</th><th>Customer</th><th>Origin</th><th>Destination</th>
+                <th>Available pickup</th><th>Due date</th><th>Status</th><th>Notes</th>
+              </tr></thead><tbody><tr>
+                <td>12345</td><td>Example customer</td><td>Toronto, ON</td><td>Denver, CO</td>
+                <td>2026-09-22</td><td>2026-09-24</td><td>Available</td><td>Wide result data</td>
+              </tr></tbody></table>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  `);
+  await page.addStyleTag({path: stylesheet});
+
+  const layout = await page.evaluate(() => {
+    const bounds = selector => document.querySelector(selector).getBoundingClientRect();
+    const host = bounds("[data-test-host]");
+    const workspace = bounds(".sc-workspace");
+    const builder = bounds(".sc-builder");
+    const results = bounds(".sc-results");
+    const tableWrap = document.querySelector(".sc-table-wrap");
+    const builderContent = document.querySelector("[data-sc-builder-content]");
+    const builderForm = document.querySelector(".sc-builder form");
+    return {
+      hostRight: host.right,
+      workspaceRight: workspace.right,
+      builderRight: builder.right,
+      resultsLeft: results.left,
+      resultsRight: results.right,
+      tableClientWidth: tableWrap.clientWidth,
+      tableScrollWidth: tableWrap.scrollWidth,
+      builderContentClientWidth: builderContent.clientWidth,
+      builderContentScrollWidth: builderContent.scrollWidth,
+      builderFormClientWidth: builderForm.clientWidth,
+      builderFormScrollWidth: builderForm.scrollWidth,
+    };
+  });
+
+  expect(layout.workspaceRight).toBeLessThanOrEqual(layout.hostRight + 1);
+  expect(layout.resultsRight).toBeLessThanOrEqual(layout.workspaceRight + 1);
+  expect(layout.builderRight).toBeLessThanOrEqual(layout.resultsLeft + 1);
+  expect(layout.tableScrollWidth).toBeGreaterThan(layout.tableClientWidth);
+  expect(layout.builderContentScrollWidth).toBeLessThanOrEqual(layout.builderContentClientWidth);
+  expect(layout.builderFormScrollWidth).toBeLessThanOrEqual(layout.builderFormClientWidth);
+});
 
 test("a live Explorer builder sends its complete query over the WebSocket", async ({page}) => {
   await page.route("http://selecto.test/**", route => route.fulfill({
@@ -412,6 +488,51 @@ test("mixed graph series configure independent left and right axes", async ({pag
     return {submitted, cursor};
   });
   expect(axisDrilldown).toEqual({submitted: true, cursor: "pointer"});
+});
+
+test("breakout graph points and axis labels use their mapped drilldowns", async ({page}) => {
+  await page.setContent(`
+    <div data-sc-chart data-chart-type="line"
+      data-chart-data='{"labels":["Jan"],"axisDrilldownIndices":[6],"datasets":[{"label":"Alex","data":[42],"drilldownIndices":[5]}]}'
+    ><canvas></canvas>
+      <form data-sc-graph-drilldown="5"><button>Representative and month</button></form>
+      <form data-sc-graph-drilldown="6"><button>Month only</button></form>
+    </div>
+  `);
+  await page.evaluate(() => {
+    window.Chart = function (_canvas, config) {
+      window.capturedChartConfig = config;
+      this.destroy = function () {};
+    };
+    window.Chart.register = function () {};
+    window.Chart.getChart = function () { return null; };
+    window.Chart.version = "test";
+  });
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
+  await expect.poll(() => page.evaluate(() => Boolean(window.capturedChartConfig))).toBe(true);
+  const submitted = await page.evaluate(() => {
+    const result = [];
+    document.querySelectorAll("form[data-sc-graph-drilldown]").forEach(form => {
+      form.addEventListener("submit", event => {
+        event.preventDefault();
+        result.push(form.dataset.scGraphDrilldown);
+      });
+    });
+    const chart = {
+      canvas: {style: {}},
+      scales: {x: {
+        top: 100, bottom: 140, left: 20, right: 220,
+        getValueForPixel: () => 0
+      }}
+    };
+    window.capturedChartConfig.options.onClick(
+      {x: 120, y: 80}, [{datasetIndex: 0, index: 0}], chart
+    );
+    window.capturedChartConfig.options.onClick({x: 120, y: 120}, [], chart);
+    return result;
+  });
+  expect(submitted).toEqual(["5", "6"]);
 });
 
 test("a chart initialization failure reveals the fallback without flashing it first", async ({page}) => {
