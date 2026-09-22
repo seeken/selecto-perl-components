@@ -2,8 +2,11 @@ use 5.034;
 use strict;
 use warnings;
 
+use FindBin ();
+use lib "$FindBin::Bin/lib";
 use JSON::PP ();
 use Test::More;
+use TestSelectoComponents ();
 
 use Selecto::Components::Templates::Dispatcher;
 use Selecto::Components::Templates::Event;
@@ -165,10 +168,7 @@ is $gone->{status}, 'not_found', 'expired instances are removed from memory stor
 done_testing;
 
 sub _manifest {
-    my $path = '../selecto-protocol/spec/fixtures/templates/order-browser.compile.json';
-    open my $file, '<:raw', $path or die "could not read $path: $!";
-    local $/;
-    return JSON::PP->new->utf8(1)->decode(<$file>);
+    return TestSelectoComponents::template_order_manifest();
 }
 
 sub _completion {
@@ -186,8 +186,5 @@ sub _completion {
 }
 
 sub _event_transport_fixture {
-    my $path = '../selecto-protocol/spec/fixtures/templates/event-transport.cases.json';
-    open my $file, '<:raw', $path or die "could not read $path: $!";
-    local $/;
-    return JSON::PP->new->utf8(1)->decode(<$file>);
+    return TestSelectoComponents::template_event_transport_fixture();
 }

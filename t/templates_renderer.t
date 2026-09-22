@@ -5,15 +5,15 @@ use utf8;
 
 use FindBin ();
 use lib "$FindBin::Bin/../lib";
-use JSON::PP ();
+use lib "$FindBin::Bin/lib";
 use Test::More;
+use TestSelectoComponents ();
 use Selecto::Components::Templates::Renderer ();
 use Selecto::Components::Util qw(html_escape);
 use Selecto::Templates ();
 
-my $fixtures = "$FindBin::Bin/../../selecto-protocol/spec/fixtures/templates";
-my $customer_manifest = _json("$fixtures/customer-summary.compile.json");
-my $order_manifest = _json("$fixtures/order-browser.compile.json");
+my $customer_manifest = TestSelectoComponents::template_customer_manifest();
+my $order_manifest = TestSelectoComponents::template_order_manifest();
 my $registry = _registry();
 
 my $mounted = Selecto::Templates->mount_runtime(
@@ -143,11 +143,4 @@ sub _registry {
 
 sub _safe {
     return Selecto::Components::Templates::Renderer->safe_html($_[0]);
-}
-
-sub _json {
-    my ($path) = @_;
-    open my $handle, '<:raw', $path or die "cannot read $path: $!";
-    local $/;
-    return JSON::PP->new->utf8(1)->decode(<$handle>);
 }

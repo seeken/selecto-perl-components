@@ -33,6 +33,7 @@ lib/Selecto/Components/State.pm
 lib/Selecto/Components/Templates/Dispatcher.pm
 lib/Selecto/Components/Templates/Event.pm
 lib/Selecto/Components/Templates/InstanceStore/Memory.pm
+lib/Selecto/Components/Templates/InstanceStore/PostgreSQL.pm
 lib/Selecto/Components/Templates/Renderer.pm
 lib/Selecto/Components/Templates/SourceExecutor.pm
 lib/Selecto/Components/Util.pm
@@ -91,6 +92,8 @@ t/route_bridge.t
 t/row_actions.t
 t/security_boundaries.t
 t/state.t
+t/templates_instance_store_postgresql.t
+t/templates_renderer.t
 t/templates_runtime_host.t
 t/templates_source_executor.t
 THIRD_PARTY_NOTICES.md
