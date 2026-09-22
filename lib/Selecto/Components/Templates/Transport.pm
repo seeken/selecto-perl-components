@@ -58,6 +58,7 @@ sub respond_snapshot ($self, $controller, %args) {
 sub respond_error ($self, $controller, $result) {
     my $rendered = _error_fragment($result);
     _private_headers($controller);
+    _error_headers($controller, $result);
     my $html = _is_fragment($controller)
         ? $rendered->{content} : _page('Template error', $rendered->{content});
     return $controller->render(
@@ -92,12 +93,16 @@ sub websocket_snapshot ($self, $controller, %args) {
 
 sub websocket_error ($self, %args) {
     my $rendered = _error_fragment($args{result});
+    my $metadata = ref($args{result}) eq 'HASH'
+        && ref($args{result}{response_metadata}) eq 'HASH'
+        ? $args{result}{response_metadata} : {};
     return {
         content => $rendered->{content},
         target => '#' . _root_id($args{instance_id}),
         swap => 'outerHTML',
         selecto => {
             status => $rendered->{status}, code => $rendered->{code},
+            %$metadata,
         },
     };
 }
@@ -282,6 +287,26 @@ sub _private_headers ($controller) {
     $controller->res->headers->cache_control('no-store, private');
     $controller->res->headers->header('Pragma' => 'no-cache');
     $controller->res->headers->header('X-Content-Type-Options' => 'nosniff');
+}
+
+sub _error_headers ($controller, $result) {
+    return unless ref($result) eq 'HASH'
+        && ref($result->{response_metadata}) eq 'HASH';
+    my $metadata = $result->{response_metadata};
+    my %headers = (
+        instance_id => 'X-Selecto-Template-Instance',
+        state_revision => 'X-Selecto-State-Revision',
+        store_revision => 'X-Selecto-Store-Revision',
+        event_id => 'X-Selecto-Event-ID',
+        component_id => 'X-Selecto-Component-ID',
+        component_lifetime => 'X-Selecto-Component-Lifetime',
+        form_revision => 'X-Selecto-Form-Revision',
+    );
+    for my $name (keys %headers) {
+        return unless defined($metadata->{$name}) && !ref($metadata->{$name});
+    }
+    $controller->res->headers->header($headers{$_} => $metadata->{$_})
+        for keys %headers;
 }
 
 sub _is_fragment ($controller) {

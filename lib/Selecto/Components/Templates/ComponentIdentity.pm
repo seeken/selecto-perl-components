@@ -17,9 +17,7 @@ sub descriptor {
     my $form_revision = $snapshot->{state_revision};
     return {
         component_id => "$component_id",
-        component_lifetime => _lifetime(
-            $snapshot, $component_id, $form_revision,
-        ),
+        component_lifetime => _lifetime($snapshot, $component_id),
         form_revision => 0 + $form_revision,
     };
 }
@@ -36,14 +34,10 @@ sub validate {
     } unless _valid_context($manifest, $snapshot, $component_id, $event);
     my $form_revision = $args{form_revision};
     return {
-        status => 'conflict', code => 'stale_form_revision',
-        message => 'Template form is stale. Reload and try again.',
-    } unless defined($form_revision) && !ref($form_revision)
-        && "$form_revision" =~ /\A[0-9]+\z/
-        && defined($args{state_revision}) && !ref($args{state_revision})
-        && "$args{state_revision}" =~ /\A[0-9]+\z/
-        && $form_revision == $args{state_revision};
-    my $expected = _lifetime($snapshot, $component_id, $form_revision);
+        status => 'error', code => 'invalid_form_revision',
+        message => 'Template form revision is invalid.',
+    } unless _revision($form_revision);
+    my $expected = _lifetime($snapshot, $component_id);
     return {
         status => 'conflict', code => 'stale_component_lifetime',
         message => 'Template component is stale. Reload and try again.',
@@ -91,7 +85,7 @@ sub _declares_event {
 }
 
 sub _lifetime {
-    my ($snapshot, $component_id, $form_revision) = @_;
+    my ($snapshot, $component_id) = @_;
     my @sources = map {
         my $source = $snapshot->{sources}{$_};
         my $generation = ref($source) eq 'HASH'
@@ -105,8 +99,15 @@ sub _lifetime {
     return sha256_hex(join "\0",
         'selecto.template.component-lifetime.v1',
         $snapshot->{instance_id}, $snapshot->{release_id},
-        $component_id, $form_revision, @sources,
+        $component_id, $snapshot->{state_revision}, @sources,
     );
+}
+
+sub _revision {
+    my ($value) = @_;
+    return defined($value) && !ref($value)
+        && "$value" =~ /\A(?:0|[1-9][0-9]{0,18})\z/
+        && (length("$value") < 19 || "$value" le '9223372036854775807');
 }
 
 sub _component_id {

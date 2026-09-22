@@ -104,9 +104,9 @@ sub _event_params ($envelope) {
     return {
         status => 'ok',
         map { $_ => $envelope->{$_} }
-            qw(csrf_token event event_id value component_id component_lifetime),
+            qw(csrf_token event event_id value component_id component_lifetime
+                form_revision),
         state_revision => 0 + $envelope->{state_revision},
-        form_revision => 0 + $envelope->{form_revision},
     };
 }
 
