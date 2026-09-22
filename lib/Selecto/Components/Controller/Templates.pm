@@ -7,24 +7,36 @@ use Selecto::Components::Templates::Regions ();
 use Selecto::Components::Templates::SourceExecutor ();
 
 sub show ($class, $controller, $runtime) {
+    my $result = $class->mount_instance(
+        $controller, $runtime,
+        $controller->stash('selecto_template_id'),
+    );
+    return $runtime->{transport}->respond_error($controller, $result)
+        unless $result->{status} eq 'ok' || $result->{status} eq 'redirect';
+    return $runtime->{transport}->respond_redirect(
+        $controller, $result->{location},
+    ) if $result->{status} eq 'redirect';
+    return _snapshot_response(
+        $controller, $runtime, $result->{template}, $result->{snapshot},
+        $result->{store_revision}, canonical_url => $result->{canonical_url},
+    );
+}
+
+sub mount_instance ($class, $controller, $runtime, $template_id) {
     my $owner = _owner($controller, $runtime);
-    return $runtime->{transport}->respond_error($controller, $owner)
-        unless $owner->{status} eq 'ok';
-    my $template_id = $controller->stash('selecto_template_id');
+    return $owner unless $owner->{status} eq 'ok';
     my $template = $runtime->{templates}{$template_id};
-    return $runtime->{transport}->respond_error($controller, {
+    return {
         status => 'not_found', code => 'template_not_found',
         message => 'Template was not found.',
-    }) unless $template;
+    } unless $template;
 
     my $inputs = _inputs($controller, $template);
-    return $runtime->{transport}->respond_error($controller, $inputs)
-        unless $inputs->{status} eq 'ok';
-    return $runtime->{transport}->respond_redirect(
-        $controller, $inputs->{canonical_url},
-    ) if $inputs->{redirect};
+    return $inputs unless $inputs->{status} eq 'ok';
+    return {status => 'redirect', location => $inputs->{canonical_url}}
+        if $inputs->{redirect};
     my $now = eval { $runtime->{clock}->() };
-    return $runtime->{transport}->respond_error($controller, _unavailable())
+    return _unavailable()
         if $@ || !defined($now) || ref($now);
 
     my $mounted = $runtime->{dispatcher}->mount(
@@ -34,25 +46,19 @@ sub show ($class, $controller, $runtime) {
         inputs => $inputs->{inputs},
         expires_at => $now + $template->{ttl_seconds},
     );
-    return $runtime->{transport}->respond_error($controller, $mounted)
-        unless $mounted->{status} eq 'ok';
-    return _snapshot_response(
-        $controller, $runtime, $template, $mounted->{observation}{snapshot},
-        $mounted->{store_revision},
+    return $mounted unless $mounted->{status} eq 'ok';
+    return {
+        status => 'ok', template => $template,
+        snapshot => $mounted->{observation}{snapshot},
+        store_revision => $mounted->{store_revision},
         canonical_url => $inputs->{canonical_url},
-    );
+    };
 }
 
 sub event ($class, $controller, $runtime) {
-    return $runtime->{transport}->respond_error($controller, _csrf_error())
-        unless _csrf_valid($controller);
-    my $params = _event_params($controller);
-    return $runtime->{transport}->respond_error($controller, $params)
-        unless $params->{status} eq 'ok';
-    my $result = $class->dispatch_event(
+    my $result = $class->dispatch_event_request(
         $controller, $runtime,
         instance_id => $controller->stash('selecto_template_instance_id'),
-        params => $params,
     );
     return $runtime->{transport}->respond_error($controller, $result)
         unless $result->{status} eq 'ok';
@@ -64,6 +70,16 @@ sub event ($class, $controller, $runtime) {
         component_lifetime => $result->{component_lifetime},
         form_revision => $result->{form_revision},
         region_node_ids => $result->{region_node_ids},
+    );
+}
+
+sub dispatch_event_request ($class, $controller, $runtime, %args) {
+    return _csrf_error() unless _csrf_valid($controller);
+    my $params = _event_params($controller);
+    return $params unless $params->{status} eq 'ok';
+    return $class->dispatch_event(
+        $controller, $runtime,
+        instance_id => $args{instance_id}, params => $params,
     );
 }
 
@@ -126,22 +142,46 @@ sub dispatch_event ($class, $controller, $runtime, %args) {
 }
 
 sub source ($class, $controller, $runtime) {
-    return $runtime->{transport}->respond_error($controller, _csrf_error())
-        unless _csrf_valid($controller);
-    my $params = _source_params($controller);
-    return $runtime->{transport}->respond_error($controller, $params)
-        unless $params->{status} eq 'ok';
-    my $context = $class->instance_context(
-        $controller, $runtime, $controller->stash('selecto_template_instance_id'),
+    my $result = $class->dispatch_source_request(
+        $controller, $runtime,
+        instance_id => $controller->stash('selecto_template_instance_id'),
+        source_id => $controller->stash('selecto_template_source_id'),
+        on_finish => sub ($finished) {
+            return $runtime->{transport}->respond_error($controller, $finished)
+                unless $finished->{status} eq 'ok';
+            return _snapshot_response(
+                $controller, $runtime, $finished->{template},
+                $finished->{snapshot}, $finished->{store_revision},
+                source_id => $finished->{source_id},
+                source_generation => $finished->{source_generation},
+                region_node_ids => $finished->{region_node_ids},
+            );
+        },
     );
-    return $runtime->{transport}->respond_error($controller, $context)
-        unless $context->{status} eq 'ok';
-    my $source_id = $controller->stash('selecto_template_source_id');
+    return $runtime->{transport}->respond_error($controller, $result)
+        unless $result->{status} eq 'scheduled';
+    $controller->render_later;
+    return undef;
+}
+
+sub dispatch_source_request ($class, $controller, $runtime, %args) {
+    return _csrf_error() unless _csrf_valid($controller);
+    my $params = _source_params($controller);
+    return $params unless $params->{status} eq 'ok';
+    my $on_finish = $args{on_finish};
+    return _invalid_request(
+        'invalid_source_callback', 'Template source callback is invalid.',
+    ) unless ref($on_finish) eq 'CODE';
+    my $context = $class->instance_context(
+        $controller, $runtime, $args{instance_id},
+    );
+    return $context unless $context->{status} eq 'ok';
+    my $source_id = $args{source_id};
     my $source = $context->{loaded}{snapshot}{sources}{$source_id};
-    return $runtime->{transport}->respond_error($controller, {
+    return {
         status => 'error', code => 'source_not_pending',
         message => 'Template source is not waiting to run.',
-    }) unless ref($source) eq 'HASH' && ($source->{status} // '') eq 'loading'
+    } unless ref($source) eq 'HASH' && ($source->{status} // '') eq 'loading'
         && defined($source->{generation}) && !ref($source->{generation})
         && "$source->{generation}" =~ /\A[1-9][0-9]*\z/;
 
@@ -159,11 +199,10 @@ sub source ($class, $controller, $runtime) {
         effect => $effect,
         lease_seconds => $context->{template}{lease_seconds},
     );
-    return $runtime->{transport}->respond_error($controller, $claim)
-        unless $claim->{status} eq 'claimed';
+    return $claim unless $claim->{status} eq 'claimed';
     my $source_context = _source_context($controller, $context, $effect);
-    return _release_and_error(
-        $controller, $runtime, $context, $effect,
+    return _release_and_result(
+        $runtime, $context, $effect,
         $claim->{claim_token}, $source_context,
     ) unless $source_context->{status} eq 'ok';
 
@@ -192,35 +231,34 @@ sub source ($class, $controller, $runtime) {
             );
         },
         on_finish => sub ($execution) {
-            return _finish_source(
-                $controller, $runtime, $context, $effect,
+            my $finished = _finish_source_result(
+                $runtime, $context, $effect,
                 $claim->{claim_token}, $execution,
             );
+            return $on_finish->($finished);
         },
     );
     if (($scheduled->{status} // '') ne 'scheduled') {
-        return _release_and_error(
-            $controller, $runtime, $context, $effect,
+        return _release_and_result(
+            $runtime, $context, $effect,
             $claim->{claim_token}, $scheduled,
         );
     }
-    $controller->render_later;
-    return undef;
+    return {status => 'scheduled'};
 }
 
-sub _release_and_error ($controller, $runtime, $context, $effect, $claim_token, $error) {
+sub _release_and_result ($runtime, $context, $effect, $claim_token, $error) {
     my $released = $runtime->{dispatcher}->release_effect_claim(
         owner_scope => $context->{owner_scope},
         instance_id => $context->{instance_id},
         effect => $effect,
         claim_token => $claim_token,
     );
-    return $runtime->{transport}->respond_error($controller, $released)
-        unless $released->{status} eq 'ok';
-    return $runtime->{transport}->respond_error($controller, $error);
+    return $released unless $released->{status} eq 'ok';
+    return $error;
 }
 
-sub _finish_source ($controller, $runtime, $context, $effect, $claim_token, $execution) {
+sub _finish_source_result ($runtime, $context, $effect, $claim_token, $execution) {
     my $completion = {
         schema => 'selecto.template.runtime-completion.v1',
         instance_id => $context->{instance_id},
@@ -242,17 +280,17 @@ sub _finish_source ($controller, $runtime, $context, $effect, $claim_token, $exe
         claim_token => $claim_token,
         completion => $completion,
     );
-    return $runtime->{transport}->respond_error($controller, $completed)
-        unless $completed->{status} eq 'ok';
-    return _snapshot_response(
-        $controller, $runtime, $context->{template},
-        $completed->{observation}{snapshot}, $completed->{store_revision},
+    return $completed unless $completed->{status} eq 'ok';
+    return {
+        status => 'ok', template => $context->{template},
+        snapshot => $completed->{observation}{snapshot},
+        store_revision => $completed->{store_revision},
         source_id => $effect->{source},
         source_generation => $effect->{generation},
         region_node_ids => Selecto::Components::Templates::Regions->for_source(
             $context->{template}{manifest}, $effect->{source},
         ),
-    );
+    };
 }
 
 sub _source_context ($controller, $context, $effect) {

@@ -6,6 +6,7 @@ use Mojo::File qw(path);
 use Time::HiRes qw(time);
 use Selecto::Components::Controller::Templates ();
 use Selecto::Components::Templates::Dispatcher ();
+use Selecto::Components::Templates::Native ();
 use Selecto::Components::Templates::PublicInputs ();
 use Selecto::Components::Templates::SourceScheduler ();
 use Selecto::Components::Templates::Transport ();
@@ -110,6 +111,16 @@ sub register ($self, $app, $plugin_config) {
         websocket_heartbeat_interval => $websocket_heartbeat_interval,
         clock => $clock,
     };
+    my $native = Selecto::Components::Templates::Native->new(runtime => $runtime);
+    $app->helper(selecto_template_model => sub ($controller, %args) {
+        return $native->model($controller, %args);
+    });
+    $app->helper(selecto_template_dispatch_event => sub ($controller, %args) {
+        return $native->dispatch_event($controller, %args);
+    });
+    $app->helper(selecto_template_dispatch_source => sub ($controller, %args) {
+        return $native->dispatch_source($controller, %args);
+    });
 
     $app->routes->get("$template_path/:selecto_template_id")->to(cb => sub ($controller) {
         return Selecto::Components::Controller::Templates->show($controller, $runtime);

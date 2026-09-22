@@ -34,6 +34,7 @@ use_ok 'Selecto::Components::Templates::EffectCoordinator';
 use_ok 'Selecto::Components::Templates::Event';
 use_ok 'Selecto::Components::Templates::EventDispatcher';
 use_ok 'Selecto::Components::Templates::InstanceService';
+use_ok 'Selecto::Components::Templates::Native';
 use_ok 'Selecto::Components::Templates::Renderer';
 use_ok 'Selecto::Components::Templates::SourceExecutor';
 use_ok 'Selecto::Components::Templates::SourceScheduler';
