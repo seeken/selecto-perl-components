@@ -296,6 +296,45 @@ the displayed name creates an exact, direct predicate such as `status = 'D'`.
 Star dimensions intentionally do not offer bucketing or prefix formats because
 their name/key pair is the grouping unit.
 
+## Native-template instance storage
+
+`Selecto::Components::Templates::InstanceStore::Memory` supports tests and one
+worker. Hosts that may serve one private template instance from multiple workers
+use `Selecto::Components::Templates::InstanceStore::PostgreSQL`:
+
+```perl
+use Selecto::Components::Templates::Dispatcher;
+use Selecto::Components::Templates::InstanceStore::PostgreSQL;
+
+my $store = Selecto::Components::Templates::InstanceStore::PostgreSQL->new(
+    dbh_provider => sub { $request_worker->dbh },
+    table => 'app_runtime.selecto_template_instances',
+    max_snapshot_bytes => 1_048_576,
+    max_ttl_seconds => 86_400,
+    cleanup_limit => 1_000,
+);
+my $dispatcher = Selecto::Components::Templates::Dispatcher->new(store => $store);
+```
+
+The provider supplies a DBI-compatible PostgreSQL handle already owned by the
+current request worker. The store neither retains nor disconnects it, and the host
+must not share one handle across workers. Apply the statements from
+`schema_sql` through the host migration system; `install_schema` is available for
+development and disposable tests.
+
+Owner scope is canonicalized and stored only as a SHA-256 digest. Instance IDs are
+opaque references. Snapshots remain server-side, have a configurable byte limit,
+and are updated by an atomic revision-checked statement. Stale writers receive a
+conflict with the current storage revision. Expiry uses PostgreSQL's clock, and
+`cleanup_expired` deletes no more than the configured row limit per call. Database
+exceptions are returned by the dispatcher as the bounded
+`instance_store_unavailable` error.
+
+The store is ephemeral recovery infrastructure rather than business persistence.
+It does not make business writes idempotent and does not yet claim source effects;
+the dispatcher still needs the planned lease/claim step before multi-worker source
+execution can be advertised.
+
 ## Plugin usage
 
 ```perl

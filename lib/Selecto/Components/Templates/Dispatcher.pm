@@ -10,14 +10,17 @@ use Selecto::Components::Templates::Event ();
 sub new {
     my ($class, %args) = @_;
     die "invalid_store: template dispatcher requires an instance store\n"
-        unless ref($args{store}) && $args{store}->can('load')
-        && $args{store}->can('compare_and_set');
+        unless ref($args{store})
+        && !grep { !$args{store}->can($_) }
+            qw(new_instance_id create load compare_and_set dispose);
     return bless {store => $args{store}}, $class;
 }
 
 sub mount {
     my ($self, %args) = @_;
-    my $instance_id = $self->{store}->new_instance_id;
+    my $allocated = _store(sub { $self->{store}->new_instance_id });
+    return $allocated unless $allocated->{status} eq 'ok';
+    my $instance_id = $allocated->{value};
     my $runtime = _runtime(sub {
         Selecto::Templates->mount_runtime(
             $args{manifest},
@@ -28,7 +31,7 @@ sub mount {
     });
     return $runtime unless $runtime->{status} eq 'ok';
 
-    my $created = eval {
+    my $stored = _store(sub {
         $self->{store}->create(
             owner_scope => $args{owner_scope},
             release => $args{release_id},
@@ -36,11 +39,11 @@ sub mount {
             expires_at => $args{expires_at},
             instance_id => $instance_id,
         );
-    };
-    return _exception($@) if $@;
+    });
+    return $stored unless $stored->{status} eq 'ok';
     return {
         status => 'ok',
-        instance_id => $created,
+        instance_id => $stored->{value},
         store_revision => 0,
         observation => $runtime->{observation},
     };
@@ -48,10 +51,13 @@ sub mount {
 
 sub load {
     my ($self, %args) = @_;
-    return $self->{store}->load(
-        owner_scope => $args{owner_scope},
-        instance_id => $args{instance_id},
-    );
+    my $stored = _store(sub {
+        $self->{store}->load(
+            owner_scope => $args{owner_scope},
+            instance_id => $args{instance_id},
+        );
+    });
+    return $stored->{status} eq 'ok' ? $stored->{value} : $stored;
 }
 
 sub dispatch {
@@ -104,10 +110,13 @@ sub complete {
 
 sub dispose {
     my ($self, %args) = @_;
-    return $self->{store}->dispose(
-        owner_scope => $args{owner_scope},
-        instance_id => $args{instance_id},
-    );
+    my $stored = _store(sub {
+        $self->{store}->dispose(
+            owner_scope => $args{owner_scope},
+            instance_id => $args{instance_id},
+        );
+    });
+    return $stored->{status} eq 'ok' ? $stored->{value} : $stored;
 }
 
 sub _commit_observation {
@@ -118,12 +127,16 @@ sub _commit_observation {
         observation => $observation,
     } unless ($observation->{outcome} // '') eq 'accepted';
 
-    my $stored = $self->{store}->compare_and_set(
-        owner_scope => $args->{owner_scope},
-        instance_id => $args->{instance_id},
-        revision => $loaded->{revision},
-        next_snapshot => $observation->{snapshot},
-    );
+    my $operation = _store(sub {
+        $self->{store}->compare_and_set(
+            owner_scope => $args->{owner_scope},
+            instance_id => $args->{instance_id},
+            revision => $loaded->{revision},
+            next_snapshot => $observation->{snapshot},
+        );
+    });
+    return $operation unless $operation->{status} eq 'ok';
+    my $stored = $operation->{value};
     return $stored unless $stored->{status} eq 'ok';
     return {
         status => 'ok',
@@ -137,6 +150,17 @@ sub _runtime {
     my $observation = eval { $operation->() };
     return _exception($@) if $@;
     return {status => 'ok', observation => $observation};
+}
+
+sub _store {
+    my ($operation) = @_;
+    my $value = eval { $operation->() };
+    return {
+        status => 'error',
+        code => 'instance_store_unavailable',
+        message => 'template instance store is unavailable',
+    } if $@;
+    return {status => 'ok', value => $value};
 }
 
 sub _exception {

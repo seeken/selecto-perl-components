@@ -32,6 +32,7 @@ use_ok 'Selecto::Components::Templates::Event';
 use_ok 'Selecto::Components::Templates::Renderer';
 use_ok 'Selecto::Components::Templates::SourceExecutor';
 use_ok 'Selecto::Components::Templates::InstanceStore::Memory';
+use_ok 'Selecto::Components::Templates::InstanceStore::PostgreSQL';
 use_ok 'Selecto::Components::Util';
 
 done_testing;

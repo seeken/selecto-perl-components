@@ -42,6 +42,7 @@ WriteMakefile(
         'lib/Selecto/Components/Templates/Dispatcher.pm' => '$(INST_LIB)/Selecto/Components/Templates/Dispatcher.pm',
         'lib/Selecto/Components/Templates/Event.pm' => '$(INST_LIB)/Selecto/Components/Templates/Event.pm',
         'lib/Selecto/Components/Templates/InstanceStore/Memory.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceStore/Memory.pm',
+        'lib/Selecto/Components/Templates/InstanceStore/PostgreSQL.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceStore/PostgreSQL.pm',
         'lib/Selecto/Components/Templates/Renderer.pm' => '$(INST_LIB)/Selecto/Components/Templates/Renderer.pm',
         'lib/Selecto/Components/Templates/SourceExecutor.pm' => '$(INST_LIB)/Selecto/Components/Templates/SourceExecutor.pm',
         'lib/Selecto/Components/Util.pm' => '$(INST_LIB)/Selecto/Components/Util.pm',
@@ -62,6 +63,7 @@ WriteMakefile(
     },
     PREREQ_PM        => {
         'Excel::Writer::XLSX' => '1.10',
+        'Digest::SHA' => 0,
         'JSON::PP'    => '4.06',
         'Mojolicious' => '9.49',
         'Selecto'     => '0.2.0',

@@ -3,6 +3,9 @@ package TestSelectoComponents;
 use 5.034;
 use strict;
 use warnings;
+use File::Basename qw(dirname);
+use File::Spec ();
+use JSON::PP ();
 use Mojolicious;
 use Selecto;
 use Selecto::Adapter ();
@@ -21,6 +24,254 @@ our @SAVED_QUERIES = (
     {name => 'alpha inventory', url => '/explore/products?q=1&view=detail&field=product_name&limit=25&page=1'},
     {name => 'Wrong explorer', url => '/explore/elsewhere?q=1'},
 );
+
+sub template_order_manifest {
+    return _protocol_fixture('order-browser.compile.json') // {
+        schema => 'selecto.template.compile-manifest.v1',
+        profile => 'templates.query.v1',
+        template => {name => 'order_browser', version => '1', fingerprint => 'test-order'},
+        inputs => [],
+        state => [
+            {name => 'search', type => 'string', default => {type => 'string', value => ''}},
+            {name => 'selected_order_id', type => 'integer?'},
+        ],
+        sources => [{
+            id => 'orders', domain => 'orders', domain_fingerprint => 'test-orders',
+            authorization => {
+                mode => 'host_required', template_scope => 'constrain_only',
+                domain_requires_tenant => JSON::PP::true,
+            },
+            query => {
+                select => [qw(id order_number ordered_at status), 'customer.id'],
+                segments => [{
+                    id => 'searchable_orders',
+                    bindings => {value => {expression => 'state.search'}},
+                }],
+                order_by => [
+                    {field => 'ordered_at', direction => 'desc'},
+                    {field => 'id', direction => 'desc'},
+                ],
+                collections => [], limit => 25,
+            },
+        }],
+        events => [
+            {
+                name => 'search_changed', payload => {value => 'string'},
+                actions => [
+                    {kind => 'set_state', state => 'search',
+                        value => {expression => 'event.value'}},
+                    {kind => 'reload_source', source => 'orders', reset_page => JSON::PP::true},
+                ],
+            },
+            {
+                name => 'order_selected', payload => {value => 'integer'},
+                actions => [{
+                    kind => 'set_state', state => 'selected_order_id',
+                    value => {expression => 'event.value'},
+                }],
+            },
+        ],
+        view => {
+            schema => 'selecto.template.view.v1',
+            nodes => [
+                {
+                    kind => 'component', name => 'SearchInput', node_id => 'root.children.5',
+                    events => {change => 'search_changed'}, children => [],
+                    props => {value => {
+                        kind => 'binding', type => 'string', expression => 'state.search',
+                    }},
+                },
+                {
+                    kind => 'component', name => 'OrderTable', node_id => 'root.children.6',
+                    events => {select => 'order_selected'}, children => [],
+                    props => {rows => {
+                        kind => 'binding', type => 'rows', expression => 'orders.rows',
+                    }},
+                },
+                {
+                    kind => 'condition', node_id => 'root.children.7', else => [],
+                    test => {
+                        kind => 'binding', type => 'boolean',
+                        expression => 'present(state.selected_order_id)',
+                    },
+                    then => [{
+                        kind => 'include', template => 'order_editor',
+                        node_id => 'root.children.7.children.0',
+                        bindings => {order_id => {
+                            kind => 'binding', type => 'integer',
+                            expression => 'state.selected_order_id',
+                        }},
+                    }],
+                },
+            ],
+        },
+    };
+}
+
+sub template_customer_manifest {
+    return _protocol_fixture('customer-summary.compile.json') // {
+        schema => 'selecto.template.compile-manifest.v1',
+        profile => 'templates.query.v1',
+        template => {name => 'customer_summary', version => '1', fingerprint => 'test-customer'},
+        inputs => [{name => 'customer', type => 'source<customers?>'}],
+        state => [], sources => [], events => [],
+        view => {
+            schema => 'selecto.template.view.v1',
+            nodes => [{
+                kind => 'component', name => 'Card', node_id => 'root.children.2',
+                events => {},
+                props => {class => {
+                    kind => 'literal', type => 'string', value => 'customer-summary',
+                }},
+                children => [{
+                    kind => 'condition', node_id => 'root.children.2.children.0',
+                    test => {
+                        kind => 'binding', type => 'boolean', expression => 'present(customer)',
+                    },
+                    then => [
+                        {
+                            kind => 'element', name => 'h2',
+                            node_id => 'root.children.2.children.0.children.0', attributes => {},
+                            children => [{
+                                kind => 'expression',
+                                node_id => 'root.children.2.children.0.children.0.children.0',
+                                value => {
+                                    kind => 'binding', type => 'any',
+                                    expression => 'customer.company_name',
+                                },
+                            }],
+                        },
+                        {
+                            kind => 'element', name => 'p',
+                            node_id => 'root.children.2.children.0.children.1', attributes => {},
+                            children => [
+                                {
+                                    kind => 'expression',
+                                    node_id => 'root.children.2.children.0.children.1.children.0',
+                                    value => {
+                                        kind => 'binding', type => 'any',
+                                        expression => 'customer.address.city',
+                                    },
+                                },
+                                {
+                                    kind => 'text',
+                                    node_id => 'root.children.2.children.0.children.1.children.1',
+                                    value => ',',
+                                },
+                                {
+                                    kind => 'expression',
+                                    node_id => 'root.children.2.children.0.children.1.children.2',
+                                    value => {
+                                        kind => 'binding', type => 'any',
+                                        expression => 'customer.address.region',
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                    else => [{
+                        kind => 'component', name => 'EmptyState',
+                        node_id => 'root.children.2.children.0.else.0',
+                        events => {}, props => {},
+                        children => [{
+                            kind => 'text',
+                            node_id => 'root.children.2.children.0.else.0.children.0',
+                            value => 'No customer is assigned.',
+                        }],
+                    }],
+                }],
+            }],
+        },
+    };
+}
+
+sub template_domain_catalog {
+    return _protocol_fixture('domains.json') // {domains => {orders => {
+        schema_version => 1,
+        domain_version => '1.0.0',
+        domain_fingerprint => 'test-orders',
+        name => 'Orders',
+        source => {
+            source_table => 'orders', primary_key => 'id', tenant_field => 'tenant_id',
+            fields => [qw(id tenant_id order_number ordered_at status customer_id)],
+            columns => {
+                id => {type => 'integer'}, tenant_id => {type => 'integer', internal => 1},
+                order_number => {type => 'string'}, ordered_at => {type => 'utc_datetime'},
+                status => {type => 'string'}, customer_id => {type => 'integer'},
+            },
+            associations => {customer => {
+                queryable => 'customers', owner_key => 'customer_id', related_key => 'id',
+                cardinality => 'one', source_scope_key => 'tenant_id',
+                target_scope_key => 'tenant_id',
+            }},
+        },
+        schemas => {customers => {
+            source_table => 'customers', primary_key => 'id',
+            fields => [qw(id tenant_id company_name)],
+            columns => {
+                id => {type => 'integer'}, tenant_id => {type => 'integer', internal => 1},
+                company_name => {type => 'string'},
+            },
+            associations => {},
+        }},
+        joins => {customer => {type => 'left'}},
+        query_library => {
+            segments => {searchable_orders => {
+                filters => [['eq', 'order_number', ['param', 'value']]],
+                parameters => {value => {type => 'string', required => 1}},
+            }},
+            projections => {}, orderings => {}, views => {},
+        },
+    }}};
+}
+
+sub template_event_transport_fixture {
+    return _protocol_fixture('event-transport.cases.json') // {
+        max_value_bytes => 16_384,
+        events => [
+            {name => 'changed', payload => {value => 'string'}},
+            {name => 'selected', payload => {value => 'integer'}},
+            {name => 'toggled', payload => {value => 'boolean'}},
+        ],
+        cases => [
+            {id => 'string', event => 'changed', params => {value => 'cafe'},
+                outcome => 'ok', payload => {value => 'cafe'}},
+            {id => 'integer_string', event => 'selected', params => {value => '17'},
+                outcome => 'ok', payload => {value => 17}},
+            {id => 'boolean_true_string', event => 'toggled', params => {value => 'true'},
+                outcome => 'ok', payload => {value => JSON::PP::true}},
+            {id => 'unknown_event', event => 'missing', params => {value => 'x'},
+                outcome => 'error', code => 'unknown_event'},
+            {id => 'missing_value', event => 'changed', params => {},
+                outcome => 'error', code => 'invalid_event_params'},
+            {id => 'extra_param', event => 'changed',
+                params => {value => 'x', tenant_id => 9},
+                outcome => 'error', code => 'invalid_event_params'},
+            {id => 'leading_zero', event => 'selected', params => {value => '017'},
+                outcome => 'error', code => 'invalid_event_value'},
+            {id => 'integer_overflow', event => 'selected',
+                params => {value => '9223372036854775808'},
+                outcome => 'error', code => 'invalid_event_value'},
+        ],
+    };
+}
+
+sub _protocol_fixture {
+    my ($name) = @_;
+    my $repo = File::Spec->rel2abs(File::Spec->catdir(dirname(__FILE__), '..', '..'));
+    my @roots = grep { defined($_) && length($_) } (
+        $ENV{SELECTO_PROTOCOL_ROOT},
+        File::Spec->catdir($repo, '..', 'selecto-protocol'),
+    );
+    for my $root (@roots) {
+        my $path = File::Spec->catfile($root, 'spec', 'fixtures', 'templates', $name);
+        next unless -f $path;
+        open my $handle, '<:raw', $path or die "cannot read $path: $!";
+        local $/;
+        return JSON::PP->new->utf8(1)->decode(<$handle>);
+    }
+    return undef;
+}
 
 sub domain {
     return _domain();

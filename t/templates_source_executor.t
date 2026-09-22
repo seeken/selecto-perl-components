@@ -3,8 +3,10 @@ use strict;
 use warnings;
 
 use FindBin ();
+use lib "$FindBin::Bin/lib";
 use JSON::PP ();
 use Test::More;
+use TestSelectoComponents ();
 use Selecto::Components::Templates::SourceExecutor;
 use Selecto::Domain ();
 use Selecto::Engine ();
@@ -12,9 +14,8 @@ use Selecto::Expression ();
 use Selecto::PostgreSQL ();
 use Selecto::Templates ();
 
-my $fixtures = "$FindBin::Bin/../../selecto-protocol/spec/fixtures/templates";
-my $manifest = _json("$fixtures/order-browser.compile.json");
-my $catalog = _json("$fixtures/domains.json");
+my $manifest = TestSelectoComponents::template_order_manifest();
+my $catalog = TestSelectoComponents::template_domain_catalog();
 my $effect = Selecto::Templates->mount_runtime(
     $manifest,
     instance_id => 'source-executor-perl',
@@ -120,13 +121,6 @@ my $invalid_rows = Selecto::Components::Templates::SourceExecutor->execute(
 is $invalid_rows->{code}, 'invalid_source_result', 'invalid native rows fail projection';
 
 done_testing;
-
-sub _json {
-    my ($path) = @_;
-    open my $file, '<:raw', $path or die "could not read $path: $!";
-    local $/;
-    return JSON::PP->new->utf8(1)->decode(<$file>);
-}
 
 package TemplateSourceDBH;
 
