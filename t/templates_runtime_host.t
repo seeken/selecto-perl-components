@@ -6,6 +6,7 @@ use JSON::PP ();
 use Test::More;
 
 use Selecto::Components::Templates::Dispatcher;
+use Selecto::Components::Templates::Event;
 use Selecto::Components::Templates::InstanceStore::Memory;
 
 my $now = 100;
@@ -57,6 +58,58 @@ is $dispatched->{observation}{snapshot}{state}{search}, 'PO-100',
     'portable reducer updates state';
 is $dispatched->{observation}{effects}[0]{generation}, 2,
     'portable reducer emits the next source generation';
+
+my $browser_manifest = _event_transport_fixture();
+for my $case (@{$browser_manifest->{cases}}) {
+    my $result = Selecto::Components::Templates::Event->normalize(
+        {events => $browser_manifest->{events}}, $case->{event}, $case->{params},
+    );
+    is $result->{status}, $case->{outcome}, "$case->{id}: outcome";
+    if ($case->{outcome} eq 'ok') {
+        is_deeply $result->{payload}, $case->{payload}, "$case->{id}: normalized payload";
+    } else {
+        is $result->{code}, $case->{code}, "$case->{id}: error code";
+    }
+}
+is(
+    Selecto::Components::Templates::Event->max_value_bytes(),
+    $browser_manifest->{max_value_bytes},
+    'transport budget matches the protocol fixture',
+);
+my $oversized = Selecto::Components::Templates::Event->normalize(
+    {events => [{name => 'changed', payload => {value => 'string'}}]},
+    'changed', {value => 'x' x (Selecto::Components::Templates::Event->max_value_bytes() + 1)},
+);
+is $oversized->{code}, 'event_value_too_large', 'oversized browser values fail before dispatch';
+
+my $second = $dispatcher->mount(
+    owner_scope => $owner,
+    manifest => $manifest,
+    release_id => 'release-perl-1',
+    inputs => {},
+    expires_at => 200,
+);
+my $browser_integer = $dispatcher->dispatch_params(
+    owner_scope => $owner,
+    instance_id => $second->{instance_id},
+    manifest => $manifest,
+    event_id => 'event-perl-browser-1',
+    name => 'order_selected',
+    expected_state_revision => 0,
+    params => {value => '17'},
+);
+is $browser_integer->{status}, 'ok', 'dispatcher accepts normalized browser parameters';
+is $browser_integer->{observation}{snapshot}{state}{selected_order_id}, 17,
+    'dispatcher passes an integer to the portable reducer';
+my $injected = $dispatcher->dispatch_params(
+    owner_scope => $owner,
+    instance_id => $second->{instance_id},
+    manifest => $manifest,
+    event_id => 'event-perl-browser-2',
+    name => 'order_selected',
+    params => {value => '18', tenant_id => 9},
+);
+is $injected->{code}, 'invalid_event_params', 'extra browser parameters fail before dispatch';
 
 my $stale_event = $dispatcher->dispatch(
     owner_scope => $owner,
@@ -130,4 +183,11 @@ sub _completion {
         outcome => 'ok',
         result => $rows,
     };
+}
+
+sub _event_transport_fixture {
+    my $path = '../selecto-protocol/spec/fixtures/templates/event-transport.cases.json';
+    open my $file, '<:raw', $path or die "could not read $path: $!";
+    local $/;
+    return JSON::PP->new->utf8(1)->decode(<$file>);
 }
