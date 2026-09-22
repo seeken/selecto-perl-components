@@ -15,7 +15,7 @@ run = "node script/selecto-web-assets.mjs sync --profile perl-components --targe
 
 [tasks."assets:check"]
 description = "Verify committed generated browser assets match their shared sources"
-run = "node script/selecto-web-assets.mjs sync --profile perl-components --target public/selecto-components --check && npm run build:check"
+run = "node script/selecto-web-assets.mjs sync --profile perl-components --target public/selecto-components --check && script/sync-api-console --check && npm run build:check"
 
 [tasks."test:browser"]
 description = "Run browser interaction tests for the Components asset"

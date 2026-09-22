@@ -5,11 +5,15 @@ use strict;
 use warnings;
 
 use Digest::SHA qw(sha256_hex);
+use File::Compare qw(compare);
 use File::Copy qw(copy);
 use File::Path qw(make_path);
 use File::Spec;
 use FindBin qw($Bin);
 use JSON::PP qw(decode_json);
+
+my $check = @ARGV == 1 && $ARGV[0] eq '--check';
+die "Usage: script/sync-api-console [--check]\n" if @ARGV && !$check;
 
 my $repo = File::Spec->rel2abs(File::Spec->catdir($Bin, '..'));
 my $sibling = $ENV{SELECTO_LIVE_SELECTO_WEB}
@@ -45,7 +49,7 @@ my @files = qw(
     selecto-importer.js
 );
 my $target = File::Spec->catdir($repo, 'public', 'selecto-api-console');
-make_path($target);
+make_path($target) unless $check;
 for my $file (@files) {
     my $source = File::Spec->catfile($dist, $file);
     open my $source_file, '<:raw', $source or die "Cannot read $source: $!\n";
@@ -53,13 +57,20 @@ for my $file (@files) {
     close $source_file or die "Cannot close $source: $!\n";
     my $expected = $manifest->{assets}{$file}{sha256} // '';
     die "Digest mismatch for $source\n" unless sha256_hex($content) eq $expected;
-    copy($source, File::Spec->catfile($target, $file))
-        or die "Cannot copy $source: $!\n";
+    _sync_or_check($source, File::Spec->catfile($target, $file), $check);
 }
-copy($manifest_path, File::Spec->catfile($target, 'manifest.json'))
-    or die "Cannot copy $manifest_path: $!\n";
+_sync_or_check($manifest_path, File::Spec->catfile($target, 'manifest.json'), $check);
 my $license = File::Spec->catfile($dist, '..', 'LICENSE');
-copy($license, File::Spec->catfile($target, 'LICENSE'))
-    or die "Cannot copy $license: $!\n";
+_sync_or_check($license, File::Spec->catfile($target, 'LICENSE'), $check);
 
-say "Synced Selecto API Console $manifest->{version} from $dist";
+say(($check ? 'Verified' : 'Synced') . " Selecto API Console $manifest->{version} from $dist");
+
+sub _sync_or_check {
+    my ($source, $destination, $check) = @_;
+    if ($check) {
+        die "Stale Selecto API Console asset: $destination\n"
+            unless -f $destination && compare($source, $destination) == 0;
+        return;
+    }
+    copy($source, $destination) or die "Cannot copy $source: $!\n";
+}
