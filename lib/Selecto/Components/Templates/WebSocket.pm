@@ -55,6 +55,7 @@ sub connect ($class, $controller, $runtime) {
             template => $result->{template},
             snapshot => $result->{snapshot},
             store_revision => $result->{store_revision},
+            event_id => $result->{event_id},
         );
         return $socket->send({text => encode_json($response)});
     });
@@ -89,7 +90,7 @@ sub _event_params ($envelope) {
     }
     return _invalid_event()
         unless length($envelope->{event}) && length($envelope->{event}) <= 128
-        && length($envelope->{event_id}) && length($envelope->{event_id}) <= 256
+        && "$envelope->{event_id}" =~ /\A[\x21-\x7e]{1,256}\z/
         && "$envelope->{state_revision}" =~ /\A[0-9]+\z/;
     return {
         status => 'ok',

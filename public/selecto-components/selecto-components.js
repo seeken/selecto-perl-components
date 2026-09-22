@@ -1785,6 +1785,140 @@
     return left < right ? -1 : 1;
   }
 
+  var pendingTemplateControlSnapshots = new Map();
+
+  function templateControlKey(control) {
+    if (!(control instanceof Element)
+        || !control.matches("input, select, textarea")) return null;
+    var field = control.getAttribute("data-selecto-template-field");
+    if (field) return "field:" + field;
+    return control.id ? "id:" + control.id : null;
+  }
+
+  function templateControlState(control) {
+    if (control instanceof HTMLInputElement) {
+      if (control.type === "file" || control.type === "hidden") return null;
+      if (control.type === "checkbox" || control.type === "radio") {
+        return {kind: "checked", checked: control.checked};
+      }
+    }
+    if (control instanceof HTMLSelectElement && control.multiple) {
+      return {
+        kind: "selected",
+        values: Array.from(control.selectedOptions, function (option) {
+          return option.value;
+        })
+      };
+    }
+    return {kind: "value", value: control.value};
+  }
+
+  function templateEventForm(root, eventId) {
+    if (!eventId) return null;
+    for (var input of root.querySelectorAll('form input[name="event_id"]')) {
+      if (input.value === eventId) return input.form;
+    }
+    return null;
+  }
+
+  function templateControlMap(root) {
+    var controls = new Map();
+    var duplicates = new Set();
+    for (var control of root.querySelectorAll("input, select, textarea")) {
+      var key = templateControlKey(control);
+      if (!key || duplicates.has(key)) continue;
+      if (controls.has(key)) {
+        controls.delete(key);
+        duplicates.add(key);
+      } else {
+        controls.set(key, control);
+      }
+    }
+    return controls;
+  }
+
+  function captureTemplateControls(root, metadata) {
+    if (!root) return null;
+    var controls = templateControlMap(root);
+    var submittedForm = templateEventForm(root, metadata && metadata.event_id);
+    var values = [];
+    controls.forEach(function (control, key) {
+      if (!control.hasAttribute("data-selecto-template-dirty")
+          || (submittedForm && submittedForm.contains(control))) return;
+      var state = templateControlState(control);
+      if (state) values.push({key: key, state: state});
+    });
+    var active = document.activeElement;
+    var focus = null;
+    if (active && root.contains(active)) {
+      var activeKey = templateControlKey(active);
+      if (activeKey && controls.get(activeKey) === active) {
+        focus = {key: activeKey};
+        try {
+          if (typeof active.selectionStart === "number") {
+            focus.start = active.selectionStart;
+            focus.end = active.selectionEnd;
+            focus.direction = active.selectionDirection;
+          }
+        } catch (_error) {}
+      }
+    }
+    return {
+      instance_id: root.dataset.selectoTemplateInstance,
+      values: values,
+      focus: focus
+    };
+  }
+
+  function restoreTemplateControls(snapshot) {
+    if (!snapshot || typeof snapshot.instance_id !== "string") return;
+    var root = templateRootForInstance(snapshot.instance_id);
+    if (!root) return;
+    var controls = templateControlMap(root);
+    snapshot.values.forEach(function (entry) {
+      var control = controls.get(entry.key);
+      if (!control) return;
+      if (entry.state.kind === "checked") control.checked = entry.state.checked;
+      else if (entry.state.kind === "selected" && control instanceof HTMLSelectElement) {
+        var selected = new Set(entry.state.values);
+        for (var option of control.options) option.selected = selected.has(option.value);
+      } else if (entry.state.kind === "value") control.value = entry.state.value;
+      else return;
+      control.setAttribute("data-selecto-template-dirty", "true");
+    });
+    var focus = snapshot.focus;
+    var focused = focus && controls.get(focus.key);
+    if (!focused) return;
+    try { focused.focus({preventScroll: true}); }
+    catch (_error) { focused.focus(); }
+    if (typeof focus.start === "number" && focused.setSelectionRange) {
+      try { focused.setSelectionRange(focus.start, focus.end, focus.direction); }
+      catch (_error) {}
+    }
+  }
+
+  function templateResponseKey(metadata) {
+    if (!metadata || typeof metadata.instance_id !== "string") return null;
+    var state = normalizedTemplateRevision(metadata.state_revision);
+    var store = normalizedTemplateRevision(metadata.store_revision);
+    return state === null || store === null
+      ? null : metadata.instance_id + "\u0000" + state + "\u0000" + store;
+  }
+
+  document.addEventListener("input", function (event) {
+    var control = event.target;
+    if (!templateControlKey(control)
+        || !control.closest("[data-selecto-template-instance]")) return;
+    control.setAttribute("data-selecto-template-dirty", "true");
+  });
+
+  document.addEventListener("change", function (event) {
+    var control = event.target;
+    if (!templateControlKey(control)
+        || !control.closest("[data-selecto-template-instance]")) return;
+    control.setAttribute("data-selecto-template-dirty", "true");
+  });
+
   function templateRootForInstance(instanceId, target) {
     if (target !== undefined) {
       if (!(target instanceof Element)) return null;
@@ -1828,7 +1962,10 @@
     return {
       instance_id: instanceId,
       state_revision: stateRevision,
-      store_revision: storeRevision
+      store_revision: storeRevision,
+      event_id: headers.get("X-Selecto-Event-ID"),
+      source_id: headers.get("X-Selecto-Source"),
+      source_generation: headers.get("X-Selecto-Source-Generation")
     };
   }
 
@@ -1864,8 +2001,24 @@
         try { target = document.querySelector(message.target); }
         catch (_error) { target = null; }
       }
-      if (templateResponseIsStale(message && message.selecto, target)) {
+      var metadata = message && message.selecto;
+      if (templateResponseIsStale(metadata, target)) {
         detail.cancelled = true;
+        return;
+      }
+      var key = templateResponseKey(metadata);
+      if (key) {
+        pendingTemplateControlSnapshots.set(
+          key,
+          captureTemplateControls(
+            templateRootForInstance(metadata.instance_id, target), metadata
+          )
+        );
+        while (pendingTemplateControlSnapshots.size > 32) {
+          pendingTemplateControlSnapshots.delete(
+            pendingTemplateControlSnapshots.keys().next().value
+          );
+        }
       }
     }).catch(function () {}));
   });
@@ -1874,6 +2027,12 @@
     var incoming = event.detail && event.detail.message;
     if (incoming && typeof incoming.json === "function") {
       incoming.json().then(function (message) {
+        var templateKey = templateResponseKey(message && message.selecto);
+        if (templateKey) {
+          var controlSnapshot = pendingTemplateControlSnapshots.get(templateKey);
+          pendingTemplateControlSnapshots.delete(templateKey);
+          restoreTemplateControls(controlSnapshot);
+        }
         var requestId = message && message.selecto && message.selecto.request_id;
         if (requestId && requestId === activeSelectoRequestId) activeSelectoRequestId = null;
         var nextUrl = message && message.selecto && message.selecto.url;
@@ -1902,7 +2061,9 @@
     // traversed the freshly inserted surface twice for every WebSocket reply.
   });
 
-  document.addEventListener("htmx:after:swap", function () {
+  document.addEventListener("htmx:after:swap", function (event) {
+    var ctx = event.detail && event.detail.ctx;
+    restoreTemplateControls(ctx && ctx.selectoTemplateControlSnapshot);
     restoreBuilderTabs();
     restoreBuilderTrays();
     restoreResultViews();
@@ -1917,9 +2078,15 @@
 
   document.addEventListener("htmx:before:swap", function (event) {
     var ctx = event.detail && event.detail.ctx;
-    if (templateResponseIsStale(httpTemplateMetadata(ctx), ctx && ctx.target)) {
+    var metadata = httpTemplateMetadata(ctx);
+    if (templateResponseIsStale(metadata, ctx && ctx.target)) {
       event.preventDefault();
       return;
+    }
+    if (metadata) {
+      ctx.selectoTemplateControlSnapshot = captureTemplateControls(
+        templateRootForInstance(metadata.instance_id, ctx.target), metadata
+      );
     }
     selectoSwapStarted = performance.now();
     destroyChartsWithin(event.detail && event.detail.target);

@@ -52,6 +52,7 @@ sub event ($class, $controller, $runtime) {
     return _snapshot_response(
         $controller, $runtime, $result->{template},
         $result->{snapshot}, $result->{store_revision},
+        event_id => $result->{event_id},
     );
 }
 
@@ -84,6 +85,7 @@ sub dispatch_event ($class, $controller, $runtime, %args) {
         status => 'ok', template => $context->{template},
         snapshot => $result->{observation}{snapshot},
         store_revision => $result->{store_revision},
+        event_id => "$params->{event_id}",
     };
 }
 
@@ -209,6 +211,8 @@ sub _finish_source ($controller, $runtime, $context, $effect, $claim_token, $exe
     return _snapshot_response(
         $controller, $runtime, $context->{template},
         $completed->{observation}{snapshot}, $completed->{store_revision},
+        source_id => $effect->{source},
+        source_generation => $effect->{generation},
     );
 }
 
@@ -231,12 +235,13 @@ sub _source_context ($controller, $context, $effect) {
     return {status => 'ok', source_context => $resolved};
 }
 
-sub _snapshot_response ($controller, $runtime, $template, $snapshot, $store_revision) {
+sub _snapshot_response ($controller, $runtime, $template, $snapshot, $store_revision, %metadata) {
     return $runtime->{transport}->respond_snapshot(
         $controller,
         template => $template,
         snapshot => $snapshot,
         store_revision => $store_revision,
+        %metadata,
     );
 }
 
@@ -299,7 +304,8 @@ sub _event_params ($controller) {
     }
     my $csrf = $controller->every_param('csrf_token');
     return _invalid_request('invalid_event_params', 'Template event parameters are invalid.')
-        unless _scalar($values{event}, 128) && _scalar($values{event_id}, 256)
+        unless _scalar($values{event}, 128)
+        && "$values{event_id}" =~ /\A[\x21-\x7e]{1,256}\z/
         && "$values{state_revision}" =~ /\A[0-9]+\z/
         && ref($csrf) eq 'ARRAY' && @$csrf == 1 && !ref($csrf->[0]);
     my $action = $controller->every_param('template_action');

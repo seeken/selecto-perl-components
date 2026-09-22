@@ -237,6 +237,8 @@ $t->post_ok(
 )->status_is(200)
     ->header_is('X-Selecto-State-Revision' => 0)
     ->header_is('X-Selecto-Store-Revision' => 1)
+    ->header_is('X-Selecto-Source' => 'orders')
+    ->header_is('X-Selecto-Source-Generation' => 1)
     ->element_exists('main.selecto-template-instance')
     ->element_exists_not('html')
     ->element_exists('[data-order-number="PO-100"]')
@@ -265,6 +267,7 @@ $t->post_ok(
 $t->status_is(200)
     ->header_is('X-Selecto-State-Revision' => 1)
     ->header_is('X-Selecto-Store-Revision' => 2)
+    ->header_is('X-Selecto-Event-ID' => $event_params{event_id})
     ->element_exists('input[name="value"][value="PO-200"]')
     ->element_exists('form.selecto-template-source[data-selecto-template-source="orders"]')
     ->element_exists_not('[data-order-number]');
@@ -284,6 +287,12 @@ $t->post_ok(
         form => \%forged_event,
 )->status_is(422)
     ->element_exists('[data-selecto-template-error="invalid_event_params"]');
+my %unsafe_event_id = (%event_params, event_id => "unsafe\nevent");
+$t->post_ok(
+    $event_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => \%unsafe_event_id,
+)->status_is(422)
+    ->element_exists('[data-selecto-template-error="invalid_event_params"]');
 
 $t->post_ok(
     $pending_source_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
@@ -291,6 +300,8 @@ $t->post_ok(
 )->status_is(200)
     ->header_is('X-Selecto-State-Revision' => 1)
     ->header_is('X-Selecto-Store-Revision' => 3)
+    ->header_is('X-Selecto-Source' => 'orders')
+    ->header_is('X-Selecto-Source-Generation' => 2)
     ->element_exists('[data-order-number="PO-200"]');
 is $source_context_calls, 2,
     'request authority is resolved again for a new source generation';
@@ -360,6 +371,8 @@ is $ws_response->{target}, '#' . $ws_root->attr('id'),
 is $ws_response->{swap}, 'outerHTML', 'WebSocket event preserves the channel wrapper';
 is $ws_response->{selecto}{state_revision}, 1,
     'WebSocket response carries the accepted state revision';
+is $ws_response->{selecto}{event_id}, $ws_event{event_id},
+    'WebSocket response identifies the accepted event';
 like $ws_response->{content}, qr/value="PO-WS"/,
     'WebSocket response renders the accepted event state';
 unlike $ws_response->{content}, qr/selecto-template-channel/,
@@ -387,6 +400,15 @@ is $ws_invalid->{selecto}{status}, 422,
     'forged WebSocket fields return a validation envelope';
 is $ws_invalid->{selecto}{code}, 'invalid_event_params',
     'forged WebSocket fields never reach event dispatch';
+$t->finish_ok;
+$t->websocket_ok($ws_path => {'X-Test-Actor' => 'alice'})
+    ->send_ok({text => encode_json({
+        headers => {}, %ws_event, event_id => "unsafe\nevent",
+    })})
+    ->message_ok;
+my $ws_unsafe_event_id = decode_json($t->message->[1]);
+is $ws_unsafe_event_id->{selecto}{code}, 'invalid_event_params',
+    'WebSocket event IDs exclude unsafe response-header characters';
 $t->finish_ok;
 $t->websocket_ok($ws_path => {'X-Test-Actor' => 'alice'})
     ->send_ok({text => '{invalid'})
