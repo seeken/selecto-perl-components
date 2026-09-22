@@ -60,6 +60,21 @@ sub complete {
     return $self->{effects}->complete(%args);
 }
 
+sub claim_effect {
+    my ($self, %args) = @_;
+    return $self->{effects}->claim_effect(%args);
+}
+
+sub complete_claimed_effect {
+    my ($self, %args) = @_;
+    return $self->{effects}->complete_claimed_effect(%args);
+}
+
+sub release_effect_claim {
+    my ($self, %args) = @_;
+    return $self->{effects}->release_effect_claim(%args);
+}
+
 sub dispose {
     my ($self, %args) = @_;
     return $self->{instances}->dispose(%args);

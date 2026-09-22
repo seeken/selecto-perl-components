@@ -13,6 +13,7 @@ lib/Selecto/Components/Controller/Explorer.pm
 lib/Selecto/Components/Controller/Lookups.pm
 lib/Selecto/Components/Controller/RecordEditor.pm
 lib/Selecto/Components/Controller/SavedQueries.pm
+lib/Selecto/Components/Controller/Templates.pm
 lib/Selecto/Components/DateShortcut.pm
 lib/Selecto/Components/Explorer.pm
 lib/Selecto/Components/Graph/AxisPlanner.pm
@@ -30,6 +31,7 @@ lib/Selecto/Components/Renderer/Markup.pm
 lib/Selecto/Components/Renderer/Results.pm
 lib/Selecto/Components/RowActions.pm
 lib/Selecto/Components/State.pm
+lib/Selecto/Components/Templates.pm
 lib/Selecto/Components/Templates/Dispatcher.pm
 lib/Selecto/Components/Templates/EffectCoordinator.pm
 lib/Selecto/Components/Templates/Event.pm
@@ -39,6 +41,7 @@ lib/Selecto/Components/Templates/InstanceStore/PostgreSQL.pm
 lib/Selecto/Components/Templates/InstanceService.pm
 lib/Selecto/Components/Templates/Renderer.pm
 lib/Selecto/Components/Templates/SourceExecutor.pm
+lib/Selecto/Components/Templates/Transport.pm
 lib/Selecto/Components/Util.pm
 LICENSE
 Makefile.PL
@@ -81,6 +84,7 @@ src/browser/shell.js
 t/00-load.t
 t/api_console.t
 t/browser/components.spec.js
+t/browser/templates.spec.js
 t/bucket_parser.t
 t/date_shortcut.t
 t/graph_axis_planner.t
@@ -96,6 +100,7 @@ t/row_actions.t
 t/security_boundaries.t
 t/state.t
 t/templates_instance_store_postgresql.t
+t/templates_http.t
 t/templates_renderer.t
 t/templates_runtime_host.t
 t/templates_source_executor.t

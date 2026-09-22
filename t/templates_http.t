@@ -1,0 +1,296 @@
+use 5.034;
+use strict;
+use warnings;
+
+use FindBin ();
+use lib "$FindBin::Bin/../lib";
+use lib "$FindBin::Bin/lib";
+use JSON::PP ();
+use Mojolicious;
+use Test::More;
+use Test::Mojo;
+use TestSelectoComponents ();
+use Selecto::Components::AssetManifest qw(asset_revision);
+use Selecto::Components::Templates::InstanceStore::Memory ();
+use Selecto::Components::Templates::Renderer ();
+use Selecto::Components::Util qw(html_escape);
+use Selecto::Domain ();
+use Selecto::Engine ();
+use Selecto::Expression ();
+use Selecto::PostgreSQL ();
+
+my $now = 1_000;
+my $instance_sequence = 0;
+my $claim_sequence = 0;
+my $event_sequence = 0;
+my $authorization_calls = 0;
+my $store = Selecto::Components::Templates::InstanceStore::Memory->new(
+    clock => sub { $now },
+    id_generator => sub { 'http-instance-' . ++$instance_sequence },
+    claim_token_generator => sub { 'http-claim-' . ++$claim_sequence },
+);
+my $manifest = TestSelectoComponents::template_order_manifest();
+my $catalog = TestSelectoComponents::template_domain_catalog();
+my $app = Mojolicious->new;
+$app->secrets(['template-http-test-secret']);
+$app->plugin('Selecto::Components::Templates' => {
+    store => $store,
+    clock => sub { $now },
+    event_id_generator => sub { 'http-event-' . ++$event_sequence },
+    resolve_owner => sub {
+        my ($controller) = @_;
+        my $actor = $controller->req->headers->header('X-Test-Actor') // '';
+        return {status => 'unauthenticated'} unless length $actor;
+        return {status => 'forbidden'} if $actor eq 'forbidden';
+        return {status => 'ok', owner_scope => {
+            tenant_id => 7, actor_id => "$actor", session_id => 'session-http',
+        }};
+    },
+    templates => {
+        orders => {
+            title => 'Orders template',
+            release_id => 'orders-http-v1',
+            manifest => $manifest,
+            registry => _registry(),
+            ttl_seconds => 60,
+            lease_seconds => 10,
+            source_authorizer => sub {
+                my ($controller, $source, $effect) = @_;
+                $authorization_calls++;
+                my $domain = Selecto::Domain->parse(
+                    $catalog->{domains}{orders}, strict => 1,
+                )->with_required_predicate(
+                    Selecto::Expression->eq('tenant_id', 7),
+                );
+                my $engine = Selecto::Engine->new(
+                    domain => $domain,
+                    adapter => Selecto::PostgreSQL->new(
+                        dbh => TemplateHTTPDBH->new,
+                    ),
+                );
+                return {status => 'ok', engine => $engine, query => $engine->query};
+            },
+            source_runner => sub {
+                my ($engine, $query, $effect) = @_;
+                my $search = $effect->{bindings}{state}{search};
+                my $number = length($search) ? $search : 'PO-100';
+                return {rows => [[
+                    1, $number, '2026-09-22T12:00:00Z', 'open', 44,
+                ]]};
+            },
+        },
+    },
+});
+
+my $t = Test::Mojo->new($app);
+$t->get_ok('/templates/orders')
+    ->status_is(401)
+    ->header_is('Cache-Control' => 'no-store, private')
+    ->element_exists('[data-selecto-template-error="authentication_required"]');
+$t->get_ok('/templates/orders' => {'X-Test-Actor' => 'forbidden'})
+    ->status_is(403)
+    ->element_exists('[data-selecto-template-error="template_forbidden"]');
+$t->get_ok('/templates/missing' => {'X-Test-Actor' => 'alice'})
+    ->status_is(404)
+    ->element_exists('[data-selecto-template-error="template_not_found"]');
+$t->get_ok('/selecto-components/htmx.min.js')->status_is(200);
+
+$t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})
+    ->status_is(200)
+    ->content_type_like(qr{text/html})
+    ->header_is('Cache-Control' => 'no-store, private')
+    ->header_is('X-Selecto-State-Revision' => 0)
+    ->header_is('X-Selecto-Store-Revision' => 0)
+    ->element_exists('main.selecto-template-instance[hx-history="false"]' .
+        '[hx-status\\:4xx="swap: outerHTML"][hx-status\\:5xx="swap: outerHTML"]')
+    ->element_exists('script[src="/selecto-components/htmx.min.js?v=' .
+        asset_revision() . '"]')
+    ->element_exists('form[data-template-event="search_changed"][hx-post]')
+    ->element_exists('form.selecto-template-source[data-selecto-template-source="orders"]' .
+        '[hx-trigger="load"][hx-swap="outerHTML"]')
+    ->element_exists_not('[data-order-number]');
+
+my $initial_dom = $t->tx->res->dom;
+my $root = $initial_dom->at('main.selecto-template-instance');
+my $instance_id = $root->attr('data-selecto-template-instance');
+like $instance_id, qr/\Ahttp-instance-\d+\z/, 'instance ID is opaque and server allocated';
+unlike $t->tx->res->body, qr/selecto\.template\.compile-manifest/,
+    'compiled manifest is not sent to the browser';
+my $source_form = $initial_dom->at('form.selecto-template-source');
+my $source_path = $source_form->attr('action');
+my $source_csrf = $source_form->at('input[name="csrf_token"]')->attr('value');
+
+$t->post_ok(
+    $source_path => {'X-Test-Actor' => 'mallory', 'HX-Request' => 'true'} =>
+        form => {csrf_token => $source_csrf},
+)->status_is(404)
+    ->element_exists('[data-selecto-template-error="template_not_found"]');
+$t->post_ok(
+    $source_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => {csrf_token => 'forged'},
+)->status_is(403)
+    ->element_exists('[data-selecto-template-error="invalid_csrf"]');
+$t->post_ok(
+    $source_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => {csrf_token => $source_csrf, query => 'select *'},
+)->status_is(422)
+    ->element_exists('[data-selecto-template-error="invalid_source_params"]');
+my $held_claim = $store->claim_effect(
+    owner_scope => {
+        tenant_id => 7, actor_id => 'alice', session_id => 'session-http',
+    },
+    instance_id => $instance_id,
+    source => 'orders', generation => 1,
+    effect_id => "$instance_id:source:orders:1", lease_seconds => 10,
+);
+is $held_claim->{status}, 'claimed', 'test worker holds the initial source generation';
+$t->post_ok(
+    $source_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => {csrf_token => $source_csrf},
+)->status_is(409)
+    ->element_exists('[data-selecto-template-error="source_effect_busy"]');
+is(
+    $store->release_effect_claim(
+        owner_scope => {
+            tenant_id => 7, actor_id => 'alice', session_id => 'session-http',
+        },
+        instance_id => $instance_id,
+        source => 'orders', generation => 1,
+        effect_id => "$instance_id:source:orders:1",
+        claim_token => $held_claim->{claim_token},
+    )->{status},
+    'ok',
+    'test worker releases the held source generation',
+);
+
+$t->post_ok(
+    $source_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => {csrf_token => $source_csrf},
+)->status_is(200)
+    ->header_is('X-Selecto-State-Revision' => 0)
+    ->header_is('X-Selecto-Store-Revision' => 1)
+    ->element_exists('main.selecto-template-instance')
+    ->element_exists_not('html')
+    ->element_exists('[data-order-number="PO-100"]')
+    ->element_exists_not('form.selecto-template-source');
+is $authorization_calls, 1, 'source authorization runs for the initial generation';
+
+my $ready_dom = $t->tx->res->dom;
+my $event_form = $ready_dom->at('form[data-template-event="search_changed"]');
+my $event_path = $event_form->attr('action');
+my %event_params = map {
+    $_->attr('name') => $_->attr('value')
+} $event_form->find('input[type="hidden"]')->each;
+$event_params{value} = 'PO-200';
+
+$t->post_ok(
+    $event_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => \%event_params,
+);
+$t->status_is(200)
+    ->header_is('X-Selecto-State-Revision' => 1)
+    ->header_is('X-Selecto-Store-Revision' => 2)
+    ->element_exists('input[name="value"][value="PO-200"]')
+    ->element_exists('form.selecto-template-source[data-selecto-template-source="orders"]')
+    ->element_exists_not('[data-order-number]');
+my $pending_source_form = $t->tx->res->dom->at('form.selecto-template-source');
+my $pending_source_path = $pending_source_form->attr('action');
+my $pending_source_csrf =
+    $pending_source_form->at('input[name="csrf_token"]')->attr('value');
+
+$t->post_ok(
+    $event_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => \%event_params,
+)->status_is(409)
+    ->element_exists('[data-selecto-template-error="duplicate_event"]');
+my %forged_event = (%event_params, tenant_id => 99, event_id => 'forged-event');
+$t->post_ok(
+    $event_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => \%forged_event,
+)->status_is(422)
+    ->element_exists('[data-selecto-template-error="invalid_event_params"]');
+
+$t->post_ok(
+    $pending_source_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => {csrf_token => $pending_source_csrf},
+)->status_is(200)
+    ->header_is('X-Selecto-State-Revision' => 1)
+    ->header_is('X-Selecto-Store-Revision' => 3)
+    ->element_exists('[data-order-number="PO-200"]');
+is $authorization_calls, 2, 'source authorization is reacquired for a new generation';
+
+$t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})->status_is(200);
+my $expiring_dom = $t->tx->res->dom;
+my $expiring_event = $expiring_dom->at('form[data-template-event="search_changed"]');
+my %fallback_params = map {
+    $_->attr('name') => $_->attr('value')
+} $expiring_event->find('input[type="hidden"]')->each;
+$fallback_params{value} = 'fallback';
+$t->post_ok(
+    $expiring_event->attr('action') => {'X-Test-Actor' => 'alice'} =>
+        form => \%fallback_params,
+)->status_is(200)
+    ->element_exists('html')
+    ->element_exists('script[src="/selecto-components/htmx.min.js?v=' .
+        asset_revision() . '"]')
+    ->element_exists('input[name="value"][value="fallback"]');
+my $fallback_dom = $t->tx->res->dom;
+my $expired_event = $fallback_dom->at('form[data-template-event="search_changed"]');
+my %expired_params = map {
+    $_->attr('name') => $_->attr('value')
+} $expired_event->find('input[type="hidden"]')->each;
+$expired_params{value} = 'late';
+$now += 61;
+$t->post_ok(
+    $expired_event->attr('action') => {'X-Test-Actor' => 'alice'} =>
+        form => \%expired_params,
+)->status_is(410)
+    ->element_exists('[data-selecto-template-error="template_expired"]');
+
+done_testing;
+
+sub _registry {
+    return {
+        components => {
+            SearchInput => sub {
+                my ($node) = @_;
+                my $event = $node->{transport}{events}{change};
+                my $fields = join '', map {
+                    '<input type="hidden" name="' . html_escape($_) . '" value="' .
+                        html_escape($event->{fields}{$_}) . '">'
+                } sort keys %{$event->{fields}};
+                return _safe('<form data-template-event="' .
+                    html_escape($event->{fields}{event}) . '" method="post" action="' .
+                    html_escape($event->{action}) . '" hx-post="' .
+                    html_escape($event->{hx_post}) . '" hx-target="' .
+                    html_escape($event->{hx_target}) . '" hx-swap="' .
+                    html_escape($event->{hx_swap}) . '">' . $fields .
+                    '<input name="value" value="' .
+                    html_escape($node->{props}{value}) . '"></form>');
+            },
+            OrderTable => sub {
+                my ($node) = @_;
+                my $rows = $node->{props}{rows} // [];
+                return _safe(join '', map {
+                    '<p data-order-number="' . html_escape($_->{order_number}) . '">' .
+                        html_escape($_->{order_number}) . '</p>'
+                } @$rows);
+            },
+        },
+        elements => {},
+        include => sub {
+            my ($node) = @_;
+            return _safe('<aside data-template-include="' .
+                html_escape($node->{template}) . '"></aside>');
+        },
+    };
+}
+
+sub _safe {
+    return Selecto::Components::Templates::Renderer->safe_html($_[0]);
+}
+
+package TemplateHTTPDBH;
+
+sub new { return bless {}, $_[0] }
+sub errstr { return undef }

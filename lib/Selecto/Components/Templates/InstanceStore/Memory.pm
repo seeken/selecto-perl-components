@@ -10,9 +10,16 @@ use Time::HiRes qw(time);
 
 sub new {
     my ($class, %args) = @_;
+    my $max_effect_lease_seconds = $args{max_effect_lease_seconds} // 60;
+    die "invalid_limit: max_effect_lease_seconds must be an integer between 1 and 300\n"
+        unless defined($max_effect_lease_seconds) && !ref($max_effect_lease_seconds)
+        && "$max_effect_lease_seconds" =~ /\A[1-9][0-9]*\z/
+        && $max_effect_lease_seconds <= 300;
     return bless {
         clock => $args{clock} // sub { time() },
         id_generator => $args{id_generator} // \&_opaque_id,
+        claim_token_generator => $args{claim_token_generator} // \&_opaque_id,
+        max_effect_lease_seconds => 0 + $max_effect_lease_seconds,
         instances => {},
     }, $class;
 }
@@ -51,6 +58,7 @@ sub create {
         snapshot => dclone($snapshot),
         revision => 0,
         expires_at => 0 + $expires_at,
+        effect_claims => {},
     };
     return "$instance_id";
 }
@@ -102,6 +110,100 @@ sub compare_and_set {
     return {status => 'ok', revision => $record->{revision}};
 }
 
+sub claim_effect {
+    my ($self, %args) = @_;
+    my $validated = $self->_claim_args(\%args);
+    return $validated unless $validated->{status} eq 'ok';
+
+    my $loaded = $self->load(
+        owner_scope => $args{owner_scope},
+        instance_id => $args{instance_id},
+    );
+    return $loaded unless $loaded->{status} eq 'ok';
+    return {status => 'stale'}
+        unless _effect_is_current($loaded->{snapshot}, \%args);
+
+    my $record = $self->{instances}{$args{instance_id}};
+    my $key = _claim_key($args{source}, $args{generation});
+    my $now = $self->{clock}->();
+    _prune_expired_claims($record, $now);
+    my $current = $record->{effect_claims}{$key};
+    return {
+        status => 'busy',
+        lease_expires_at => $current->{lease_expires_at},
+    } if $current && $current->{lease_expires_at} > $now;
+
+    my $claim_token = $self->{claim_token_generator}->();
+    die "claim_token_unavailable: could not allocate a template effect claim token\n"
+        unless _valid_scalar($claim_token, 256);
+    my $lease_expires_at = $now + $validated->{lease_seconds};
+    $lease_expires_at = $record->{expires_at}
+        if $lease_expires_at > $record->{expires_at};
+    $record->{effect_claims}{$key} = {
+        effect_id => "$args{effect_id}",
+        claim_token => "$claim_token",
+        lease_expires_at => $lease_expires_at,
+    };
+    return {
+        status => 'claimed',
+        claim_token => "$claim_token",
+        lease_expires_at => $lease_expires_at,
+    };
+}
+
+sub commit_claimed_effect {
+    my ($self, %args) = @_;
+    return {status => 'invalid_claim'}
+        unless _valid_claim_identity(\%args)
+        && defined($args{revision}) && !ref($args{revision})
+        && "$args{revision}" =~ /\A[0-9]+\z/
+        && _valid_scalar($args{claim_token}, 256);
+
+    my $loaded = $self->load(
+        owner_scope => $args{owner_scope},
+        instance_id => $args{instance_id},
+    );
+    return $loaded unless $loaded->{status} eq 'ok';
+    my $record = $self->{instances}{$args{instance_id}};
+    my $key = _claim_key($args{source}, $args{generation});
+    my $claim = $record->{effect_claims}{$key};
+    return {status => 'claim_lost'}
+        unless $claim
+        && $claim->{claim_token} eq "$args{claim_token}"
+        && $claim->{lease_expires_at} > $self->{clock}->();
+    return {status => 'conflict', revision => $loaded->{revision}}
+        unless $args{revision} == $loaded->{revision};
+
+    my $snapshot = $args{next_snapshot};
+    return {status => 'invalid_snapshot'}
+        unless ref($snapshot) eq 'HASH'
+        && _snapshot_matches($snapshot, $args{instance_id}, $loaded->{release});
+    $record->{snapshot} = dclone($snapshot);
+    $record->{revision}++;
+    delete $record->{effect_claims}{$key};
+    return {status => 'ok', revision => $record->{revision}};
+}
+
+sub release_effect_claim {
+    my ($self, %args) = @_;
+    return {status => 'invalid_claim'}
+        unless _valid_claim_identity(\%args)
+        && _valid_scalar($args{claim_token}, 256);
+    my $loaded = $self->load(
+        owner_scope => $args{owner_scope},
+        instance_id => $args{instance_id},
+    );
+    return $loaded unless $loaded->{status} eq 'ok';
+
+    my $record = $self->{instances}{$args{instance_id}};
+    my $key = _claim_key($args{source}, $args{generation});
+    my $claim = $record->{effect_claims}{$key};
+    return {status => 'claim_lost'}
+        unless $claim && $claim->{claim_token} eq "$args{claim_token}";
+    delete $record->{effect_claims}{$key};
+    return {status => 'ok'};
+}
+
 sub dispose {
     my ($self, %args) = @_;
     my $loaded = $self->load(
@@ -111,6 +213,48 @@ sub dispose {
     return $loaded unless $loaded->{status} eq 'ok';
     delete $self->{instances}{$args{instance_id}};
     return {status => 'ok'};
+}
+
+sub _claim_args {
+    my ($self, $args) = @_;
+    return {status => 'invalid_effect'} unless _valid_claim_identity($args);
+    my $lease_seconds = $args->{lease_seconds} // $self->{max_effect_lease_seconds};
+    return {status => 'invalid_lease'}
+        unless defined($lease_seconds) && !ref($lease_seconds)
+        && "$lease_seconds" =~ /\A[1-9][0-9]*\z/
+        && $lease_seconds <= $self->{max_effect_lease_seconds};
+    return {status => 'ok', lease_seconds => 0 + $lease_seconds};
+}
+
+sub _valid_claim_identity {
+    my ($args) = @_;
+    return _valid_scalar($args->{instance_id}, 256)
+        && _valid_scalar($args->{source}, 256)
+        && defined($args->{generation}) && !ref($args->{generation})
+        && "$args->{generation}" =~ /\A[1-9][0-9]*\z/
+        && _valid_scalar($args->{effect_id}, 768)
+        && "$args->{effect_id}" eq
+            "$args->{instance_id}:source:$args->{source}:$args->{generation}";
+}
+
+sub _effect_is_current {
+    my ($snapshot, $args) = @_;
+    my $source = ref($snapshot->{sources}) eq 'HASH'
+        ? $snapshot->{sources}{$args->{source}} : undef;
+    return ref($source) eq 'HASH'
+        && defined($source->{generation}) && !ref($source->{generation})
+        && $source->{generation} == $args->{generation}
+        && ($source->{status} // '') eq 'loading';
+}
+
+sub _claim_key { return "$_[0]\0$_[1]" }
+
+sub _prune_expired_claims {
+    my ($record, $now) = @_;
+    for my $key (keys %{$record->{effect_claims}}) {
+        delete $record->{effect_claims}{$key}
+            if $record->{effect_claims}{$key}{lease_expires_at} <= $now;
+    }
 }
 
 sub _scope_key {
@@ -126,6 +270,12 @@ sub _snapshot_matches {
         && "$snapshot->{instance_id}" eq "$instance_id"
         && defined($snapshot->{release_id}) && !ref($snapshot->{release_id})
         && "$snapshot->{release_id}" eq "$release";
+}
+
+sub _valid_scalar {
+    my ($value, $max_bytes) = @_;
+    return defined($value) && !ref($value) && length("$value")
+        && length("$value") <= $max_bytes;
 }
 
 sub _opaque_id {

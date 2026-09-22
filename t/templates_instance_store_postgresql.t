@@ -20,11 +20,13 @@ plan skip_all => 'DBD::Pg is not installed' unless eval { require DBI; require D
 my $worker_one_dbh = _connect();
 my $worker_two_dbh = _connect();
 my $table = sprintf 'selecto_template_instances_%d_%d', $$, int(time() * 1_000_000);
+my $claims_table = $table . '_claims';
 my $worker_one = _store($worker_one_dbh);
 my $worker_two = _store($worker_two_dbh);
 $worker_one->install_schema;
 
 END {
+    eval { $worker_one_dbh->do(qq{DROP TABLE IF EXISTS "$claims_table"}) if $worker_one_dbh };
     eval { $worker_one_dbh->do(qq{DROP TABLE IF EXISTS "$table"}) if $worker_one_dbh };
     eval { $worker_one_dbh->disconnect if $worker_one_dbh };
     eval { $worker_two_dbh->disconnect if $worker_two_dbh };
@@ -120,9 +122,158 @@ is(
     'worker one observes the state committed by worker two',
 );
 
+my $effect_two = $dispatched->{observation}{effects}[0];
+my $claim_one = $dispatcher_one->claim_effect(
+    owner_scope => $owner,
+    instance_id => $mounted->{instance_id},
+    effect => $effect_two,
+    lease_seconds => 5,
+);
+is $claim_one->{status}, 'claimed', 'worker one claims the current source generation';
+my $claim_two = $dispatcher_two->claim_effect(
+    owner_scope => $owner,
+    instance_id => $mounted->{instance_id},
+    effect => $effect_two,
+    lease_seconds => 5,
+);
+is $claim_two->{status}, 'busy', 'worker two cannot duplicate a live source claim';
+is(
+    $dispatcher_two->claim_effect(
+        owner_scope => $wrong_owner,
+        instance_id => $mounted->{instance_id},
+        effect => $effect_two,
+        lease_seconds => 5,
+    )->{status},
+    'not_found',
+    'a claim does not disclose an instance to another owner',
+);
+
+my $claimed_completion = $dispatcher_one->complete_claimed_effect(
+    owner_scope => $owner,
+    instance_id => $mounted->{instance_id},
+    manifest => $manifest,
+    claim_token => $claim_one->{claim_token},
+    completion => _completion(
+        $mounted->{instance_id}, 'release-perl-postgresql-1', 2,
+        [{id => 1, order_number => 'PO-100'}],
+    ),
+);
+is $claimed_completion->{status}, 'ok', 'the claim owner commits its completion';
+is $claimed_completion->{store_revision}, 2,
+    'claimed completion and claim consumption are one revisioned update';
+is(
+    $dispatcher_two->complete_claimed_effect(
+        owner_scope => $owner,
+        instance_id => $mounted->{instance_id},
+        manifest => $manifest,
+        claim_token => $claim_one->{claim_token},
+        completion => _completion(
+            $mounted->{instance_id}, 'release-perl-postgresql-1', 2,
+            [{id => 2, order_number => 'PO-duplicate'}],
+        ),
+    )->{status},
+    'claim_lost',
+    'a consumed PostgreSQL claim cannot complete twice',
+);
+
+my $third_generation = $dispatcher_one->dispatch_params(
+    owner_scope => $owner,
+    instance_id => $mounted->{instance_id},
+    manifest => $manifest,
+    event_id => 'postgres-worker-one-next-event',
+    name => 'search_changed',
+    params => {value => 'PO-200'},
+);
+is $third_generation->{store_revision}, 3, 'a later event creates another generation';
+my $effect_three = $third_generation->{observation}{effects}[0];
+my $expiring_claim = $dispatcher_one->claim_effect(
+    owner_scope => $owner,
+    instance_id => $mounted->{instance_id},
+    effect => $effect_three,
+    lease_seconds => 1,
+);
+is $expiring_claim->{status}, 'claimed', 'worker one obtains a short source lease';
+$worker_one_dbh->selectrow_array('SELECT pg_sleep(1.05)');
+my $replacement_claim = $dispatcher_two->claim_effect(
+    owner_scope => $owner,
+    instance_id => $mounted->{instance_id},
+    effect => $effect_three,
+    lease_seconds => 5,
+);
+is $replacement_claim->{status}, 'claimed', 'worker two replaces an expired source lease';
+isnt $replacement_claim->{claim_token}, $expiring_claim->{claim_token},
+    'the replacement lease has a new token';
+is(
+    $dispatcher_one->complete_claimed_effect(
+        owner_scope => $owner,
+        instance_id => $mounted->{instance_id},
+        manifest => $manifest,
+        claim_token => $expiring_claim->{claim_token},
+        completion => _completion(
+            $mounted->{instance_id}, 'release-perl-postgresql-1', 3,
+            [{id => 3, order_number => 'PO-old-worker'}],
+        ),
+    )->{status},
+    'claim_lost',
+    'an expired worker cannot commit after the lease is replaced',
+);
+my $replacement_completion = $dispatcher_two->complete_claimed_effect(
+    owner_scope => $owner,
+    instance_id => $mounted->{instance_id},
+    manifest => $manifest,
+    claim_token => $replacement_claim->{claim_token},
+    completion => _completion(
+        $mounted->{instance_id}, 'release-perl-postgresql-1', 3,
+        [{id => 4, order_number => 'PO-200'}],
+    ),
+);
+is $replacement_completion->{status}, 'ok', 'the replacement worker commits once';
+is $replacement_completion->{store_revision}, 4,
+    'the replacement completion advances the shared revision';
+
+my $cleanup_generation = $dispatcher_one->dispatch_params(
+    owner_scope => $owner,
+    instance_id => $mounted->{instance_id},
+    manifest => $manifest,
+    event_id => 'postgres-claim-cleanup-event',
+    name => 'search_changed',
+    params => {value => 'PO-300'},
+);
+is $cleanup_generation->{store_revision}, 5,
+    'another event creates a generation for abandoned-claim cleanup';
+my $cleanup_effect = $cleanup_generation->{observation}{effects}[0];
+my $abandoned_claim = $dispatcher_one->claim_effect(
+    owner_scope => $owner,
+    instance_id => $mounted->{instance_id},
+    effect => $cleanup_effect,
+    lease_seconds => 1,
+);
+is $abandoned_claim->{status}, 'claimed', 'a worker can abandon a short lease';
+$worker_one_dbh->selectrow_array('SELECT pg_sleep(1.05)');
+is $worker_two->cleanup_expired_claims(limit => 1), 1,
+    'expired effect-claim cleanup obeys its row limit';
+my $claim_after_cleanup = $dispatcher_two->claim_effect(
+    owner_scope => $owner,
+    instance_id => $mounted->{instance_id},
+    effect => $cleanup_effect,
+    lease_seconds => 5,
+);
+is $claim_after_cleanup->{status}, 'claimed', 'a cleaned generation can be claimed again';
+is(
+    $dispatcher_two->release_effect_claim(
+        owner_scope => $owner,
+        instance_id => $mounted->{instance_id},
+        effect => $cleanup_effect,
+        claim_token => $claim_after_cleanup->{claim_token},
+    )->{status},
+    'ok',
+    'a PostgreSQL claim can be released explicitly',
+);
+
 my $small_store = Selecto::Components::Templates::InstanceStore::PostgreSQL->new(
     dbh_provider => sub { $worker_one_dbh },
     table => $table,
+    claims_table => $claims_table,
     max_snapshot_bytes => 256,
 );
 my $large_id = $small_store->new_instance_id;
@@ -215,6 +366,7 @@ sub _store {
     return Selecto::Components::Templates::InstanceStore::PostgreSQL->new(
         dbh_provider => sub { $dbh },
         table => $table,
+        claims_table => $claims_table,
     );
 }
 
@@ -232,4 +384,18 @@ sub _snapshot {
 
 sub _manifest {
     return TestSelectoComponents::template_order_manifest();
+}
+
+sub _completion {
+    my ($instance_id, $release_id, $generation, $rows) = @_;
+    return {
+        schema => 'selecto.template.runtime-completion.v1',
+        instance_id => $instance_id,
+        release_id => $release_id,
+        effect_id => "$instance_id:source:orders:$generation",
+        source => 'orders',
+        generation => $generation,
+        outcome => 'ok',
+        result => $rows,
+    };
 }

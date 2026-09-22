@@ -327,7 +327,38 @@ The provider supplies a DBI-compatible PostgreSQL handle already owned by the
 current request worker. The store neither retains nor disconnects it, and the host
 must not share one handle across workers. Apply the statements from
 `schema_sql` through the host migration system; `install_schema` is available for
-development and disposable tests.
+development and disposable tests. The schema includes a child effect-claim table;
+set `claims_table` when the host needs an explicit name alongside a custom instance
+table.
+
+Before executing a source effect, a worker obtains a short server-side lease:
+
+```perl
+my $claim = $dispatcher->claim_effect(
+    owner_scope => $owner_scope,
+    instance_id => $instance_id,
+    effect => $effect,
+    lease_seconds => 30,
+);
+
+if ($claim->{status} eq 'claimed') {
+    my $completion = execute_source_outside_the_store_transaction($effect);
+    my $result = $dispatcher->complete_claimed_effect(
+        owner_scope => $owner_scope,
+        instance_id => $instance_id,
+        manifest => $manifest,
+        claim_token => $claim->{claim_token},
+        completion => $completion,
+    );
+}
+```
+
+A `busy` result means another worker owns that source generation. An expired lease
+can be replaced with a new opaque token. The old token then receives `claim_lost`
+and cannot commit. Hosts should choose a lease longer than their enforced query
+timeout and keep tokens in server-owned request state.
+`cleanup_expired_claims` removes abandoned leases with the same configured hard
+row limit used for instance cleanup.
 
 Owner scope is canonicalized and stored only as a SHA-256 digest. Instance IDs are
 opaque references. Snapshots remain server-side, have a configurable byte limit,
@@ -338,9 +369,79 @@ exceptions are returned by the dispatcher as the bounded
 `instance_store_unavailable` error.
 
 The store is ephemeral recovery infrastructure rather than business persistence.
-It does not make business writes idempotent and does not yet claim source effects;
-the dispatcher still needs the planned lease/claim step before multi-worker source
-execution can be advertised.
+It does not make business writes idempotent. Effect leases prevent duplicate source
+query execution for one instance/source/generation when the host follows the
+claim/complete flow; operation-layer receipts and idempotency remain necessary for
+business writes.
+
+## Native-template HTTP plugin
+
+`Selecto::Components::Templates` is an additive Mojolicious plugin for private
+native-template pages. It does not require or alter the explorer plugin. The host
+installs pinned compiled manifests and renderer callbacks, resolves authenticated
+owner scope for every request, and supplies fresh source authority:
+
+```perl
+plugin 'Selecto::Components::Templates' => {
+    store => $template_instance_store,
+    resolve_owner => sub ($controller) {
+        my $actor = authenticated_actor($controller)
+            or return {status => 'unauthenticated'};
+        return {status => 'ok', owner_scope => {
+            tenant_id => $actor->tenant_id,
+            actor_id => $actor->id,
+            session_id => $controller->session('template_session_id'),
+        }};
+    },
+    templates => {
+        order_browser => {
+            release_id => 'order-browser-2026-09-22',
+            manifest => $compiled_order_browser,
+            registry => $template_renderer_registry,
+            ttl_seconds => 3600,
+            lease_seconds => 30,
+            resolve_inputs => sub ($controller) {
+                return validated_public_inputs($controller);
+            },
+            source_authorizer => sub ($controller, $source, $effect) {
+                my $engine = fresh_tenant_scoped_engine($controller, $source);
+                return {status => 'ok', engine => $engine, query => $engine->query};
+            },
+        },
+    },
+};
+```
+
+The plugin adds these ordinary HTTP routes by default:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /templates/:id` | Mount an opaque owner-bound instance and render the full page |
+| `POST /template-instances/:instance/events` | Normalize and dispatch one declared event |
+| `POST /template-instances/:instance/sources/:source` | Claim and execute one current declared source generation |
+
+`template_path` and `instance_path` can replace the two prefixes. Every response is
+private and `no-store`; state-changing requests require the session-bound Mojolicious
+CSRF token. POST responses return the same stable instance root as an HTML fragment
+when `HX-Request: true`, and a complete page otherwise. The root carries state and
+store revisions, disables HTMX history snapshots, and pending source forms use the
+packaged htmx runtime with an ordinary submit fallback. It also declares the htmx 4
+status policy explicitly: bounded 4xx and 5xx fragments replace the stable root.
+Browser tests pin successful swaps plus 409 conflict and 422 validation behavior.
+
+Component renderer callbacks receive their existing node data plus a server-built
+`transport.events` descriptor for each declared event. The descriptor contains the
+POST action, htmx target/swap values, and hidden fields (`csrf_token`, `event`,
+`event_id`, and `state_revision`). Render those fields as escaped values and keep the
+editable browser value named `value`. The controller rejects missing, repeated, and
+extra fields before dispatch.
+
+The browser never supplies the manifest, source plan, owner scope, adapter, or query.
+For a source POST, the controller loads the owner-bound snapshot, reconstructs the
+current effect, obtains a generation lease, and calls `SourceExecutor`; the template
+can only narrow the fresh host query. Source execution in this initial adapter is
+synchronous. A host executor or worker/pool strategy must demonstrate that slow DBI
+work does not block unrelated requests before the route is advertised as nonblocking.
 
 ## Plugin usage
 
