@@ -8,6 +8,8 @@ use Selecto::Components::Controller::Templates ();
 use Selecto::Components::Templates::Dispatcher ();
 use Selecto::Components::Templates::SourceScheduler ();
 use Selecto::Components::Templates::Transport ();
+use Selecto::Components::Templates::WebSocket ();
+use Selecto::Components::WebSocketPolicy ();
 
 =head1 NAME
 
@@ -32,6 +34,17 @@ sub register ($self, $app, $plugin_config) {
     my $resolve_owner = $plugin_config->{resolve_owner};
     die "Selecto::Components::Templates requires a resolve_owner callback\n"
         unless ref($resolve_owner) eq 'CODE';
+    my $origin_check = $plugin_config->{origin_check}
+        // \&Selecto::Components::WebSocketPolicy::same_origin;
+    die "origin_check must be a coderef\n" unless ref($origin_check) eq 'CODE';
+    my $websocket_inactivity_timeout = _positive_integer_range(
+        $plugin_config->{websocket_inactivity_timeout} // 3600,
+        30, 86_400, 'websocket_inactivity_timeout',
+    );
+    my $websocket_heartbeat_interval = _websocket_heartbeat(
+        $plugin_config->{websocket_heartbeat_interval} // 30,
+        $websocket_inactivity_timeout,
+    );
     my $source_timeout_seconds = _positive_number(
         $plugin_config->{source_timeout_seconds} // 15, 300,
         'source_timeout_seconds',
@@ -91,6 +104,9 @@ sub register ($self, $app, $plugin_config) {
         templates_by_release => \%by_release,
         resolve_owner => $resolve_owner,
         source_scheduler => $source_scheduler,
+        origin_check => $origin_check,
+        websocket_inactivity_timeout => $websocket_inactivity_timeout,
+        websocket_heartbeat_interval => $websocket_heartbeat_interval,
         clock => $clock,
     };
 
@@ -105,6 +121,12 @@ sub register ($self, $app, $plugin_config) {
         ->post("$instance_path/:selecto_template_instance_id/sources/:selecto_template_source_id")
         ->to(cb => sub ($controller) {
             return Selecto::Components::Controller::Templates->source($controller, $runtime);
+        });
+    $app->routes->websocket("$instance_path/:selecto_template_instance_id/ws")
+        ->to(cb => sub ($controller) {
+            return Selecto::Components::Templates::WebSocket->connect(
+                $controller, $runtime,
+            );
         });
 }
 
@@ -183,6 +205,22 @@ sub _positive_number ($value, $max, $name) {
         unless defined($value) && !ref($value)
         && "$value" =~ /\A(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)\z/
         && $value > 0 && $value <= $max;
+    return 0 + $value;
+}
+
+sub _positive_integer_range ($value, $min, $max, $name) {
+    die "$name must be an integer between $min and $max\n"
+        unless defined($value) && !ref($value)
+        && "$value" =~ /\A[0-9]+\z/ && $value >= $min && $value <= $max;
+    return 0 + $value;
+}
+
+sub _websocket_heartbeat ($value, $inactivity_timeout) {
+    die "websocket_heartbeat_interval must be 0 or an integer between 15 and 300 seconds\n"
+        unless defined($value) && !ref($value) && "$value" =~ /\A[0-9]+\z/
+        && ($value == 0 || $value >= 15 && $value <= 300);
+    die "websocket_heartbeat_interval must be less than websocket_inactivity_timeout\n"
+        if $value && $value >= $inactivity_timeout;
     return 0 + $value;
 }
 

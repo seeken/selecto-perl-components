@@ -43,7 +43,9 @@ lib/Selecto/Components/Templates/Renderer.pm
 lib/Selecto/Components/Templates/SourceExecutor.pm
 lib/Selecto/Components/Templates/SourceScheduler.pm
 lib/Selecto/Components/Templates/Transport.pm
+lib/Selecto/Components/Templates/WebSocket.pm
 lib/Selecto/Components/Util.pm
+lib/Selecto/Components/WebSocketPolicy.pm
 LICENSE
 Makefile.PL
 MANIFEST

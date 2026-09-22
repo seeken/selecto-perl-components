@@ -316,6 +316,16 @@
     if (!form) {
       var websocketForm = event.target.closest("form");
       if (!websocketForm || !websocketForm.hasAttribute("hx-ws:send")) return;
+      if (websocketForm.hasAttribute("data-selecto-template-event")) {
+        if (usesSelectoWebSocket(websocketForm)) {
+          event.preventDefault();
+          return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        submitWithoutWebSocket(websocketForm);
+        return;
+      }
       rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
       var websocketConnection = document.querySelector("[data-selecto-connection]");
       if (usesSelectoWebSocket(websocketForm)) {

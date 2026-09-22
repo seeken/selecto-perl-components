@@ -42,10 +42,27 @@ sub event ($class, $controller, $runtime) {
     my $params = _event_params($controller);
     return $runtime->{transport}->respond_error($controller, $params)
         unless $params->{status} eq 'ok';
-    my $context = _instance_context($controller, $runtime);
-    return $runtime->{transport}->respond_error($controller, $context)
-        unless $context->{status} eq 'ok';
+    my $result = $class->dispatch_event(
+        $controller, $runtime,
+        instance_id => $controller->stash('selecto_template_instance_id'),
+        params => $params,
+    );
+    return $runtime->{transport}->respond_error($controller, $result)
+        unless $result->{status} eq 'ok';
+    return _snapshot_response(
+        $controller, $runtime, $result->{template},
+        $result->{snapshot}, $result->{store_revision},
+    );
+}
 
+sub dispatch_event ($class, $controller, $runtime, %args) {
+    my $params = $args{params};
+    return _invalid_request('invalid_event_params', 'Template event parameters are invalid.')
+        unless ref($params) eq 'HASH';
+    my $context = $class->instance_context(
+        $controller, $runtime, $args{instance_id},
+    );
+    return $context unless $context->{status} eq 'ok';
     my $result = $runtime->{dispatcher}->dispatch_params(
         owner_scope => $context->{owner_scope},
         instance_id => $context->{instance_id},
@@ -55,19 +72,19 @@ sub event ($class, $controller, $runtime) {
         expected_state_revision => $params->{state_revision},
         params => {value => $params->{value}},
     );
-    return $runtime->{transport}->respond_error($controller, $result)
-        unless $result->{status} eq 'ok';
+    return $result unless $result->{status} eq 'ok';
     if (($result->{observation}{outcome} // '') ne 'accepted') {
-        return $runtime->{transport}->respond_error($controller, {
+        return {
             status => 'conflict',
             code => $result->{observation}{code} // 'event_rejected',
             message => 'Template event could not be applied. Reload and try again.',
-        });
+        };
     }
-    return _snapshot_response(
-        $controller, $runtime, $context->{template},
-        $result->{observation}{snapshot}, $result->{store_revision},
-    );
+    return {
+        status => 'ok', template => $context->{template},
+        snapshot => $result->{observation}{snapshot},
+        store_revision => $result->{store_revision},
+    };
 }
 
 sub source ($class, $controller, $runtime) {
@@ -76,7 +93,9 @@ sub source ($class, $controller, $runtime) {
     my $params = _source_params($controller);
     return $runtime->{transport}->respond_error($controller, $params)
         unless $params->{status} eq 'ok';
-    my $context = _instance_context($controller, $runtime);
+    my $context = $class->instance_context(
+        $controller, $runtime, $controller->stash('selecto_template_instance_id'),
+    );
     return $runtime->{transport}->respond_error($controller, $context)
         unless $context->{status} eq 'ok';
     my $source_id = $controller->stash('selecto_template_source_id');
@@ -221,10 +240,9 @@ sub _snapshot_response ($controller, $runtime, $template, $snapshot, $store_revi
     );
 }
 
-sub _instance_context ($controller, $runtime) {
+sub instance_context ($class, $controller, $runtime, $instance_id) {
     my $owner = _owner($controller, $runtime);
     return $owner unless $owner->{status} eq 'ok';
-    my $instance_id = $controller->stash('selecto_template_instance_id');
     return _invalid_request('invalid_instance_id', 'Template instance is invalid.')
         unless _scalar($instance_id, 256);
     my $loaded = $runtime->{dispatcher}->load(
@@ -266,7 +284,8 @@ sub _inputs ($controller, $template) {
 }
 
 sub _event_params ($controller) {
-    my %allowed = map { $_ => 1 } qw(csrf_token event event_id state_revision value);
+    my %allowed = map { $_ => 1 }
+        qw(template_action csrf_token event event_id state_revision value);
     my @names = @{$controller->req->params->names};
     return _invalid_request('invalid_event_params', 'Template event parameters are invalid.')
         if grep { !$allowed{$_} } @names;
@@ -283,6 +302,10 @@ sub _event_params ($controller) {
         unless _scalar($values{event}, 128) && _scalar($values{event_id}, 256)
         && "$values{state_revision}" =~ /\A[0-9]+\z/
         && ref($csrf) eq 'ARRAY' && @$csrf == 1 && !ref($csrf->[0]);
+    my $action = $controller->every_param('template_action');
+    return _invalid_request('invalid_event_params', 'Template event parameters are invalid.')
+        unless ref($action) eq 'ARRAY' && @$action == 1
+        && !ref($action->[0]) && $action->[0] eq 'event';
     return {status => 'ok', %values, state_revision => 0 + $values{state_revision}};
 }
 

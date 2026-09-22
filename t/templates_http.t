@@ -8,6 +8,7 @@ use lib "$FindBin::Bin/lib";
 use File::Temp qw(tempfile);
 use JSON::PP ();
 use Mojolicious;
+use Mojo::JSON qw(decode_json encode_json);
 use Mojo::Promise;
 use Test::More;
 use Test::Mojo;
@@ -26,6 +27,7 @@ my $instance_sequence = 0;
 my $claim_sequence = 0;
 my $event_sequence = 0;
 my $source_context_calls = 0;
+my $alice_revoked = 0;
 my ($worker_audit_handle, $worker_audit_path) = tempfile();
 close $worker_audit_handle;
 my $store = Selecto::Components::Templates::InstanceStore::Memory->new(
@@ -87,12 +89,14 @@ $app->plugin('Selecto::Components::Templates' => {
     store => $store,
     clock => sub { $now },
     source_max_workers => 2,
+    websocket_heartbeat_interval => 0,
     event_id_generator => sub { 'http-event-' . ++$event_sequence },
     resolve_owner => sub {
         my ($controller) = @_;
         my $actor = $controller->req->headers->header('X-Test-Actor') // '';
         return {status => 'unauthenticated'} unless length $actor;
         return {status => 'forbidden'} if $actor eq 'forbidden';
+        return {status => 'forbidden'} if $actor eq 'alice' && $alice_revoked;
         return {status => 'ok', owner_scope => {
             tenant_id => 7, actor_id => "$actor", session_id => 'session-http',
         }};
@@ -162,9 +166,14 @@ $t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})
     ->header_is('X-Selecto-Store-Revision' => 0)
     ->element_exists('main.selecto-template-instance[hx-history="false"]' .
         '[hx-status\\:4xx="swap: outerHTML"][hx-status\\:5xx="swap: outerHTML"]')
+    ->element_exists('section.selecto-template-channel[hx-ext="ws"][hx-ws\\:connect]')
     ->element_exists('script[src="/selecto-components/htmx.min.js?v=' .
         asset_revision() . '"]')
-    ->element_exists('form[data-template-event="search_changed"][hx-post]')
+    ->element_exists('script[src="/selecto-components/hx-ws.min.js?v=' .
+        asset_revision() . '"]')
+    ->element_exists('script[src="/selecto-components/selecto-components.js?v=' .
+        asset_revision() . '"]')
+    ->element_exists('form[data-template-event="search_changed"][hx-ws\\:send]')
     ->element_exists('form.selecto-template-source[data-selecto-template-source="orders"]' .
         '[hx-trigger="load"][hx-swap="outerHTML"]')
     ->element_exists_not('[data-order-number]');
@@ -334,6 +343,64 @@ ok $slow_tx->res->dom->at('[data-order-number="PO-100"]'),
     'slow source result is committed and rendered';
 
 $t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})->status_is(200);
+my $ws_root = $t->tx->res->dom->at('main.selecto-template-instance');
+my $ws_instance_id = $ws_root->attr('data-selecto-template-instance');
+my $ws_form = $t->tx->res->dom->at('form[data-template-event="search_changed"]');
+my %ws_event = map {
+    $_->attr('name') => $_->attr('value')
+} $ws_form->find('input[type="hidden"]')->each;
+$ws_event{value} = 'PO-WS';
+my $ws_path = "/template-instances/$ws_instance_id/ws";
+$t->websocket_ok($ws_path => {'X-Test-Actor' => 'alice'})
+    ->send_ok({text => encode_json({headers => {}, %ws_event})})
+    ->message_ok;
+my $ws_response = decode_json($t->message->[1]);
+is $ws_response->{target}, '#' . $ws_root->attr('id'),
+    'WebSocket event targets only the replaceable template root';
+is $ws_response->{swap}, 'outerHTML', 'WebSocket event preserves the channel wrapper';
+is $ws_response->{selecto}{state_revision}, 1,
+    'WebSocket response carries the accepted state revision';
+like $ws_response->{content}, qr/value="PO-WS"/,
+    'WebSocket response renders the accepted event state';
+unlike $ws_response->{content}, qr/selecto-template-channel/,
+    'WebSocket response does not replace its own connection element';
+
+$t->send_ok({text => encode_json({headers => {}, %ws_event})})->message_ok;
+my $ws_conflict = decode_json($t->message->[1]);
+is $ws_conflict->{selecto}{status}, 409,
+    'duplicate WebSocket event returns an explicit conflict envelope';
+is $ws_conflict->{selecto}{code}, 'duplicate_event',
+    'WebSocket conflict preserves the bounded reducer code';
+$alice_revoked = 1;
+$t->send_ok({text => encode_json({headers => {}, %ws_event})})
+    ->finished_ok(1008);
+$alice_revoked = 0;
+
+$t->websocket_ok($ws_path => {'X-Test-Actor' => 'alice'})
+    ->send_ok({text => encode_json({headers => {}, %ws_event, csrf_token => 'forged'})})
+    ->finished_ok(1008);
+$t->websocket_ok($ws_path => {'X-Test-Actor' => 'alice'})
+    ->send_ok({text => encode_json({headers => {}, %ws_event, query => 'select *'})})
+    ->message_ok;
+my $ws_invalid = decode_json($t->message->[1]);
+is $ws_invalid->{selecto}{status}, 422,
+    'forged WebSocket fields return a validation envelope';
+is $ws_invalid->{selecto}{code}, 'invalid_event_params',
+    'forged WebSocket fields never reach event dispatch';
+$t->finish_ok;
+$t->websocket_ok($ws_path => {'X-Test-Actor' => 'alice'})
+    ->send_ok({text => '{invalid'})
+    ->finished_ok(1003);
+$t->websocket_ok($ws_path => {'X-Test-Actor' => 'alice'})
+    ->send_ok({text => 'x' x 131_073})
+    ->finished_ok(1009);
+$t->websocket_ok($ws_path => {'X-Test-Actor' => 'mallory'})
+    ->finished_ok(1008);
+$t->websocket_ok($ws_path => {
+    'X-Test-Actor' => 'alice', Origin => 'https://evil.example',
+})->finished_ok(1008);
+
+$t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})->status_is(200);
 my $expiring_dom = $t->tx->res->dom;
 my $expiring_event = $expiring_dom->at('form[data-template-event="search_changed"]');
 my %fallback_params = map {
@@ -375,10 +442,7 @@ sub _registry {
                 } sort keys %{$event->{fields}};
                 return _safe('<form data-template-event="' .
                     html_escape($event->{fields}{event}) . '" method="post" action="' .
-                    html_escape($event->{action}) . '" hx-post="' .
-                    html_escape($event->{hx_post}) . '" hx-target="' .
-                    html_escape($event->{hx_target}) . '" hx-swap="' .
-                    html_escape($event->{hx_swap}) . '">' . $fields .
+                    html_escape($event->{action}) . '" hx-ws:send>' . $fields .
                     '<input name="value" value="' .
                     html_escape($node->{props}{value}) . '"></form>');
             },

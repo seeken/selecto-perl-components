@@ -38,8 +38,10 @@ use_ok 'Selecto::Components::Templates::Renderer';
 use_ok 'Selecto::Components::Templates::SourceExecutor';
 use_ok 'Selecto::Components::Templates::SourceScheduler';
 use_ok 'Selecto::Components::Templates::Transport';
+use_ok 'Selecto::Components::Templates::WebSocket';
 use_ok 'Selecto::Components::Templates::InstanceStore::Memory';
 use_ok 'Selecto::Components::Templates::InstanceStore::PostgreSQL';
 use_ok 'Selecto::Components::Util';
+use_ok 'Selecto::Components::WebSocketPolicy';
 
 done_testing;
