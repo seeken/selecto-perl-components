@@ -561,6 +561,10 @@ sub _filter_expression ($operand, $op, $value, $value_end) {
         my @values = grep { length } map { _trim($_) } split /,/, $value;
         return Selecto::Expression->in($operand, \@values);
     }
+    if ($op eq 'not_in') {
+        my @values = grep { length } map { _trim($_) } split /,/, $value;
+        return Selecto::Expression->not(Selecto::Expression->in($operand, \@values));
+    }
     return Selecto::Expression->between($operand, $value, $value_end)
         if $op eq 'between';
     if ($op eq 'date_shortcut') {

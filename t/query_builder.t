@@ -766,6 +766,28 @@ like $drilldown_statement->sql,
 is_deeply $drilldown_statement->params, ['10', '2026-08'],
     'original and grouped drilldown values remain aligned bound parameters';
 
+my $excluded_members_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1,
+    view => 'detail',
+    field => 'product_name',
+    filter_field => 'category.category_name',
+    filter_op => 'not_in',
+    filter_value => 'Internal,Test',
+    order => 'product_name',
+});
+ok $excluded_members_state->valid, 'not-one-of membership is accepted';
+my $excluded_members_statement = $postgresql->compile(
+    $domain,
+    Selecto::Components::QueryBuilder->build(
+        $config, $domain, $excluded_members_state,
+    )->{query},
+);
+like $excluded_members_statement->sql,
+    qr/NOT \("j_category"\."category_name" IN \(\$1, \$2\)\)/,
+    'not-one-of compiles as a negated bound membership predicate';
+is_deeply $excluded_members_statement->params, [qw(Internal Test)],
+    'not-one-of values remain independently bound';
+
 my $grid_selection_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'detail',

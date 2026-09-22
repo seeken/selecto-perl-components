@@ -141,12 +141,14 @@ sub _saved_queries ($class, $model, $panel_id, $tab_id) {
         my $saved_url = Mojo::URL->new($_->{url});
         $saved_url->query->param(saved_query_name => $_->{name});
         '<li><a href="' . _h($saved_url->to_string) . '">' . _h($_->{name}) . '</a>' .
-        '<form method="post" action="' . _h($config->path) . '/saved-queries/delete">' .
-        '<input type="hidden" name="csrf_token" value="' . $csrf . '">' .
-        '<input type="hidden" name="saved_query_name" value="' . _h($_->{name}) . '">' .
-        '<input type="hidden" name="return_to" value="' . $current_url . '">' .
-        '<button type="submit" class="sc-saved-query-delete" aria-label="Delete saved query ' .
-        _h($_->{name}) . '">Delete</button></form></li>'
+        ($_->{readonly}
+            ? '<span class="sc-saved-query-shared">Shared</span>'
+            : '<form method="post" action="' . _h($config->path) . '/saved-queries/delete">' .
+                '<input type="hidden" name="csrf_token" value="' . $csrf . '">' .
+                '<input type="hidden" name="saved_query_name" value="' . _h($_->{name}) . '">' .
+                '<input type="hidden" name="return_to" value="' . $current_url . '">' .
+                '<button type="submit" class="sc-saved-query-delete" aria-label="Delete saved query ' .
+                _h($_->{name}) . '">Delete</button></form>') . '</li>'
     } @{$model->{saved_queries} // []};
     my $list = length($items)
         ? '<ul class="sc-saved-query-list">' . $items . '</ul>'
