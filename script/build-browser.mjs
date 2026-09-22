@@ -23,6 +23,7 @@ const modules = [
   "actions.js",
   "lookups.js",
   "action-results.js",
+  "templates.js",
 ];
 
 async function build() {

@@ -84,6 +84,7 @@ src/browser/picker.js
 src/browser/row-dialog.js
 src/browser/shared.js
 src/browser/shell.js
+src/browser/templates.js
 t/00-load.t
 t/api_console.t
 t/browser/components.spec.js
