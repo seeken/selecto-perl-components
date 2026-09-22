@@ -40,6 +40,7 @@ WriteMakefile(
         'lib/Selecto/Components/RowActions.pm' => '$(INST_LIB)/Selecto/Components/RowActions.pm',
         'lib/Selecto/Components/State.pm' => '$(INST_LIB)/Selecto/Components/State.pm',
         'lib/Selecto/Components/Templates/Dispatcher.pm' => '$(INST_LIB)/Selecto/Components/Templates/Dispatcher.pm',
+        'lib/Selecto/Components/Templates/Event.pm' => '$(INST_LIB)/Selecto/Components/Templates/Event.pm',
         'lib/Selecto/Components/Templates/InstanceStore/Memory.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceStore/Memory.pm',
         'lib/Selecto/Components/Templates/Renderer.pm' => '$(INST_LIB)/Selecto/Components/Templates/Renderer.pm',
         'lib/Selecto/Components/Util.pm' => '$(INST_LIB)/Selecto/Components/Util.pm',

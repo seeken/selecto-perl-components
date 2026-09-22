@@ -5,6 +5,7 @@ use strict;
 use warnings;
 
 use Selecto::Templates ();
+use Selecto::Components::Templates::Event ();
 
 sub new {
     my ($class, %args) = @_;
@@ -74,6 +75,17 @@ sub dispatch {
     });
     return $runtime unless $runtime->{status} eq 'ok';
     return $self->_commit_observation($loaded, \%args, $runtime->{observation});
+}
+
+sub dispatch_params {
+    my ($self, %args) = @_;
+    my $normalized = Selecto::Components::Templates::Event->normalize(
+        $args{manifest}, $args{name}, $args{params},
+    );
+    return $normalized unless $normalized->{status} eq 'ok';
+    delete $args{params};
+    $args{payload} = $normalized->{payload};
+    return $self->dispatch(%args);
 }
 
 sub complete {
