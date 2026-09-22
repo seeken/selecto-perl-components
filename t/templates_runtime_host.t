@@ -22,6 +22,62 @@ my $dispatcher = Selecto::Components::Templates::Dispatcher->new(store => $store
 my $manifest = _manifest();
 my $owner = {tenant_id => 'tenant-1', actor_id => 'actor-1', session_id => 'session-1'};
 
+my $bounded_store = Selecto::Components::Templates::InstanceStore::Memory->new(
+    clock => sub { $now },
+    id_generator => sub { 'bounded-instance' },
+    max_snapshot_bytes => 256,
+    max_owner_scope_bytes => 128,
+    max_ttl_seconds => 50,
+);
+my $oversized_snapshot_error = eval {
+    $bounded_store->create(
+        owner_scope => $owner,
+        release => 'bounded-release',
+        instance_id => 'bounded-instance',
+        expires_at => $now + 25,
+        initial_snapshot => {
+            instance_id => 'bounded-instance', release_id => 'bounded-release',
+            extra => 'x' x 512,
+        },
+    );
+    '';
+};
+$oversized_snapshot_error = $@ if $@;
+like $oversized_snapshot_error, qr/^snapshot_too_large:/,
+    'memory storage rejects snapshots over its JSON budget';
+
+my $oversized_scope_error = eval {
+    $bounded_store->create(
+        owner_scope => {%$owner, padding => 'x' x 128},
+        release => 'bounded-release',
+        instance_id => 'bounded-instance',
+        expires_at => $now + 25,
+        initial_snapshot => {
+            instance_id => 'bounded-instance', release_id => 'bounded-release',
+        },
+    );
+    '';
+};
+$oversized_scope_error = $@ if $@;
+like $oversized_scope_error, qr/^invalid_owner_scope:.*storage budget/,
+    'memory storage rejects owner scope over its JSON budget';
+
+my $oversized_ttl_error = eval {
+    $bounded_store->create(
+        owner_scope => $owner,
+        release => 'bounded-release',
+        instance_id => 'bounded-instance',
+        expires_at => $now + 51,
+        initial_snapshot => {
+            instance_id => 'bounded-instance', release_id => 'bounded-release',
+        },
+    );
+    '';
+};
+$oversized_ttl_error = $@ if $@;
+like $oversized_ttl_error, qr/^invalid_instance:/,
+    'memory storage rejects expiry beyond its TTL budget';
+
 my $mounted = $dispatcher->mount(
     owner_scope => $owner,
     manifest => $manifest,

@@ -10,16 +10,23 @@ use Time::HiRes qw(time);
 
 sub new {
     my ($class, %args) = @_;
+    my $max_snapshot_bytes = $args{max_snapshot_bytes} // 1_048_576;
+    my $max_owner_scope_bytes = $args{max_owner_scope_bytes} // 4_096;
+    my $max_ttl_seconds = $args{max_ttl_seconds} // 86_400;
     my $max_effect_lease_seconds = $args{max_effect_lease_seconds} // 60;
-    die "invalid_limit: max_effect_lease_seconds must be an integer between 1 and 300\n"
-        unless defined($max_effect_lease_seconds) && !ref($max_effect_lease_seconds)
-        && "$max_effect_lease_seconds" =~ /\A[1-9][0-9]*\z/
-        && $max_effect_lease_seconds <= 300;
+    _positive_integer('max_snapshot_bytes', $max_snapshot_bytes, 16_777_216);
+    _positive_integer('max_owner_scope_bytes', $max_owner_scope_bytes, 65_536);
+    _positive_integer('max_ttl_seconds', $max_ttl_seconds, 2_592_000);
+    _positive_integer('max_effect_lease_seconds', $max_effect_lease_seconds, 300);
     return bless {
         clock => $args{clock} // sub { time() },
         id_generator => $args{id_generator} // \&_opaque_id,
         claim_token_generator => $args{claim_token_generator} // \&_opaque_id,
+        max_snapshot_bytes => 0 + $max_snapshot_bytes,
+        max_owner_scope_bytes => 0 + $max_owner_scope_bytes,
+        max_ttl_seconds => 0 + $max_ttl_seconds,
         max_effect_lease_seconds => 0 + $max_effect_lease_seconds,
+        json => JSON::PP->new->canonical(1)->ascii(1)->allow_nonref(1),
         instances => {},
     }, $class;
 }
@@ -36,21 +43,26 @@ sub new_instance_id {
 
 sub create {
     my ($self, %args) = @_;
-    my $scope_key = _scope_key($args{owner_scope});
+    my $scope_key = $self->_scope_key($args{owner_scope});
     my $release = $args{release};
     my $snapshot = $args{initial_snapshot};
     my $expires_at = $args{expires_at};
     my $instance_id = $args{instance_id} // $self->new_instance_id;
 
+    my $now = $self->{clock}->();
     die "invalid_instance: template instance fields are invalid\n"
-        unless defined($release) && !ref($release) && length("$release")
+        unless _valid_scalar($release, 256)
         && ref($snapshot) eq 'HASH'
-        && defined($expires_at) && !ref($expires_at) && $expires_at > $self->{clock}->()
-        && defined($instance_id) && !ref($instance_id) && length("$instance_id");
+        && defined($expires_at) && !ref($expires_at)
+        && "$expires_at" =~ /\A(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)\z/
+        && $expires_at > $now
+        && $expires_at <= $now + $self->{max_ttl_seconds}
+        && _valid_scalar($instance_id, 256);
     die "instance_exists: template instance ID already exists\n"
         if exists $self->{instances}{$instance_id};
     die "invalid_snapshot: snapshot identity does not match the stored instance\n"
         unless _snapshot_matches($snapshot, $instance_id, $release);
+    $self->_validate_snapshot($snapshot);
 
     $self->{instances}{$instance_id} = {
         owner_scope => $scope_key,
@@ -65,7 +77,7 @@ sub create {
 
 sub load {
     my ($self, %args) = @_;
-    my $scope_key = _scope_key($args{owner_scope});
+    my $scope_key = $self->_scope_key($args{owner_scope});
     my $instance_id = $args{instance_id};
     return {status => 'not_found'}
         unless defined($instance_id) && !ref($instance_id)
@@ -103,6 +115,7 @@ sub compare_and_set {
     return {status => 'invalid_snapshot'}
         unless ref($snapshot) eq 'HASH'
         && _snapshot_matches($snapshot, $args{instance_id}, $loaded->{release});
+    $self->_validate_snapshot($snapshot);
 
     my $record = $self->{instances}{$args{instance_id}};
     $record->{snapshot} = dclone($snapshot);
@@ -178,6 +191,7 @@ sub commit_claimed_effect {
     return {status => 'invalid_snapshot'}
         unless ref($snapshot) eq 'HASH'
         && _snapshot_matches($snapshot, $args{instance_id}, $loaded->{release});
+    $self->_validate_snapshot($snapshot);
     $record->{snapshot} = dclone($snapshot);
     $record->{revision}++;
     delete $record->{effect_claims}{$key};
@@ -258,10 +272,24 @@ sub _prune_expired_claims {
 }
 
 sub _scope_key {
-    my ($owner_scope) = @_;
+    my ($self, $owner_scope) = @_;
     die "invalid_owner_scope: template owner scope must be a non-empty object\n"
         unless ref($owner_scope) eq 'HASH' && keys(%$owner_scope);
-    return JSON::PP->new->canonical(1)->allow_nonref(1)->encode($owner_scope);
+    my $json = eval { $self->{json}->encode($owner_scope) };
+    die "invalid_owner_scope: template owner scope must be canonical JSON data\n" if $@;
+    die "invalid_owner_scope: template owner scope exceeds the storage budget\n"
+        if length($json) > $self->{max_owner_scope_bytes};
+    return $json;
+}
+
+sub _validate_snapshot {
+    my ($self, $snapshot) = @_;
+    die "invalid_snapshot: template snapshot must be an object\n"
+        unless ref($snapshot) eq 'HASH';
+    my $json = eval { $self->{json}->encode($snapshot) };
+    die "invalid_snapshot: template snapshot must be canonical JSON data\n" if $@;
+    die "snapshot_too_large: template snapshot exceeds the storage budget\n"
+        if length($json) > $self->{max_snapshot_bytes};
 }
 
 sub _snapshot_matches {
@@ -276,6 +304,13 @@ sub _valid_scalar {
     my ($value, $max_bytes) = @_;
     return defined($value) && !ref($value) && length("$value")
         && length("$value") <= $max_bytes;
+}
+
+sub _positive_integer {
+    my ($name, $value, $maximum) = @_;
+    die "invalid_limit: $name must be an integer between 1 and $maximum\n"
+        unless defined($value) && !ref($value) && "$value" =~ /\A[1-9][0-9]*\z/
+        && $value <= $maximum;
 }
 
 sub _opaque_id {
