@@ -36,6 +36,15 @@ my $store = Selecto::Components::Templates::InstanceStore::Memory->new(
     claim_token_generator => sub { 'http-claim-' . ++$claim_sequence },
 );
 my $manifest = TestSelectoComponents::template_order_manifest();
+my $public_manifest = decode_json(encode_json($manifest));
+$public_manifest->{inputs} = [
+    {name => 'status', type => 'string?'},
+    {name => 'customer_id', type => 'integer?'},
+    {name => 'include_closed', type => 'boolean?'},
+    {name => 'private_scope', type => 'string'},
+];
+$public_manifest->{sources}[0]{query}{segments}[0]{bindings}{value}{expression} =
+    'input.status';
 my $catalog = TestSelectoComponents::template_domain_catalog();
 my $app = Mojolicious->new;
 $app->secrets(['template-http-test-secret']);
@@ -145,6 +154,27 @@ $app->plugin('Selecto::Components::Templates' => {
             source_authorizer => $source_authorizer,
             source_runner => $source_runner,
         },
+        public_orders => {
+            title => 'Public order filters',
+            release_id => 'public-orders-http-v1',
+            manifest => $public_manifest,
+            registry => _registry(),
+            public_inputs => [qw(include_closed status customer_id)],
+            ttl_seconds => 60,
+            lease_seconds => 10,
+            source_timeout_seconds => 5,
+            resolve_inputs => sub { return {private_scope => 'tenant-7'} },
+            resolve_source_context => $resolve_source_context,
+            source_authorizer => $source_authorizer,
+            source_runner => sub {
+                my ($engine, $query, $effect) = @_;
+                my $status = $effect->{bindings}{input}{status} // 'all';
+                return {rows => [[
+                    1, "STATUS-$status", '2026-09-22T12:00:00Z',
+                    $status, 44,
+                ]]};
+            },
+        },
     },
 });
 
@@ -160,6 +190,72 @@ $t->get_ok('/templates/missing' => {'X-Test-Actor' => 'alice'})
     ->status_is(404)
     ->element_exists('[data-selecto-template-error="template_not_found"]');
 $t->get_ok('/selecto-components/htmx.min.js')->status_is(200);
+
+$t->get_ok('/templates/public_orders?tenant_id=7')
+    ->status_is(401)
+    ->element_exists('[data-selecto-template-error="authentication_required"]');
+$t->get_ok('/templates/public_orders?tenant_id=7' => {'X-Test-Actor' => 'alice'})
+    ->status_is(422)
+    ->element_exists('[data-selecto-template-error="invalid_public_template_inputs"]');
+$t->get_ok('/templates/public_orders?status=open&status=closed' =>
+    {'X-Test-Actor' => 'alice'})
+    ->status_is(422)
+    ->element_exists('[data-selecto-template-error="invalid_public_template_inputs"]');
+$t->get_ok('/templates/public_orders?customer_id=01' => {'X-Test-Actor' => 'alice'})
+    ->status_is(422)
+    ->element_exists('[data-selecto-template-error="invalid_public_template_inputs"]');
+$t->get_ok('/templates/public_orders?include_closed=1' => {'X-Test-Actor' => 'alice'})
+    ->status_is(422)
+    ->element_exists('[data-selecto-template-error="invalid_public_template_inputs"]');
+my $instances_before_redirect = $instance_sequence;
+$t->get_ok('/templates/public_orders?include_closed=true&customer_id=17&status=open' =>
+    {'X-Test-Actor' => 'alice'})
+    ->status_is(302)
+    ->header_is(Location =>
+        '/templates/public_orders?status=open&customer_id=17&include_closed=true')
+    ->header_is('Cache-Control' => 'no-store, private');
+is $instance_sequence, $instances_before_redirect,
+    'canonical redirect does not allocate a template instance';
+
+my $public_url =
+    '/templates/public_orders?status=open&customer_id=17&include_closed=true';
+$t->get_ok($public_url => {'X-Test-Actor' => 'alice'})
+    ->status_is(200)
+    ->header_is('Content-Location' => $public_url)
+    ->element_exists('link[rel="canonical"][href="' . $public_url . '"]');
+my $public_dom = $t->tx->res->dom;
+my $public_instance_id = $public_dom->at('main.selecto-template-instance')
+    ->attr('data-selecto-template-instance');
+my $public_loaded = $store->load(
+    owner_scope => {
+        tenant_id => 7, actor_id => 'alice', session_id => 'session-http',
+    },
+    instance_id => $public_instance_id,
+);
+is $public_loaded->{snapshot}{inputs}{status}, 'open',
+    'public string input reaches the server-owned snapshot';
+is $public_loaded->{snapshot}{inputs}{customer_id}, 17,
+    'public integer input is typed before mount';
+ok $public_loaded->{snapshot}{inputs}{include_closed},
+    'public boolean input is typed before mount';
+is $public_loaded->{snapshot}{inputs}{private_scope}, 'tenant-7',
+    'trusted host input remains outside the URL';
+my $public_source_form = $public_dom->at('form.selecto-template-source');
+$t->post_ok(
+    $public_source_form->attr('action') =>
+        {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => {csrf_token =>
+            $public_source_form->at('input[name="csrf_token"]')->attr('value')},
+)->status_is(200)
+    ->element_exists('[data-order-number="STATUS-open"]');
+is $source_context_calls, 1,
+    'public filters reach source execution through the ordinary authority boundary';
+is scalar(_worker_audit($worker_audit_path)), 1,
+    'public filter source execution still runs in the bounded worker';
+$source_context_calls = 0;
+open my $reset_worker_audit, '>', $worker_audit_path
+    or die "worker audit reset unavailable\n";
+close $reset_worker_audit;
 
 $t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})
     ->status_is(200)

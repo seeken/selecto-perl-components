@@ -2,6 +2,7 @@ package Selecto::Components::Controller::Templates;
 
 use Mojo::Base -base, -signatures;
 use Selecto::Components::Templates::ComponentIdentity ();
+use Selecto::Components::Templates::PublicInputs ();
 use Selecto::Components::Templates::Regions ();
 use Selecto::Components::Templates::SourceExecutor ();
 
@@ -19,6 +20,9 @@ sub show ($class, $controller, $runtime) {
     my $inputs = _inputs($controller, $template);
     return $runtime->{transport}->respond_error($controller, $inputs)
         unless $inputs->{status} eq 'ok';
+    return $runtime->{transport}->respond_redirect(
+        $controller, $inputs->{canonical_url},
+    ) if $inputs->{redirect};
     my $now = eval { $runtime->{clock}->() };
     return $runtime->{transport}->respond_error($controller, _unavailable())
         if $@ || !defined($now) || ref($now);
@@ -35,6 +39,7 @@ sub show ($class, $controller, $runtime) {
     return _snapshot_response(
         $controller, $runtime, $template, $mounted->{observation}{snapshot},
         $mounted->{store_revision},
+        canonical_url => $inputs->{canonical_url},
     );
 }
 
@@ -331,13 +336,25 @@ sub _owner ($controller, $runtime) {
 }
 
 sub _inputs ($controller, $template) {
-    return {status => 'ok', inputs => {}}
-        unless defined($template->{resolve_inputs});
-    my $inputs = eval { $template->{resolve_inputs}->($controller) };
-    return _unavailable() if $@;
-    return _invalid_request('invalid_template_inputs', 'Template inputs are invalid.')
-        unless ref($inputs) eq 'HASH';
-    return {status => 'ok', inputs => $inputs};
+    my $public = Selecto::Components::Templates::PublicInputs->decode(
+        $controller, $template->{public_inputs},
+    );
+    return $public unless $public->{status} eq 'ok';
+    my $trusted = {};
+    if (defined($template->{resolve_inputs})) {
+        $trusted = eval { $template->{resolve_inputs}->($controller) };
+        return _unavailable() if $@;
+        return _invalid_request('invalid_template_inputs', 'Template inputs are invalid.')
+            unless ref($trusted) eq 'HASH';
+    }
+    return {
+        status => 'error', code => 'template_host_unavailable',
+        message => 'Template host is unavailable.',
+    } if grep { exists($trusted->{$_->{name}}) } @{$template->{public_inputs}};
+    return {
+        %$public,
+        inputs => {%$trusted, %{$public->{inputs}}},
+    };
 }
 
 sub _event_params ($controller) {

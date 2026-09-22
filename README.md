@@ -402,11 +402,12 @@ plugin 'Selecto::Components::Templates' => {
             release_id => 'order-browser-2026-09-22',
             manifest => $compiled_order_browser,
             registry => $template_renderer_registry,
+            public_inputs => [qw(status customer_id)],
             ttl_seconds => 3600,
             lease_seconds => 30,
             source_timeout_seconds => 15,
             resolve_inputs => sub ($controller) {
-                return validated_public_inputs($controller);
+                return trusted_server_inputs($controller);
             },
             resolve_source_context => sub ($controller, $owner_scope, $effect) {
                 return {
@@ -444,6 +445,17 @@ store revisions, disables HTMX history snapshots, and pending source forms use t
 packaged htmx runtime with an ordinary submit fallback. It also declares the htmx 4
 status policy explicitly: bounded 4xx and 5xx fragments replace the stable root.
 Browser tests pin successful swaps plus 409 conflict and 422 validation behavior.
+
+`public_inputs` is the host's explicit allowlist for bookmarkable GET filters. Each
+name must be an input declared by the compiled manifest with type `string`, `integer`,
+or `boolean` (including optional forms). Unknown, repeated, oversized, and incorrectly
+typed query values fail before an instance is allocated. Valid values are decoded to
+their manifest types, merged with non-overlapping trusted values from `resolve_inputs`,
+and then mounted; a compiled source can bind them as `input.status` or another declared
+input when constructing its query. The host still supplies tenant scope and fresh source
+authority independently. Query parameters are ordered by the manifest, noncanonical
+requests redirect before mount, and the successful page emits both `Content-Location`
+and a canonical link. Templates without an allowlist reject all query parameters.
 
 Component renderer callbacks receive their existing node data plus a server-built
 `transport.events` descriptor for each declared event. The descriptor contains the
