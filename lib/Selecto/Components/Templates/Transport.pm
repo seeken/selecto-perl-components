@@ -26,6 +26,17 @@ sub respond_snapshot ($self, $controller, %args) {
     $controller->res->headers->header(
         'X-Selecto-Store-Revision' => $args{store_revision},
     );
+    $controller->res->headers->header(
+        'X-Selecto-Event-ID' => $args{event_id},
+    ) if defined($args{event_id});
+    if (defined($args{source_id}) && defined($args{source_generation})) {
+        $controller->res->headers->header(
+            'X-Selecto-Source' => $args{source_id},
+        );
+        $controller->res->headers->header(
+            'X-Selecto-Source-Generation' => $args{source_generation},
+        );
+    }
     my $html = _is_fragment($controller) ? $rendered->{root} : $rendered->{page};
     return $controller->render(data => $html, format => 'html', status => 200);
 }
@@ -55,6 +66,7 @@ sub websocket_snapshot ($self, $controller, %args) {
             instance_id => $args{snapshot}{instance_id},
             state_revision => 0 + $args{snapshot}{state_revision},
             store_revision => 0 + $args{store_revision},
+            (defined($args{event_id}) ? (event_id => "$args{event_id}") : ()),
         },
     };
 }
@@ -123,7 +135,7 @@ sub _event_descriptor ($self, $snapshot, $csrf_token, $root_id, $event) {
     my $event_id = $self->event_id_generator->();
     die "invalid_event_id: event ID generator returned an invalid value\n"
         unless defined($event_id) && !ref($event_id)
-        && length("$event_id") && length("$event_id") <= 256;
+        && "$event_id" =~ /\A[\x21-\x7e]{1,256}\z/;
     my $action = $self->instance_path . '/' . $snapshot->{instance_id} . '/events';
     return {
         action => $action, method => 'post', hx_post => $action,

@@ -87,9 +87,10 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
             <input type="hidden" name="event" value="search_changed">
             <input type="hidden" name="event_id" value="event-one">
             <input type="hidden" name="state_revision" value="0">
-            <input name="value" value="PO-100">
+            <input id="template-search" name="value" value="PO-100">
             <button type="submit">Search</button>
           </form>
+          <input id="template-note" name="note" value="Server note">
         </main>
       </section>
     </body></html>`,
@@ -130,7 +131,14 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
     document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true}));
   });
 
-  await page.getByRole("button", {name: "Search"}).click();
+  await page.locator("#template-search").fill("PO-200");
+  await page.locator("#template-note").fill("Unsent note");
+  await page.evaluate(() => {
+    const note = document.querySelector("#template-note");
+    note.focus();
+    note.setSelectionRange(2, 6);
+    document.querySelector('[data-selecto-template-event="search_changed"]').requestSubmit();
+  });
   await expect.poll(() => page.evaluate(
     () => window.fakeTemplateMessages?.length || 0,
   )).toBe(1);
@@ -141,23 +149,41 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
     event: "search_changed",
     event_id: "event-one",
     state_revision: "0",
-    value: "PO-100",
+    value: "PO-200",
   });
   expect(outgoing).not.toHaveProperty("selecto_request_id");
 
   await page.evaluate(() => {
     window.fakeTemplateSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
       content: `<main id="template-root" data-selecto-template-instance="one"
-        data-selecto-state-revision="2" data-selecto-store-revision="2">Updated</main>`,
+        data-selecto-state-revision="2" data-selecto-store-revision="2">
+        <form method="post" action="/template-instances/one/events" hx-ws:send
+          data-selecto-template-event="search_changed">
+          <input type="hidden" name="event_id" value="event-one">
+          <input id="template-search" name="value" value="Server search">
+        </form>
+        <input id="template-note" name="note" value="Server note">
+        <span>Updated</span>
+      </main>`,
       target: "#template-root",
       swap: "outerHTML",
-      selecto: {instance_id: "one", state_revision: 2, store_revision: 2},
+      selecto: {
+        instance_id: "one", state_revision: 2, store_revision: 2,
+        event_id: "event-one",
+      },
     })}));
   });
   await expect(page.locator("#template-root")).toHaveAttribute(
     "data-selecto-state-revision", "2",
   );
   await expect(page.locator("#selecto-channel-template-one")).toHaveCount(1);
+  await expect(page.locator("#template-search")).toHaveValue("Server search");
+  await expect(page.locator("#template-note")).toHaveValue("Unsent note");
+  expect(await page.evaluate(() => ({
+    id: document.activeElement.id,
+    start: document.activeElement.selectionStart,
+    end: document.activeElement.selectionEnd,
+  }))).toEqual({id: "template-note", start: 2, end: 6});
 
   await page.evaluate(async () => {
     window.fakeTemplateSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
@@ -172,7 +198,7 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
   await expect(page.locator("#template-root")).toHaveAttribute(
     "data-selecto-store-revision", "2",
   );
-  await expect(page.locator("#template-root")).toHaveText("Updated");
+  await expect(page.locator("#template-root")).toContainText("Updated");
 
   await page.evaluate(async () => {
     window.fakeTemplateSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
@@ -184,7 +210,75 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
     })}));
     await new Promise(resolve => setTimeout(resolve, 20));
   });
-  await expect(page.locator("#template-root")).toHaveText("Updated");
+  await expect(page.locator("#template-root")).toContainText("Updated");
+});
+
+test("an HTTP template swap preserves other dirty fields and focused selection", async ({page}) => {
+  await page.route("http://selecto.test/**", route => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        headers: {
+          "X-Selecto-Template-Instance": "one",
+          "X-Selecto-State-Revision": "1",
+          "X-Selecto-Store-Revision": "1",
+          "X-Selecto-Event-ID": "event-one",
+        },
+        body: `<main id="template-root" data-selecto-template-instance="one"
+          data-selecto-state-revision="1" data-selecto-store-revision="1">
+          <form method="post" action="/events" hx-post="/events"
+            hx-target="#template-root" hx-swap="outerHTML">
+            <input type="hidden" name="event_id" value="event-one">
+            <input id="template-search" name="value" value="Server search">
+          </form>
+          <input id="template-note" name="note" value="Server note">
+        </main>`,
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: `<!doctype html><html><body>
+        <main id="template-root" data-selecto-template-instance="one"
+          data-selecto-state-revision="0" data-selecto-store-revision="0">
+          <form method="post" action="/events" hx-post="/events"
+            hx-target="#template-root" hx-swap="outerHTML">
+            <input type="hidden" name="event_id" value="event-one">
+            <input id="template-search" name="value" value="Initial search">
+          </form>
+          <input id="template-note" name="note" value="Server note">
+        </main>
+      </body></html>`,
+    });
+  });
+  await page.goto("http://selecto.test/templates/orders");
+  await page.addScriptTag({path: htmxBundle});
+  await page.addScriptTag({path: componentsBundle});
+  await page.evaluate(() => {
+    window.templateRequestFinished = new Promise(resolve => {
+      document.addEventListener("htmx:finally:request", () => resolve(true), {once: true});
+    });
+    window.htmx.process(document.body);
+  });
+
+  await page.locator("#template-search").fill("Submitted search");
+  await page.locator("#template-note").fill("Unsent note");
+  await page.evaluate(() => {
+    const note = document.querySelector("#template-note");
+    note.focus();
+    note.setSelectionRange(1, 7);
+    document.querySelector("#template-search").form.requestSubmit();
+  });
+  await page.evaluate(() => window.templateRequestFinished);
+
+  await expect(page.locator("#template-search")).toHaveValue("Server search");
+  await expect(page.locator("#template-note")).toHaveValue("Unsent note");
+  expect(await page.evaluate(() => ({
+    id: document.activeElement.id,
+    start: document.activeElement.selectionStart,
+    end: document.activeElement.selectionEnd,
+  }))).toEqual({id: "template-note", start: 1, end: 7});
 });
 
 test("a late HTTP template response cannot replace a newer root revision", async ({page}) => {
