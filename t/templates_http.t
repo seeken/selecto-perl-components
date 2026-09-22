@@ -98,7 +98,10 @@ $app->plugin('Selecto::Components::Templates' => {
         return {status => 'forbidden'} if $actor eq 'forbidden';
         return {status => 'forbidden'} if $actor eq 'alice' && $alice_revoked;
         return {status => 'ok', owner_scope => {
-            tenant_id => 7, actor_id => "$actor", session_id => 'session-http',
+            tenant_id => 0 + ($controller->req->headers->header('X-Test-Tenant') // 7),
+            actor_id => "$actor",
+            session_id => $controller->req->headers->header('X-Test-Session')
+                // 'session-http',
         }};
     },
     templates => {
@@ -194,11 +197,26 @@ my %event_params = map {
 } $event_form->find('input[type="hidden"]')->each;
 $event_params{value} = 'PO-200';
 
+$t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})->status_is(200);
+my $second_tab_id = $t->tx->res->dom->at('main.selecto-template-instance')
+    ->attr('data-selecto-template-instance');
+isnt $second_tab_id, $instance_id,
+    'a second page mount receives an independent tab-specific instance';
+
 $t->post_ok(
     $source_path => {'X-Test-Actor' => 'mallory', 'HX-Request' => 'true'} =>
         form => {csrf_token => $source_csrf},
 )->status_is(404)
     ->element_exists('[data-selecto-template-error="template_not_found"]');
+for my $rotated_headers (
+    {'X-Test-Actor' => 'alice', 'X-Test-Tenant' => 8, 'HX-Request' => 'true'},
+    {'X-Test-Actor' => 'alice', 'X-Test-Session' => 'rotated', 'HX-Request' => 'true'},
+) {
+    $t->post_ok(
+        $source_path => $rotated_headers => form => {csrf_token => $source_csrf},
+    )->status_is(404)
+        ->element_exists('[data-selecto-template-error="template_not_found"]');
+}
 $t->post_ok(
     $source_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
         form => {csrf_token => 'forged'},

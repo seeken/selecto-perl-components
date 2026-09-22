@@ -76,11 +76,36 @@ my $wrong_owner = $dispatcher->load(
     instance_id => $instance_id,
 );
 is $wrong_owner->{status}, 'not_found', 'an owner mismatch does not disclose the instance';
+for my $scope_change (
+    [tenant_id => 'tenant-2'],
+    [session_id => 'session-2'],
+) {
+    my ($field, $value) = @$scope_change;
+    is(
+        $dispatcher->load(
+            owner_scope => {%$owner, $field => $value},
+            instance_id => $instance_id,
+        )->{status},
+        'not_found',
+        "$field rotation does not disclose the instance",
+    );
+}
 
 my $loaded = $dispatcher->load(owner_scope => $owner, instance_id => $instance_id);
 $loaded->{snapshot}{state}{search} = 'tampered copy';
 my $reloaded = $dispatcher->load(owner_scope => $owner, instance_id => $instance_id);
 is $reloaded->{snapshot}{state}{search}, '', 'load returns an isolated snapshot copy';
+my $forged_release_snapshot = {%{$reloaded->{snapshot}}, release_id => 'release-forged'};
+is(
+    $store->compare_and_set(
+        owner_scope => $owner,
+        instance_id => $instance_id,
+        revision => $reloaded->{revision},
+        next_snapshot => $forged_release_snapshot,
+    )->{status},
+    'invalid_snapshot',
+    'a stored instance cannot be rebound to another template release',
+);
 
 my $dispatched = $dispatcher->dispatch(
     owner_scope => $owner,
@@ -128,6 +153,8 @@ my $second = $dispatcher->mount(
     inputs => {},
     expires_at => 200,
 );
+isnt $second->{instance_id}, $instance_id,
+    'a second tab receives a separate opaque instance for the same owner and release';
 my $browser_integer = $dispatcher->dispatch_params(
     owner_scope => $owner,
     instance_id => $second->{instance_id},
@@ -140,6 +167,10 @@ my $browser_integer = $dispatcher->dispatch_params(
 is $browser_integer->{status}, 'ok', 'dispatcher accepts normalized browser parameters';
 is $browser_integer->{observation}{snapshot}{state}{selected_order_id}, 17,
     'dispatcher passes an integer to the portable reducer';
+ok !defined(
+    $dispatcher->load(owner_scope => $owner, instance_id => $instance_id)
+        ->{snapshot}{state}{selected_order_id}
+), 'state changed in the second tab does not leak into the first instance';
 my $injected = $dispatcher->dispatch_params(
     owner_scope => $owner,
     instance_id => $second->{instance_id},
