@@ -6,6 +6,7 @@ use FindBin ();
 use lib "$FindBin::Bin/../lib";
 use lib "$FindBin::Bin/lib";
 use Mojolicious;
+use Mojo::JSON qw(decode_json encode_json);
 use Test::More;
 use Test::Mojo;
 use TestSelectoComponents ();
@@ -121,6 +122,22 @@ $app->routes->post('/native-template-instances/:instance/sources/:source')->to(c
     $controller->render_later;
     return undef;
 });
+$app->routes->websocket('/native-template-instances/:instance/ws')->to(cb => sub {
+    my ($controller) = @_;
+    return $controller->selecto_template_websocket(
+        instance => $controller->stash('instance'),
+        $native_options->(),
+        render => sub {
+            my ($model) = @_;
+            return $controller->render_to_string(template => 'native', model => $model);
+        },
+        render_error => sub {
+            my ($error) = @_;
+            return '<section id="native-orders" role="alert">' .
+                ($error->{code} // 'native_template_error') . '</section>';
+        },
+    );
+});
 
 my $t = Test::Mojo->new($app);
 $t->get_ok('/native/orders' => {'X-Test-Actor' => 'alice'})
@@ -167,6 +184,39 @@ $t->post_ok($source_form->attr('action') => {
         'custom source route completes the same template-owned query workflow')
     ->element_exists_not('html', 'HTMX path remains an EP-rendered fragment');
 
+my $ws_form = $t->tx->res->dom->at('form[data-native-event="search_changed"]');
+my %ws_event = (_hidden_fields($ws_form), value => 'PO-WS');
+my $ws_path = $ws_form->attr('action');
+$ws_path =~ s{/events\z}{/ws};
+$t->websocket_ok($ws_path => {'X-Test-Actor' => 'alice'})
+    ->send_ok({text => encode_json({
+        headers => {}, %ws_event, value => 'x' x 16_385, form_revision => 7,
+    })})
+    ->message_ok;
+my $ws_error = decode_json($t->message->[1]);
+is $ws_error->{target}, '#native-orders',
+    'native helper WebSocket errors target the host-owned EP root';
+is $ws_error->{selecto}{code}, 'event_value_too_large',
+    'native helper WebSocket preserves bounded validation metadata';
+like $ws_error->{content}, qr/event_value_too_large/,
+    'native helper WebSocket uses the host error renderer';
+$t->send_ok({text => encode_json({headers => {}, %ws_event})})
+    ->message_ok;
+my $ws_response = decode_json($t->message->[1]);
+is $ws_response->{target}, '#native-orders',
+    'native helper WebSocket targets the host-owned EP root';
+is $ws_response->{swap}, 'outerHTML',
+    'native helper WebSocket preserves the host swap contract';
+is $ws_response->{selecto}{state_revision}, 2,
+    'native helper WebSocket carries the accepted state revision';
+like $ws_response->{content}, qr/data-native-template="orders"/,
+    'native helper WebSocket renders custom EP markup';
+like $ws_response->{content}, qr/value="PO-WS"/,
+    'custom EP receives reducer-owned WebSocket state';
+unlike $ws_response->{content}, qr/selecto-template-instance/,
+    'native WebSocket response does not fall back to the generic renderer';
+$t->finish_ok;
+
 $t->get_ok('/native/orders')
     ->status_is(401, 'native helper resolves owner authority before mounting');
 
@@ -205,9 +255,9 @@ __DATA__
 @@ native.html.ep
 % my $source = $model->{sources}{orders};
 % my $event = $model->{forms}{events}[0];
-<section id="<%= $model->{root_id} %>" data-native-template="<%= $model->{template}{id} %>" data-state-revision="<%= $model->{state_revision} %>">
+<section id="<%= $model->{root_id} %>" data-native-template="<%= $model->{template}{id} %>" data-state-revision="<%= $model->{state_revision} %>" data-native-websocket="<%= $model->{transport}{websocket_path} %>">
   <h1>Orders in native EP</h1>
-  <form data-native-event="<%= $event->{event} %>" method="<%= $event->{method} %>" action="<%= $event->{action} %>" hx-post="<%= $event->{hx_post} %>" hx-target="<%= $event->{hx_target} %>" hx-swap="<%= $event->{hx_swap} %>">
+  <form data-native-event="<%= $event->{event} %>" data-selecto-template-event="<%= $event->{event} %>" method="<%= $event->{method} %>" action="<%= $event->{action} %>" hx-post="<%= $event->{hx_post} %>" hx-target="<%= $event->{hx_target} %>" hx-swap="<%= $event->{hx_swap} %>"<%== $event->{hx_ws_send} ? ' hx-ws:send' : '' %>>
 % for my $name (sort keys %{$event->{fields}}) {
     <input type="hidden" name="<%= $name %>" value="<%= $event->{fields}{$name} %>">
 % }
