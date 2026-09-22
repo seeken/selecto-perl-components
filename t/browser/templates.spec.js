@@ -344,6 +344,49 @@ test("a late HTTP template response cannot replace a newer root revision", async
   await expect(page.locator("#template-root")).toHaveText("Newer");
 });
 
+test("Back and bfcache restoration reauthorize a private template document", async ({page}) => {
+  let session = "alice";
+  let templateRequests = 0;
+  await page.route("http://selecto.test/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/away") {
+      return route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: "<!doctype html><title>Away</title><p>Outside the template</p>",
+      });
+    }
+    templateRequests += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      headers: {"Cache-Control": "no-store, private"},
+      body: `<!doctype html><html><body>
+        <main data-selecto-template-instance="${session}"
+          data-selecto-state-revision="0" data-selecto-store-revision="0">
+          Session ${session}
+        </main>
+      </body></html>`,
+    });
+  });
+
+  await page.goto("http://selecto.test/templates/private");
+  await expect(page.locator("main")).toHaveText("Session alice");
+  await page.goto("http://selecto.test/away");
+  session = "bob";
+  await page.goBack();
+  await expect(page.locator("main")).toHaveText("Session bob");
+  expect(templateRequests).toBe(2);
+
+  await page.addScriptTag({path: componentsBundle});
+  session = "carol";
+  await page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent("pageshow", {persisted: true}));
+  });
+  await expect(page.locator("main")).toHaveText("Session carol");
+  expect(templateRequests).toBe(3);
+});
+
 for (const status of [409, 422]) {
   test(`a ${status} template response deliberately swaps its bounded error fragment`, async ({page}) => {
     await loadTemplate(page, {
