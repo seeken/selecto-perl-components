@@ -1,6 +1,7 @@
 package Selecto::Components::Controller::Templates;
 
 use Mojo::Base -base, -signatures;
+use Selecto::Components::Templates::ComponentIdentity ();
 use Selecto::Components::Templates::Regions ();
 use Selecto::Components::Templates::SourceExecutor ();
 
@@ -54,6 +55,9 @@ sub event ($class, $controller, $runtime) {
         $controller, $runtime, $result->{template},
         $result->{snapshot}, $result->{store_revision},
         event_id => $result->{event_id},
+        component_id => $result->{component_id},
+        component_lifetime => $result->{component_lifetime},
+        form_revision => $result->{form_revision},
         region_node_ids => $result->{region_node_ids},
     );
 }
@@ -66,6 +70,23 @@ sub dispatch_event ($class, $controller, $runtime, %args) {
         $controller, $runtime, $args{instance_id},
     );
     return $context unless $context->{status} eq 'ok';
+    my $duplicate = ref($context->{loaded}{snapshot}{processed_event_ids}) eq 'ARRAY'
+        && grep { $_ eq $params->{event_id} }
+            @{$context->{loaded}{snapshot}{processed_event_ids}};
+    my $identity = $duplicate ? {
+        status => 'ok',
+        map { $_ => $params->{$_} }
+            qw(component_id component_lifetime form_revision),
+    } : Selecto::Components::Templates::ComponentIdentity->validate(
+        manifest => $context->{template}{manifest},
+        snapshot => $context->{loaded}{snapshot},
+        component_id => $params->{component_id},
+        component_lifetime => $params->{component_lifetime},
+        form_revision => $params->{form_revision},
+        state_revision => $params->{state_revision},
+        event => $params->{event},
+    );
+    return $identity unless $identity->{status} eq 'ok';
     my $result = $runtime->{dispatcher}->dispatch_params(
         owner_scope => $context->{owner_scope},
         instance_id => $context->{instance_id},
@@ -88,6 +109,9 @@ sub dispatch_event ($class, $controller, $runtime, %args) {
         snapshot => $result->{observation}{snapshot},
         store_revision => $result->{store_revision},
         event_id => "$params->{event_id}",
+        component_id => $identity->{component_id},
+        component_lifetime => $identity->{component_lifetime},
+        form_revision => $identity->{form_revision},
         region_node_ids => Selecto::Components::Templates::Regions->for_event(
             $context->{template}{manifest}, $params->{event},
         ),
@@ -298,12 +322,14 @@ sub _inputs ($controller, $template) {
 
 sub _event_params ($controller) {
     my %allowed = map { $_ => 1 }
-        qw(template_action csrf_token event event_id state_revision value);
+        qw(template_action csrf_token event event_id state_revision value
+            component_id component_lifetime form_revision);
     my @names = @{$controller->req->params->names};
     return _invalid_request('invalid_event_params', 'Template event parameters are invalid.')
         if grep { !$allowed{$_} } @names;
     my %values;
-    for my $name (qw(event event_id state_revision value)) {
+    for my $name (qw(event event_id state_revision value component_id
+        component_lifetime form_revision)) {
         my $submitted = $controller->every_param($name);
         return _invalid_request('invalid_event_params', 'Template event parameters are invalid.')
             unless ref($submitted) eq 'ARRAY' && @$submitted == 1
@@ -315,12 +341,19 @@ sub _event_params ($controller) {
         unless _scalar($values{event}, 128)
         && "$values{event_id}" =~ /\A[\x21-\x7e]{1,256}\z/
         && "$values{state_revision}" =~ /\A[0-9]+\z/
+        && "$values{component_id}" =~ /\A[A-Za-z0-9_.:-]{1,512}\z/
+        && "$values{component_lifetime}" =~ /\A[0-9a-f]{64}\z/
+        && "$values{form_revision}" =~ /\A[0-9]+\z/
         && ref($csrf) eq 'ARRAY' && @$csrf == 1 && !ref($csrf->[0]);
     my $action = $controller->every_param('template_action');
     return _invalid_request('invalid_event_params', 'Template event parameters are invalid.')
         unless ref($action) eq 'ARRAY' && @$action == 1
         && !ref($action->[0]) && $action->[0] eq 'event';
-    return {status => 'ok', %values, state_revision => 0 + $values{state_revision}};
+    return {
+        status => 'ok', %values,
+        state_revision => 0 + $values{state_revision},
+        form_revision => 0 + $values{form_revision},
+    };
 }
 
 sub _source_params ($controller) {

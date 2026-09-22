@@ -41,6 +41,7 @@ WriteMakefile(
         'lib/Selecto/Components/State.pm' => '$(INST_LIB)/Selecto/Components/State.pm',
         'lib/Selecto/Components/Templates.pm' => '$(INST_LIB)/Selecto/Components/Templates.pm',
         'lib/Selecto/Components/Controller/Templates.pm' => '$(INST_LIB)/Selecto/Components/Controller/Templates.pm',
+        'lib/Selecto/Components/Templates/ComponentIdentity.pm' => '$(INST_LIB)/Selecto/Components/Templates/ComponentIdentity.pm',
         'lib/Selecto/Components/Templates/Dispatcher.pm' => '$(INST_LIB)/Selecto/Components/Templates/Dispatcher.pm',
         'lib/Selecto/Components/Templates/EffectCoordinator.pm' => '$(INST_LIB)/Selecto/Components/Templates/EffectCoordinator.pm',
         'lib/Selecto/Components/Templates/Event.pm' => '$(INST_LIB)/Selecto/Components/Templates/Event.pm',

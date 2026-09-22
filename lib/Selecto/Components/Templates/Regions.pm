@@ -19,14 +19,22 @@ sub for_event {
         $changed{"source:$action->{source}"} = 1
             if ($action->{kind} // '') eq 'reload_source' && defined($action->{source});
     }
-    $changed{"event:$event_name"} = 1;
+    $changed{"event:$_->{name}"} = 1 for grep {
+        ref($_) eq 'HASH' && defined($_->{name}) && !ref($_->{name})
+    } @{$manifest->{events}};
     return _matching($manifest, \%changed);
 }
 
 sub for_source {
     my ($class, $manifest, $source_id) = @_;
     return [] unless defined($source_id) && !ref($source_id);
-    return _matching($manifest, {"source:$source_id" => 1});
+    my %changed = ("source:$source_id" => 1);
+    if (ref($manifest) eq 'HASH' && ref($manifest->{events}) eq 'ARRAY') {
+        $changed{"event:$_->{name}"} = 1 for grep {
+            ref($_) eq 'HASH' && defined($_->{name}) && !ref($_->{name})
+        } @{$manifest->{events}};
+    }
+    return _matching($manifest, \%changed);
 }
 
 sub _matching {

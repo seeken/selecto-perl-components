@@ -4225,21 +4225,28 @@
     var event = form.querySelector('input[name="event"]');
     var eventId = form.querySelector('input[name="event_id"]');
     var revision = form.querySelector('input[name="state_revision"]');
+    var componentId = form.querySelector('input[name="component_id"]');
+    var componentLifetime = form.querySelector('input[name="component_lifetime"]');
+    var formRevision = form.querySelector('input[name="form_revision"]');
     var root = form.closest("[data-selecto-template-instance]");
     var region = form.closest("[data-selecto-template-node]");
     if (!action || action.value !== "event" || !event || !event.value
-        || !eventId || !eventId.value || !revision || !root || !region) return null;
+        || !eventId || !eventId.value || !revision || !componentId
+        || !componentId.value || !componentLifetime || !componentLifetime.value
+        || !formRevision || !root || !region) return null;
     var values = new FormData(form).getAll("value");
     if (values.length !== 1 || typeof values[0] !== "string") return null;
     var key = [
       root.dataset.selectoTemplateInstance,
-      region.dataset.selectoTemplateNode,
+      componentId.value,
       event.value
     ].join("\u0000");
     return {
       key: key,
       instance_id: root.dataset.selectoTemplateInstance,
-      node_id: region.dataset.selectoTemplateNode,
+      component_id: componentId.value,
+      component_lifetime: componentLifetime.value,
+      form_revision: formRevision.value,
       event: event.value,
       event_id: eventId.value,
       value: values[0]
@@ -4252,7 +4259,7 @@
       bubbles: true,
       detail: {
         instance_id: entry && entry.instance_id,
-        node_id: entry && entry.node_id,
+        component_id: entry && entry.component_id,
         event: entry && entry.event,
         reason: reason
       }
@@ -4262,12 +4269,9 @@
   function currentTemplateEventForm(entry) {
     var root = templateRootForInstance(entry.instance_id);
     if (!root) return null;
-    for (var region of root.querySelectorAll("[data-selecto-template-node]")) {
-      if (region.dataset.selectoTemplateNode !== entry.node_id) continue;
-      for (var form of region.querySelectorAll("form")) {
-        var info = templateEventFormInfo(form);
-        if (info && info.key === entry.key) return form;
-      }
+    for (var form of root.querySelectorAll("form")) {
+      var info = templateEventFormInfo(form);
+      if (info && info.key === entry.key) return form;
     }
     return null;
   }
@@ -4462,6 +4466,31 @@
     return null;
   }
 
+  function templateResponseComponentIsCurrent(metadata, root) {
+    var fields = [
+      metadata.component_id,
+      metadata.component_lifetime,
+      metadata.form_revision
+    ];
+    if (fields.every(function (value) { return value === undefined || value === null; })) {
+      return true;
+    }
+    if (typeof metadata.component_id !== "string"
+        || typeof metadata.component_lifetime !== "string") return false;
+    var responseRevision = normalizedTemplateRevision(metadata.form_revision);
+    if (responseRevision === null) return false;
+    for (var form of root.querySelectorAll("form")) {
+      var info = templateEventFormInfo(form);
+      if (info
+          && info.component_id === metadata.component_id
+          && info.component_lifetime === metadata.component_lifetime
+          && normalizedTemplateRevision(info.form_revision) === responseRevision) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function templateResponseIsStale(metadata, target) {
     if (!metadata || typeof metadata.instance_id !== "string") return false;
     if (metadata.state_revision === undefined || metadata.store_revision === undefined) {
@@ -4472,6 +4501,7 @@
     if (incomingState === null || incomingStore === null) return true;
     var root = templateRootForInstance(metadata.instance_id, target);
     if (!root) return true;
+    if (!templateResponseComponentIsCurrent(metadata, root)) return true;
     var currentState = normalizedTemplateRevision(root.dataset.selectoStateRevision);
     var currentStore = normalizedTemplateRevision(root.dataset.selectoStoreRevision);
     if (currentState === null || currentStore === null) return false;
@@ -4510,6 +4540,9 @@
       state_revision: stateRevision,
       store_revision: storeRevision,
       event_id: headers.get("X-Selecto-Event-ID"),
+      component_id: headers.get("X-Selecto-Component-ID"),
+      component_lifetime: headers.get("X-Selecto-Component-Lifetime"),
+      form_revision: headers.get("X-Selecto-Form-Revision"),
       source_id: headers.get("X-Selecto-Source"),
       source_generation: headers.get("X-Selecto-Source-Generation")
     };
@@ -4522,7 +4555,10 @@
       catch (_error) { target = null; }
     }
     var metadata = message && message.selecto;
-    if (templateResponseIsStale(metadata, target)) return false;
+    if (templateResponseIsStale(metadata, target)) {
+      completeTemplateEvent(metadata && metadata.event_id, false);
+      return false;
+    }
     var key = templateResponseKey(metadata);
     if (!key) return true;
     pendingTemplateControlSnapshots.set(
@@ -4565,7 +4601,10 @@
 
   function prepareTemplateHttpSwap(ctx) {
     var metadata = httpTemplateMetadata(ctx);
-    if (templateResponseIsStale(metadata, ctx && ctx.target)) return false;
+    if (templateResponseIsStale(metadata, ctx && ctx.target)) {
+      completeTemplateEvent(metadata && metadata.event_id, false);
+      return false;
+    }
     if (metadata) {
       ctx.selectoTemplateMetadata = metadata;
       ctx.selectoTemplateControlSnapshot = captureTemplateControls(
@@ -4588,7 +4627,7 @@
       entry = {
         key: info.key,
         instance_id: info.instance_id,
-        node_id: info.node_id,
+        component_id: info.component_id,
         event: info.event,
         in_flight_event_id: info.event_id,
         pending: []

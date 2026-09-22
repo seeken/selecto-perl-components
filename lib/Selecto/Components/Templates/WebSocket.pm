@@ -56,6 +56,9 @@ sub connect ($class, $controller, $runtime) {
             snapshot => $result->{snapshot},
             store_revision => $result->{store_revision},
             event_id => $result->{event_id},
+            component_id => $result->{component_id},
+            component_lifetime => $result->{component_lifetime},
+            form_revision => $result->{form_revision},
             region_node_ids => $result->{region_node_ids},
         );
         return $socket->send({text => encode_json($response)});
@@ -79,25 +82,31 @@ sub _heartbeat ($controller, $interval) {
 
 sub _event_params ($envelope) {
     my %allowed = map { $_ => 1 }
-        qw(headers template_action csrf_token event event_id state_revision value);
+        qw(headers template_action csrf_token event event_id state_revision value
+            component_id component_lifetime form_revision);
     return _invalid_event() if grep { !$allowed{$_} } keys %$envelope;
     return _invalid_event()
         unless defined($envelope->{template_action})
         && !ref($envelope->{template_action})
         && $envelope->{template_action} eq 'event';
-    for my $name (qw(csrf_token event event_id state_revision value)) {
+    for my $name (qw(csrf_token event event_id state_revision value component_id
+        component_lifetime form_revision)) {
         return _invalid_event()
             unless exists($envelope->{$name}) && !ref($envelope->{$name});
     }
     return _invalid_event()
         unless length($envelope->{event}) && length($envelope->{event}) <= 128
         && "$envelope->{event_id}" =~ /\A[\x21-\x7e]{1,256}\z/
-        && "$envelope->{state_revision}" =~ /\A[0-9]+\z/;
+        && "$envelope->{state_revision}" =~ /\A[0-9]+\z/
+        && "$envelope->{component_id}" =~ /\A[A-Za-z0-9_.:-]{1,512}\z/
+        && "$envelope->{component_lifetime}" =~ /\A[0-9a-f]{64}\z/
+        && "$envelope->{form_revision}" =~ /\A[0-9]+\z/;
     return {
         status => 'ok',
         map { $_ => $envelope->{$_} }
-            qw(csrf_token event event_id value),
+            qw(csrf_token event event_id value component_id component_lifetime),
         state_revision => 0 + $envelope->{state_revision},
+        form_revision => 0 + $envelope->{form_revision},
     };
 }
 

@@ -2,6 +2,7 @@ package Selecto::Components::Templates::Transport;
 
 use Mojo::Base -base, -signatures;
 use Selecto::Components::AssetManifest qw(asset_revision);
+use Selecto::Components::Templates::ComponentIdentity ();
 use Selecto::Components::Templates::Renderer ();
 use Selecto::Components::Util qw(html_escape);
 
@@ -29,6 +30,18 @@ sub respond_snapshot ($self, $controller, %args) {
     $controller->res->headers->header(
         'X-Selecto-Event-ID' => $args{event_id},
     ) if defined($args{event_id});
+    if (defined($args{component_id}) && defined($args{component_lifetime})
+        && defined($args{form_revision})) {
+        $controller->res->headers->header(
+            'X-Selecto-Component-ID' => $args{component_id},
+        );
+        $controller->res->headers->header(
+            'X-Selecto-Component-Lifetime' => $args{component_lifetime},
+        );
+        $controller->res->headers->header(
+            'X-Selecto-Form-Revision' => $args{form_revision},
+        );
+    }
     if (defined($args{source_id}) && defined($args{source_generation})) {
         $controller->res->headers->header(
             'X-Selecto-Source' => $args{source_id},
@@ -68,6 +81,11 @@ sub websocket_snapshot ($self, $controller, %args) {
             state_revision => 0 + $args{snapshot}{state_revision},
             store_revision => 0 + $args{store_revision},
             (defined($args{event_id}) ? (event_id => "$args{event_id}") : ()),
+            (defined($args{component_id}) ? (
+                component_id => "$args{component_id}",
+                component_lifetime => "$args{component_lifetime}",
+                form_revision => 0 + $args{form_revision},
+            ) : ()),
         },
     };
 }
@@ -90,7 +108,8 @@ sub _render_snapshot ($self, $controller, %args) {
     my $csrf_token = $controller->csrf_token;
     my $root_id = _root_id($snapshot->{instance_id});
     my $registry = $self->_transport_registry(
-        $template->{registry}, $snapshot, $csrf_token, $root_id,
+        $template->{manifest}, $template->{registry}, $snapshot,
+        $csrf_token, $root_id,
     );
     my $content = Selecto::Components::Templates::Renderer->render(
         manifest => $template->{manifest}, snapshot => $snapshot,
@@ -127,7 +146,9 @@ sub _render_snapshot ($self, $controller, %args) {
     };
 }
 
-sub _transport_registry ($self, $registry, $snapshot, $csrf_token, $root_id) {
+sub _transport_registry (
+    $self, $template_manifest, $registry, $snapshot, $csrf_token, $root_id
+) {
     my %decorated = %$registry;
     my %components;
     for my $name (keys %{ref($registry->{components}) eq 'HASH'
@@ -136,7 +157,8 @@ sub _transport_registry ($self, $registry, $snapshot, $csrf_token, $root_id) {
         $components{$name} = sub ($node) {
             my %events = map {
                 $_ => $self->_event_descriptor(
-                    $snapshot, $csrf_token, $root_id, $node->{events}{$_},
+                    $template_manifest, $snapshot, $csrf_token, $root_id,
+                    $node->{node_id}, $node->{events}{$_},
                 )
             } keys %{$node->{events}};
             return $renderer->({%$node, transport => {events => \%events}});
@@ -146,12 +168,18 @@ sub _transport_registry ($self, $registry, $snapshot, $csrf_token, $root_id) {
     return \%decorated;
 }
 
-sub _event_descriptor ($self, $snapshot, $csrf_token, $root_id, $event) {
+sub _event_descriptor (
+    $self, $manifest, $snapshot, $csrf_token, $root_id, $component_id, $event
+) {
     my $event_id = $self->event_id_generator->();
     die "invalid_event_id: event ID generator returned an invalid value\n"
         unless defined($event_id) && !ref($event_id)
         && "$event_id" =~ /\A[\x21-\x7e]{1,256}\z/;
     my $action = $self->instance_path . '/' . $snapshot->{instance_id} . '/events';
+    my $identity = Selecto::Components::Templates::ComponentIdentity->descriptor(
+        manifest => $manifest, snapshot => $snapshot,
+        component_id => $component_id, event => $event,
+    );
     return {
         action => $action, method => 'post', hx_post => $action,
         hx_target => "#$root_id", hx_swap => 'outerHTML',
@@ -159,6 +187,7 @@ sub _event_descriptor ($self, $snapshot, $csrf_token, $root_id, $event) {
             template_action => 'event', csrf_token => "$csrf_token", event => "$event",
             event_id => "$event_id",
             state_revision => 0 + $snapshot->{state_revision},
+            %$identity,
         },
         hx_ws_send => 1,
     };
