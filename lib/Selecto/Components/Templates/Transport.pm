@@ -37,7 +37,8 @@ sub respond_snapshot ($self, $controller, %args) {
             'X-Selecto-Source-Generation' => $args{source_generation},
         );
     }
-    my $html = _is_fragment($controller) ? $rendered->{root} : $rendered->{page};
+    my $html = _is_fragment($controller)
+        ? ($rendered->{partial} // $rendered->{root}) : $rendered->{page};
     return $controller->render(data => $html, format => 'html', status => 200);
 }
 
@@ -59,7 +60,7 @@ sub websocket_snapshot ($self, $controller, %args) {
             message => 'Template could not be rendered.'},
     ) if $@ || ref($rendered) ne 'HASH';
     return {
-        content => $rendered->{root},
+        content => $rendered->{partial} // $rendered->{root},
         target => '#' . _root_id($args{snapshot}{instance_id}),
         swap => 'outerHTML',
         selecto => {
@@ -95,7 +96,7 @@ sub _render_snapshot ($self, $controller, %args) {
         manifest => $template->{manifest}, snapshot => $snapshot,
         registry => $registry,
     );
-    my $sources = $self->_source_controls($snapshot, $csrf_token, $root_id);
+    my $sources = $self->_source_region($snapshot, $csrf_token, $root_id);
     my $root = '<main id="' . html_escape($root_id) . '"' .
         ' class="selecto-template-instance" hx-history="false"' .
         ' hx-status:4xx="swap: outerHTML" hx-status:5xx="swap: outerHTML"' .
@@ -109,7 +110,21 @@ sub _render_snapshot ($self, $controller, %args) {
     my $channel = '<section id="' . html_escape($channel_id) . '"' .
         ' class="selecto-template-channel" hx-ext="ws" hx-ws:connect="' .
         html_escape($ws_path) . '" hx-swap="none">' . $root . '</section>';
-    return {root => $root, page => _page($template->{title}, $channel)};
+    my $partial;
+    if (ref($args{region_node_ids}) eq 'ARRAY') {
+        my $regions = Selecto::Components::Templates::Renderer->render_regions(
+            manifest => $template->{manifest}, snapshot => $snapshot,
+            registry => $registry, node_ids => $args{region_node_ids},
+        );
+        $partial = join '', map {
+            _partial($_->{target}, $_->{html})
+        } @$regions;
+        $partial .= _partial('#' . _source_region_id($root_id), $sources);
+    }
+    return {
+        root => $root, page => _page($template->{title}, $channel),
+        (defined($partial) ? (partial => $partial) : ()),
+    };
 }
 
 sub _transport_registry ($self, $registry, $snapshot, $csrf_token, $root_id) {
@@ -149,6 +164,12 @@ sub _event_descriptor ($self, $snapshot, $csrf_token, $root_id, $event) {
     };
 }
 
+sub _source_region ($self, $snapshot, $csrf_token, $root_id) {
+    my $content = $self->_source_controls($snapshot, $csrf_token, $root_id);
+    return '<div id="' . html_escape(_source_region_id($root_id)) . '"' .
+        ' data-selecto-template-sources>' . $content . '</div>';
+}
+
 sub _source_controls ($self, $snapshot, $csrf_token, $root_id) {
     my $html = '';
     for my $source_id (sort keys %{$snapshot->{sources}}) {
@@ -174,6 +195,15 @@ sub _source_controls ($self, $snapshot, $csrf_token, $root_id) {
         }
     }
     return $html;
+}
+
+sub _source_region_id ($root_id) {
+    return "$root_id-sources";
+}
+
+sub _partial ($target, $html) {
+    return '<template hx type="partial" hx-target="' . html_escape($target) .
+        '" hx-swap="outerHTML">' . $html . '</template>';
 }
 
 sub _root_id ($instance_id) {

@@ -187,6 +187,12 @@ unlike $t->tx->res->body, qr/selecto\.template\.compile-manifest/,
 my $source_form = $initial_dom->at('form.selecto-template-source');
 my $source_path = $source_form->attr('action');
 my $source_csrf = $source_form->at('input[name="csrf_token"]')->attr('value');
+my $event_form = $initial_dom->at('form[data-template-event="search_changed"]');
+my $event_path = $event_form->attr('action');
+my %event_params = map {
+    $_->attr('name') => $_->attr('value')
+} $event_form->find('input[type="hidden"]')->each;
+$event_params{value} = 'PO-200';
 
 $t->post_ok(
     $source_path => {'X-Test-Actor' => 'mallory', 'HX-Request' => 'true'} =>
@@ -239,7 +245,9 @@ $t->post_ok(
     ->header_is('X-Selecto-Store-Revision' => 1)
     ->header_is('X-Selecto-Source' => 'orders')
     ->header_is('X-Selecto-Source-Generation' => 1)
-    ->element_exists('main.selecto-template-instance')
+    ->content_like(qr{<template hx type="partial"})
+    ->element_exists('[data-selecto-template-node="root.children.6"]')
+    ->element_exists_not('[data-selecto-template-node="root.children.5"]')
     ->element_exists_not('html')
     ->element_exists('[data-order-number="PO-100"]')
     ->element_exists_not('form.selecto-template-source');
@@ -251,14 +259,6 @@ unlike $worker_audit[0], qr/\A\Q$$\E:/,
     'source authorization and DB handle creation run outside the web process';
 like $worker_audit[0], qr/:alice:orders:1\z/,
     'child authorization receives only the resolved actor and source effect data';
-
-my $ready_dom = $t->tx->res->dom;
-my $event_form = $ready_dom->at('form[data-template-event="search_changed"]');
-my $event_path = $event_form->attr('action');
-my %event_params = map {
-    $_->attr('name') => $_->attr('value')
-} $event_form->find('input[type="hidden"]')->each;
-$event_params{value} = 'PO-200';
 
 $t->post_ok(
     $event_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>

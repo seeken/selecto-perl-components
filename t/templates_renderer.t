@@ -76,6 +76,35 @@ like $order_html, qr/data-select-event="order_selected"/,
     'selection component receives its declared event';
 like $order_html, qr/data-order-id="17"/,
     'include renderer receives the resolved typed binding';
+like $order_html,
+    qr/data-selecto-template-node="root\.children\.7"/,
+    'top-level conditional keeps a stable fragment boundary';
+
+my $regions = Selecto::Components::Templates::Renderer->render_regions(
+    manifest => $order_manifest,
+    snapshot => $dispatched->{snapshot},
+    registry => $registry,
+    node_ids => ['root.children.7'],
+);
+is scalar(@$regions), 1, 'renderer returns only requested server-owned regions';
+is $regions->[0]{node_id}, 'root.children.7', 'fragment preserves its compiled node ID';
+like $regions->[0]{target}, qr/\A#selecto-template-orders-2D1-.*-region\z/,
+    'fragment target is derived from instance and compiled node identity';
+like $regions->[0]{html}, qr/data-order-id="17"/,
+    'fragment uses the same rendering pipeline as the full view';
+
+my $unknown_region;
+eval {
+    Selecto::Components::Templates::Renderer->render_regions(
+        manifest => $order_manifest,
+        snapshot => $dispatched->{snapshot},
+        registry => $registry,
+        node_ids => ['client.chosen'],
+    );
+    1;
+} or $unknown_region = $@;
+like $unknown_region, qr/\Aunknown_render_region:/,
+    'renderer rejects a region absent from the compiled top-level view';
 
 my $missing_renderer;
 eval {

@@ -80,17 +80,21 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
         hx-ws:connect="/template-instances/one/ws" hx-swap="none">
         <main id="template-root" data-selecto-template-instance="one"
           data-selecto-state-revision="0" data-selecto-store-revision="0">
-          <form method="post" action="/template-instances/one/events"
-            hx-ws:send data-selecto-template-event="search_changed">
-            <input type="hidden" name="template_action" value="event">
-            <input type="hidden" name="csrf_token" value="csrf-one">
-            <input type="hidden" name="event" value="search_changed">
-            <input type="hidden" name="event_id" value="event-one">
-            <input type="hidden" name="state_revision" value="0">
-            <input id="template-search" name="value" value="PO-100">
-            <button type="submit">Search</button>
-          </form>
-          <input id="template-note" name="note" value="Server note">
+          <div id="search-region" data-selecto-template-node="root.children.5">
+            <form method="post" action="/template-instances/one/events"
+              hx-ws:send data-selecto-template-event="search_changed">
+              <input type="hidden" name="template_action" value="event">
+              <input type="hidden" name="csrf_token" value="csrf-one">
+              <input type="hidden" name="event" value="search_changed">
+              <input type="hidden" name="event_id" value="event-one">
+              <input type="hidden" name="state_revision" value="0">
+              <input id="template-search" name="value" value="PO-100">
+              <button type="submit">Search</button>
+            </form>
+          </div>
+          <div id="note-region" data-selecto-template-node="root.children.8">
+            <input id="template-note" name="note" value="Server note">
+          </div>
         </main>
       </section>
     </body></html>`,
@@ -155,16 +159,16 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
 
   await page.evaluate(() => {
     window.fakeTemplateSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
-      content: `<main id="template-root" data-selecto-template-instance="one"
-        data-selecto-state-revision="2" data-selecto-store-revision="2">
-        <form method="post" action="/template-instances/one/events" hx-ws:send
-          data-selecto-template-event="search_changed">
-          <input type="hidden" name="event_id" value="event-one">
-          <input id="template-search" name="value" value="Server search">
-        </form>
-        <input id="template-note" name="note" value="Server note">
-        <span>Updated</span>
-      </main>`,
+      content: `<template hx type="partial" hx-target="#search-region" hx-swap="outerHTML">
+        <div id="search-region" data-selecto-template-node="root.children.5">
+          <form method="post" action="/template-instances/one/events" hx-ws:send
+            data-selecto-template-event="search_changed">
+            <input type="hidden" name="event_id" value="event-one">
+            <input id="template-search" name="value" value="Server search">
+          </form>
+          <span>Updated</span>
+        </div>
+      </template>`,
       target: "#template-root",
       swap: "outerHTML",
       selecto: {
@@ -225,15 +229,15 @@ test("an HTTP template swap preserves other dirty fields and focused selection",
           "X-Selecto-Store-Revision": "1",
           "X-Selecto-Event-ID": "event-one",
         },
-        body: `<main id="template-root" data-selecto-template-instance="one"
-          data-selecto-state-revision="1" data-selecto-store-revision="1">
-          <form method="post" action="/events" hx-post="/events"
-            hx-target="#template-root" hx-swap="outerHTML">
-            <input type="hidden" name="event_id" value="event-one">
-            <input id="template-search" name="value" value="Server search">
-          </form>
-          <input id="template-note" name="note" value="Server note">
-        </main>`,
+        body: `<template hx type="partial" hx-target="#search-region" hx-swap="outerHTML">
+          <div id="search-region" data-selecto-template-node="root.children.5">
+            <form method="post" action="/events" hx-post="/events"
+              hx-target="#template-root" hx-swap="outerHTML">
+              <input type="hidden" name="event_id" value="event-one">
+              <input id="template-search" name="value" value="Server search">
+            </form>
+          </div>
+        </template>`,
       });
     }
     return route.fulfill({
@@ -242,12 +246,16 @@ test("an HTTP template swap preserves other dirty fields and focused selection",
       body: `<!doctype html><html><body>
         <main id="template-root" data-selecto-template-instance="one"
           data-selecto-state-revision="0" data-selecto-store-revision="0">
-          <form method="post" action="/events" hx-post="/events"
-            hx-target="#template-root" hx-swap="outerHTML">
-            <input type="hidden" name="event_id" value="event-one">
-            <input id="template-search" name="value" value="Initial search">
-          </form>
-          <input id="template-note" name="note" value="Server note">
+          <div id="search-region" data-selecto-template-node="root.children.5">
+            <form method="post" action="/events" hx-post="/events"
+              hx-target="#template-root" hx-swap="outerHTML">
+              <input type="hidden" name="event_id" value="event-one">
+              <input id="template-search" name="value" value="Initial search">
+            </form>
+          </div>
+          <div id="note-region" data-selecto-template-node="root.children.8">
+            <input id="template-note" name="note" value="Server note">
+          </div>
         </main>
       </body></html>`,
     });
@@ -272,6 +280,9 @@ test("an HTTP template swap preserves other dirty fields and focused selection",
   });
   await page.evaluate(() => window.templateRequestFinished);
 
+  await expect(page.locator("#template-root")).toHaveAttribute(
+    "data-selecto-store-revision", "1",
+  );
   await expect(page.locator("#template-search")).toHaveValue("Server search");
   await expect(page.locator("#template-note")).toHaveValue("Unsent note");
   expect(await page.evaluate(() => ({
