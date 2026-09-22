@@ -316,6 +316,13 @@ my $store = Selecto::Components::Templates::InstanceStore::PostgreSQL->new(
 my $dispatcher = Selecto::Components::Templates::Dispatcher->new(store => $store);
 ```
 
+`Dispatcher` is the stable host facade. `InstanceService` owns scoped instance
+lifecycle and compare-and-set persistence, `EventDispatcher` owns typed browser
+events, and `EffectCoordinator` applies source completions. `SourceExecutor`
+remains the separate boundary that attaches fresh host authority and performs a
+query. This keeps storage, event handling, query execution, and future effect
+leasing independently replaceable without changing route code.
+
 The provider supplies a DBI-compatible PostgreSQL handle already owned by the
 current request worker. The store neither retains nor disconnects it, and the host
 must not share one handle across workers. Apply the statements from
