@@ -43,6 +43,7 @@ WriteMakefile(
         'lib/Selecto/Components/Templates/Event.pm' => '$(INST_LIB)/Selecto/Components/Templates/Event.pm',
         'lib/Selecto/Components/Templates/InstanceStore/Memory.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceStore/Memory.pm',
         'lib/Selecto/Components/Templates/Renderer.pm' => '$(INST_LIB)/Selecto/Components/Templates/Renderer.pm',
+        'lib/Selecto/Components/Templates/SourceExecutor.pm' => '$(INST_LIB)/Selecto/Components/Templates/SourceExecutor.pm',
         'lib/Selecto/Components/Util.pm' => '$(INST_LIB)/Selecto/Components/Util.pm',
         'public/selecto-components/chart.umd.min.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/chart.umd.min.js',
         'public/selecto-api-console/index.html' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-api-console/index.html',
