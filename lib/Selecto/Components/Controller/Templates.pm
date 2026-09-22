@@ -86,7 +86,8 @@ sub dispatch_event ($class, $controller, $runtime, %args) {
         state_revision => $params->{state_revision},
         event => $params->{event},
     );
-    return $identity unless $identity->{status} eq 'ok';
+    return _event_error($identity, $context, $params)
+        unless $identity->{status} eq 'ok';
     my $result = $runtime->{dispatcher}->dispatch_params(
         owner_scope => $context->{owner_scope},
         instance_id => $context->{instance_id},
@@ -96,13 +97,14 @@ sub dispatch_event ($class, $controller, $runtime, %args) {
         expected_state_revision => $params->{state_revision},
         params => {value => $params->{value}},
     );
-    return $result unless $result->{status} eq 'ok';
+    return _event_error($result, $context, $params)
+        unless $result->{status} eq 'ok';
     if (($result->{observation}{outcome} // '') ne 'accepted') {
-        return {
+        return _event_error({
             status => 'conflict',
             code => $result->{observation}{code} // 'event_rejected',
             message => 'Template event could not be applied. Reload and try again.',
-        };
+        }, $context, $params);
     }
     return {
         status => 'ok', template => $context->{template},
@@ -277,6 +279,24 @@ sub _snapshot_response ($controller, $runtime, $template, $snapshot, $store_revi
     );
 }
 
+sub _event_error ($result, $context, $params) {
+    return $result unless ref($result) eq 'HASH'
+        && ref($context) eq 'HASH' && ref($context->{loaded}) eq 'HASH'
+        && ref($context->{loaded}{snapshot}) eq 'HASH'
+        && ref($params) eq 'HASH';
+    my $snapshot = $context->{loaded}{snapshot};
+    return {
+        %$result,
+        response_metadata => {
+            instance_id => "$context->{instance_id}",
+            state_revision => 0 + $snapshot->{state_revision},
+            store_revision => 0 + $context->{loaded}{revision},
+            map { $_ => "$params->{$_}" }
+                qw(event_id component_id component_lifetime form_revision),
+        },
+    };
+}
+
 sub instance_context ($class, $controller, $runtime, $instance_id) {
     my $owner = _owner($controller, $runtime);
     return $owner unless $owner->{status} eq 'ok';
@@ -352,7 +372,6 @@ sub _event_params ($controller) {
     return {
         status => 'ok', %values,
         state_revision => 0 + $values{state_revision},
-        form_revision => 0 + $values{form_revision},
     };
 }
 

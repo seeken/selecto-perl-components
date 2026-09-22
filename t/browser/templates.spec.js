@@ -158,7 +158,7 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
     state_revision: "0",
     component_id: "root.children.5",
     component_lifetime: "lifetime-one",
-    form_revision: "0",
+    form_revision: "1",
     value: "PO-200",
   });
   expect(outgoing).not.toHaveProperty("selecto_request_id");
@@ -198,7 +198,7 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
         instance_id: "one", state_revision: 2, store_revision: 2,
         event_id: "event-one",
         component_id: "root.children.5",
-        component_lifetime: "lifetime-one", form_revision: 0,
+        component_lifetime: "lifetime-one", form_revision: 1,
       },
     })}));
   });
@@ -261,6 +261,27 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
     start: document.activeElement.selectionStart,
     end: document.activeElement.selectionEnd,
   }))).toEqual({id: "template-note", start: 2, end: 6});
+
+  await page.locator("#template-search").fill("Newer local draft");
+  await page.evaluate(async () => {
+    window.fakeTemplateSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
+      content: `<section data-selecto-template-error="old-validation" role="alert">
+        Old validation
+      </section>`,
+      target: "#template-root",
+      swap: "outerHTML",
+      selecto: {
+        status: 422, code: "invalid_event_value",
+        instance_id: "one", state_revision: 3, store_revision: 3,
+        event_id: "event-three", component_id: "root.children.5",
+        component_lifetime: "lifetime-three", form_revision: 3,
+      },
+    })}));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+  await expect(page.locator("#template-search")).toHaveValue("Newer local draft");
+  await expect(page.locator('[data-selecto-template-error="old-validation"]'))
+    .toHaveCount(0);
 
   await page.evaluate(async () => {
     window.fakeTemplateSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
@@ -415,7 +436,7 @@ test("HTTP template events wait per form and rebuild queued requests from fresh 
           "X-Selecto-Component-ID": "root.children.5",
           "X-Selecto-Component-Lifetime": requestNumber === 1
             ? "lifetime-one" : "lifetime-two",
-          "X-Selecto-Form-Revision": requestNumber === 1 ? "0" : "1",
+          "X-Selecto-Form-Revision": requestNumber === 1 ? "1" : "2",
         },
         body: `<template hx type="partial" hx-target="#search-region" hx-swap="outerHTML">
           <div id="search-region" data-selecto-template-node="root.children.5">
@@ -488,17 +509,91 @@ test("HTTP template events wait per form and rebuild queued requests from fresh 
   expect(Object.fromEntries(firstBody)).toMatchObject({
     csrf_token: "csrf-one", event_id: "event-one", state_revision: "0", value: "PO-200",
     component_id: "root.children.5", component_lifetime: "lifetime-one",
-    form_revision: "0",
+    form_revision: "1",
   });
   expect(Object.fromEntries(secondBody)).toMatchObject({
     csrf_token: "csrf-two", event_id: "event-two", state_revision: "1", value: "PO-300",
     component_id: "root.children.5", component_lifetime: "lifetime-two",
-    form_revision: "1",
+    form_revision: "2",
   });
   await expect(page.locator("#template-root")).toHaveAttribute(
     "data-selecto-state-revision", "2",
   );
   await expect(page.locator("#template-search")).toHaveValue("Second server search");
+});
+
+test("a late HTTP validation response cannot replace a newer local draft", async ({page}) => {
+  let releaseResponse;
+  const responseGate = new Promise(resolve => { releaseResponse = resolve; });
+  let requestStarted;
+  const started = new Promise(resolve => { requestStarted = resolve; });
+  await page.route("http://selecto.test/**", async route => {
+    if (route.request().method() === "POST") {
+      requestStarted();
+      await responseGate;
+      return route.fulfill({
+        status: 422,
+        contentType: "text/html",
+        headers: {
+          "X-Selecto-Template-Instance": "one",
+          "X-Selecto-State-Revision": "0",
+          "X-Selecto-Store-Revision": "0",
+          "X-Selecto-Event-ID": "event-one",
+          "X-Selecto-Component-ID": "root.children.5",
+          "X-Selecto-Component-Lifetime": "lifetime-one",
+          "X-Selecto-Form-Revision": "1",
+        },
+        body: '<section data-selecto-template-error="old-validation">Old validation</section>',
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: `<!doctype html><html><body>
+        <main id="template-root" data-selecto-template-instance="one"
+          data-selecto-state-revision="0" data-selecto-store-revision="0"
+          hx-status:4xx="swap: outerHTML">
+          <div data-selecto-template-node="root.children.5">
+            <form method="post" action="/events" hx-post="/events"
+              hx-target="#template-root" hx-swap="outerHTML"
+              data-selecto-template-event="search_changed">
+              <input type="hidden" name="template_action" value="event">
+              <input type="hidden" name="csrf_token" value="csrf-one">
+              <input type="hidden" name="event" value="search_changed">
+              <input type="hidden" name="event_id" value="event-one">
+              <input type="hidden" name="state_revision" value="0">
+              <input type="hidden" name="component_id" value="root.children.5">
+              <input type="hidden" name="component_lifetime" value="lifetime-one">
+              <input type="hidden" name="form_revision" value="0">
+              <input id="template-search" name="value" value="Initial">
+              <button type="submit">Search</button>
+            </form>
+          </div>
+        </main>
+      </body></html>`,
+    });
+  });
+  await page.goto("http://selecto.test/templates/orders");
+  await page.addScriptTag({path: htmxBundle});
+  await page.addScriptTag({path: componentsBundle});
+  await page.evaluate(() => {
+    window.templateRequestFinished = new Promise(resolve => {
+      document.addEventListener("htmx:finally:request", () => resolve(true), {once: true});
+    });
+    window.htmx.process(document.body);
+  });
+
+  await page.locator("#template-search").fill("Submitted invalid draft");
+  await page.locator("#template-search").evaluate(input => input.form.requestSubmit());
+  await started;
+  await page.locator("#template-search").fill("Newer local draft");
+  releaseResponse();
+  await page.evaluate(() => window.templateRequestFinished);
+
+  await expect(page.locator("#template-root")).toHaveCount(1);
+  await expect(page.locator("#template-search")).toHaveValue("Newer local draft");
+  await expect(page.locator('[data-selecto-template-error="old-validation"]'))
+    .toHaveCount(0);
 });
 
 test("a late HTTP template response cannot replace a newer root revision", async ({page}) => {

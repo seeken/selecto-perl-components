@@ -15,10 +15,25 @@
     return left < right ? -1 : 1;
   }
 
+  function nextTemplateRevision(value) {
+    value = normalizedTemplateRevision(value);
+    if (value === null) return null;
+    var digits = value.split("");
+    var carry = 1;
+    for (var index = digits.length - 1; index >= 0 && carry; index -= 1) {
+      var digit = Number(digits[index]) + carry;
+      digits[index] = String(digit % 10);
+      carry = digit > 9 ? 1 : 0;
+    }
+    if (carry) digits.unshift("1");
+    return digits.join("");
+  }
+
   var pendingTemplateControlSnapshots = new Map();
   var templateEventQueues = new Map();
   var templateEventKeysById = new Map();
   var templateEventQueueLimit = 16;
+  var templateControlDraftValues = new WeakMap();
 
   function templateEventFormInfo(form) {
     if (!(form instanceof HTMLFormElement)) return null;
@@ -34,7 +49,8 @@
     if (!action || action.value !== "event" || !event || !event.value
         || !eventId || !eventId.value || !revision || !componentId
         || !componentId.value || !componentLifetime || !componentLifetime.value
-        || !formRevision || !root || !region) return null;
+        || !formRevision || normalizedTemplateRevision(formRevision.value) === null
+        || !root || !region) return null;
     var values = new FormData(form).getAll("value");
     if (values.length !== 1 || typeof values[0] !== "string") return null;
     var key = [
@@ -87,6 +103,22 @@
     return true;
   }
 
+  function setTemplateEventFormRevision(form, revision) {
+    var input = form && form.querySelector('input[name="form_revision"]');
+    revision = normalizedTemplateRevision(revision);
+    if (!input || revision === null) return false;
+    input.value = revision;
+    return true;
+  }
+
+  function advanceTemplateEventFormRevision(form) {
+    var input = form && form.querySelector('input[name="form_revision"]');
+    var next = input && nextTemplateRevision(input.value);
+    if (!input || next === null) return false;
+    input.value = next;
+    return true;
+  }
+
   function resetTemplateEventValue(form) {
     var controls = form.querySelectorAll('[name="value"]');
     if (controls.length !== 1) return false;
@@ -128,7 +160,8 @@
       templateEventQueues.delete(key);
       return;
     }
-    if (!form || !setTemplateEventValue(form, queued.value)) {
+    if (!form || !setTemplateEventValue(form, queued.value)
+        || !setTemplateEventFormRevision(form, queued.form_revision)) {
       return cancelTemplateEventEntry(entry, "form_disposed");
     }
     form.requestSubmit();
@@ -229,6 +262,7 @@
     var root = templateRootForInstance(snapshot.instance_id);
     if (!root) return;
     var controls = templateControlMap(root);
+    var editedForms = new Set();
     snapshot.values.forEach(function (entry) {
       var control = controls.get(entry.key);
       if (!control) return;
@@ -239,7 +273,11 @@
       } else if (entry.state.kind === "value") control.value = entry.state.value;
       else return;
       control.setAttribute("data-selecto-template-dirty", "true");
+      if (control.form && templateEventFormInfo(control.form)) {
+        editedForms.add(control.form);
+      }
     });
+    editedForms.forEach(advanceTemplateEventFormRevision);
     var focus = snapshot.focus;
     var focused = focus && controls.get(focus.key);
     if (!focused) return;
@@ -282,14 +320,24 @@
     if (responseRevision === null) return false;
     for (var form of root.querySelectorAll("form")) {
       var info = templateEventFormInfo(form);
-      if (info
-          && info.component_id === metadata.component_id
+      if (info && info.component_id === metadata.component_id
           && info.component_lifetime === metadata.component_lifetime
-          && normalizedTemplateRevision(info.form_revision) === responseRevision) {
+          && (normalizedTemplateRevision(info.form_revision) === responseRevision
+            || templateResponseAdvancesQueuedDraft(metadata, info))) {
         return true;
       }
     }
     return false;
+  }
+
+  function templateResponseAdvancesQueuedDraft(metadata, info) {
+    if (!metadata || Number(metadata.status || 0) >= 400
+        || typeof metadata.event_id !== "string") return false;
+    var key = templateEventKeysById.get(metadata.event_id);
+    var entry = key && templateEventQueues.get(key);
+    return !!(entry && entry.key === info.key
+      && entry.in_flight_event_id === metadata.event_id
+      && entry.pending.length);
   }
 
   function templateResponseIsStale(metadata, target) {
@@ -345,7 +393,8 @@
       component_lifetime: headers.get("X-Selecto-Component-Lifetime"),
       form_revision: headers.get("X-Selecto-Form-Revision"),
       source_id: headers.get("X-Selecto-Source"),
-      source_generation: headers.get("X-Selecto-Source-Generation")
+      source_generation: headers.get("X-Selecto-Source-Generation"),
+      status: ctx.response.status
     };
   }
 
@@ -360,6 +409,7 @@
       completeTemplateEvent(metadata && metadata.event_id, false);
       return false;
     }
+    if (metadata && metadata.status) return true;
     var key = templateResponseKey(metadata);
     if (!key) return true;
     pendingTemplateControlSnapshots.set(
@@ -378,21 +428,17 @@
 
   function reconcileTemplateWebSocketMessage(message) {
     var metadata = message && message.selecto;
-    var key = templateResponseKey(metadata);
-    if (!key) {
-      if (metadata && metadata.status) {
-        var target;
-        try { target = document.querySelector(message.target); }
-        catch (_error) { target = null; }
-        var root = target && target.closest("[data-selecto-template-instance]");
-        if (root) {
-          cancelTemplateEventQueuesForInstance(
-            root.dataset.selectoTemplateInstance, "server_rejected"
-          );
-        }
+    if (metadata && metadata.status) {
+      if (typeof metadata.event_id === "string"
+          && templateEventKeysById.has(metadata.event_id)) {
+        completeTemplateEvent(metadata.event_id, false);
+      } else if (typeof metadata.instance_id === "string") {
+        cancelTemplateEventQueuesForInstance(metadata.instance_id, "server_rejected");
       }
       return;
     }
+    var key = templateResponseKey(metadata);
+    if (!key) return;
     var snapshot = pendingTemplateControlSnapshots.get(key);
     pendingTemplateControlSnapshots.delete(key);
     applyTemplateMetadata(metadata);
@@ -408,9 +454,11 @@
     }
     if (metadata) {
       ctx.selectoTemplateMetadata = metadata;
-      ctx.selectoTemplateControlSnapshot = captureTemplateControls(
-        templateRootForInstance(metadata.instance_id, ctx.target), metadata
-      );
+      if (Number(metadata.status || 0) < 400) {
+        ctx.selectoTemplateControlSnapshot = captureTemplateControls(
+          templateRootForInstance(metadata.instance_id, ctx.target), metadata
+        );
+      }
     }
     return true;
   }
@@ -448,7 +496,7 @@
       emitTemplateQueueEvent("selecto:template:queue:overflow", entry, "queue_full");
       return;
     }
-    entry.pending.push({value: info.value});
+    entry.pending.push({value: info.value, form_revision: info.form_revision});
   }, true);
 
   document.addEventListener("htmx:finally:request", function (event) {
@@ -487,18 +535,33 @@
     }
   });
 
-  document.addEventListener("input", function (event) {
-    var control = event.target;
+  function markTemplateControlEdited(control) {
     if (!templateControlKey(control)
         || !control.closest("[data-selecto-template-instance]")) return;
+    var draftValue = control instanceof HTMLInputElement
+        && (control.type === "checkbox" || control.type === "radio")
+      ? String(control.checked)
+      : control instanceof HTMLSelectElement && control.multiple
+        ? Array.from(control.selectedOptions, function (option) {
+            return option.value;
+          }).join("\u0000")
+        : control.value;
+    if (templateControlDraftValues.get(control) === draftValue) return;
+    templateControlDraftValues.set(control, draftValue);
     control.setAttribute("data-selecto-template-dirty", "true");
+    if (control.form && templateEventFormInfo(control.form)) {
+      advanceTemplateEventFormRevision(control.form);
+    }
+  }
+
+  document.addEventListener("input", function (event) {
+    var control = event.target;
+    markTemplateControlEdited(control);
   });
 
   document.addEventListener("change", function (event) {
     var control = event.target;
-    if (!templateControlKey(control)
-        || !control.closest("[data-selecto-template-instance]")) return;
-    control.setAttribute("data-selecto-template-dirty", "true");
+    markTemplateControlEdited(control);
   });
 
   window.addEventListener("pageshow", function (event) {

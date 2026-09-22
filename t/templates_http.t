@@ -317,6 +317,25 @@ my $pending_source_form = $t->tx->res->dom->at('form.selecto-template-source');
 my $pending_source_path = $pending_source_form->attr('action');
 my $pending_source_csrf =
     $pending_source_form->at('input[name="csrf_token"]')->attr('value');
+my %validation_event = map {
+    $_->attr('name') => $_->attr('value')
+} $next_event_form->find('input[type="hidden"]')->each;
+$validation_event{event_id} = 'validation-event';
+$validation_event{form_revision} = 7;
+$validation_event{value} = 'x' x 16_385;
+$t->post_ok(
+    $event_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => \%validation_event,
+)->status_is(422)
+    ->header_is('X-Selecto-Template-Instance' => $instance_id)
+    ->header_is('X-Selecto-State-Revision' => 1)
+    ->header_is('X-Selecto-Store-Revision' => 2)
+    ->header_is('X-Selecto-Event-ID' => 'validation-event')
+    ->header_is('X-Selecto-Component-ID' => $validation_event{component_id})
+    ->header_is('X-Selecto-Component-Lifetime' =>
+        $validation_event{component_lifetime})
+    ->header_is('X-Selecto-Form-Revision' => 7)
+    ->element_exists('[data-selecto-template-error="event_value_too_large"]');
 
 $t->post_ok(
     $event_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
@@ -358,13 +377,13 @@ $t->post_ok(
 my %stale_form = (
     %event_params,
     event_id => 'stale-form-event',
-    form_revision => 1,
+    form_revision => '01',
 );
 $t->post_ok(
     $event_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
         form => \%stale_form,
-)->status_is(409)
-    ->element_exists('[data-selecto-template-error="stale_form_revision"]');
+)->status_is(422)
+    ->element_exists('[data-selecto-template-error="invalid_form_revision"]');
 
 $t->post_ok(
     $pending_source_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
@@ -434,8 +453,30 @@ my %ws_event = map {
 } $ws_form->find('input[type="hidden"]')->each;
 $ws_event{value} = 'PO-WS';
 my $ws_path = "/template-instances/$ws_instance_id/ws";
-$t->websocket_ok($ws_path => {'X-Test-Actor' => 'alice'})
-    ->send_ok({text => encode_json({headers => {}, %ws_event})})
+$t->websocket_ok($ws_path => {'X-Test-Actor' => 'alice'});
+my %ws_validation_event = (
+    %ws_event,
+    value => 'x' x 16_385,
+    form_revision => 7,
+);
+$t->send_ok({text => encode_json({headers => {}, %ws_validation_event})})
+    ->message_ok;
+my $ws_validation = decode_json($t->message->[1]);
+is $ws_validation->{selecto}{status}, 422,
+    'WebSocket value validation returns a bounded error envelope';
+is $ws_validation->{selecto}{code}, 'event_value_too_large',
+    'WebSocket validation preserves the typed event error';
+is $ws_validation->{selecto}{instance_id}, $ws_instance_id,
+    'WebSocket validation identifies its template instance';
+is $ws_validation->{selecto}{event_id}, $ws_event{event_id},
+    'WebSocket validation identifies its submitted event';
+is $ws_validation->{selecto}{component_lifetime},
+    $ws_event{component_lifetime},
+    'WebSocket validation carries the submitted component lifetime';
+is $ws_validation->{selecto}{form_revision}, 7,
+    'WebSocket validation carries the submitted draft revision';
+
+$t->send_ok({text => encode_json({headers => {}, %ws_event})})
     ->message_ok;
 my $ws_response = decode_json($t->message->[1]);
 is $ws_response->{target}, '#' . $ws_root->attr('id'),
