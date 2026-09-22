@@ -121,6 +121,9 @@ sub register ($self, $app, $plugin_config) {
     $app->helper(selecto_template_dispatch_source => sub ($controller, %args) {
         return $native->dispatch_source($controller, %args);
     });
+    $app->helper(selecto_template_websocket => sub ($controller, %args) {
+        return $native->websocket($controller, %args);
+    });
 
     $app->routes->get("$template_path/:selecto_template_id")->to(cb => sub ($controller) {
         return Selecto::Components::Controller::Templates->show($controller, $runtime);

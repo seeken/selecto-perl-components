@@ -71,6 +71,70 @@ test("a template event swaps its stable root with the pinned htmx runtime", asyn
   expect(requests[0].headers()["hx-target"]).toBe("main#template-root");
 });
 
+test("native EP source and event controls swap the host-owned root", async ({page}) => {
+  const requests = [];
+  await page.route("http://selecto.test/**", async route => {
+    const request = route.request();
+    if (request.method() === "POST") {
+      requests.push(request);
+      const event = request.url().endsWith("/events");
+      return route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: event
+          ? `<section id="native-product-catalog" data-state-revision="1">
+              <p role="status">Selected product <strong>10</strong>.</p>
+              <button type="button" data-native-selected="true">Selected</button>
+            </section>`
+          : `<section id="native-product-catalog" data-state-revision="0">
+              <table data-native-products><tbody><tr data-native-product="10">
+                <td>Harbor Ember Sauce</td><td>
+                  <form method="post" action="/native-template-instances/one/events"
+                    hx-post="/native-template-instances/one/events"
+                    hx-target="#native-product-catalog" hx-swap="outerHTML">
+                    <input type="hidden" name="value" value="10">
+                    <button type="submit">Select product 10</button>
+                  </form>
+                </td>
+              </tr></tbody></table>
+            </section>`,
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: `<!doctype html><html><body>
+        <section id="native-product-catalog" data-state-revision="0">
+          <form method="post" action="/native-template-instances/one/sources/products"
+            hx-post="/native-template-instances/one/sources/products" hx-trigger="load"
+            hx-target="#native-product-catalog" hx-swap="outerHTML">
+            <input type="hidden" name="csrf_token" value="csrf-one">
+          </form>
+        </section>
+      </body></html>`,
+    });
+  });
+
+  await page.goto("http://selecto.test/native-templates/product-catalog");
+  await page.addScriptTag({path: htmxBundle});
+  await page.evaluate(() => window.htmx.process(document.body));
+
+  await expect(page.locator("[data-native-product='10']")).toContainText(
+    "Harbor Ember Sauce",
+  );
+  await page.getByRole("button", {name: "Select product 10"}).click();
+  await expect(page.locator("#native-product-catalog")).toHaveAttribute(
+    "data-state-revision", "1",
+  );
+  await expect(page.locator("[data-native-selected='true']")).toHaveText("Selected");
+  expect(requests).toHaveLength(2);
+  expect(requests.map(request => new URL(request.url()).pathname)).toEqual([
+    "/native-template-instances/one/sources/products",
+    "/native-template-instances/one/events",
+  ]);
+  expect(requests.every(request => request.headers()["hx-request"] === "true")).toBe(true);
+});
+
 test("a template event uses the pinned WebSocket envelope without replacing its channel", async ({page}) => {
   await page.route("http://selecto.test/**", route => route.fulfill({
     status: 200,

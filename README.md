@@ -504,7 +504,7 @@ limits, timeout, and forced termination of a child that ignores `TERM`.
 
 ### Native EP helpers
 
-The same plugin installs three trusted server-side helpers for applications that
+The same plugin installs four trusted server-side helpers for applications that
 want ordinary Mojolicious EP markup instead of the generic compiled renderer:
 
 ```perl
@@ -529,6 +529,17 @@ my $scheduled = $controller->selecto_template_dispatch_source(
         return $controller->render(template => 'orders/native', model => $next_model);
     },
 );
+
+$controller->selecto_template_websocket(
+    instance => $controller->stash('instance'),
+    instance_path => '/native-template-instances',
+    target => '#native-order-browser',
+    render => sub ($next_model) {
+        return $controller->render_to_string(
+            template => 'orders/native', model => $next_model,
+        );
+    },
+);
 ```
 
 `selecto_template_model` accepts exactly one of `template` (mount a new instance)
@@ -537,7 +548,9 @@ or `instance` (load an existing owner-bound instance). The returned
 projected source rows or bounded source errors, and server-built event/source form
 descriptors. EP templates render the supplied actions, HTMX target/swap metadata,
 CSRF fields, component lifetime, and revisions as escaped values. Editable event
-values stay in the field named by `input_name`.
+values stay in the field named by `input_name`. The `transport` object supplies a
+stable channel ID and WebSocket path; event descriptors advertise `hx_ws_send` when
+the EP chooses the packaged HTMX WebSocket transport.
 
 The dispatch helpers use the same owner resolution, CSRF validation, component
 identity, effect leases, source workers, reducer, and instance store as the generic
@@ -546,7 +559,10 @@ handle, and source-authority callbacks. These are host helpers rather than publi
 browser APIs: applications provide their own native routes, error rendering,
 private-cache headers, and full-page versus fragment layout. The source helper is
 asynchronous; render later when it returns `scheduled`, and complete the response in
-`on_finish`.
+`on_finish`. The WebSocket helper installs the same handshake, owner, origin, CSRF,
+event-envelope, and revision checks as the generic route, but its `render` callback
+returns the host's EP fragment for the stable native target. A native WebSocket route
+therefore does not fall back to generic component markup.
 
 ## Plugin usage
 

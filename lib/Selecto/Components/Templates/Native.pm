@@ -7,6 +7,7 @@ use warnings;
 use Storable qw(dclone);
 use Selecto::Components::Controller::Templates ();
 use Selecto::Components::Templates::ComponentIdentity ();
+use Selecto::Components::Templates::WebSocket ();
 
 =head1 NAME
 
@@ -102,6 +103,59 @@ sub dispatch_source {
     );
 }
 
+sub websocket {
+    my ($self, $controller, %args) = @_;
+    my $instance_id = delete $args{instance};
+    my $render = delete $args{render};
+    my $render_error = delete $args{render_error};
+    return _error('invalid_native_template_callback',
+        'Native template WebSocket renderer is invalid.')
+        unless ref($render) eq 'CODE';
+    return _error('invalid_native_template_callback',
+        'Native template WebSocket error renderer is invalid.')
+        if defined($render_error) && ref($render_error) ne 'CODE';
+    my $target = _target($args{target} // ('#' . _root_id($instance_id)));
+    return Selecto::Components::Templates::WebSocket->connect(
+        $controller, $self->{runtime},
+        instance_id => $instance_id,
+        snapshot_response => sub {
+            my ($socket, $result) = @_;
+            my $model = $self->_build_model(
+                $socket, $result->{template}, $result->{snapshot},
+                $result->{store_revision}, %args,
+                event_id => $result->{event_id},
+                component_id => $result->{component_id},
+                component_lifetime => $result->{component_lifetime},
+                form_revision => $result->{form_revision},
+            );
+            return {
+                content => _rendered_content($render->($model)),
+                target => $target,
+                swap => 'outerHTML',
+                selecto => {
+                    instance_id => $model->{instance_id},
+                    state_revision => $model->{state_revision},
+                    store_revision => $model->{store_revision},
+                    event_id => "$result->{event_id}",
+                    component_id => "$result->{component_id}",
+                    component_lifetime => "$result->{component_lifetime}",
+                    form_revision => 0 + $result->{form_revision},
+                },
+            };
+        },
+        error_response => sub {
+            my ($socket, $result) = @_;
+            my $response = $self->{runtime}{transport}->websocket_error(
+                instance_id => $instance_id, result => $result,
+            );
+            $response->{target} = $target;
+            $response->{content} = _rendered_content($render_error->($result))
+                if $render_error;
+            return $response;
+        },
+    );
+}
+
 sub _build_model {
     my ($self, $controller, $template, $snapshot, $store_revision, %args) = @_;
     my $instance_path = _instance_path(
@@ -161,6 +215,14 @@ sub _build_model {
         state => dclone($snapshot->{state}),
         sources => \%sources,
         forms => {events => \@events, sources => \%source_forms},
+        transport => {
+            target => $target,
+            channel_id => 'selecto-channel-' . substr($target, 1),
+            websocket_path => "$instance_path/$snapshot->{instance_id}/ws",
+            hx_ext => 'ws',
+            hx_ws_connect => "$instance_path/$snapshot->{instance_id}/ws",
+            hx_swap => 'none',
+        },
         response => \%metadata,
     };
 }
@@ -189,6 +251,7 @@ sub _event_forms {
                     hx_post => $action,
                     hx_target => $target,
                     hx_swap => 'outerHTML',
+                    hx_ws_send => 1,
                     input_name => 'value',
                     fields => {
                         template_action => 'event',
@@ -237,6 +300,16 @@ sub _root_id {
 sub _error {
     my ($code, $message) = @_;
     return {status => 'error', code => $code, message => $message};
+}
+
+sub _rendered_content {
+    my ($rendered) = @_;
+    die "native_template_render_failed: renderer returned no content\n"
+        unless defined($rendered);
+    my $content = "$rendered";
+    die "native_template_render_failed: renderer returned too much content\n"
+        if length($content) > 1_048_576;
+    return $content;
 }
 
 1;

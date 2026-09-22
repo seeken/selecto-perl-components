@@ -7,11 +7,18 @@ use Mojo::WebSocket qw(WS_PING);
 use Selecto::Components::Controller::Templates ();
 use Selecto::Components::WebSocketPolicy ();
 
-sub connect ($class, $controller, $runtime) {
+sub connect ($class, $controller, $runtime, %options) {
+    my $snapshot_response = $options{snapshot_response};
+    my $error_response = $options{error_response};
+    die "snapshot_response must be a coderef\n"
+        if defined($snapshot_response) && ref($snapshot_response) ne 'CODE';
+    die "error_response must be a coderef\n"
+        if defined($error_response) && ref($error_response) ne 'CODE';
     unless ($runtime->{origin_check}->($controller)) {
         return $controller->finish(1008 => 'WebSocket origin is not allowed');
     }
-    my $instance_id = $controller->stash('selecto_template_instance_id');
+    my $instance_id = $options{instance_id}
+        // $controller->stash('selecto_template_instance_id');
     my $context = Selecto::Components::Controller::Templates->instance_context(
         $controller, $runtime, $instance_id,
     );
@@ -31,7 +38,9 @@ sub connect ($class, $controller, $runtime) {
 
         my $params = _event_params($envelope);
         unless ($params->{status} eq 'ok') {
-            return _send_error($socket, $runtime, $instance_id, $params);
+            return _send_error(
+                $socket, $runtime, $instance_id, $params, $error_response,
+            );
         }
         return $socket->finish(1008 => 'Template request token is invalid')
             unless Selecto::Components::WebSocketPolicy::valid_csrf(
@@ -47,20 +56,28 @@ sub connect ($class, $controller, $runtime) {
             if ($result->{status} // '') eq 'unauthenticated'
             || ($result->{status} // '') eq 'forbidden'
             || ($result->{status} // '') eq 'not_found';
-        return _send_error($socket, $runtime, $instance_id, $result)
+        return _send_error(
+            $socket, $runtime, $instance_id, $result, $error_response,
+        )
             unless $result->{status} eq 'ok';
 
-        my $response = $runtime->{transport}->websocket_snapshot(
-            $socket,
-            template => $result->{template},
-            snapshot => $result->{snapshot},
-            store_revision => $result->{store_revision},
-            event_id => $result->{event_id},
-            component_id => $result->{component_id},
-            component_lifetime => $result->{component_lifetime},
-            form_revision => $result->{form_revision},
-            region_node_ids => $result->{region_node_ids},
-        );
+        my $response = eval {
+            $snapshot_response
+                ? $snapshot_response->($socket, $result)
+                : $runtime->{transport}->websocket_snapshot(
+                    $socket,
+                    template => $result->{template},
+                    snapshot => $result->{snapshot},
+                    store_revision => $result->{store_revision},
+                    event_id => $result->{event_id},
+                    component_id => $result->{component_id},
+                    component_lifetime => $result->{component_lifetime},
+                    form_revision => $result->{form_revision},
+                    region_node_ids => $result->{region_node_ids},
+                );
+        };
+        return $socket->finish(1011 => 'Template response could not be rendered')
+            unless ref($response) eq 'HASH';
         return $socket->send({text => encode_json($response)});
     });
     return undef;
@@ -117,10 +134,16 @@ sub _invalid_event {
     };
 }
 
-sub _send_error ($socket, $runtime, $instance_id, $error) {
-    my $response = $runtime->{transport}->websocket_error(
-        instance_id => $instance_id, result => $error,
-    );
+sub _send_error ($socket, $runtime, $instance_id, $error, $error_response = undef) {
+    my $response = eval {
+        $error_response
+            ? $error_response->($socket, $error)
+            : $runtime->{transport}->websocket_error(
+                instance_id => $instance_id, result => $error,
+            );
+    };
+    return $socket->finish(1011 => 'Template response could not be rendered')
+        unless ref($response) eq 'HASH';
     return $socket->send({text => encode_json($response)});
 }
 
