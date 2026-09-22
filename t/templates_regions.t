@@ -23,8 +23,8 @@ is_deeply(
     Selecto::Components::Templates::Regions->for_event(
         $manifest, 'order_selected',
     ),
-    ['root.children.7'],
-    'selection event updates its conditional include region',
+    ['root.children.6', 'root.children.7'],
+    'selection event refreshes its emitter metadata and conditional include region',
 );
 
 is_deeply(

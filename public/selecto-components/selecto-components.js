@@ -4215,6 +4215,126 @@
   }
 
   var pendingTemplateControlSnapshots = new Map();
+  var templateEventQueues = new Map();
+  var templateEventKeysById = new Map();
+  var templateEventQueueLimit = 16;
+
+  function templateEventFormInfo(form) {
+    if (!(form instanceof HTMLFormElement)) return null;
+    var action = form.querySelector('input[name="template_action"]');
+    var event = form.querySelector('input[name="event"]');
+    var eventId = form.querySelector('input[name="event_id"]');
+    var revision = form.querySelector('input[name="state_revision"]');
+    var root = form.closest("[data-selecto-template-instance]");
+    var region = form.closest("[data-selecto-template-node]");
+    if (!action || action.value !== "event" || !event || !event.value
+        || !eventId || !eventId.value || !revision || !root || !region) return null;
+    var values = new FormData(form).getAll("value");
+    if (values.length !== 1 || typeof values[0] !== "string") return null;
+    var key = [
+      root.dataset.selectoTemplateInstance,
+      region.dataset.selectoTemplateNode,
+      event.value
+    ].join("\u0000");
+    return {
+      key: key,
+      instance_id: root.dataset.selectoTemplateInstance,
+      node_id: region.dataset.selectoTemplateNode,
+      event: event.value,
+      event_id: eventId.value,
+      value: values[0]
+    };
+  }
+
+  function emitTemplateQueueEvent(name, entry, reason) {
+    var root = entry && templateRootForInstance(entry.instance_id);
+    (root || document).dispatchEvent(new CustomEvent(name, {
+      bubbles: true,
+      detail: {
+        instance_id: entry && entry.instance_id,
+        node_id: entry && entry.node_id,
+        event: entry && entry.event,
+        reason: reason
+      }
+    }));
+  }
+
+  function currentTemplateEventForm(entry) {
+    var root = templateRootForInstance(entry.instance_id);
+    if (!root) return null;
+    for (var region of root.querySelectorAll("[data-selecto-template-node]")) {
+      if (region.dataset.selectoTemplateNode !== entry.node_id) continue;
+      for (var form of region.querySelectorAll("form")) {
+        var info = templateEventFormInfo(form);
+        if (info && info.key === entry.key) return form;
+      }
+    }
+    return null;
+  }
+
+  function setTemplateEventValue(form, value) {
+    var controls = form.querySelectorAll('[name="value"]');
+    if (controls.length !== 1
+        || !(controls[0] instanceof HTMLInputElement
+          || controls[0] instanceof HTMLSelectElement
+          || controls[0] instanceof HTMLTextAreaElement)) return false;
+    controls[0].value = value;
+    return true;
+  }
+
+  function resetTemplateEventValue(form) {
+    var controls = form.querySelectorAll('[name="value"]');
+    if (controls.length !== 1) return false;
+    var control = controls[0];
+    if (control instanceof HTMLSelectElement) {
+      for (var option of control.options) option.selected = option.defaultSelected;
+      return true;
+    }
+    if (control instanceof HTMLInputElement
+        || control instanceof HTMLTextAreaElement) {
+      control.value = control.defaultValue;
+      return true;
+    }
+    return false;
+  }
+
+  function cancelTemplateEventEntry(entry, reason) {
+    if (!entry) return;
+    if (entry.in_flight_event_id) {
+      templateEventKeysById.delete(entry.in_flight_event_id);
+    }
+    templateEventQueues.delete(entry.key);
+    emitTemplateQueueEvent("selecto:template:queue:cancelled", entry, reason);
+  }
+
+  function completeTemplateEvent(eventId, accepted) {
+    if (typeof eventId !== "string" || !eventId) return;
+    var key = templateEventKeysById.get(eventId);
+    if (!key) return;
+    templateEventKeysById.delete(eventId);
+    var entry = templateEventQueues.get(key);
+    if (!entry || entry.in_flight_event_id !== eventId) return;
+    entry.in_flight_event_id = null;
+    if (!accepted) return cancelTemplateEventEntry(entry, "request_failed");
+    var form = currentTemplateEventForm(entry);
+    if (form) resetTemplateEventValue(form);
+    var queued = entry.pending.shift();
+    if (!queued) {
+      templateEventQueues.delete(key);
+      return;
+    }
+    if (!form || !setTemplateEventValue(form, queued.value)) {
+      return cancelTemplateEventEntry(entry, "form_disposed");
+    }
+    form.requestSubmit();
+  }
+
+  function cancelTemplateEventQueuesForInstance(instanceId, reason) {
+    if (typeof instanceId !== "string") return;
+    for (var entry of Array.from(templateEventQueues.values())) {
+      if (entry.instance_id === instanceId) cancelTemplateEventEntry(entry, reason);
+    }
+  }
 
   function templateControlKey(control) {
     if (!(control instanceof Element)
@@ -4422,11 +4542,25 @@
   function reconcileTemplateWebSocketMessage(message) {
     var metadata = message && message.selecto;
     var key = templateResponseKey(metadata);
-    if (!key) return;
+    if (!key) {
+      if (metadata && metadata.status) {
+        var target;
+        try { target = document.querySelector(message.target); }
+        catch (_error) { target = null; }
+        var root = target && target.closest("[data-selecto-template-instance]");
+        if (root) {
+          cancelTemplateEventQueuesForInstance(
+            root.dataset.selectoTemplateInstance, "server_rejected"
+          );
+        }
+      }
+      return;
+    }
     var snapshot = pendingTemplateControlSnapshots.get(key);
     pendingTemplateControlSnapshots.delete(key);
     applyTemplateMetadata(metadata);
     restoreTemplateControls(snapshot);
+    completeTemplateEvent(metadata.event_id, true);
   }
 
   function prepareTemplateHttpSwap(ctx) {
@@ -4445,6 +4579,73 @@
     applyTemplateMetadata(ctx && ctx.selectoTemplateMetadata);
     restoreTemplateControls(ctx && ctx.selectoTemplateControlSnapshot);
   }
+
+  document.addEventListener("submit", function (event) {
+    var info = templateEventFormInfo(event.target);
+    if (!info) return;
+    var entry = templateEventQueues.get(info.key);
+    if (!entry) {
+      entry = {
+        key: info.key,
+        instance_id: info.instance_id,
+        node_id: info.node_id,
+        event: info.event,
+        in_flight_event_id: info.event_id,
+        pending: []
+      };
+      templateEventQueues.set(info.key, entry);
+      templateEventKeysById.set(info.event_id, info.key);
+      return;
+    }
+    if (!entry.in_flight_event_id) {
+      entry.in_flight_event_id = info.event_id;
+      templateEventKeysById.set(info.event_id, info.key);
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (entry.pending.length >= templateEventQueueLimit) {
+      emitTemplateQueueEvent("selecto:template:queue:overflow", entry, "queue_full");
+      return;
+    }
+    entry.pending.push({value: info.value});
+  }, true);
+
+  document.addEventListener("htmx:finally:request", function (event) {
+    var ctx = event.detail && event.detail.ctx;
+    var source = ctx && ctx.sourceElement;
+    var form = source instanceof HTMLFormElement
+      ? source : source && (source.form || source.closest("form"));
+    var eventId = form && form.querySelector('input[name="event_id"]');
+    if (!eventId || !templateEventKeysById.has(eventId.value)) return;
+    var metadata = httpTemplateMetadata(ctx);
+    var status = ctx && ctx.response && ctx.response.status;
+    completeTemplateEvent(
+      eventId.value,
+      status >= 200 && status < 300
+        && metadata && metadata.event_id === eventId.value
+    );
+  });
+
+  document.addEventListener("htmx:ws:close", function (event) {
+    var root = event.target && event.target.querySelector
+      && event.target.querySelector("[data-selecto-template-instance]");
+    if (root) {
+      cancelTemplateEventQueuesForInstance(
+        root.dataset.selectoTemplateInstance, "connection_closed"
+      );
+    }
+  });
+
+  document.addEventListener("htmx:ws:error", function (event) {
+    var root = event.target && event.target.querySelector
+      && event.target.querySelector("[data-selecto-template-instance]");
+    if (root) {
+      cancelTemplateEventQueuesForInstance(
+        root.dataset.selectoTemplateInstance, "connection_error"
+      );
+    }
+  });
 
   document.addEventListener("input", function (event) {
     var control = event.target;
