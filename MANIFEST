@@ -33,6 +33,8 @@ lib/Selecto/Components/State.pm
 lib/Selecto/Components/Templates/Dispatcher.pm
 lib/Selecto/Components/Templates/Event.pm
 lib/Selecto/Components/Templates/InstanceStore/Memory.pm
+lib/Selecto/Components/Templates/Renderer.pm
+lib/Selecto/Components/Templates/SourceExecutor.pm
 lib/Selecto/Components/Util.pm
 LICENSE
 Makefile.PL
@@ -90,5 +92,6 @@ t/row_actions.t
 t/security_boundaries.t
 t/state.t
 t/templates_runtime_host.t
+t/templates_source_executor.t
 THIRD_PARTY_NOTICES.md
 SECURITY_REVIEW_2026-09-21.md
