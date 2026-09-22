@@ -78,7 +78,8 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
     body: `<!doctype html><html><body>
       <section id="selecto-channel-template-one" hx-ext="ws"
         hx-ws:connect="/template-instances/one/ws" hx-swap="none">
-        <main id="template-root" data-selecto-state-revision="0">
+        <main id="template-root" data-selecto-template-instance="one"
+          data-selecto-state-revision="0" data-selecto-store-revision="0">
           <form method="post" action="/template-instances/one/events"
             hx-ws:send data-selecto-template-event="search_changed">
             <input type="hidden" name="template_action" value="event">
@@ -146,16 +147,107 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
 
   await page.evaluate(() => {
     window.fakeTemplateSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
-      content: '<main id="template-root" data-selecto-state-revision="1">Updated</main>',
+      content: `<main id="template-root" data-selecto-template-instance="one"
+        data-selecto-state-revision="2" data-selecto-store-revision="2">Updated</main>`,
       target: "#template-root",
       swap: "outerHTML",
-      selecto: {state_revision: 1, store_revision: 1},
+      selecto: {instance_id: "one", state_revision: 2, store_revision: 2},
     })}));
   });
   await expect(page.locator("#template-root")).toHaveAttribute(
-    "data-selecto-state-revision", "1",
+    "data-selecto-state-revision", "2",
   );
   await expect(page.locator("#selecto-channel-template-one")).toHaveCount(1);
+
+  await page.evaluate(async () => {
+    window.fakeTemplateSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
+      content: `<main id="template-root" data-selecto-template-instance="one"
+        data-selecto-state-revision="1" data-selecto-store-revision="1">Stale</main>`,
+      target: "#template-root",
+      swap: "outerHTML",
+      selecto: {instance_id: "one", state_revision: 1, store_revision: 1},
+    })}));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+  await expect(page.locator("#template-root")).toHaveAttribute(
+    "data-selecto-store-revision", "2",
+  );
+  await expect(page.locator("#template-root")).toHaveText("Updated");
+
+  await page.evaluate(async () => {
+    window.fakeTemplateSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
+      content: `<main id="template-root" data-selecto-template-instance="one"
+        data-selecto-state-revision="3" data-selecto-store-revision="3">Wrong instance</main>`,
+      target: "#template-root",
+      swap: "outerHTML",
+      selecto: {instance_id: "two", state_revision: 3, store_revision: 3},
+    })}));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+  await expect(page.locator("#template-root")).toHaveText("Updated");
+});
+
+test("a late HTTP template response cannot replace a newer root revision", async ({page}) => {
+  let releaseResponse;
+  const responseGate = new Promise(resolve => { releaseResponse = resolve; });
+  let requestStarted;
+  const started = new Promise(resolve => { requestStarted = resolve; });
+  await page.route("http://selecto.test/**", async route => {
+    const request = route.request();
+    if (request.method() === "POST") {
+      requestStarted();
+      await responseGate;
+      return route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        headers: {
+          "X-Selecto-Template-Instance": "one",
+          "X-Selecto-State-Revision": "1",
+          "X-Selecto-Store-Revision": "1",
+        },
+        body: `<main id="template-root" data-selecto-template-instance="one"
+          data-selecto-state-revision="1" data-selecto-store-revision="1">Late</main>`,
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: `<!doctype html><html><body>
+        <main id="template-root" data-selecto-template-instance="one"
+          data-selecto-state-revision="0" data-selecto-store-revision="0">
+          <form method="post" action="/template-instances/one/events"
+            hx-post="/template-instances/one/events"
+            hx-target="#template-root" hx-swap="outerHTML">
+            <button type="submit">Search</button>
+          </form>
+        </main>
+      </body></html>`,
+    });
+  });
+  await page.goto("http://selecto.test/templates/orders");
+  await page.addScriptTag({path: htmxBundle});
+  await page.addScriptTag({path: componentsBundle});
+  await page.evaluate(() => {
+    window.templateRequestFinished = new Promise(resolve => {
+      document.addEventListener("htmx:finally:request", () => resolve(true), {once: true});
+    });
+    window.htmx.process(document.body);
+  });
+
+  await page.getByRole("button", {name: "Search"}).click();
+  await started;
+  await page.locator("#template-root").evaluate(root => {
+    root.dataset.selectoStateRevision = "2";
+    root.dataset.selectoStoreRevision = "2";
+    root.replaceChildren("Newer");
+  });
+  releaseResponse();
+  await page.evaluate(() => window.templateRequestFinished);
+
+  await expect(page.locator("#template-root")).toHaveAttribute(
+    "data-selecto-store-revision", "2",
+  );
+  await expect(page.locator("#template-root")).toHaveText("Newer");
 });
 
 for (const status of [409, 422]) {
