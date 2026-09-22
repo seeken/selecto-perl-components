@@ -376,6 +376,33 @@ business writes.
 
 ## Native-template HTTP plugin
 
+### Server-owned update forms
+
+`Selecto::Components::Templates::Form` connects a compiled native update form
+to the same owner-scoped instance stores used by native read templates. A host
+supplies `resolve_form`, `load_record`, and `write_record` callbacks. Resolve
+the form and record for the authenticated owner and tenant on every request;
+the browser supplies only an opaque instance, operation, path, field value,
+and expected revision. The service checks the current contract fingerprint,
+validates declared fields and exact nested row identities through
+`Selecto::Templates::FormState`, and uses store compare-and-set before returning
+the next draft. It generates new nested draft identities on the server.
+
+`write_record` receives `(owner_scope, record_id, form, baseline, draft)`. It
+must recheck tenant/record membership and the baseline within its own database
+transaction, apply explicit create/update/delete intents through the host's
+mutation engine, and return `{status => 'ok'}` only after commit. Failed writes
+leave the draft available at a new revision; successful writes seal that
+instance as `saved`. A fresh GET opens a new authorized draft. An abandoned
+`saving` reservation expires with the instance; hosts should use transactional
+idempotency receipts if they need automatic retry after a worker failure.
+
+The host owns Mojolicious routes, CSRF protection, validation display, and
+escaped HTML. Ordinary POST and HTMX fragment requests can use the same
+`change`/`save` operations and response model. The executable
+`t/templates_form_http.t` shows both paths with nested edits, owner isolation,
+stale revision rejection, host write conflict, and contract re-resolution.
+
 `Selecto::Components::Templates` is an additive Mojolicious plugin for private
 native-template pages. It does not require or alter the explorer plugin. The host
 installs pinned compiled manifests and renderer callbacks, resolves authenticated

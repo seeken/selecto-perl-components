@@ -46,6 +46,7 @@ WriteMakefile(
         'lib/Selecto/Components/Templates/EffectCoordinator.pm' => '$(INST_LIB)/Selecto/Components/Templates/EffectCoordinator.pm',
         'lib/Selecto/Components/Templates/Event.pm' => '$(INST_LIB)/Selecto/Components/Templates/Event.pm',
         'lib/Selecto/Components/Templates/EventDispatcher.pm' => '$(INST_LIB)/Selecto/Components/Templates/EventDispatcher.pm',
+        'lib/Selecto/Components/Templates/Form.pm' => '$(INST_LIB)/Selecto/Components/Templates/Form.pm',
         'lib/Selecto/Components/Templates/InstanceStore/Memory.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceStore/Memory.pm',
         'lib/Selecto/Components/Templates/InstanceStore/PostgreSQL.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceStore/PostgreSQL.pm',
         'lib/Selecto/Components/Templates/InstanceService.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceService.pm',
