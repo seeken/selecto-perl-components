@@ -19,6 +19,7 @@ sub for_event {
         $changed{"source:$action->{source}"} = 1
             if ($action->{kind} // '') eq 'reload_source' && defined($action->{source});
     }
+    $changed{"event:$event_name"} = 1;
     return _matching($manifest, \%changed);
 }
 
@@ -47,6 +48,12 @@ sub _dependencies {
         return;
     }
     return unless ref($value) eq 'HASH';
+    if (ref($value->{events}) eq 'HASH') {
+        for my $event (values %{$value->{events}}) {
+            $dependencies->{"event:$event"} = 1
+                if defined($event) && !ref($event);
+        }
+    }
     if (defined($value->{expression}) && !ref($value->{expression})) {
         my $expression = $value->{expression};
         $dependencies->{"state:$1"} = 1
