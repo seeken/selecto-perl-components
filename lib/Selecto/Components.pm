@@ -6,7 +6,6 @@ use Encode qw(encode);
 use Mojo::File qw(path);
 use Mojo::IOLoop ();
 use Mojo::JSON qw(decode_json encode_json);
-use Mojo::URL ();
 use Mojo::WebSocket qw(WS_PING);
 use Scalar::Util qw(blessed);
 use Time::HiRes qw(time);
@@ -19,6 +18,7 @@ use Selecto::Components::Controller::SavedQueries ();
 use Selecto::Components::Explorer ();
 use Selecto::Components::Renderer ();
 use Selecto::Components::Util qw(humanize);
+use Selecto::Components::WebSocketPolicy ();
 
 our $VERSION = '0.1.0';
 
@@ -72,7 +72,8 @@ sub register ($self, $app, $plugin_config) {
     my $specs = $plugin_config->{explorers};
     die "Selecto::Components requires an explorers object\n"
         unless ref($specs) eq 'HASH' && keys %$specs;
-    my $origin_check = $plugin_config->{origin_check} // \&_same_origin;
+    my $origin_check = $plugin_config->{origin_check}
+        // \&Selecto::Components::WebSocketPolicy::same_origin;
     die "origin_check must be a coderef\n" unless ref($origin_check) eq 'CODE';
     my ($routes, $route_prefix) = _route_bridge($app, $plugin_config->{route_bridge});
     my $websocket_inactivity_timeout
@@ -412,26 +413,7 @@ sub _render_export_preparation_error ($controller, $error) {
 }
 
 sub _same_origin ($controller) {
-    my $origin = $controller->req->headers->origin;
-    return 1 unless defined($origin) && length($origin);
-    my $origin_url = Mojo::URL->new($origin);
-    my $scheme = lc($origin_url->scheme // '');
-    return 0 unless $scheme eq 'http' || $scheme eq 'https';
-    return 0 unless defined($origin_url->host) && length($origin_url->host);
-    return 0 if defined($origin_url->userinfo) || defined($origin_url->fragment)
-        || length($origin_url->query->to_string)
-        || $origin_url->path->to_string !~ m{\A/?\z};
-    my $request_scheme = lc($controller->req->url->to_abs->scheme // '');
-    $request_scheme = 'http' if $request_scheme eq 'ws';
-    $request_scheme = 'https' if $request_scheme eq 'wss';
-    return 0 unless $scheme eq $request_scheme;
-    my $request_url = Mojo::URL->new(
-        $request_scheme . '://' . ($controller->req->headers->host // ''),
-    );
-    return 0 unless lc($origin_url->host) eq lc($request_url->host // '');
-    my $default_port = $scheme eq 'https' ? 443 : 80;
-    return ($origin_url->port // $default_port)
-        eq ($request_url->port // $default_port) ? 1 : 0;
+    return Selecto::Components::WebSocketPolicy::same_origin($controller);
 }
 
 sub _humanize ($value) { return humanize($value); }

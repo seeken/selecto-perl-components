@@ -386,6 +386,8 @@ plugin 'Selecto::Components::Templates' => {
     store => $template_instance_store,
     source_max_workers => 4,
     source_timeout_seconds => 15,
+    websocket_inactivity_timeout => 3600,
+    websocket_heartbeat_interval => 30,
     resolve_owner => sub ($controller) {
         my $actor = authenticated_actor($controller)
             or return {status => 'unauthenticated'};
@@ -432,6 +434,7 @@ The plugin adds these ordinary HTTP routes by default:
 | `GET /templates/:id` | Mount an opaque owner-bound instance and render the full page |
 | `POST /template-instances/:instance/events` | Normalize and dispatch one declared event |
 | `POST /template-instances/:instance/sources/:source` | Claim and execute one current declared source generation |
+| `WS /template-instances/:instance/ws` | Dispatch typed events with the pinned HTMX 4 WebSocket envelope |
 
 `template_path` and `instance_path` can replace the two prefixes. Every response is
 private and `no-store`; state-changing requests require the session-bound Mojolicious
@@ -444,10 +447,22 @@ Browser tests pin successful swaps plus 409 conflict and 422 validation behavior
 
 Component renderer callbacks receive their existing node data plus a server-built
 `transport.events` descriptor for each declared event. The descriptor contains the
-POST action, htmx target/swap values, and hidden fields (`csrf_token`, `event`,
-`event_id`, and `state_revision`). Render those fields as escaped values and keep the
-editable browser value named `value`. The controller rejects missing, repeated, and
-extra fields before dispatch.
+POST action, `hx_ws_send`, htmx target/swap values, and hidden fields
+(`template_action`, `csrf_token`, `event`, `event_id`, and `state_revision`). Render
+the form with `hx-ws:send`, render those fields as escaped values, and keep the
+editable browser value named `value`. Its action and method remain the ordinary POST
+fallback. The controller rejects missing, repeated, and extra fields before dispatch.
+
+The complete page keeps a stable `hx-ws:connect` channel outside the replaceable
+template root and loads the packaged `hx-ws` runtime. Typed event replies use the
+same `{content,target,swap}` envelope as the existing Explorer and carry state/store
+revision metadata under `selecto`. Handshake and every event re-resolve the opaque
+instance against authenticated owner scope. Each event also requires the masked
+session CSRF token. Same-origin validation, a 128 KiB frame ceiling, configurable
+inactivity timeout, and protocol heartbeat reuse the shared WebSocket policy. Policy
+failures close with 1008; malformed JSON closes with 1003; oversized frames close
+with 1009. The HTTP event route remains available to browsers without JavaScript or
+when the WebSocket extension falls back to the form action.
 
 The browser never supplies the manifest, source plan, owner scope, adapter, or query.
 For a source POST, the controller loads the owner-bound snapshot, reconstructs the

@@ -31,18 +31,44 @@ sub respond_snapshot ($self, $controller, %args) {
 }
 
 sub respond_error ($self, $controller, $result) {
-    my $status = _status($result);
-    my $code = ref($result) eq 'HASH' && defined($result->{code})
-        ? $result->{code} : _default_code($result, $status);
-    my $message = ref($result) eq 'HASH' && defined($result->{message})
-        ? $result->{message} : _default_message($status);
+    my $rendered = _error_fragment($result);
     _private_headers($controller);
-    my $error = '<section class="selecto-template-error" role="alert"' .
-        ' data-selecto-template-error="' . html_escape($code) . '"><h1>' .
-        html_escape(_title_for_status($status)) . '</h1><p>' .
-        html_escape($message) . '</p></section>';
-    my $html = _is_fragment($controller) ? $error : _page('Template error', $error);
-    return $controller->render(data => $html, format => 'html', status => $status);
+    my $html = _is_fragment($controller)
+        ? $rendered->{content} : _page('Template error', $rendered->{content});
+    return $controller->render(
+        data => $html, format => 'html', status => $rendered->{status},
+    );
+}
+
+sub websocket_snapshot ($self, $controller, %args) {
+    my $rendered = eval { $self->_render_snapshot($controller, %args) };
+    return $self->websocket_error(
+        instance_id => $args{snapshot}{instance_id},
+        result => {status => 'error', code => 'template_render_failed',
+            message => 'Template could not be rendered.'},
+    ) if $@ || ref($rendered) ne 'HASH';
+    return {
+        content => $rendered->{root},
+        target => '#' . _root_id($args{snapshot}{instance_id}),
+        swap => 'outerHTML',
+        selecto => {
+            instance_id => $args{snapshot}{instance_id},
+            state_revision => 0 + $args{snapshot}{state_revision},
+            store_revision => 0 + $args{store_revision},
+        },
+    };
+}
+
+sub websocket_error ($self, %args) {
+    my $rendered = _error_fragment($args{result});
+    return {
+        content => $rendered->{content},
+        target => '#' . _root_id($args{instance_id}),
+        swap => 'outerHTML',
+        selecto => {
+            status => $rendered->{status}, code => $rendered->{code},
+        },
+    };
 }
 
 sub _render_snapshot ($self, $controller, %args) {
@@ -66,7 +92,12 @@ sub _render_snapshot ($self, $controller, %args) {
         ' data-selecto-state-revision="' . html_escape($snapshot->{state_revision}) . '"' .
         ' data-selecto-store-revision="' . html_escape($args{store_revision}) . '">' .
         '<div data-selecto-template-content>' . $content . '</div>' . $sources . '</main>';
-    return {root => $root, page => _page($template->{title}, $root)};
+    my $channel_id = _channel_id($snapshot->{instance_id});
+    my $ws_path = $self->instance_path . '/' . $snapshot->{instance_id} . '/ws';
+    my $channel = '<section id="' . html_escape($channel_id) . '"' .
+        ' class="selecto-template-channel" hx-ext="ws" hx-ws:connect="' .
+        html_escape($ws_path) . '" hx-swap="none">' . $root . '</section>';
+    return {root => $root, page => _page($template->{title}, $channel)};
 }
 
 sub _transport_registry ($self, $registry, $snapshot, $csrf_token, $root_id) {
@@ -98,10 +129,11 @@ sub _event_descriptor ($self, $snapshot, $csrf_token, $root_id, $event) {
         action => $action, method => 'post', hx_post => $action,
         hx_target => "#$root_id", hx_swap => 'outerHTML',
         fields => {
-            csrf_token => "$csrf_token", event => "$event",
+            template_action => 'event', csrf_token => "$csrf_token", event => "$event",
             event_id => "$event_id",
             state_revision => 0 + $snapshot->{state_revision},
         },
+        hx_ws_send => 1,
     };
 }
 
@@ -141,6 +173,12 @@ sub _root_id ($instance_id) {
     return "selecto-template-instance-$encoded";
 }
 
+sub _channel_id ($instance_id) {
+    my $root_id = _root_id($instance_id);
+    $root_id =~ s/\Aselecto-template-instance-/selecto-channel-template-/;
+    return $root_id;
+}
+
 sub _page ($title, $content) {
     return '<!doctype html><html lang="en"><head><meta charset="utf-8">' .
         '<meta name="viewport" content="width=device-width, initial-scale=1">' .
@@ -149,7 +187,24 @@ sub _page ($title, $content) {
         asset_revision() . '">' .
         '<script src="/selecto-components/htmx.min.js?v=' . asset_revision() .
         '" defer></script>' .
+        '<script src="/selecto-components/hx-ws.min.js?v=' . asset_revision() .
+        '" defer></script>' .
+        '<script src="/selecto-components/selecto-components.js?v=' . asset_revision() .
+        '" defer></script>' .
         '</head><body>' . $content . '</body></html>';
+}
+
+sub _error_fragment ($result) {
+    my $status = _status($result);
+    my $code = ref($result) eq 'HASH' && defined($result->{code})
+        ? $result->{code} : _default_code($result, $status);
+    my $message = ref($result) eq 'HASH' && defined($result->{message})
+        ? $result->{message} : _default_message($status);
+    my $content = '<section class="selecto-template-error" role="alert"' .
+        ' data-selecto-template-error="' . html_escape($code) . '"><h1>' .
+        html_escape(_title_for_status($status)) . '</h1><p>' .
+        html_escape($message) . '</p></section>';
+    return {status => $status, code => $code, content => $content};
 }
 
 sub _private_headers ($controller) {
