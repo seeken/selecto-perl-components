@@ -6,6 +6,7 @@ use Mojo::File qw(path);
 use Time::HiRes qw(time);
 use Selecto::Components::Controller::Templates ();
 use Selecto::Components::Templates::Dispatcher ();
+use Selecto::Components::Templates::PublicInputs ();
 use Selecto::Components::Templates::SourceScheduler ();
 use Selecto::Components::Templates::Transport ();
 use Selecto::Components::Templates::WebSocket ();
@@ -173,6 +174,9 @@ sub _templates ($specs, $default_source_timeout_seconds) {
         );
         die "template $id source_timeout_seconds must be less than lease_seconds\n"
             if $has_sources && $source_timeout_seconds >= $lease_seconds;
+        my $public_inputs = Selecto::Components::Templates::PublicInputs->configure(
+            $manifest, $spec->{public_inputs}, $id,
+        );
         $templates{$id} = {
             %$spec,
             id => "$id",
@@ -180,6 +184,7 @@ sub _templates ($specs, $default_source_timeout_seconds) {
             ttl_seconds => $ttl_seconds,
             lease_seconds => $lease_seconds,
             source_timeout_seconds => $source_timeout_seconds,
+            public_inputs => $public_inputs,
             title => _scalar($spec->{title}, 256) ? "$spec->{title}" : "$id",
         };
     }

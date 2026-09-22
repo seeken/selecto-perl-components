@@ -19,6 +19,9 @@ sub respond_snapshot ($self, $controller, %args) {
     }
     _private_headers($controller);
     $controller->res->headers->header(
+        'Content-Location' => $args{canonical_url},
+    ) if defined($args{canonical_url});
+    $controller->res->headers->header(
         'X-Selecto-Template-Instance' => $args{snapshot}{instance_id},
     );
     $controller->res->headers->header(
@@ -53,6 +56,12 @@ sub respond_snapshot ($self, $controller, %args) {
     my $html = _is_fragment($controller)
         ? ($rendered->{partial} // $rendered->{root}) : $rendered->{page};
     return $controller->render(data => $html, format => 'html', status => 200);
+}
+
+sub respond_redirect ($self, $controller, $location) {
+    _private_headers($controller);
+    $controller->res->headers->location($location);
+    return $controller->render(text => '', status => 302);
 }
 
 sub respond_error ($self, $controller, $result) {
@@ -146,7 +155,8 @@ sub _render_snapshot ($self, $controller, %args) {
         $partial .= _partial('#' . _source_region_id($root_id), $sources);
     }
     return {
-        root => $root, page => _page($template->{title}, $channel),
+        root => $root,
+        page => _page($template->{title}, $channel, $args{canonical_url}),
         (defined($partial) ? (partial => $partial) : ()),
     };
 }
@@ -255,10 +265,12 @@ sub _channel_id ($instance_id) {
     return $root_id;
 }
 
-sub _page ($title, $content) {
+sub _page ($title, $content, $canonical_url = undef) {
     return '<!doctype html><html lang="en"><head><meta charset="utf-8">' .
         '<meta name="viewport" content="width=device-width, initial-scale=1">' .
         '<title>' . html_escape($title) . '</title>' .
+        (defined($canonical_url)
+            ? '<link rel="canonical" href="' . html_escape($canonical_url) . '">' : '') .
         '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' .
         asset_revision() . '">' .
         '<script src="/selecto-components/htmx.min.js?v=' . asset_revision() .

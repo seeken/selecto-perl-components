@@ -49,6 +49,7 @@ WriteMakefile(
         'lib/Selecto/Components/Templates/InstanceStore/Memory.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceStore/Memory.pm',
         'lib/Selecto/Components/Templates/InstanceStore/PostgreSQL.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceStore/PostgreSQL.pm',
         'lib/Selecto/Components/Templates/InstanceService.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceService.pm',
+        'lib/Selecto/Components/Templates/PublicInputs.pm' => '$(INST_LIB)/Selecto/Components/Templates/PublicInputs.pm',
         'lib/Selecto/Components/Templates/Renderer.pm' => '$(INST_LIB)/Selecto/Components/Templates/Renderer.pm',
         'lib/Selecto/Components/Templates/Regions.pm' => '$(INST_LIB)/Selecto/Components/Templates/Regions.pm',
         'lib/Selecto/Components/Templates/SourceExecutor.pm' => '$(INST_LIB)/Selecto/Components/Templates/SourceExecutor.pm',

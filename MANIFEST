@@ -40,6 +40,7 @@ lib/Selecto/Components/Templates/EventDispatcher.pm
 lib/Selecto/Components/Templates/InstanceStore/Memory.pm
 lib/Selecto/Components/Templates/InstanceStore/PostgreSQL.pm
 lib/Selecto/Components/Templates/InstanceService.pm
+lib/Selecto/Components/Templates/PublicInputs.pm
 lib/Selecto/Components/Templates/Renderer.pm
 lib/Selecto/Components/Templates/Regions.pm
 lib/Selecto/Components/Templates/SourceExecutor.pm
@@ -107,6 +108,7 @@ t/security_boundaries.t
 t/state.t
 t/templates_instance_store_postgresql.t
 t/templates_http.t
+t/templates_public_inputs.t
 t/templates_renderer.t
 t/templates_regions.t
 t/templates_runtime_host.t
