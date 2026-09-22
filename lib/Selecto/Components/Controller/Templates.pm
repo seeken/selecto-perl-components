@@ -1,6 +1,7 @@
 package Selecto::Components::Controller::Templates;
 
 use Mojo::Base -base, -signatures;
+use Selecto::Components::Templates::Regions ();
 use Selecto::Components::Templates::SourceExecutor ();
 
 sub show ($class, $controller, $runtime) {
@@ -53,6 +54,7 @@ sub event ($class, $controller, $runtime) {
         $controller, $runtime, $result->{template},
         $result->{snapshot}, $result->{store_revision},
         event_id => $result->{event_id},
+        region_node_ids => $result->{region_node_ids},
     );
 }
 
@@ -86,6 +88,9 @@ sub dispatch_event ($class, $controller, $runtime, %args) {
         snapshot => $result->{observation}{snapshot},
         store_revision => $result->{store_revision},
         event_id => "$params->{event_id}",
+        region_node_ids => Selecto::Components::Templates::Regions->for_event(
+            $context->{template}{manifest}, $params->{event},
+        ),
     };
 }
 
@@ -213,6 +218,9 @@ sub _finish_source ($controller, $runtime, $context, $effect, $claim_token, $exe
         $completed->{observation}{snapshot}, $completed->{store_revision},
         source_id => $effect->{source},
         source_generation => $effect->{generation},
+        region_node_ids => Selecto::Components::Templates::Regions->for_source(
+            $context->{template}{manifest}, $effect->{source},
+        ),
     );
 }
 

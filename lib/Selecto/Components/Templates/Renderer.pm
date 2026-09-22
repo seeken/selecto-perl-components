@@ -10,6 +10,40 @@ use Selecto::Components::Util qw(html_escape);
 
 sub render {
     my ($class, %args) = @_;
+    my ($manifest, $snapshot, $registry, $context) = _render_input(%args);
+    return join '', map {
+        _render_region($_, $context, $registry)
+    } @{$manifest->{view}{nodes}};
+}
+
+sub render_regions {
+    my ($class, %args) = @_;
+    my ($manifest, $snapshot, $registry, $context) = _render_input(%args);
+    my $node_ids = $args{node_ids};
+    _die('invalid_render_regions', 'template render regions are invalid')
+        unless ref($node_ids) eq 'ARRAY' && @$node_ids <= 256;
+    my %requested;
+    for my $node_id (@$node_ids) {
+        _die('invalid_render_regions', 'template render regions are invalid')
+            unless defined($node_id) && !ref($node_id) && length($node_id)
+            && length($node_id) <= 512 && !$requested{"$node_id"}++;
+    }
+    my %available = map { $_->{node_id} => $_ } @{$manifest->{view}{nodes}};
+    _die('unknown_render_region', 'template render region is unavailable')
+        if grep { !exists($available{$_}) } keys %requested;
+    return [map {
+        my $node = $_;
+        my $region_id = _region_dom_id($context->{instance_id}, $node->{node_id});
+        +{
+            node_id => "$node->{node_id}",
+            target => "#$region_id",
+            html => _render_region($node, $context, $registry),
+        }
+    } grep { $requested{$_->{node_id}} } @{$manifest->{view}{nodes}}];
+}
+
+sub _render_input {
+    my (%args) = @_;
     my $manifest = $args{manifest};
     my $snapshot = $args{snapshot};
     my $registry = $args{registry};
@@ -20,7 +54,18 @@ sub render {
         && ref($manifest->{view}{nodes}) eq 'ARRAY'
         && ref($snapshot) eq 'HASH' && ref($registry) eq 'HASH';
     my $context = _render_context($snapshot);
-    return _render_nodes($manifest->{view}{nodes}, $context, $registry);
+    return ($manifest, $snapshot, $registry, $context);
+}
+
+sub _render_region {
+    my ($node, $context, $registry) = @_;
+    my $node_id = ref($node) eq 'HASH' ? $node->{node_id} : undef;
+    _die('invalid_render_node', 'compiled render node is invalid', $node_id)
+        unless defined($node_id) && length($node_id);
+    my $region_id = _region_dom_id($context->{instance_id}, $node_id);
+    return '<div id="' . html_escape($region_id) . '"' .
+        ' data-selecto-template-node="' . html_escape($node_id) . '">' .
+        _render_node($node, $context, $registry) . '</div>';
 }
 
 sub safe_html {
@@ -258,6 +303,11 @@ sub _dom_id {
     my ($instance_id, $node_id) = @_;
     return 'selecto-template-' . _encode_dom_part($instance_id) . '-' .
         _encode_dom_part($node_id);
+}
+
+sub _region_dom_id {
+    my ($instance_id, $node_id) = @_;
+    return _dom_id($instance_id, $node_id) . '-region';
 }
 
 sub _encode_dom_part {

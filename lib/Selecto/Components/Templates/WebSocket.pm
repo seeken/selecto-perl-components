@@ -56,6 +56,7 @@ sub connect ($class, $controller, $runtime) {
             snapshot => $result->{snapshot},
             store_revision => $result->{store_revision},
             event_id => $result->{event_id},
+            region_node_ids => $result->{region_node_ids},
         );
         return $socket->send({text => encode_json($response)});
     });

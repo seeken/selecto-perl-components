@@ -168,6 +168,17 @@
       ? null : metadata.instance_id + "\u0000" + state + "\u0000" + store;
   }
 
+  function applyTemplateMetadata(metadata) {
+    if (!metadata || typeof metadata.instance_id !== "string") return;
+    var state = normalizedTemplateRevision(metadata.state_revision);
+    var store = normalizedTemplateRevision(metadata.store_revision);
+    if (state === null || store === null) return;
+    var root = templateRootForInstance(metadata.instance_id);
+    if (!root) return;
+    root.dataset.selectoStateRevision = state;
+    root.dataset.selectoStoreRevision = store;
+  }
+
   function httpTemplateMetadata(ctx) {
     var headers = ctx && ctx.response && ctx.response.raw && ctx.response.raw.headers;
     if (!headers || typeof headers.get !== "function") return null;
@@ -210,10 +221,12 @@
   }
 
   function reconcileTemplateWebSocketMessage(message) {
-    var key = templateResponseKey(message && message.selecto);
+    var metadata = message && message.selecto;
+    var key = templateResponseKey(metadata);
     if (!key) return;
     var snapshot = pendingTemplateControlSnapshots.get(key);
     pendingTemplateControlSnapshots.delete(key);
+    applyTemplateMetadata(metadata);
     restoreTemplateControls(snapshot);
   }
 
@@ -221,6 +234,7 @@
     var metadata = httpTemplateMetadata(ctx);
     if (templateResponseIsStale(metadata, ctx && ctx.target)) return false;
     if (metadata) {
+      ctx.selectoTemplateMetadata = metadata;
       ctx.selectoTemplateControlSnapshot = captureTemplateControls(
         templateRootForInstance(metadata.instance_id, ctx.target), metadata
       );
@@ -229,6 +243,7 @@
   }
 
   function reconcileTemplateHttpSwap(ctx) {
+    applyTemplateMetadata(ctx && ctx.selectoTemplateMetadata);
     restoreTemplateControls(ctx && ctx.selectoTemplateControlSnapshot);
   }
 
