@@ -829,7 +829,7 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
         }
         $regular_filter_count++ unless $group_filter || length($clause);
         ($value, $value_end) = ('', '') if $op =~ /_null\z/;
-        if ($op eq 'in' && length($value)
+        if (($op eq 'in' || $op eq 'not_in') && length($value)
             && !grep { length } map { _trim($_) } split /,/, $value, -1) {
             push @$errors, 'Membership filters require at least one value.';
             next;

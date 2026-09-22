@@ -773,11 +773,12 @@ sub filter_operators ($self, $type) {
         [eq => 'equals'], [ne => 'does not equal'],
         [gte => 'at least'], [gt => 'greater than'],
         [lte => 'at most'], [lt => 'less than'],
-        [between => 'between'], [in => 'one of'],
+        [between => 'between'], [in => 'one of'], [not_in => 'not one of'],
         [is_null => 'is empty'], [not_null => 'is not empty'],
     ] if $self->numeric_type($type);
     return [
         [eq => 'equals'], [ne => 'does not equal'], [in => 'one of'],
+        [not_in => 'not one of'],
         [is_null => 'is empty'], [not_null => 'is not empty'],
     ];
 }

@@ -145,7 +145,10 @@ sub _normalize_saved_queries ($config, $queries) {
         next if $parsed->is_abs || defined($parsed->host) || defined($parsed->userinfo);
         next unless $parsed->path->to_string eq $config->path;
         next if defined($parsed->fragment) && length($parsed->fragment);
-        push @normalized, {name => $name, url => $parsed->to_string};
+        push @normalized, {
+            name => $name, url => $parsed->to_string,
+            ($query->{readonly} ? (readonly => 1) : ()),
+        };
     }
     return [sort { lc($a->{name}) cmp lc($b->{name}) || $a->{name} cmp $b->{name} } @normalized];
 }
