@@ -502,6 +502,52 @@ source authorization and DB-handle creation run outside the web process. Schedul
 tests also cover capacity rejection, event-loop progress, JSON isolation, result
 limits, timeout, and forced termination of a child that ignores `TERM`.
 
+### Native EP helpers
+
+The same plugin installs three trusted server-side helpers for applications that
+want ordinary Mojolicious EP markup instead of the generic compiled renderer:
+
+```perl
+my $model = $controller->selecto_template_model(
+    template => 'order_browser',
+    instance_path => '/native-template-instances',
+    target => '#native-order-browser',
+);
+
+my $next = $controller->selecto_template_dispatch_event(
+    instance => $controller->stash('instance'),
+    instance_path => '/native-template-instances',
+    target => '#native-order-browser',
+);
+
+my $scheduled = $controller->selecto_template_dispatch_source(
+    instance => $controller->stash('instance'),
+    source => $controller->stash('source'),
+    instance_path => '/native-template-instances',
+    target => '#native-order-browser',
+    on_finish => sub ($next_model) {
+        return $controller->render(template => 'orders/native', model => $next_model);
+    },
+);
+```
+
+`selecto_template_model` accepts exactly one of `template` (mount a new instance)
+or `instance` (load an existing owner-bound instance). The returned
+`selecto.template.native-model.v1` object contains cloned input/state values,
+projected source rows or bounded source errors, and server-built event/source form
+descriptors. EP templates render the supplied actions, HTMX target/swap metadata,
+CSRF fields, component lifetime, and revisions as escaped values. Editable event
+values stay in the field named by `input_name`.
+
+The dispatch helpers use the same owner resolution, CSRF validation, component
+identity, effect leases, source workers, reducer, and instance store as the generic
+routes. The model excludes the compiled manifest, owner scope, adapter, database
+handle, and source-authority callbacks. These are host helpers rather than public
+browser APIs: applications provide their own native routes, error rendering,
+private-cache headers, and full-page versus fragment layout. The source helper is
+asynchronous; render later when it returns `scheduled`, and complete the response in
+`on_finish`.
+
 ## Plugin usage
 
 ```perl
