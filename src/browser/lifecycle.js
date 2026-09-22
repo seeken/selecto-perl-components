@@ -410,6 +410,68 @@
     });
   }
 
+  function normalizedTemplateRevision(value) {
+    if (typeof value === "number") {
+      if (!Number.isSafeInteger(value) || value < 0) return null;
+      value = String(value);
+    }
+    if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
+    return value.replace(/^0+(?=\d)/, "");
+  }
+
+  function compareTemplateRevisions(left, right) {
+    if (left.length !== right.length) return left.length < right.length ? -1 : 1;
+    if (left === right) return 0;
+    return left < right ? -1 : 1;
+  }
+
+  function templateRootForInstance(instanceId, target) {
+    if (target !== undefined) {
+      if (!(target instanceof Element)) return null;
+      var targetedRoot = target.closest("[data-selecto-template-instance]");
+      if (targetedRoot
+          && targetedRoot.dataset.selectoTemplateInstance === instanceId) {
+        return targetedRoot;
+      }
+      return null;
+    }
+    for (var candidate of document.querySelectorAll("[data-selecto-template-instance]")) {
+      if (candidate.dataset.selectoTemplateInstance === instanceId) return candidate;
+    }
+    return null;
+  }
+
+  function templateResponseIsStale(metadata, target) {
+    if (!metadata || typeof metadata.instance_id !== "string") return false;
+    if (metadata.state_revision === undefined || metadata.store_revision === undefined) {
+      return false;
+    }
+    var incomingState = normalizedTemplateRevision(metadata.state_revision);
+    var incomingStore = normalizedTemplateRevision(metadata.store_revision);
+    if (incomingState === null || incomingStore === null) return true;
+    var root = templateRootForInstance(metadata.instance_id, target);
+    if (!root) return true;
+    var currentState = normalizedTemplateRevision(root.dataset.selectoStateRevision);
+    var currentStore = normalizedTemplateRevision(root.dataset.selectoStoreRevision);
+    if (currentState === null || currentStore === null) return false;
+    return compareTemplateRevisions(incomingStore, currentStore) < 0
+      || compareTemplateRevisions(incomingState, currentState) < 0;
+  }
+
+  function httpTemplateMetadata(ctx) {
+    var headers = ctx && ctx.response && ctx.response.raw && ctx.response.raw.headers;
+    if (!headers || typeof headers.get !== "function") return null;
+    var instanceId = headers.get("X-Selecto-Template-Instance");
+    var stateRevision = headers.get("X-Selecto-State-Revision");
+    var storeRevision = headers.get("X-Selecto-Store-Revision");
+    if (instanceId === null || stateRevision === null || storeRevision === null) return null;
+    return {
+      instance_id: instanceId,
+      state_revision: stateRevision,
+      store_revision: storeRevision
+    };
+  }
+
   // Export links are rendered from the last completed query.  The picker can
   // be edited locally immediately before a download, so rebuild the link from
   // the live form as it is clicked. This keeps the export projection, filters,
@@ -437,6 +499,14 @@
     detail.waitUntil(incoming.json().then(function (message) {
       var requestId = message && message.selecto && message.selecto.request_id;
       if (requestId && requestId !== activeSelectoRequestId) detail.cancelled = true;
+      var target;
+      if (message && typeof message.target === "string") {
+        try { target = document.querySelector(message.target); }
+        catch (_error) { target = null; }
+      }
+      if (templateResponseIsStale(message && message.selecto, target)) {
+        detail.cancelled = true;
+      }
     }).catch(function () {}));
   });
 
@@ -486,6 +556,11 @@
   });
 
   document.addEventListener("htmx:before:swap", function (event) {
+    var ctx = event.detail && event.detail.ctx;
+    if (templateResponseIsStale(httpTemplateMetadata(ctx), ctx && ctx.target)) {
+      event.preventDefault();
+      return;
+    }
     selectoSwapStarted = performance.now();
     destroyChartsWithin(event.detail && event.detail.target);
   });
