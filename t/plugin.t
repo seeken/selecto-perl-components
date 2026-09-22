@@ -251,6 +251,40 @@ $t->get_ok($alpha_saved_query_link)
     ->status_is(200)
     ->text_is('title' => 'alpha inventory')
     ->text_is('h1' => 'alpha inventory');
+$t->get_ok('/explore/products?expand_saved=alpha+inventory&expand_saved_type=user')
+    ->status_is(302);
+my $expanded_user = Mojo::URL->new($t->tx->res->headers->location);
+is $expanded_user->path->to_string, '/explore/products',
+    'legacy user links redirect to the saved Explorer path';
+is $expanded_user->query->param('saved_query_name'), 'alpha inventory',
+    'legacy user links retain the saved view title';
+is $expanded_user->query->param('field'), 'product_name',
+    'legacy user links load the saved fields rather than default state';
+$t->get_ok($expanded_user)->status_is(200)
+    ->text_is('h1' => 'alpha inventory');
+{
+    local @TestSelectoComponents::SAVED_QUERIES = (
+        @TestSelectoComponents::SAVED_QUERIES,
+        {name => 'Team report', readonly => 1,
+            url => '/explore/products?q=1&view=detail&field=unit_price&limit=25&page=1'},
+        {name => 'Loop', url => '/explore/products?expand_saved=Loop&expand_saved_type=user'},
+    );
+    $t->get_ok('/explore/products?expand_saved=Team+report&expand_saved_type=client')
+        ->status_is(302);
+    my $expanded_client = Mojo::URL->new($t->tx->res->headers->location);
+    is $expanded_client->query->param('field'), 'unit_price',
+        'legacy client links resolve a shared saved view';
+    $t->get_ok('/explore/products?expand_saved=Team+report&expand_saved_type=user')
+        ->status_is(404);
+    $t->get_ok('/explore/products?expand_saved=alpha+inventory&expand_saved_type=client')
+        ->status_is(404);
+    $t->get_ok('/explore/products?expand_saved=Wrong+explorer&expand_saved_type=user')
+        ->status_is(404);
+    $t->get_ok('/explore/products?expand_saved=Loop&expand_saved_type=user')
+        ->status_is(404);
+    $t->get_ok('/explore/products?expand_saved=alpha+inventory&expand_saved_type=priv')
+        ->status_is(400);
+}
 my $changed_saved_query_url = Mojo::URL->new($alpha_saved_query_link);
 $changed_saved_query_url->query->param(field => 'unit_price');
 $t->get_ok($changed_saved_query_url)

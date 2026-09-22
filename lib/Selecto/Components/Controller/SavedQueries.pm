@@ -4,6 +4,49 @@ use Mojo::Base -base, -signatures;
 use Mojo::URL ();
 use Selecto::Components::State ();
 
+sub _expand_saved_query ($controller, $explorer) {
+    my $request_query = $controller->req->url->query;
+    my $names = $request_query->every_param('expand_saved');
+    return undef unless @$names;
+
+    my $types = $request_query->every_param('expand_saved_type');
+    my ($name, $name_error) = @$names == 1
+        ? _saved_query_name($names->[0])
+        : (undef, 'A single saved query name is required.');
+    return $controller->render(text => $name_error, status => 400)
+        if $name_error;
+    return $controller->render(text => 'Invalid saved query type.', status => 400)
+        unless @$types == 1 && $types->[0] =~ /\A(?:user|client)\z/;
+
+    my $config = $explorer->config;
+    my $store = $config->saved_query_store;
+    return $controller->render(text => 'Saved query not found.', status => 404)
+        unless $store;
+
+    my $queries = eval { $store->list($controller, $config) };
+    unless (ref($queries) eq 'ARRAY') {
+        $controller->app->log->error(
+            'Selecto saved query expansion failed: ' . ($@ || 'invalid saved query list'),
+        );
+        return $controller->render(text => 'Saved queries could not be loaded.', status => 500);
+    }
+    my @matching = grep {
+        ref($_) eq 'HASH' && defined($_->{name}) && !ref($_->{name})
+            && $_->{name} eq $name
+            && ($types->[0] eq 'client' ? $_->{readonly} : !$_->{readonly})
+    } @$queries;
+    my $valid = _normalize_saved_queries($config, \@matching);
+    my $saved = $valid->[0];
+    return $controller->render(text => 'Saved query not found.', status => 404)
+        unless $saved;
+
+    my $destination = Mojo::URL->new($saved->{url});
+    return $controller->render(text => 'Saved query not found.', status => 404)
+        if $destination->query->every_param('expand_saved')->@*;
+    $destination->query->param(saved_query_name => $saved->{name});
+    return $controller->redirect_to($destination);
+}
+
 sub _save_query ($controller, $explorer) {
     my $config = $explorer->config;
     my $return_to = Selecto::Components::_safe_return_to($config, scalar $controller->param('return_to'));

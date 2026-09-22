@@ -137,6 +137,10 @@ sub _routes (
     my $config = $explorer->config;
     my $route_path = _mounted_route_path($config->path, $route_prefix);
     $routes->get($route_path)->to(cb => sub ($controller) {
+        my $expanded = Selecto::Components::Controller::SavedQueries::_expand_saved_query(
+            $controller, $explorer,
+        );
+        return $expanded if $expanded;
         my $format = normalize_export_format($controller->param('format'));
         if ($format eq 'xlsx') {
             my ($file_export, $error);
