@@ -4444,4 +4444,12 @@
         || !control.closest("[data-selecto-template-instance]")) return;
     control.setAttribute("data-selecto-template-dirty", "true");
   });
+
+  window.addEventListener("pageshow", function (event) {
+    if (!event.persisted
+        || !document.querySelector("[data-selecto-template-instance]")) return;
+    // A private template restored from bfcache contains the previous session's
+    // rendered DOM. Reload it so the host resolves tenant/session authority again.
+    window.location.reload();
+  });
 })();
