@@ -384,6 +384,8 @@ owner scope for every request, and supplies fresh source authority:
 ```perl
 plugin 'Selecto::Components::Templates' => {
     store => $template_instance_store,
+    source_max_workers => 4,
+    source_timeout_seconds => 15,
     resolve_owner => sub ($controller) {
         my $actor = authenticated_actor($controller)
             or return {status => 'unauthenticated'};
@@ -400,11 +402,22 @@ plugin 'Selecto::Components::Templates' => {
             registry => $template_renderer_registry,
             ttl_seconds => 3600,
             lease_seconds => 30,
+            source_timeout_seconds => 15,
             resolve_inputs => sub ($controller) {
                 return validated_public_inputs($controller);
             },
-            source_authorizer => sub ($controller, $source, $effect) {
-                my $engine = fresh_tenant_scoped_engine($controller, $source);
+            resolve_source_context => sub ($controller, $owner_scope, $effect) {
+                return {
+                    tenant_id => $owner_scope->{tenant_id},
+                    actor_id => $owner_scope->{actor_id},
+                };
+            },
+            source_authorizer => sub ($source_context, $source, $effect) {
+                my $engine = fresh_tenant_scoped_engine(
+                    $source_context->{tenant_id},
+                    $source_context->{actor_id},
+                    $source,
+                );
                 return {status => 'ok', engine => $engine, query => $engine->query};
             },
         },
@@ -438,10 +451,29 @@ extra fields before dispatch.
 
 The browser never supplies the manifest, source plan, owner scope, adapter, or query.
 For a source POST, the controller loads the owner-bound snapshot, reconstructs the
-current effect, obtains a generation lease, and calls `SourceExecutor`; the template
-can only narrow the fresh host query. Source execution in this initial adapter is
-synchronous. A host executor or worker/pool strategy must demonstrate that slow DBI
-work does not block unrelated requests before the route is advertised as nonblocking.
+current effect, obtains a generation lease, reduces request authority to a bounded
+JSON-safe source context, and schedules `SourceExecutor`; the template can only narrow
+the fresh host query. `resolve_source_context` runs in the web process and must return
+data rather than a controller, cookie, handle, or service object. `source_authorizer`
+runs in the source child and must create its engine and DBI handle there. The default
+context contains only `owner_scope` when no resolver is configured.
+
+The built-in `SourceScheduler` uses Mojolicious subprocesses with a per-web-process
+concurrency bound. `source_max_workers` defaults to 4, and excess work returns a
+bounded 503 after releasing its effect claim. `source_timeout_seconds` defaults to 15
+and must be lower than every source template's lease; a template can select a lower
+timeout. Timed-out children receive `TERM`, then `KILL` after a short grace period,
+and their typed timeout completion is applied by the parent only while the claim is
+still current. Payloads and results cross a JSON boundary and default to a 1 MiB
+limit; `source_max_payload_bytes` and `source_max_result_bytes` can lower or raise
+that bound up to 16 MiB. A host can inject an object implementing `execute` as
+`source_scheduler` when it needs an existing supervised worker service.
+
+The route test starts a slow source and an unrelated HTTP request concurrently. The
+unrelated route completes first, while child-process audit evidence confirms that
+source authorization and DB-handle creation run outside the web process. Scheduler
+tests also cover capacity rejection, event-loop progress, JSON isolation, result
+limits, timeout, and forced termination of a child that ignores `TERM`.
 
 ## Plugin usage
 

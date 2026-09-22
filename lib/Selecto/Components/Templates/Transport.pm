@@ -173,7 +173,10 @@ sub _status ($result) {
         || $status eq 'claim_lost' || $status eq 'stale'
         || $code eq 'stale_revision' || $code eq 'duplicate_event';
     return 503 if $code eq 'instance_store_unavailable'
-        || $code eq 'template_host_unavailable';
+        || $code eq 'template_host_unavailable'
+        || $code eq 'source_context_unavailable'
+        || $code eq 'source_workers_busy'
+        || $code eq 'invalid_source_job';
     return 422;
 }
 

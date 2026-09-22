@@ -50,6 +50,7 @@ WriteMakefile(
         'lib/Selecto/Components/Templates/InstanceService.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceService.pm',
         'lib/Selecto/Components/Templates/Renderer.pm' => '$(INST_LIB)/Selecto/Components/Templates/Renderer.pm',
         'lib/Selecto/Components/Templates/SourceExecutor.pm' => '$(INST_LIB)/Selecto/Components/Templates/SourceExecutor.pm',
+        'lib/Selecto/Components/Templates/SourceScheduler.pm' => '$(INST_LIB)/Selecto/Components/Templates/SourceScheduler.pm',
         'lib/Selecto/Components/Templates/Transport.pm' => '$(INST_LIB)/Selecto/Components/Templates/Transport.pm',
         'lib/Selecto/Components/Util.pm' => '$(INST_LIB)/Selecto/Components/Util.pm',
         'public/selecto-components/chart.umd.min.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/chart.umd.min.js',

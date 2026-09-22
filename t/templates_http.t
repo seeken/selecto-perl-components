@@ -5,8 +5,10 @@ use warnings;
 use FindBin ();
 use lib "$FindBin::Bin/../lib";
 use lib "$FindBin::Bin/lib";
+use File::Temp qw(tempfile);
 use JSON::PP ();
 use Mojolicious;
+use Mojo::Promise;
 use Test::More;
 use Test::Mojo;
 use TestSelectoComponents ();
@@ -23,7 +25,9 @@ my $now = 1_000;
 my $instance_sequence = 0;
 my $claim_sequence = 0;
 my $event_sequence = 0;
-my $authorization_calls = 0;
+my $source_context_calls = 0;
+my ($worker_audit_handle, $worker_audit_path) = tempfile();
+close $worker_audit_handle;
 my $store = Selecto::Components::Templates::InstanceStore::Memory->new(
     clock => sub { $now },
     id_generator => sub { 'http-instance-' . ++$instance_sequence },
@@ -33,9 +37,56 @@ my $manifest = TestSelectoComponents::template_order_manifest();
 my $catalog = TestSelectoComponents::template_domain_catalog();
 my $app = Mojolicious->new;
 $app->secrets(['template-http-test-secret']);
+$app->routes->get('/template-probe')->to(cb => sub {
+    my ($controller) = @_;
+    return $controller->render(text => 'ready');
+});
+my $resolve_source_context = sub {
+    my ($controller, $owner_scope, $effect) = @_;
+    $source_context_calls++;
+    return {
+        tenant_id => $owner_scope->{tenant_id},
+        actor_id => $owner_scope->{actor_id},
+        request_actor => $controller->req->headers->header('X-Test-Actor'),
+        source => $effect->{source},
+    };
+};
+my $source_authorizer = sub {
+    my ($source_context, $source, $effect) = @_;
+    die "invalid source context\n"
+        unless $source_context->{tenant_id} == 7
+        && $source_context->{actor_id} eq $source_context->{request_actor}
+        && $source_context->{source} eq $source->{id};
+    open my $audit, '>>', $worker_audit_path
+        or die "worker audit unavailable\n";
+    print {$audit} join(':', $$, $source_context->{actor_id},
+        $source->{id}, $effect->{generation}), "\n";
+    close $audit;
+    my $domain = Selecto::Domain->parse(
+        $catalog->{domains}{orders}, strict => 1,
+    )->with_required_predicate(
+        Selecto::Expression->eq('tenant_id', $source_context->{tenant_id}),
+    );
+    my $engine = Selecto::Engine->new(
+        domain => $domain,
+        adapter => Selecto::PostgreSQL->new(
+            dbh => TemplateHTTPDBH->new,
+        ),
+    );
+    return {status => 'ok', engine => $engine, query => $engine->query};
+};
+my $source_runner = sub {
+    my ($engine, $query, $effect) = @_;
+    my $search = $effect->{bindings}{state}{search};
+    my $number = length($search) ? $search : 'PO-100';
+    return {rows => [[
+        1, $number, '2026-09-22T12:00:00Z', 'open', 44,
+    ]]};
+};
 $app->plugin('Selecto::Components::Templates' => {
     store => $store,
     clock => sub { $now },
+    source_max_workers => 2,
     event_id_generator => sub { 'http-event-' . ++$event_sequence },
     resolve_owner => sub {
         my ($controller) = @_;
@@ -54,30 +105,38 @@ $app->plugin('Selecto::Components::Templates' => {
             registry => _registry(),
             ttl_seconds => 60,
             lease_seconds => 10,
-            source_authorizer => sub {
-                my ($controller, $source, $effect) = @_;
-                $authorization_calls++;
-                my $domain = Selecto::Domain->parse(
-                    $catalog->{domains}{orders}, strict => 1,
-                )->with_required_predicate(
-                    Selecto::Expression->eq('tenant_id', 7),
-                );
-                my $engine = Selecto::Engine->new(
-                    domain => $domain,
-                    adapter => Selecto::PostgreSQL->new(
-                        dbh => TemplateHTTPDBH->new,
-                    ),
-                );
-                return {status => 'ok', engine => $engine, query => $engine->query};
-            },
+            source_timeout_seconds => 5,
+            resolve_source_context => $resolve_source_context,
+            source_authorizer => $source_authorizer,
+            source_runner => $source_runner,
+        },
+        slow_orders => {
+            title => 'Slow orders template',
+            release_id => 'slow-orders-http-v1',
+            manifest => $manifest,
+            registry => _registry(),
+            ttl_seconds => 60,
+            lease_seconds => 10,
+            source_timeout_seconds => 2,
+            resolve_source_context => $resolve_source_context,
+            source_authorizer => $source_authorizer,
             source_runner => sub {
                 my ($engine, $query, $effect) = @_;
-                my $search = $effect->{bindings}{state}{search};
-                my $number = length($search) ? $search : 'PO-100';
-                return {rows => [[
-                    1, $number, '2026-09-22T12:00:00Z', 'open', 44,
-                ]]};
+                select undef, undef, undef, 0.25;
+                return $source_runner->($engine, $query, $effect);
             },
+        },
+        invalid_context => {
+            title => 'Invalid source context template',
+            release_id => 'invalid-source-context-http-v1',
+            manifest => $manifest,
+            registry => _registry(),
+            ttl_seconds => 60,
+            lease_seconds => 10,
+            source_timeout_seconds => 5,
+            resolve_source_context => sub { return {unsafe => sub { return 1 }} },
+            source_authorizer => $source_authorizer,
+            source_runner => $source_runner,
         },
     },
 });
@@ -173,7 +232,14 @@ $t->post_ok(
     ->element_exists_not('html')
     ->element_exists('[data-order-number="PO-100"]')
     ->element_exists_not('form.selecto-template-source');
-is $authorization_calls, 1, 'source authorization runs for the initial generation';
+is $source_context_calls, 1,
+    'request authority is reduced to source context for the initial generation';
+my @worker_audit = _worker_audit($worker_audit_path);
+is scalar(@worker_audit), 1, 'source authorization ran once for the initial generation';
+unlike $worker_audit[0], qr/\A\Q$$\E:/,
+    'source authorization and DB handle creation run outside the web process';
+like $worker_audit[0], qr/:alice:orders:1\z/,
+    'child authorization receives only the resolved actor and source effect data';
 
 my $ready_dom = $t->tx->res->dom;
 my $event_form = $ready_dom->at('form[data-template-event="search_changed"]');
@@ -217,7 +283,55 @@ $t->post_ok(
     ->header_is('X-Selecto-State-Revision' => 1)
     ->header_is('X-Selecto-Store-Revision' => 3)
     ->element_exists('[data-order-number="PO-200"]');
-is $authorization_calls, 2, 'source authorization is reacquired for a new generation';
+is $source_context_calls, 2,
+    'request authority is resolved again for a new source generation';
+@worker_audit = _worker_audit($worker_audit_path);
+is scalar(@worker_audit), 2, 'source authorization is reacquired in a fresh worker';
+like $worker_audit[1], qr/:alice:orders:2\z/,
+    'new generation reaches child authorization with its current effect data';
+
+$t->get_ok('/templates/invalid_context' => {'X-Test-Actor' => 'alice'})
+    ->status_is(200);
+my $invalid_context_form = $t->tx->res->dom->at('form.selecto-template-source');
+my $invalid_context_path = $invalid_context_form->attr('action');
+my $invalid_context_csrf =
+    $invalid_context_form->at('input[name="csrf_token"]')->attr('value');
+for my $attempt (1 .. 2) {
+    $t->post_ok(
+        $invalid_context_path => {
+            'X-Test-Actor' => 'alice', 'HX-Request' => 'true',
+        } => form => {csrf_token => $invalid_context_csrf},
+    )->status_is(503)
+        ->element_exists('[data-selecto-template-error="invalid_source_job"]');
+}
+is scalar(_worker_audit($worker_audit_path)), 2,
+    'invalid source context never reaches child authorization';
+
+$t->get_ok('/templates/slow_orders' => {'X-Test-Actor' => 'alice'})
+    ->status_is(200);
+my $slow_form = $t->tx->res->dom->at('form.selecto-template-source');
+my $slow_path = $slow_form->attr('action');
+my $slow_csrf = $slow_form->at('input[name="csrf_token"]')->attr('value');
+my (@completion_order, $slow_tx, $probe_tx);
+my $slow_promise = $t->ua->post_p(
+    $slow_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
+        form => {csrf_token => $slow_csrf},
+)->then(sub {
+    ($slow_tx) = @_;
+    push @completion_order, 'source';
+});
+my $probe_promise = $t->ua->get_p('/template-probe')->then(sub {
+    ($probe_tx) = @_;
+    push @completion_order, 'probe';
+});
+Mojo::Promise->all($slow_promise, $probe_promise)->wait;
+is $probe_tx->res->code, 200, 'unrelated HTTP request completes during source work';
+is $probe_tx->res->text, 'ready', 'unrelated route returns its normal response';
+is_deeply \@completion_order, ['probe', 'source'],
+    'slow DBI-shaped source work does not freeze the Mojolicious event loop';
+is $slow_tx->res->code, 200, 'slow source request completes after the probe';
+ok $slow_tx->res->dom->at('[data-order-number="PO-100"]'),
+    'slow source result is committed and rendered';
 
 $t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})->status_is(200);
 my $expiring_dom = $t->tx->res->dom;
@@ -288,6 +402,15 @@ sub _registry {
 
 sub _safe {
     return Selecto::Components::Templates::Renderer->safe_html($_[0]);
+}
+
+sub _worker_audit {
+    my ($path) = @_;
+    open my $audit, '<', $path or die "worker audit unavailable\n";
+    my @lines = <$audit>;
+    close $audit;
+    chomp @lines;
+    return @lines;
 }
 
 package TemplateHTTPDBH;

@@ -41,6 +41,7 @@ lib/Selecto/Components/Templates/InstanceStore/PostgreSQL.pm
 lib/Selecto/Components/Templates/InstanceService.pm
 lib/Selecto/Components/Templates/Renderer.pm
 lib/Selecto/Components/Templates/SourceExecutor.pm
+lib/Selecto/Components/Templates/SourceScheduler.pm
 lib/Selecto/Components/Templates/Transport.pm
 lib/Selecto/Components/Util.pm
 LICENSE
@@ -104,5 +105,6 @@ t/templates_http.t
 t/templates_renderer.t
 t/templates_runtime_host.t
 t/templates_source_executor.t
+t/templates_source_scheduler.t
 THIRD_PARTY_NOTICES.md
 SECURITY_REVIEW_2026-09-21.md
