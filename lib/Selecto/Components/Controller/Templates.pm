@@ -104,18 +104,66 @@ sub source ($class, $controller, $runtime) {
     );
     return $runtime->{transport}->respond_error($controller, $claim)
         unless $claim->{status} eq 'claimed';
+    my $source_context = _source_context($controller, $context, $effect);
+    return _release_and_error(
+        $controller, $runtime, $context, $effect,
+        $claim->{claim_token}, $source_context,
+    ) unless $source_context->{status} eq 'ok';
 
-    my $execution = Selecto::Components::Templates::SourceExecutor->execute(
-        manifest => $context->{template}{manifest},
-        effect => $effect,
-        authorize => sub ($declared_source, $declared_effect) {
-            return $context->{template}{source_authorizer}->(
-                $controller, $declared_source, $declared_effect,
+    my $manifest = $context->{template}{manifest};
+    my $source_authorizer = $context->{template}{source_authorizer};
+    my $source_runner = $context->{template}{source_runner};
+    my $scheduled = $runtime->{source_scheduler}->execute(
+        payload => {
+            manifest => $manifest,
+            effect => $effect,
+            source_context => $source_context->{source_context},
+        },
+        timeout_seconds => $context->{template}{source_timeout_seconds},
+        work => sub ($payload) {
+            return Selecto::Components::Templates::SourceExecutor->execute(
+                manifest => $payload->{manifest},
+                effect => $payload->{effect},
+                authorize => sub ($declared_source, $declared_effect) {
+                    return $source_authorizer->(
+                        $payload->{source_context},
+                        $declared_source,
+                        $declared_effect,
+                    );
+                },
+                (defined($source_runner) ? (run => $source_runner) : ()),
             );
         },
-        (defined($context->{template}{source_runner})
-            ? (run => $context->{template}{source_runner}) : ()),
+        on_finish => sub ($execution) {
+            return _finish_source(
+                $controller, $runtime, $context, $effect,
+                $claim->{claim_token}, $execution,
+            );
+        },
     );
+    if (($scheduled->{status} // '') ne 'scheduled') {
+        return _release_and_error(
+            $controller, $runtime, $context, $effect,
+            $claim->{claim_token}, $scheduled,
+        );
+    }
+    $controller->render_later;
+    return undef;
+}
+
+sub _release_and_error ($controller, $runtime, $context, $effect, $claim_token, $error) {
+    my $released = $runtime->{dispatcher}->release_effect_claim(
+        owner_scope => $context->{owner_scope},
+        instance_id => $context->{instance_id},
+        effect => $effect,
+        claim_token => $claim_token,
+    );
+    return $runtime->{transport}->respond_error($controller, $released)
+        unless $released->{status} eq 'ok';
+    return $runtime->{transport}->respond_error($controller, $error);
+}
+
+sub _finish_source ($controller, $runtime, $context, $effect, $claim_token, $execution) {
     my $completion = {
         schema => 'selecto.template.runtime-completion.v1',
         instance_id => $context->{instance_id},
@@ -134,7 +182,7 @@ sub source ($class, $controller, $runtime) {
         owner_scope => $context->{owner_scope},
         instance_id => $context->{instance_id},
         manifest => $context->{template}{manifest},
-        claim_token => $claim->{claim_token},
+        claim_token => $claim_token,
         completion => $completion,
     );
     return $runtime->{transport}->respond_error($controller, $completed)
@@ -143,6 +191,25 @@ sub source ($class, $controller, $runtime) {
         $controller, $runtime, $context->{template},
         $completed->{observation}{snapshot}, $completed->{store_revision},
     );
+}
+
+sub _source_context ($controller, $context, $effect) {
+    my $resolver = $context->{template}{resolve_source_context};
+    return {
+        status => 'ok',
+        source_context => {owner_scope => $context->{owner_scope}},
+    } unless defined($resolver);
+    my $resolved = eval {
+        $resolver->($controller, $context->{owner_scope}, $effect)
+    };
+    return {
+        status => 'error', code => 'source_context_unavailable',
+        message => 'Template source context is unavailable.',
+    } if $@;
+    return _invalid_request(
+        'invalid_source_context', 'Template source context is invalid.',
+    ) unless ref($resolved) eq 'HASH';
+    return {status => 'ok', source_context => $resolved};
 }
 
 sub _snapshot_response ($controller, $runtime, $template, $snapshot, $store_revision) {

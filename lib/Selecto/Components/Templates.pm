@@ -6,6 +6,7 @@ use Mojo::File qw(path);
 use Time::HiRes qw(time);
 use Selecto::Components::Controller::Templates ();
 use Selecto::Components::Templates::Dispatcher ();
+use Selecto::Components::Templates::SourceScheduler ();
 use Selecto::Components::Templates::Transport ();
 
 =head1 NAME
@@ -31,7 +32,35 @@ sub register ($self, $app, $plugin_config) {
     my $resolve_owner = $plugin_config->{resolve_owner};
     die "Selecto::Components::Templates requires a resolve_owner callback\n"
         unless ref($resolve_owner) eq 'CODE';
-    my $templates = _templates($plugin_config->{templates});
+    my $source_timeout_seconds = _positive_number(
+        $plugin_config->{source_timeout_seconds} // 15, 300,
+        'source_timeout_seconds',
+    );
+    my $source_scheduler = $plugin_config->{source_scheduler};
+    if (defined($source_scheduler)) {
+        die "source_scheduler must provide execute\n"
+            unless ref($source_scheduler) && $source_scheduler->can('execute');
+    }
+    else {
+        $source_scheduler = Selecto::Components::Templates::SourceScheduler->new(
+            max_workers => _positive_integer(
+                $plugin_config->{source_max_workers} // 4, 64,
+                'source_max_workers',
+            ),
+            timeout_seconds => $source_timeout_seconds,
+            max_payload_bytes => _positive_integer(
+                $plugin_config->{source_max_payload_bytes} // 1_048_576,
+                16_777_216, 'source_max_payload_bytes',
+            ),
+            max_result_bytes => _positive_integer(
+                $plugin_config->{source_max_result_bytes} // 1_048_576,
+                16_777_216, 'source_max_result_bytes',
+            ),
+        );
+    }
+    my $templates = _templates(
+        $plugin_config->{templates}, $source_timeout_seconds,
+    );
     my $template_path = _path(
         $plugin_config->{template_path} // '/templates', 'template_path',
     );
@@ -61,6 +90,7 @@ sub register ($self, $app, $plugin_config) {
         templates => $templates,
         templates_by_release => \%by_release,
         resolve_owner => $resolve_owner,
+        source_scheduler => $source_scheduler,
         clock => $clock,
     };
 
@@ -78,7 +108,7 @@ sub register ($self, $app, $plugin_config) {
         });
 }
 
-sub _templates ($specs) {
+sub _templates ($specs, $default_source_timeout_seconds) {
     die "Selecto::Components::Templates requires a templates object\n"
         unless ref($specs) eq 'HASH' && keys %$specs;
     my (%templates, %releases);
@@ -99,7 +129,7 @@ sub _templates ($specs) {
             if $releases{$release}++;
         die "template $id requires a renderer registry\n"
             unless ref($registry) eq 'HASH';
-        for my $callback (qw(resolve_inputs source_authorizer source_runner)) {
+        for my $callback (qw(resolve_inputs resolve_source_context source_authorizer source_runner)) {
             die "template $id $callback must be a coderef\n"
                 if defined($spec->{$callback}) && ref($spec->{$callback}) ne 'CODE';
         }
@@ -115,12 +145,19 @@ sub _templates ($specs) {
             $spec->{lease_seconds} // 30, 300,
             "template $id lease_seconds",
         );
+        my $source_timeout_seconds = _positive_number(
+            $spec->{source_timeout_seconds} // $default_source_timeout_seconds,
+            300, "template $id source_timeout_seconds",
+        );
+        die "template $id source_timeout_seconds must be less than lease_seconds\n"
+            if $has_sources && $source_timeout_seconds >= $lease_seconds;
         $templates{$id} = {
             %$spec,
             id => "$id",
             release_id => "$release",
             ttl_seconds => $ttl_seconds,
             lease_seconds => $lease_seconds,
+            source_timeout_seconds => $source_timeout_seconds,
             title => _scalar($spec->{title}, 256) ? "$spec->{title}" : "$id",
         };
     }
@@ -138,6 +175,14 @@ sub _positive_integer ($value, $max, $name) {
     die "$name must be an integer between 1 and $max\n"
         unless defined($value) && !ref($value)
         && "$value" =~ /\A[1-9][0-9]*\z/ && $value <= $max;
+    return 0 + $value;
+}
+
+sub _positive_number ($value, $max, $name) {
+    die "$name must be a number greater than 0 and at most $max\n"
+        unless defined($value) && !ref($value)
+        && "$value" =~ /\A(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)\z/
+        && $value > 0 && $value <= $max;
     return 0 + $value;
 }
 

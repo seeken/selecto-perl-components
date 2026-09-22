@@ -36,6 +36,7 @@ use_ok 'Selecto::Components::Templates::EventDispatcher';
 use_ok 'Selecto::Components::Templates::InstanceService';
 use_ok 'Selecto::Components::Templates::Renderer';
 use_ok 'Selecto::Components::Templates::SourceExecutor';
+use_ok 'Selecto::Components::Templates::SourceScheduler';
 use_ok 'Selecto::Components::Templates::Transport';
 use_ok 'Selecto::Components::Templates::InstanceStore::Memory';
 use_ok 'Selecto::Components::Templates::InstanceStore::PostgreSQL';
