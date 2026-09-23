@@ -28,6 +28,7 @@
     choice.dataset.search = (label + " " + type).toLowerCase();
     choice.dataset.defaultFunction = metadata.defaultFunction || "";
     choice.dataset.measureField = metadata.measureField || "";
+    choice.dataset.scPickerGroupKey = metadata.groupKey || "";
     if (kind === "filter") {
       choice.dataset.scFilterAction = "add";
       choice.setAttribute("data-sc-filter-available-item", "");
@@ -69,6 +70,7 @@
     item.dataset.type = type;
     item.dataset.defaultFunction = choice.dataset.defaultFunction || "";
     item.dataset.measureField = choice.dataset.measureField || "";
+    item.dataset.scPickerGroupKey = choice.dataset.scPickerGroupKey || "";
     if (choice.hasAttribute("data-sc-picker-repeatable")) {
       item.setAttribute("data-sc-picker-repeatable", "");
     }
@@ -411,8 +413,8 @@
     var maximum = Number(root.dataset.scPickerMax || available.length + items.length);
     available.forEach(function (choice) {
       choice.disabled = items.length >= maximum;
-      choice.hidden = query.length > 0 && !choice.dataset.search.includes(query);
     });
+    refreshGroupedPickerSearch(availableList, query, "[data-sc-picker-available-item]");
     var setCount = root.querySelector("[data-sc-picker-set-count]");
     var availableCount = root.querySelector("[data-sc-picker-available-count]");
     if (setCount) setCount.textContent = items.length;
@@ -425,6 +427,35 @@
       if (up) up.disabled = index === 0;
       if (down) down.disabled = index === items.length - 1;
       if (remove) remove.disabled = items.length === 1;
+    });
+  }
+
+  function refreshGroupedPickerSearch(container, query, selector) {
+    if (!container) return;
+    container.querySelectorAll("[data-sc-picker-group]").forEach(function (group) {
+      var choices = Array.from(group.querySelectorAll(selector));
+      var headingMatches = query && (group.dataset.searchLabel || "").includes(query);
+      var matching = 0;
+      choices.forEach(function (choice) {
+        choice.hidden = !!query && !headingMatches && !(choice.dataset.search || "").includes(query);
+        if (!choice.hidden) matching += 1;
+      });
+      var count = group.querySelector("summary small");
+      if (count) count.textContent = choices.length;
+      group.hidden = !choices.length || (!!query && !matching);
+      if (query) {
+        if (group.dataset.scOpenBeforeSearch === undefined) {
+          group.dataset.scOpenBeforeSearch = group.open ? "1" : "0";
+        }
+        if (!group.hidden) group.open = true;
+      } else if (group.dataset.scOpenBeforeSearch !== undefined) {
+        group.open = group.dataset.scOpenBeforeSearch === "1";
+        delete group.dataset.scOpenBeforeSearch;
+      }
+    });
+    container.querySelectorAll(selector).forEach(function (choice) {
+      if (choice.closest("[data-sc-picker-group]")) return;
+      choice.hidden = !!query && !(choice.dataset.search || "").includes(query);
     });
   }
 

@@ -241,6 +241,13 @@ code, pre, textarea.sac-request-editor {
   text-transform: uppercase;
 }
 
+.sac-segment-groups { display: grid; gap: .6rem; margin-top: .75rem; }
+.sac-segment-group { border: 0; padding: 0 0 0 1rem; }
+.sac-segment-group legend { color: var(--sac-text); font-weight: 700; padding: 0; }
+.sac-segment-group > .sac-help { display: block; margin: .2rem 0 .25rem; }
+.sac-segment-group-choice { display: inline-flex; align-items: center; gap: .35rem; margin: .25rem 1rem .25rem .75rem; }
+.sac-card .sac-segment-group-choice input[type="radio"] { width: auto; }
+
 .sac-card input, .sac-card select, .sac-card textarea, .sac-parameter input {
   width: 100%;
   min-height: 2.55rem;

@@ -13,6 +13,78 @@ async function load(page, html) {
   await page.addScriptTag({path: bundle});
 }
 
+test("segment choice radios keep one choice or Off and update the filter count", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote">
+    <span data-sc-filter-badge>0</span>
+    <fieldset><legend>PDF sent to customer</legend>
+      <label><input type="radio" name="query_library_segment_choice_pdf" value="" data-sc-query-library-group-choice checked>Off</label>
+      <label><input type="radio" name="query_library_segment_choice_pdf" value="pdf_yes" data-sc-query-library-group-choice>Yes</label>
+      <label><input type="radio" name="query_library_segment_choice_pdf" value="pdf_no" data-sc-query-library-group-choice>No</label>
+    </fieldset>
+  </form>`);
+  await page.locator('input[value="pdf_yes"]').check();
+  await expect(page.locator("[data-sc-filter-badge]")).toHaveText("1");
+  await page.locator('input[value="pdf_no"]').check();
+  await expect(page.locator("[data-sc-filter-badge]")).toHaveText("1");
+  await expect(page.locator('input[value="pdf_yes"]')).not.toBeChecked();
+  await page.locator('input[value=""]').check();
+  await expect(page.locator("[data-sc-filter-badge]")).toHaveText("0");
+});
+
+test("field and filter searches open matching source groups and restore collapsed state", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote">
+    <div data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
+      <input data-sc-picker-filter aria-label="Filter available fields">
+      <div data-sc-picker-available>
+        <details data-sc-picker-group data-sc-picker-group-key="bill_to" data-search-label="bill to">
+          <summary>Bill To <small>2</small></summary><div data-sc-picker-group-items>
+            <button data-sc-picker-available-item data-search="company name string bill_to.co_name">Company Name</button>
+            <button data-sc-picker-available-item data-search="city string bill_to.city">City</button>
+          </div>
+        </details>
+        <details data-sc-picker-group data-sc-picker-group-key="_actions" data-search-label="actions">
+          <summary>Actions <small>1</small></summary><div data-sc-picker-group-items>
+            <button data-sc-picker-available-item data-search="send quote action">Send Quote</button>
+          </div>
+        </details>
+      </div><span data-sc-picker-available-count></span><span data-sc-picker-set-count></span>
+      <div data-sc-picker-set></div>
+    </div>
+    <div data-sc-filter-root data-sc-filter-max="10">
+      <input data-sc-filter-search aria-label="Filter available filters">
+      <div data-sc-filter-available>
+        <details data-sc-picker-group data-sc-picker-group-key="bill_to" data-search-label="bill to">
+          <summary>Bill To <small>1</small></summary><div data-sc-picker-group-items>
+            <button data-sc-filter-available-item data-search="state string bill_to.state">State</button>
+          </div>
+        </details>
+      </div><span data-sc-filter-available-count></span><span data-sc-filter-set-count></span>
+      <div data-sc-filter-set></div>
+    </div>
+  </form>`);
+  const billTo = page.locator('[data-sc-picker-root] [data-sc-picker-group-key="bill_to"]');
+  const actions = page.locator('[data-sc-picker-root] [data-sc-picker-group-key="_actions"]');
+  await expect(billTo).not.toHaveAttribute("open");
+  await billTo.locator("summary").click();
+  await expect(billTo).toHaveAttribute("open", "");
+  await billTo.locator("summary").click();
+  await expect(billTo).not.toHaveAttribute("open");
+  await page.getByLabel("Filter available fields").fill("bill to");
+  await expect(billTo).toHaveAttribute("open", "");
+  await expect(billTo.getByText("Company Name")).toBeVisible();
+  await expect(actions).toBeHidden();
+  await page.getByLabel("Filter available fields").fill("actions");
+  await expect(actions).toHaveAttribute("open", "");
+  await expect(actions.getByText("Send Quote")).toBeVisible();
+  await page.getByLabel("Filter available fields").fill("");
+  await expect(actions).not.toHaveAttribute("open");
+  await expect(billTo).not.toHaveAttribute("open");
+  await page.getByLabel("Filter available filters").fill("state");
+  const filterBillTo = page.locator('[data-sc-filter-root] [data-sc-picker-group-key="bill_to"]');
+  await expect(filterBillTo).toHaveAttribute("open", "");
+  await expect(filterBillTo.getByText("State")).toBeVisible();
+});
+
 test("a loaded saved view stays identified while its query is rerun", async ({page}) => {
   await page.route("http://saved.test/**", route => route.fulfill({
     contentType: "text/html",
@@ -541,6 +613,126 @@ test("date-only values remain stable for datetime filters", async ({page}) => {
   await page.locator('[name="filter_op"]').selectOption("lt");
   await expect(page.locator('[name="filter_value"]')).toHaveAttribute("type", "date");
   await expect(page.locator('[name="filter_value"]')).toHaveValue("2024-10-01");
+});
+
+test("CustomOption filters offer named multi-select choices and retain IDs", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote">
+    <div data-sc-filter-root data-sc-filter-max="10">
+      <div data-sc-filter-available>
+        <button type="button" data-sc-filter-action="add" data-sc-filter-available-item
+          data-field="lhf_option_2.option_item_id" data-label="Billing Class (Quote)"
+          data-type="integer" data-sc-filter-choices='[{"value":"191","label":"Corporate"},{"value":"192","label":"Retail"}]'
+          data-search="billing class quote">Add Billing Class</button>
+      </div>
+      <span data-sc-filter-available-count></span><span data-sc-filter-set-count></span>
+      <div data-sc-filter-set></div>
+    </div>
+  </form>`);
+  await page.locator('[data-sc-filter-action="add"]').click();
+  const item = page.locator('[data-sc-filter-set-item]');
+  await expect(item.locator('[name="filter_op"]')).toHaveValue("in");
+  const choices = item.locator('[data-sc-filter-choice-select]');
+  await expect(choices).toBeVisible();
+  await expect(choices.locator("option")).toHaveText(["Corporate", "Retail"]);
+  await choices.selectOption(["191", "192"]);
+  await expect(item.locator('[name="filter_value"]')).toHaveValue("191,192");
+  await expect(item).not.toHaveClass(/is-draft/);
+  await item.locator('[name="filter_op"]').selectOption("eq");
+  await expect(item.locator('[data-sc-filter-choice-select]')).toBeVisible();
+  await expect(item.locator('[name="filter_value"]')).toHaveValue("191");
+  await item.locator('[data-sc-filter-choice-select]').selectOption("192");
+  await expect(item.locator('[name="filter_value"]')).toHaveValue("192");
+});
+
+test("a saved CustomOption filter shows its selected names on initial load", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote">
+    <article data-sc-filter-set-item data-field="lhf_option_2.option_item_id"
+      data-label="Billing Class (Quote)" data-type="integer"
+      data-sc-filter-choices='[{"value":"191","label":"Corporate"},{"value":"192","label":"Retail"}]'>
+      <div class="sc-filter-editor"><select name="filter_op"><option value="in" selected>one of</option></select>
+        <div data-sc-filter-values><label>
+          <input data-sc-filter-choice-value name="filter_value" value="191,192">
+          <select data-sc-filter-choice-select multiple hidden aria-label="Choices for Billing Class (Quote)">
+            <option value="191" selected>Corporate</option><option value="192" selected>Retail</option>
+          </select>
+        </label><input type="hidden" name="filter_value_end" value=""></div>
+      </div>
+    </article>
+  </form>`);
+  const select = page.locator('[data-sc-filter-choice-select]');
+  await expect(select).toBeVisible();
+  await expect(page.locator('[data-sc-filter-choice-value]')).toBeHidden();
+  expect(await select.evaluate(element => Array.from(element.selectedOptions).map(option => option.text))).toEqual(
+    ["Corporate", "Retail"]
+  );
+});
+
+test("promoted CustomOption choices update the governed filter without showing IDs", async ({page}) => {
+  await load(page, `<form id="selecto-query-quote" data-sc-builder="quote">
+    <article data-sc-filter-set-item data-field="lhf_option_2.option_item_id"
+      data-filter-instance="1" data-label="Billing Class (Quote)" data-type="integer">
+      <div class="sc-filter-editor"><select name="filter_op"><option value="in" selected>one of</option></select>
+        <div data-sc-filter-values><input name="filter_value" value="191">
+          <input type="hidden" name="filter_value_end" value=""></div>
+      </div>
+    </article>
+  </form>
+  <section data-sc-promoted-filters><button form="selecto-query-quote">Run query</button>
+    <select multiple data-sc-promoted-filter-input="value"
+      data-filter-field="lhf_option_2.option_item_id" data-filter-instance="1"
+      aria-label="Choices for Billing Class (Quote)">
+      <option value="191" selected>Corporate</option><option value="192">Retail</option>
+    </select>
+  </section>`);
+  const choices = page.getByLabel("Choices for Billing Class (Quote)");
+  await choices.selectOption(["191", "192"]);
+  await expect(page.locator('[name="filter_value"]')).toHaveValue("191,192");
+  await expect(choices).toHaveText(/Corporate/);
+});
+
+test("a newly added Move Type filter can be promoted immediately", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote">
+    <div data-sc-filter-root data-sc-filter-max="10">
+      <div data-sc-filter-available><button type="button" data-sc-filter-action="add"
+        data-sc-filter-available-item data-field="lhf_option_1.option_item_id"
+        data-label="Move Type (Quote)" data-type="integer"
+        data-sc-filter-choices='[{"value":"71","label":"Open"},{"value":"72","label":"Enclosed"}]'
+        data-search="move type">Add Move Type</button></div>
+      <span data-sc-filter-available-count></span><span data-sc-filter-set-count></span>
+      <div data-sc-filter-set></div>
+    </div>
+  </form>`);
+  await page.locator('[data-sc-filter-action="add"]').click();
+  const item = page.locator('[data-sc-filter-set-item]');
+  const promote = item.getByLabel("Promote to View Controller");
+  await expect(promote).toBeVisible();
+  await expect(promote).toHaveValue("1");
+  await promote.check();
+  expect(await page.locator("form").evaluate(form =>
+    new FormData(form).getAll("filter_promote_index"))).toEqual(["1"]);
+});
+
+test("saved ordinary alternatives keep editable filter values", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote" data-sc-builder-query>
+    <fieldset data-sc-filter-clauses data-sc-filter-clause-mode="ordinary">
+      <article data-sc-filter-clause="1"><div class="sc-filter-clause-conditions">
+        <section data-sc-filter-condition data-field="billing_class_id"
+          data-label="Billing Class ID" data-type="integer">
+          <div class="sc-filter-editor">
+            <select name="filter_op"><option value="eq" selected>equals</option>
+              <option value="in">one of</option><option value="is_null">is empty</option></select>
+            <div data-sc-filter-values><input name="filter_value" value="14">
+              <input type="hidden" name="filter_value_end" value=""></div>
+          </div>
+        </section>
+      </div></article>
+    </fieldset>
+  </form>`);
+  await page.locator('[name="filter_op"]').selectOption("in");
+  await expect(page.locator('[name="filter_value"]')).toHaveValue("14");
+  await page.locator('[name="filter_value"]').fill("14,17");
+  await expect(page.locator('[name="filter_value"]')).toHaveValue("14,17");
+  await expect(page.locator('[data-sc-filter-condition]')).not.toHaveClass(/is-draft/);
 });
 
 test("mixed graph series configure independent left and right axes", async ({page}) => {

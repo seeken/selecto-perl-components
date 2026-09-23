@@ -220,6 +220,13 @@ a { color: inherit; }
 .sc-picker-heading span:last-child { background: var(--sc-badge-bg); border-radius: 999px; min-width: 22px; padding: 2px 6px; text-align: center; }
 .sc-picker-filter { margin: 0 0 7px !important; min-height: 34px !important; }
 .sc-picker-list { display: grid; gap: 5px; max-height: 265px; min-height: 180px; overflow-y: auto; }
+.sc-picker-group { border: 1px solid var(--sc-border); border-radius: 8px; min-width: 0; overflow: hidden; }
+.sc-picker-group[hidden] { display: none; }
+.sc-picker-group > summary { align-items: center; background: var(--sc-control-button-bg); color: var(--sc-ink); cursor: pointer; display: flex; font-size: .74rem; font-weight: 700; justify-content: space-between; list-style-position: inside; padding: 7px 8px; }
+.sc-picker-group > summary::before { content: '▸'; display: inline-block; margin-right: 6px; transition: transform .12s ease; }
+.sc-picker-group[open] > summary::before { transform: rotate(90deg); }
+.sc-picker-group > summary small { color: var(--sc-hint); font-size: .65rem; margin-left: auto; }
+.sc-picker-group-items { display: grid; gap: 5px; padding: 5px; }
 .sc-picker-choice { align-items: center; background: var(--sc-panel); border: 1px solid var(--sc-border); border-radius: 8px; color: var(--sc-ink); cursor: pointer; display: flex; gap: 8px; justify-content: space-between; min-width: 0; padding: 7px 8px; text-align: left; }
 .sc-picker-choice[hidden] { display: none; }
 .sc-picker-choice:hover { border-color: var(--sc-hover-border); background: var(--sc-control-hover-bg); }
@@ -270,6 +277,10 @@ a { color: inherit; }
 .sc-filter-editor input[readonly] { color: var(--sc-muted); cursor: not-allowed; }
 .sc-filter-values { display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-width: 0; }
 .sc-filter-value-wide { grid-column: 1 / -1; }
+.sc-filter-value-wide [data-sc-filter-choice-select] { display: block; width: 100%; }
+.sc-filter-value-wide [data-sc-filter-choice-select][hidden],
+.sc-filter-value-wide [data-sc-filter-choice-value][hidden] { display: none; }
+.sc-filter-choice-hint { color: var(--sc-muted); display: block; font-size: .66rem; margin-top: 3px; }
 .sc-filter-value-note { align-self: center; color: var(--sc-muted); font-size: .7rem; grid-column: 1 / -1; margin: 22px 0 0; }
 .sc-filter-draft-note { color: var(--sc-accent); font-size: .67rem; margin: 0; }
 .sc-filter-clauses { background: color-mix(in srgb, var(--sc-accent) 5%, var(--sc-subpanel)); border: 1px solid var(--sc-border) !important; border-radius: 10px; display: grid; gap: 8px; padding: 9px !important; }
@@ -283,6 +294,8 @@ a { color: inherit; }
 .sc-filter-clause > header button:hover { border-color: var(--sc-danger); color: var(--sc-danger); }
 .sc-filter-clause-conditions { display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 .sc-filter-clause-condition { background: var(--sc-item-bg); border: 1px solid var(--sc-border); border-radius: 7px; display: grid; gap: 6px; min-width: 0; padding: 7px; }
+.sc-filter-clauses[data-sc-filter-clause-mode="ordinary"] .sc-filter-clause-conditions { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
+.sc-filter-clauses[data-sc-filter-clause-mode="ordinary"] .sc-filter-editor { grid-template-columns: minmax(0, 1fr); }
 .sc-filter-clause-condition > strong { font-size: .72rem; }
 .sc-filter-clause-condition.is-draft { border-color: var(--sc-draft-border); }
 .sc-button { align-items: center; border: 1px solid transparent; border-radius: 9px; cursor: pointer; display: inline-flex; font-weight: 800; justify-content: center; min-height: 38px; padding: 8px 13px; text-decoration: none; }
@@ -628,3 +641,8 @@ a { color: inherit; }
 .sc-query-library-choices,
 .sc-query-library-parameters { display: grid; gap: .65rem; margin-top: .5rem; }
 .sc-query-library-choice { align-items: flex-start; display: flex; gap: .5rem; }
+.sc-query-library-choice-group { display: grid; gap: .3rem; min-width: 0; padding-left: 1.5rem; }
+.sc-query-library-choice-group-heading small { display: block; color: var(--sc-muted); }
+.sc-query-library-choice-group-options { display: flex; flex-wrap: wrap; gap: .4rem 1rem; padding-left: 1rem; }
+.sc-query-library-choice-group-options .sc-query-library-choice { align-items: center; }
+.sc-query-library-choice-group > small { display: block; padding-left: 1rem; color: var(--sc-muted); }

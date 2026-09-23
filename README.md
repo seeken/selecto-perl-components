@@ -46,7 +46,10 @@ Chromium with Playwright.
 - a left-side view tray that participates in normal page scrolling, collapses
   to a chevron rail, and automatically collapses when a query is applied;
 - domain-derived Available/Set field picker with filtering, add/remove controls,
-  drag ordering, and accessible move-up/move-down controls;
+  drag ordering, and accessible move-up/move-down controls; Available fields,
+  groups, measures, sorts, and filters are arranged in collapsible source
+  sections (with governed actions under Actions). Searching opens sections
+  whose heading or fields match and restores their prior state when cleared;
 - per-column presentation aliases and governed date/time formats for Detail
   columns and Aggregate grouping buckets;
 - an ordered Available/Set sort picker with independent ascending/descending
@@ -290,8 +293,22 @@ In the default shareable mode, canonical parameters are:
 - aligned, repeated `filter_field`, `filter_op`, `filter_value`, and
   `filter_value_end` values; server-generated aggregate drilldowns also align
   a `filter_group` marker so the governed grouping expression is reused as the
-  Detail predicate. Multi-cell grid drilldowns align `filter_clause` markers:
-  conditions in one numbered clause use AND, while numbered clauses use OR.
+  Detail predicate. Multi-cell grid drilldowns and ordinary alternative filters
+  align `filter_clause` markers: conditions in one numbered clause use AND,
+  while numbered clauses use OR. Ordinary filters without a clause apply to
+  every alternative. A host can expose a domain-internal key only in the
+  filter picker with `filter_fields => ['association.key']`; this does not add
+  it to selectable Detail columns. When the domain declares
+  `components.filter_choices` for a path, the filter picker shows named
+  options in a single- or multi-select (depending on the operator), submitting
+  stable values through the same canonical `filter_value` parameter. Such
+  internal filter fields are available without adding them to Detail columns.
+  A domain-defined conditional choice exposes one virtual filter backed by
+  separate physical fields; `filter_picker_hidden_paths` hides legacy fields
+  from Available while preserving their saved URLs and validation.
+  Column and generated aggregate pickers hide numeric IDs except the root ID
+  and `client_profile` IDs; the paths remain valid for saved views, and the
+  domain may explicitly expose another with `components.picker_visible_id_paths`.
   The browser's repeated `grid_cell` JSON pairs are a bounded submission format
   only and are replaced by these validated canonical filters;
   newly added filters remain URL-visible drafts and do not constrain the query
@@ -313,6 +330,14 @@ query alongside visual filters. They are included in the applied-filter count
 and shown as non-removable segment summaries; remove them by changing the named
 view or segment controls. Query-library `capability` values are rendered as
 metadata only and are not an authorization decision.
+Hosts can set `picker_hidden => 1` on a segment retained for saved-link
+compatibility. It is omitted from new selections but remains visible and
+removable when an existing query selects it.
+`query_library.segment_picker_groups` renders domain-declared alternatives as
+radio groups with an Off default. The form submits the chosen segment through
+the same canonical `query_library_segment` state, so existing saved URLs and
+API requests do not change. An old URL selecting conflicting alternatives is
+shown as invalid until the user chooses one.
 
 Projection association shapes are adapted to the Perl component builder as
 validated dotted field paths. Parameter values are type-checked by

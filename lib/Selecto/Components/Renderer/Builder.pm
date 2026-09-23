@@ -18,7 +18,9 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         ($_ eq $state->view ? ' checked' : '') . '><span>' . _h(_humanize($_)) . '</span></label>'
     } @{$config->views};
     my $measure_catalog = $config->measure_catalog($model->{domain});
-    my $filter_picker = $class->_filter_picker($state, $catalog, $config);
+    my $filter_catalog = $config->filter_catalog($model->{domain});
+    my $root_label = $model->{domain}->name;
+    my $filter_picker = $class->_filter_picker($state, $filter_catalog, $config, $root_label);
     my $query_library_views = $class->_query_library_view_controls(
         $state, $model->{domain}, $config,
     );
@@ -33,16 +35,16 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
     );
     my $applied_filter_count = _logical_filter_count($state->filters)
         + scalar(@$governed_segments);
-    my $query_summary = $class->_query_summary($state, $catalog, $governed_segments);
+    my $query_summary = $class->_query_summary($state, $filter_catalog, $governed_segments);
     my $detail_controls = $class->_row_click_picker($state, $model->{domain}, $config) .
-        $class->_field_picker($state, $detail_catalog // $catalog, $config) .
-        $class->_order_picker($state, $catalog, $config->max_orders) .
+        $class->_field_picker($state, $detail_catalog // $catalog, $config, $root_label) .
+        $class->_order_picker($state, $catalog, $config->max_orders, $root_label) .
         _measure_selection_hidden($state) .
         _selection_hidden('group', $state->groups, $state->group_configs);
     my $summary_controls = $class->_aggregate_grid_picker($state) .
         $class->_chart_type_picker($state, $catalog) .
-        $class->_group_picker($state, $catalog, $config) .
-        $class->_measure_picker($state, $measure_catalog, $config) .
+        $class->_group_picker($state, $catalog, $config, $root_label) .
+        $class->_measure_picker($state, $measure_catalog, $config, $root_label) .
         _selection_hidden(
             'field', $state->fields, $state->field_configs, $state->field_config_list
         ) .
@@ -246,7 +248,16 @@ sub _query_library_view_controls ($class, $state, $domain, $config = undef) {
 }
 
 sub _query_library_filter_controls ($class, $state, $domain, $config = undef) {
-    my $segments = Selecto::Components::QueryLibrary->entries($domain, 'segments', $config);
+    my %selected_segment = map { $_ => 1 } @{$state->query_library_segments // []};
+    my %view_segment = map { $_ => 1 } @{Selecto::Components::QueryLibrary->view_segment_ids(
+        $domain, $state->query_library_view,
+    )};
+    my $picker_groups = Selecto::Components::QueryLibrary->segment_picker_groups($domain, $config);
+    my %grouped_segment = map { $_->{segment} => 1 }
+        map { @{$_->{choices}} } @$picker_groups;
+    my $segments = [grep { !$_->{picker_hidden} || $selected_segment{$_->{id}} }
+        grep { !$grouped_segment{$_->{id}} }
+        @{Selecto::Components::QueryLibrary->entries($domain, 'segments', $config)}];
     my $parameters = [];
     eval {
         $parameters = Selecto::Components::QueryLibrary->parameter_entries(
@@ -257,9 +268,7 @@ sub _query_library_filter_controls ($class, $state, $domain, $config = undef) {
         );
         1;
     };
-    return '' unless @$segments || @$parameters;
-
-    my %selected_segment = map { $_ => 1 } @{$state->query_library_segments // []};
+    return '' unless @$segments || @$picker_groups || @$parameters;
 
     my $segment_choices = join('', map {
         my $entry = $_;
@@ -271,6 +280,38 @@ sub _query_library_filter_controls ($class, $state, $domain, $config = undef) {
                 _h($entry->{capability}) . '</small>' : '') .
             '</span></label>'
     } @$segments);
+
+    my $group_choices = join('', map {
+        my $group = $_;
+        my @selected = grep { $selected_segment{$_->{segment}} || $view_segment{$_->{segment}} }
+            @{$group->{choices}};
+        my $inherited = scalar grep { $view_segment{$_->{segment}} } @{$group->{choices}};
+        my $name = 'query_library_segment_choice_' . $group->{id};
+        my $heading_id = 'sc-segment-group-' . $group->{id};
+        my $off = '<label class="sc-query-library-choice"><input type="radio" name="' .
+            _h($name) . '" value="" data-sc-query-library-group-choice' .
+            ($inherited ? ' disabled' : '') .
+            (@selected ? '' : ' checked') . '><span>' . _h($group->{off_label}) . '</span></label>';
+        my $options = join('', map {
+            '<label class="sc-query-library-choice"><input type="radio" name="' . _h($name) .
+                '" value="' . _h($_->{segment}) . '" data-sc-query-library-group-choice' .
+                ($inherited ? ' disabled' : '') .
+                (($selected_segment{$_->{segment}} || $view_segment{$_->{segment}}) && @selected == 1 ? ' checked' : '') .
+                '><span>' . _h($_->{label}) . '</span></label>'
+        } @{$group->{choices}});
+        my $conflict = @selected > 1
+            ? '<label class="sc-query-library-choice"><input type="radio" name="' . _h($name) .
+              '" value="__conflict__" checked><span>Multiple selected; choose one</span></label>'
+            : '';
+        '<div class="sc-query-library-choice-group" role="group" aria-labelledby="' .
+            _h($heading_id) . '"><div class="sc-query-library-choice-group-heading"><strong id="' .
+            _h($heading_id) . '">' . _h($group->{label}) . '</strong>' .
+            (length($group->{description}) ? '<small>' . _h($group->{description}) . '</small>' : '') .
+            '</div><div class="sc-query-library-choice-group-options">' .
+            $off . $options . $conflict . '</div>' .
+            ($inherited ? '<small>Set by the named view; change the view to change this choice.</small>' : '') .
+            '</div>'
+    } @$picker_groups);
 
     my $parameter_controls = join('', map {
             my $entry = $_;
@@ -296,8 +337,9 @@ sub _query_library_filter_controls ($class, $state, $domain, $config = undef) {
     return '<section class="sc-query-library sc-query-library-filters" ' .
         'data-sc-query-library-filter-controls><p class="sc-picker-hint">Named segments add ' .
         'governed constraints alongside the visual filters below.</p>' .
-        (@$segments ? '<fieldset><legend>Named segments</legend><div class="sc-query-library-choices">' .
-            $segment_choices . '</div></fieldset>' : '') .
+        (@$segments || @$picker_groups
+            ? '<fieldset><legend>Named segments</legend><div class="sc-query-library-choices">' .
+                $group_choices . $segment_choices . '</div></fieldset>' : '') .
         (length($parameter_controls) ? '<fieldset><legend>Parameters</legend><div class="sc-query-library-parameters">' .
             $parameter_controls . '</div></fieldset>' : '') . '</section>';
 }
@@ -314,14 +356,19 @@ sub _query_summary ($class, $state, $catalog, $governed_segments) {
         my $filter = $_;
         my $field = $by_path{$filter->{field}};
         my $label = $field ? $field->{label} : _humanize($filter->{field});
-        '<span data-sc-filter-summary>' . _h(_filter_summary_text($label, $filter)) . '</span>'
+        '<span data-sc-filter-summary>' . _h(_filter_summary_text($label, $filter, $field)) . '</span>'
     } @filters;
     my %clause;
     $clause{$_->{clause}} = 1
         for grep { !$_->{draft} && defined($_->{clause}) } @{$state->filters};
     my $clause_count = scalar(keys %clause);
-    push @chips, '<span data-sc-filter-clause-summary>Grid selection: ' .
-        $clause_count . ($clause_count == 1 ? ' area' : ' areas') . '</span>'
+    my %grid_fields = map { $_ => 1 } @{$state->groups // []};
+    my $grid_mode = keys(%grid_fields) == 2
+        && !grep { !$grid_fields{$_->{field}} }
+            grep { defined($_->{clause}) } @{$state->filters};
+    push @chips, '<span data-sc-filter-clause-summary>' .
+        ($grid_mode ? 'Grid selection: ' : 'Alternatives: ') .
+        $clause_count . ($grid_mode ? ($clause_count == 1 ? ' area' : ' areas') : '') . '</span>'
         if $clause_count;
     push @chips, map {
         '<span data-sc-query-library-segment-summary="' . _h($_->{id}) . '">' .
@@ -384,7 +431,7 @@ sub _promoted_filter_header ($class, $model, $catalog) {
             '<section class="sc-promoted-filter-pair-condition" data-sc-promoted-filter-condition ' .
                 'data-field="' . _h($filter->{field}) . '"><strong>' .
                 _h($field->{label}) . '</strong><span class="sc-promoted-filter-pair-value">' .
-                _h(_filter_value_text($filter)) . '</span></section>'
+                _h(_filter_value_text($filter, $field)) . '</span></section>'
         } @{$by_clause{$clause}};
         my $kind = @{$by_clause{$clause}} == 1 ? 'row or column' : 'cell';
         '<article class="sc-promoted-filter sc-promoted-filter-pair" data-sc-promoted-filter ' .
@@ -451,6 +498,29 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter, $clause =
             '"' . _promoted_filter_input_attributes('value_end', $field_name, $clause, $filter->{instance}) .
             ' aria-label="End value for ' . _h($label) . '"></label></div>';
     }
+    if (ref($field->{filter_choices}) eq 'ARRAY'
+        && @{$field->{filter_choices}}
+        && $operator =~ /\A(?:eq|ne|in|not_in)\z/) {
+        my $multiple = $operator eq 'in' || $operator eq 'not_in';
+        my %selected = map { my $id = $_; $id =~ s/\A\s+|\s+\z//g; $id => 1 }
+            split /,/, $value, -1;
+        my %known;
+        my $options = $multiple ? '' : '<option value="">Choose a value</option>';
+        for my $choice (@{$field->{filter_choices}}) {
+            $known{$choice->{value}} = 1;
+            $options .= '<option value="' . _h($choice->{value}) . '"' .
+                ($selected{$choice->{value}} ? ' selected' : '') . '>' .
+                _h($choice->{label}) . '</option>';
+        }
+        for my $unlisted (sort grep { length($_) && !$known{$_} } keys %selected) {
+            $options .= '<option value="' . _h($unlisted) . '" selected>' .
+                'Unavailable option</option>';
+        }
+        return '<label>' . ($multiple ? 'Values' : 'Value') . '<select' .
+            ($multiple ? ' multiple size="6"' : '') .
+            _promoted_filter_input_attributes('value', $field_name, $clause, $filter->{instance}) .
+            ' aria-label="Choices for ' . _h($label) . '">' . $options . '</select></label>';
+    }
     if ($config->boolean_type($type)) {
         return '<label>Value<select' .
             _promoted_filter_input_attributes('value', $field_name, $clause, $filter->{instance}) .
@@ -478,11 +548,11 @@ sub _promoted_filter_input_attributes ($kind, $field, $clause = undef, $instance
         (defined($instance) ? ' data-filter-instance="' . _h($instance) . '"' : '');
 }
 
-sub _filter_summary_text ($label, $filter) {
-    return "$label " . _filter_value_text($filter);
+sub _filter_summary_text ($label, $filter, $field = undef) {
+    return "$label " . _filter_value_text($filter, $field);
 }
 
-sub _filter_value_text ($filter) {
+sub _filter_value_text ($filter, $field = undef) {
     my $operator = $filter->{op} // 'eq';
     return $operator eq 'is_null' ? 'is empty' : 'is not empty'
         if $operator eq 'is_null' || $operator eq 'not_null';
@@ -490,6 +560,16 @@ sub _filter_value_text ($filter) {
         if $operator eq 'between';
     my %symbols = (eq => '=', ne => '!=', gt => '>', gte => '>=', lt => '<', lte => '<=');
     my $display_operator = $symbols{$operator} // _humanize($operator);
+    if (ref($field) eq 'HASH' && ref($field->{filter_choices}) eq 'ARRAY'
+        && $operator =~ /\A(?:eq|ne|in|not_in)\z/) {
+        $display_operator = 'one of' if $operator eq 'in';
+        $display_operator = 'not one of' if $operator eq 'not_in';
+        my %labels = map { $_->{value} => $_->{label} } @{$field->{filter_choices}};
+        my @values = map { my $id = $_; $id =~ s/\A\s+|\s+\z//g;
+            $labels{$id} // 'Unavailable option' }
+            grep { length($_) } split /,/, ($filter->{value} // ''), -1;
+        return "$display_operator " . join(', ', @values);
+    }
     return "$display_operator " . ($filter->{value} // '');
 }
 
@@ -550,7 +630,7 @@ sub _aggregate_grid_picker ($class, $state) {
         'name="aggregate_grid_color_scale">' . $scales . '</select></label></fieldset>';
 }
 
-sub _field_picker ($class, $state, $catalog, $config) {
+sub _field_picker ($class, $state, $catalog, $config, $root_label = 'Main record') {
     return $class->_selection_picker(
         $state,
         $catalog,
@@ -564,10 +644,11 @@ sub _field_picker ($class, $state, $catalog, $config) {
         hint => 'Drag or use arrows to reorder columns. Configure labels and date formats per column.',
         set_label => 'Set columns',
         date_formats => $config->date_formats,
+        root_label => $root_label,
     );
 }
 
-sub _group_picker ($class, $state, $catalog, $config) {
+sub _group_picker ($class, $state, $catalog, $config, $root_label = 'Main record') {
     return $class->_selection_picker(
         $state,
         $catalog,
@@ -581,10 +662,11 @@ sub _group_picker ($class, $state, $catalog, $config) {
         set_label => 'Set group columns',
         date_formats => $config->date_formats,
         config => $config,
+        root_label => $root_label,
     );
 }
 
-sub _measure_picker ($class, $state, $catalog, $config) {
+sub _measure_picker ($class, $state, $catalog, $config, $root_label = 'Main record') {
     return $class->_selection_picker(
         $state,
         $catalog,
@@ -598,10 +680,11 @@ sub _measure_picker ($class, $state, $catalog, $config) {
         hint => 'Choose domain columns or curated presets, then configure functions, aliases, and buckets.',
         set_label => 'Set measures',
         config => $config,
+        root_label => $root_label,
     );
 }
 
-sub _order_picker ($class, $state, $catalog, $maximum) {
+sub _order_picker ($class, $state, $catalog, $maximum, $root_label = 'Main record') {
     my @selected = map { $_->{field} } @{$state->orders};
     my %configs = map { $_->{field} => { direction => $_->{direction} } } @{$state->orders};
     return $class->_selection_picker(
@@ -615,6 +698,7 @@ sub _order_picker ($class, $state, $catalog, $maximum) {
         search_label => 'Filter available sort fields',
         hint => 'Earlier fields have higher sort priority.',
         set_label => 'Set sort fields',
+        root_label => $root_label,
     );
 }
 
@@ -625,23 +709,26 @@ sub _selection_picker ($class, $state, $catalog, %options) {
     my $configs = $options{configs};
     my %selected = map { $_ => 1 } @$selected_values;
     my @available = $kind eq 'field'
-        ? grep { ($_->{type} // '') ne 'action' || !$selected{$_->{path}} } @$catalog
-        : $kind eq 'measure' ? @$catalog
-        : grep { !$selected{$_->{path}} } @$catalog;
+        ? grep { !$_->{picker_hidden} && (($_->{type} // '') ne 'action' || !$selected{$_->{path}}) } @$catalog
+        : $kind eq 'measure' ? grep { !$_->{picker_hidden} } @$catalog
+        : grep { !$_->{picker_hidden} && !$selected{$_->{path}} } @$catalog;
     my $at_limit = @$selected_values >= $options{maximum};
-    my $available_items = join '', map {
+    my $available_items = _grouped_picker_items(\@available, $options{root_label}, sub {
+        my ($field, $group_key) = @_;
+        local $_ = $field;
         '<button class="sc-picker-choice" type="button" data-sc-picker-action="add"' .
         ($at_limit ? ' disabled' : '') . ' ' .
         'data-sc-picker-available-item data-field="' . _h($_->{path}) . '" data-label="' .
-        _h($_->{label}) . '" data-type="' . _h($_->{type}) . '" data-search="' .
-        _h(lc($_->{label} . ' ' . $_->{type})) . '" data-default-function="' .
+        _h($_->{label}) . '" data-type="' . _h($_->{type}) . '" data-sc-picker-group-key="' .
+        _h($group_key) . '" data-search="' .
+        _h(lc($_->{label} . ' ' . $_->{type} . ' ' . $_->{path})) . '" data-default-function="' .
         _h($_->{default_function} // '') . '" data-measure-field="' .
         _h($_->{field} // '') . '"' .
         (($kind eq 'field' && ($_->{type} // '') ne 'action') || $kind eq 'measure'
             ? ' data-sc-picker-repeatable' : '') .
-        '><span><strong>' . _h($_->{label}) .
+        '><span><strong>' . _h(_picker_leaf_label($_)) .
         '</strong><small>' . _h($_->{type}) . '</small></span><span aria-hidden="true">+</span></button>'
-    } @available;
+    });
     $available_items ||= '<p class="sc-picker-empty">Every available field is set.</p>';
 
     my $selected_count = scalar @$selected_values;
@@ -674,6 +761,7 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         _h($path) . '" data-label="' . _h($field->{label}) . '" data-type="' . _h($field->{type}) .
         '" data-default-function="' . _h($field->{default_function} // '') .
         '" data-measure-field="' . _h($field->{field} // '') .
+        '" data-sc-picker-group-key="' . _h(_picker_group_key($field)) .
         '"' . (($kind eq 'field' && ($field->{type} // '') ne 'action') || $kind eq 'measure'
             ? ' data-sc-picker-repeatable' : '') .
         '><input type="hidden" name="' . _h($kind) . '" value="' . _h($path) . '">' .
@@ -706,6 +794,43 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         '<div class="sc-picker-list sc-picker-set" data-sc-picker-set aria-label="' .
         _h($options{set_label}) . '">' .
         $set_items . '</div></section></div></fieldset>';
+}
+
+sub _picker_group_key ($field) {
+    return '_actions' if ($field->{type} // '') eq 'action';
+    my $path = $field->{field} // $field->{path} // '';
+    $path =~ s/\Afield://;
+    return $path =~ /\A([^.]+)\./ ? $1 : '';
+}
+
+sub _picker_leaf_label ($field) {
+    my $label = $field->{label} // '';
+    return $label =~ s/\AAction:\s*//r if ($field->{type} // '') eq 'action';
+    my $group = $field->{picker_group_label} // '';
+    if (length($group)) {
+        my $leaf = $label =~ s/\A\Q$group\E\s*[-:]\s*//r;
+        return $leaf if length($leaf) && $leaf ne $label;
+    }
+    return $label;
+}
+
+sub _grouped_picker_items ($fields, $root_label, $render) {
+    my %groups;
+    push @{$groups{_picker_group_key($_)}}, $_ for @$fields;
+    return join '', map {
+        my $key = $_;
+        my $label = $key eq '_actions' ? 'Actions'
+            : length($key)
+                ? ($groups{$key}[0]{picker_group_label} // _humanize($key))
+                : ($root_label // 'Main record');
+        my $items = join '', map { $render->($_, $key) } @{$groups{$key}};
+        '<details class="sc-picker-group" data-sc-picker-group data-sc-picker-group-key="' .
+            _h($key) . '" data-search-label="' . _h(lc($label)) . '"' .
+            (length($key) ? '' : ' open') . '><summary>' . _h($label) .
+            '<small>' . scalar(@{$groups{$key}}) . '</small></summary>' .
+            '<div class="sc-picker-group-items" data-sc-picker-group-items>' .
+            $items . '</div></details>'
+    } sort { !length($a) ? -1 : !length($b) ? 1 : lc($a) cmp lc($b) } keys %groups;
 }
 
 sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats) {
@@ -851,22 +976,26 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
         '<div class="sc-column-config-grid">' . $controls . '</div></details>';
 }
 
-sub _filter_picker ($class, $state, $catalog, $config) {
+sub _filter_picker ($class, $state, $catalog, $config, $root_label = 'Main record') {
     my $max_filters = $config->max_filters;
     my %by_path = map { $_->{path} => $_ } @$catalog;
     my @ordinary_filters = map {
         my $filter = $state->filters->[$_];
         !defined($filter->{clause}) ? ({%$filter, instance => $_ + 1}) : ()
     } (@{$state->filters} ? (0 .. $#{$state->filters}) : ());
-    my @available = @$catalog;
+    my @available = grep { !$_->{picker_hidden} } @$catalog;
     my $at_limit = @ordinary_filters >= $max_filters;
-    my $available_items = $at_limit ? '' : join '', map {
+    my $available_items = $at_limit ? '' : _grouped_picker_items(\@available, $root_label, sub {
+        my ($field, $group_key) = @_;
+        local $_ = $field;
         '<button class="sc-picker-choice" type="button" data-sc-filter-action="add" ' .
         'data-sc-filter-available-item data-field="' . _h($_->{path}) . '" data-label="' .
-        _h($_->{label}) . '" data-type="' . _h($_->{type}) . '" data-search="' .
-        _h(lc($_->{label} . ' ' . $_->{type})) . '"><span><strong>' . _h($_->{label}) .
+        _h($_->{label}) . '" data-type="' . _h($_->{type}) . '" data-sc-picker-group-key="' .
+        _h($group_key) . '"' .
+        _filter_choice_attribute($_) . ' data-search="' .
+        _h(lc($_->{label} . ' ' . $_->{type} . ' ' . $_->{path})) . '"><span><strong>' . _h(_picker_leaf_label($_)) .
         '</strong><small>' . _h($_->{type}) . '</small></span><span aria-hidden="true">+</span></button>'
-    } @available;
+    });
     $available_items ||= '<p class="sc-picker-empty">' .
         ($at_limit ? 'Maximum of ' . _h($max_filters) . ' filters set.' : 'Every available filter is set.') .
         '</p>';
@@ -890,7 +1019,8 @@ sub _filter_picker ($class, $state, $catalog, $config) {
         ' data-field="' . _h($filter->{field}) . '" data-filter-instance="' .
         _h($filter->{instance}) . '" data-label="' .
         _h($field->{label}) . '" data-type="' .
-        _h($filter->{grouped} ? 'string' : $field->{type}) . '">' .
+        _h($filter->{grouped} ? 'string' : $field->{type}) . '"' .
+        ($filter->{grouped} ? '' : _filter_choice_attribute($field)) . '>' .
         '<input type="hidden" name="filter_field" value="' . _h($filter->{field}) . '">' .
         _hidden('filter_group', $filter->{grouped} ? 1 : 0) .
         _hidden('filter_clause', '') .
@@ -929,50 +1059,77 @@ sub _filter_clause_picker ($class, $state, $by_path, $config) {
         push @{$by_clause{$filter->{clause}}}, $filter;
     }
     return '' unless @order;
+    my %grid_fields = map { $_ => 1 } @{$state->groups // []};
+    my $grid_mode = keys(%grid_fields) == 2
+        && !grep { !$grid_fields{$_->{field}} } map { @$_ } values %by_clause;
     my $cards = join '', map {
         my $clause = $_;
         my $conditions = join '', map {
             my $filter = $_;
             my $field = $by_path->{$filter->{field}};
             return '' unless $field;
+            my $ops = join '', map {
+                '<option value="' . $_->[0] . '"' . ($_->[0] eq $filter->{op} ? ' selected' : '') . '>' .
+                _h($_->[1]) . '</option>'
+            } @{_filter_operators_for_filter($config, $field, $filter)};
             '<section class="sc-filter-clause-condition' . ($filter->{draft} ? ' is-draft' : '') .
                 '" data-sc-filter-condition data-field="' . _h($filter->{field}) .
                 '" data-label="' . _h($field->{label}) . '" data-type="' .
-                _h($filter->{grouped} ? 'string' : $field->{type}) . '">' .
+                _h($filter->{grouped} ? 'string' : $field->{type}) . '"' .
+                ($filter->{grouped} ? '' : _filter_choice_attribute($field)) . '>' .
                 _hidden('filter_field', $filter->{field}) .
                 _hidden('filter_group', $filter->{grouped} ? 1 : 0) .
                 _hidden('filter_clause', $clause) .
-                _hidden('filter_op', $filter->{op}) .
-                _hidden('filter_value', $filter->{value}) .
-                _hidden('filter_value_end', $filter->{value_end} // '') .
-                '<strong>' . _h(_filter_summary_text($field->{label}, $filter)) .
-                '</strong></section>'
+                ($grid_mode
+                    ? _hidden('filter_op', $filter->{op}) .
+                      _hidden('filter_value', $filter->{value}) .
+                      _hidden('filter_value_end', $filter->{value_end} // '') .
+                      '<strong>' . _h(_filter_summary_text($field->{label}, $filter, $field)) . '</strong>'
+                    : '<strong>' . _h($field->{label}) . '</strong>' .
+                      '<div class="sc-filter-editor"><label>Operator<select name="filter_op" aria-label="Operator for ' .
+                      _h($field->{label}) . '">' . $ops . '</select></label>' .
+                      $class->_filter_value_controls($config, $field, $filter) . '</div>') .
+                '</section>'
         } @{$by_clause{$clause}};
-        my $kind = @{$by_clause{$clause}} == 1 ? 'row or column' : 'cell';
         '<article class="sc-filter-clause' .
             ($by_clause{$clause}[0]{draft} ? ' is-draft' : '') .
             '" data-sc-filter-clause="' . _h($clause) . '"><header><div><small>Alternative</small>' .
-            '<strong>Selected ' . _h($kind) . ' ' . _h($clause) . '</strong></div>' .
-            '<button type="button" data-sc-filter-clause-remove aria-label="Remove grid selection ' .
-            _h($clause) . '" title="Remove grid selection">×</button></header>' .
+            '<strong>' . ($grid_mode ? 'Selected area ' : 'Match ') . _h($clause) . '</strong></div>' .
+            '<button type="button" data-sc-filter-clause-remove aria-label="Remove alternative ' .
+            _h($clause) . '" title="Remove alternative">×</button></header>' .
             '<div class="sc-filter-clause-conditions">' . $conditions . '</div>' .
             ($by_clause{$clause}[0]{draft}
                 ? '<p class="sc-filter-draft-note" data-sc-filter-clause-note>' .
-                    'Complete all conditions to apply this selection.</p>' : '') .
+                    'Complete all conditions to apply this alternative.</p>' : '') .
             '</article>'
     } @order;
-    return '<fieldset class="sc-picker-fieldset sc-filter-clauses" data-sc-filter-clauses>' .
-        '<legend>Selected grid areas <small><span data-sc-filter-clause-count>' .
+    return '<fieldset class="sc-picker-fieldset sc-filter-clauses" data-sc-filter-clauses ' .
+        'data-sc-filter-clause-mode="' . ($grid_mode ? 'grid' : 'ordinary') . '">' .
+        '<legend>' . ($grid_mode ? 'Selected grid areas' : 'Alternative filters (OR)') .
+        ' <small><span data-sc-filter-clause-count>' .
         scalar(@order) . '</span> of ' .
         _h($config->max_grid_cells) . '</small></legend>' .
-        '<p class="sc-picker-hint">Full rows and columns use one condition. Within a cell, ' .
-        'row and column conditions use AND; selections use OR.</p><div class="sc-filter-clause-list">' .
+        '<p class="sc-picker-hint">' . ($grid_mode
+            ? 'Full rows and columns use one condition. Within a cell, row and column conditions use AND; selections use OR.'
+            : 'Conditions within an alternative use AND. Alternatives use OR; regular filters apply to all alternatives.') .
+        '</p><div class="sc-filter-clause-list">' .
         $cards . '</div></fieldset>';
 }
 
 sub _filter_operators_for_filter ($config, $field, $filter) {
     return [[eq => 'equals'], [is_null => 'is empty']] if $filter->{grouped};
+    return [
+        [eq => 'equals'], [ne => 'does not equal'],
+        [in => 'one of'], [not_in => 'not one of'],
+        [is_null => 'is empty'], [not_null => 'is not empty'],
+    ] if ref($field->{filter_choices}) eq 'ARRAY' && @{$field->{filter_choices}};
     return $config->filter_operators($field->{type});
+}
+
+sub _filter_choice_attribute ($field) {
+    return '' unless ref($field->{filter_choices}) eq 'ARRAY'
+        && @{$field->{filter_choices}};
+    return ' data-sc-filter-choices="' . _h(encode_json($field->{filter_choices})) . '"';
 }
 
 sub _filter_value_controls ($class, $config, $field, $filter) {
@@ -1015,6 +1172,33 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
             '></label><label>End<input type="' . $input_type . '" name="filter_value_end" ' .
             'aria-label="End value for ' . _h($label) . '" value="' . _h($value_end) . '"' . $step .
             '></label></div>';
+    }
+    if (ref($field->{filter_choices}) eq 'ARRAY'
+        && @{$field->{filter_choices}}
+        && $operator =~ /\A(?:eq|ne|in|not_in)\z/) {
+        my $multiple = $operator eq 'in' || $operator eq 'not_in';
+        my %selected = map { my $id = $_; $id =~ s/\A\s+|\s+\z//g; $id => 1 }
+            split /,/, $value, -1;
+        my %known;
+        my $options = $multiple ? '' : '<option value="">Choose a value</option>';
+        for my $choice (@{$field->{filter_choices}}) {
+            $known{$choice->{value}} = 1;
+            $options .= '<option value="' . _h($choice->{value}) . '"' .
+                ($selected{$choice->{value}} ? ' selected' : '') . '>' .
+                _h($choice->{label}) . '</option>';
+        }
+        for my $unlisted (sort grep { length($_) && !$known{$_} } keys %selected) {
+            $options .= '<option value="' . _h($unlisted) . '" selected>' .
+                'Unavailable option</option>';
+        }
+        return $controls . '<label class="sc-filter-value-wide">' .
+            ($multiple ? 'Values' : 'Value') .
+            '<input type="text" name="filter_value" data-sc-filter-choice-value value="' .
+            _h($value) . '" aria-label="Option IDs for ' . _h($label) . '">' .
+            '<select data-sc-filter-choice-select' . ($multiple ? ' multiple size="6"' : '') .
+            ' hidden aria-label="Choices for ' . _h($label) . '">' . $options . '</select>' .
+            ($multiple ? '<small class="sc-filter-choice-hint">Use Ctrl or Command to select multiple options.</small>' : '') .
+            '</label>' . _hidden('filter_value_end', '') . '</div>';
     }
     if ($config->boolean_type($type)) {
         return $controls . '<label class="sc-filter-value-wide">Value<select name="filter_value" ' .
