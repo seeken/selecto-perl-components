@@ -1523,4 +1523,25 @@ is_deeply(
     'pagination keeps first, last, and neighboring pages for a large result set',
 );
 
+{
+    package TestSavedViewConfig;
+    sub path { '/explore/products' }
+}
+my $scoped_saved_views =
+    Selecto::Components::Controller::SavedQueries::_normalize_saved_queries(
+        bless({}, 'TestSavedViewConfig'), [
+            {id => 'user:Daily', name => 'Daily', scope => 'user',
+                url => '/explore/products?q=1', revision => 'a' x 64},
+            {id => 'client:42:Daily', name => 'Daily', scope => 'client',
+                url => '/explore/products?q=1', readonly => 1,
+                revision => 'b' x 64},
+            {id => 'priv:7', name => 'Dispatch', scope => 'priv', folder => 'Operations',
+                url => '/explore/products?q=1', revision => 'c' x 64},
+        ],
+    );
+is scalar(@$scoped_saved_views), 3,
+    'same-name views in different host destinations remain separately selectable';
+is $scoped_saved_views->[2]{folder}, 'Operations',
+    'privilege folder metadata survives normalization';
+
 done_testing;

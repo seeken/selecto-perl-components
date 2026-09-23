@@ -159,9 +159,31 @@
     }
   }
 
+  function syncSavedQueryForms(url) {
+    if (!url) return;
+    document.querySelectorAll('form.sc-saved-query-form').forEach(function (form) {
+      var value = form.querySelector('input[name="saved_query_url"]');
+      var returnTo = form.querySelector('input[name="return_to"]');
+      if (value) value.value = url;
+      if (returnTo) returnTo.value = url;
+    });
+  }
+
+  function updateSavedQueryStatus(canonicalUrl) {
+    document.querySelectorAll('form[data-sc-saved-original-url]').forEach(function (form) {
+      var status = form.querySelector('[data-sc-saved-edit-status]');
+      if (!status) return;
+      var original = form.getAttribute('data-sc-saved-original-url') || '';
+      var name = form.getAttribute('data-sc-saved-name') || '';
+      status.textContent = 'Editing ' + name +
+        (canonicalUrl === original ? ' — unchanged' : ' — unsaved changes');
+    });
+  }
+
   function beginSelectoNavigation(form) {
     var url = formNavigationUrl(form);
     if (!url) return;
+    syncSavedQueryForms(url);
     var requestId = "selecto-" + Date.now() + "-" + (++selectoRequestCounter);
     // Create the joint-history entry while the submit event is still in
     // progress. Waiting for the asynchronous WebSocket response leaves a
@@ -463,6 +485,14 @@
           renderSelectoPerformance();
         }
         if (typeof nextUrl === "string" && nextUrl.charAt(0) === "/") {
+          updateSavedQueryStatus(nextUrl);
+          var loadedId = document.querySelector('[data-sc-builder-query] input[name="saved_query_id"]');
+          if (loadedId && loadedId.value) {
+            var trackedUrl = new URL(nextUrl, window.location.href);
+            trackedUrl.searchParams.set("saved_query_id", loadedId.value);
+            nextUrl = trackedUrl.pathname + trackedUrl.search;
+          }
+          syncSavedQueryForms(nextUrl);
           var currentUrl = window.location.pathname + window.location.search + window.location.hash;
           var pendingNavigation = window.history && window.history.state
             && window.history.state.selectoPendingNavigation;
