@@ -85,6 +85,146 @@ test("field and filter searches open matching source groups and restore collapse
   await expect(filterBillTo.getByText("State")).toBeVisible();
 });
 
+test("Available stays beside Set until the picker truly lacks room", async ({page}) => {
+  await page.setViewportSize({width: 1400, height: 900});
+  await page.setContent(`<section class="sc-surface"><div class="sc-workspace">
+    <aside class="sc-builder"><div data-sc-builder-content><form data-sc-builder="quote">
+      <fieldset class="sc-picker-fieldset"><legend>Columns</legend>
+        <div class="sc-list-picker" data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
+          <section class="sc-picker-pane sc-picker-available-pane">
+            <div class="sc-picker-heading"><span>Available</span>
+              <button type="button" class="sc-picker-available-close" data-sc-picker-available-close>Close</button>
+              <span data-sc-picker-available-count>1</span></div>
+            <input class="sc-picker-filter" data-sc-picker-filter aria-label="Filter available fields">
+            <div class="sc-picker-list" data-sc-picker-available>
+              <button type="button" class="sc-picker-choice" data-sc-picker-action="add"
+                data-sc-picker-available-item data-field="id" data-label="Quote ID" data-type="integer">Quote ID</button>
+            </div>
+          </section>
+          <section class="sc-picker-pane sc-picker-set-pane">
+            <div class="sc-picker-heading"><span>Set</span>
+              <button type="button" class="sc-picker-available-toggle" data-sc-picker-available-toggle
+                aria-expanded="false">Available</button><span data-sc-picker-set-count>0</span></div>
+            <div class="sc-picker-list" data-sc-picker-set></div>
+          </section>
+        </div>
+      </fieldset>
+      <fieldset class="sc-picker-fieldset"><legend>Filters</legend>
+        <div class="sc-list-picker" data-sc-filter-root data-sc-filter-max="10">
+          <section class="sc-picker-pane sc-picker-available-pane">
+            <div class="sc-picker-heading"><span>Available</span>
+              <button type="button" class="sc-picker-available-close" data-sc-picker-available-close>Close</button>
+              <span data-sc-filter-available-count>1</span></div>
+            <input class="sc-picker-filter" data-sc-filter-search aria-label="Filter available filters">
+            <div class="sc-picker-list" data-sc-filter-available><button type="button"
+              data-sc-filter-available-item>Quote ID</button></div>
+          </section>
+          <section class="sc-picker-pane sc-picker-set-pane">
+            <div class="sc-picker-heading"><span>Set</span>
+              <button type="button" class="sc-picker-available-toggle" data-sc-picker-available-toggle
+                aria-expanded="false">Available</button><span data-sc-filter-set-count>0</span></div>
+            <div class="sc-picker-list" data-sc-filter-set></div>
+          </section>
+        </div>
+      </fieldset>
+    </form></div></aside><section class="sc-results"></section>
+  </div></section>`);
+  await page.addStyleTag({path: stylesheet});
+  await page.addScriptTag({path: bundle});
+
+  const columns = page.locator("[data-sc-picker-root]");
+  const filters = page.locator("[data-sc-filter-root]");
+  const wideLayout = await columns.evaluate(root => {
+    const available = root.querySelector(".sc-picker-available-pane").getBoundingClientRect();
+    const set = root.querySelector(".sc-picker-set-pane").getBoundingClientRect();
+    return {availableRight: available.right, setLeft: set.left, setWidth: set.width};
+  });
+  expect(wideLayout.availableRight).toBeLessThan(wideLayout.setLeft);
+  expect(wideLayout.setWidth).toBeGreaterThan(350);
+  await expect(columns.locator(".sc-picker-available-pane")).toBeVisible();
+  await expect(columns.locator("[data-sc-picker-available-toggle]")).toBeHidden();
+
+  await page.setViewportSize({width: 600, height: 900});
+  await expect(columns.locator(".sc-picker-available-pane")).toBeHidden();
+  await expect(columns.locator("[data-sc-picker-available-toggle]")).toBeVisible();
+
+  await page.setViewportSize({width: 480, height: 900});
+  await expect(columns.locator(".sc-picker-available-pane")).toBeHidden();
+  await columns.locator("[data-sc-picker-available]").evaluate(list => {
+    for (let index = 0; index < 160; index += 1) {
+      const choice = document.createElement("button");
+      choice.type = "button";
+      choice.className = "sc-picker-choice";
+      choice.dataset.scPickerAvailableItem = "";
+      choice.textContent = `Quote Field ${index}`;
+      list.appendChild(choice);
+    }
+  });
+  await columns.locator("[data-sc-picker-available-toggle]").click();
+  await expect(columns.locator(".sc-picker-available-pane")).toBeVisible();
+  await expect(columns.locator(".sc-picker-available-pane")).toHaveAttribute("popover", "manual");
+  await expect(columns.locator(".sc-picker-available-pane")).toHaveAttribute("aria-modal", "true");
+  await expect(columns.locator("[data-sc-picker-available-toggle]")).toHaveAttribute("aria-expanded", "true");
+  await expect(columns.locator("[data-sc-picker-filter]")).toBeFocused();
+  const sheetBounds = await columns.locator(".sc-picker-available-pane").evaluate(node => {
+    const bounds = node.getBoundingClientRect();
+    return {left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height};
+  });
+  expect(sheetBounds.left).toBe(0);
+  expect(sheetBounds.top).toBe(0);
+  expect(sheetBounds.width).toBe(480);
+  expect(sheetBounds.height).toBe(900);
+  await expect(page.locator("body")).toHaveCSS("overflow-y", "hidden");
+  const availableList = columns.locator("[data-sc-picker-available]");
+  const rowSizes = await availableList.evaluate(list => ({
+    first: list.querySelector("[data-sc-picker-available-item]").getBoundingClientRect().height,
+    scroll: list.scrollHeight,
+    viewport: list.clientHeight,
+  }));
+  expect(rowSizes.first).toBeGreaterThan(25);
+  expect(rowSizes.scroll).toBeGreaterThan(rowSizes.viewport);
+  await availableList.evaluate(list => { list.scrollTop = list.scrollHeight; });
+  await expect(columns.locator("[data-sc-picker-filter]")).toBeInViewport();
+  await availableList.locator("[data-sc-picker-available-item]").last().focus();
+  await page.keyboard.press("Tab");
+  await expect(columns.locator("[data-sc-picker-available-close]")).toBeFocused();
+  await columns.locator('[data-sc-picker-available-item][data-field="id"]').click();
+  await expect(columns.locator(".sc-picker-available-pane")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(columns.locator(".sc-picker-available-pane")).toBeHidden();
+  await expect(columns.locator("[data-sc-picker-available-toggle]")).toBeFocused();
+
+  await filters.locator("[data-sc-picker-available-toggle]").click();
+  await expect(filters.locator(".sc-picker-available-pane")).toBeVisible();
+  await filters.locator("[data-sc-picker-available-close]").click();
+  await expect(filters.locator(".sc-picker-available-pane")).toBeHidden();
+
+  await columns.locator("[data-sc-picker-set]").evaluate(list => {
+    for (let index = 0; index < 12; index += 1) {
+      const item = document.createElement("article");
+      item.className = "sc-picker-set-item";
+      item.style.minHeight = "80px";
+      item.textContent = `Selected field ${index}`;
+      list.appendChild(item);
+    }
+  });
+  const setScroll = await columns.locator("[data-sc-picker-set]").evaluate(list => ({
+    overflow: getComputedStyle(list).overflowY,
+    maxHeight: getComputedStyle(list).maxHeight,
+    scroll: list.scrollHeight,
+    viewport: list.clientHeight,
+  }));
+  expect(setScroll.overflow).toBe("visible");
+  expect(setScroll.maxHeight).toBe("none");
+  expect(setScroll.scroll).toBe(setScroll.viewport);
+  const pageScroll = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
+  expect(pageScroll).toBeGreaterThan(0);
+
+  await page.setViewportSize({width: 1600, height: 900});
+  await expect(columns.locator(".sc-picker-available-pane")).toBeVisible();
+  await expect(columns.locator("[data-sc-picker-available-toggle]")).toBeHidden();
+});
+
 test("a loaded saved view stays identified while its query is rerun", async ({page}) => {
   await page.route("http://saved.test/**", route => route.fulfill({
     contentType: "text/html",

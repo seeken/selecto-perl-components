@@ -2048,6 +2048,99 @@
     return Array.from(root.querySelectorAll("[data-sc-picker-set-item]"));
   }
 
+  function setAvailablePickerOpen(root, open) {
+    if (!root) return;
+    var available = root.querySelector(".sc-picker-available-pane");
+    var mobile = window.matchMedia("(max-width: 620px)").matches;
+    var focusWasInside = available && available.contains(document.activeElement);
+    if (available && typeof available.showPopover === "function"
+      && available.matches(":popover-open")) available.hidePopover();
+    if (available) {
+      available.removeAttribute("popover");
+      available.removeAttribute("role");
+      available.removeAttribute("aria-modal");
+      available.removeAttribute("aria-label");
+    }
+    root.classList.toggle("is-available-open", open);
+    var toggle = root.querySelector("[data-sc-picker-available-toggle]");
+    if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) {
+      if (mobile && available && typeof available.showPopover === "function") {
+        available.setAttribute("popover", "manual");
+        available.setAttribute("role", "dialog");
+        available.setAttribute("aria-modal", "true");
+        available.setAttribute("aria-label", root.hasAttribute("data-sc-filter-root")
+          ? "Available filters" : "Available fields");
+        available.showPopover();
+      }
+      var search = root.querySelector("[data-sc-picker-filter], [data-sc-filter-search]");
+      if (search) search.focus();
+    } else if (focusWasInside && toggle && getComputedStyle(toggle).display !== "none") {
+      toggle.focus();
+    }
+  }
+
+  window.matchMedia("(max-width: 620px)").addEventListener("change", function () {
+    document.querySelectorAll(".sc-list-picker.is-available-open").forEach(function (picker) {
+      setAvailablePickerOpen(picker, false);
+    });
+  });
+
+  document.addEventListener("click", function (event) {
+    var control = event.target.closest(
+      "[data-sc-picker-available-toggle], [data-sc-picker-available-close]"
+    );
+    if (control) {
+      var picker = control.closest(".sc-list-picker");
+      var opening = control.hasAttribute("data-sc-picker-available-toggle")
+        && !picker.classList.contains("is-available-open");
+      if (opening) {
+        document.querySelectorAll(".sc-list-picker.is-available-open").forEach(function (other) {
+          if (other !== picker) setAvailablePickerOpen(other, false);
+        });
+      }
+      setAvailablePickerOpen(picker, opening);
+      return;
+    }
+    document.querySelectorAll(".sc-list-picker.is-available-open").forEach(function (picker) {
+      if (!picker.contains(event.target)) setAvailablePickerOpen(picker, false);
+    });
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Tab") {
+      var sheet = typeof HTMLElement.prototype.showPopover === "function"
+        ? document.querySelector(".sc-picker-available-pane:popover-open") : null;
+      if (sheet) {
+        var focusable = Array.from(sheet.querySelectorAll(
+          'button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, a[href]'
+        )).filter(function (element) { return element.getClientRects().length > 0; });
+        if (focusable.length) {
+          var first = focusable[0];
+          var last = focusable[focusable.length - 1];
+          if (event.shiftKey && (document.activeElement === first || !sheet.contains(document.activeElement))) {
+            last.focus();
+            event.preventDefault();
+          } else if (!event.shiftKey && (document.activeElement === last || !sheet.contains(document.activeElement))) {
+            first.focus();
+            event.preventDefault();
+          }
+        }
+      }
+    }
+    if (event.key !== "Escape") return;
+    var openPickers = document.querySelectorAll(".sc-list-picker.is-available-open");
+    if (!openPickers.length) return;
+    openPickers.forEach(function (picker) {
+      setAvailablePickerOpen(picker, false);
+    });
+    var toggle = openPickers[openPickers.length - 1].querySelector(
+      "[data-sc-picker-available-toggle]"
+    );
+    if (toggle) toggle.focus();
+    event.preventDefault();
+  });
+
   function pickerTone(path) {
     var hash = 2166136261;
     Array.from(String(path || "")).forEach(function (character) {

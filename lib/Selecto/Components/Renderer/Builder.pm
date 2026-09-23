@@ -783,13 +783,17 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         ' <small>up to ' . _h($options{maximum}) . '</small></legend>' .
         '<div class="sc-list-picker" data-sc-picker-root data-sc-picker-kind="' . _h($kind) .
         '" data-sc-picker-max="' . _h($options{maximum}) . '">' .
-        '<section class="sc-picker-pane"><div class="sc-picker-heading"><span>Available</span>' .
+        '<section class="sc-picker-pane sc-picker-available-pane"><div class="sc-picker-heading"><span>Available</span>' .
+        '<button class="sc-picker-available-close" type="button" data-sc-picker-available-close ' .
+        'aria-label="Close available ' . _h(lc($options{legend})) . '">Close</button>' .
         '<span data-sc-picker-available-count>' . scalar(@available) . '</span></div>' .
         '<input class="sc-picker-filter" type="search" ' .
         'data-sc-picker-filter placeholder="' . _h($options{search_label}) . '" aria-label="' .
         _h($options{search_label}) . '">' .
         '<div class="sc-picker-list" data-sc-picker-available>' . $available_items . '</div></section>' .
         '<section class="sc-picker-pane sc-picker-set-pane"><div class="sc-picker-heading"><span>Set</span>' .
+        '<button class="sc-picker-available-toggle" type="button" data-sc-picker-available-toggle ' .
+        'aria-expanded="false" aria-label="Show available ' . _h(lc($options{legend})) . '">Available</button>' .
         '<span data-sc-picker-set-count>' . $selected_count . '</span></div>' .
         '<p class="sc-picker-hint">' . _h($options{hint}) . '</p>' .
         '<div class="sc-picker-list sc-picker-set" data-sc-picker-set aria-label="' .
@@ -1040,12 +1044,16 @@ sub _filter_picker ($class, $state, $catalog, $config, $root_label = 'Main recor
 
     my $ordinary_picker = '<fieldset class="sc-picker-fieldset"><legend>Filters <small>up to ' . _h($max_filters) .
         '</small></legend><div class="sc-list-picker sc-filter-picker" data-sc-filter-root data-sc-filter-max="' .
-        _h($max_filters) . '"><section class="sc-picker-pane"><div class="sc-picker-heading">' .
-        '<span>Available</span><span data-sc-filter-available-count>' .
+        _h($max_filters) . '"><section class="sc-picker-pane sc-picker-available-pane"><div class="sc-picker-heading">' .
+        '<span>Available</span><button class="sc-picker-available-close" type="button" ' .
+        'data-sc-picker-available-close aria-label="Close available filters">Close</button>' .
+        '<span data-sc-filter-available-count>' .
         ($at_limit ? 0 : scalar(@available)) . '</span></div><input class="sc-picker-filter" type="search" ' .
         'data-sc-filter-search placeholder="Filter available filters" aria-label="Filter available filters">' .
         '<div class="sc-picker-list" data-sc-filter-available>' . $available_items . '</div></section>' .
         '<section class="sc-picker-pane sc-picker-set-pane"><div class="sc-picker-heading"><span>Set</span>' .
+        '<button class="sc-picker-available-toggle" type="button" data-sc-picker-available-toggle ' .
+        'aria-expanded="false" aria-label="Show available filters">Available</button>' .
         '<span data-sc-filter-set-count>' . scalar(@ordinary_filters) . '</span></div>' .
         '<p class="sc-picker-hint">Set filters are combined with AND.</p>' .
         '<div class="sc-picker-list sc-filter-set" data-sc-filter-set aria-label="Set filters">' .
