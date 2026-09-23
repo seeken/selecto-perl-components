@@ -92,6 +92,47 @@ my %semantic_position;
 cmp_ok $semantic_position{unit_price}, '<', $semantic_position{product_name},
     'field catalogs sort by semantic label instead of underlying field name';
 
+my $id_picker_catalog = $config->field_map($domain);
+ok !$id_picker_catalog->{id}{picker_hidden}, 'main record ID remains in the column picker';
+ok $id_picker_catalog->{'category.id'}{picker_hidden},
+    'related object ID stays queryable but is hidden from new column picks';
+ok !$id_picker_catalog->{'category.category_name'}{picker_hidden},
+    'related descriptive value is offered instead of its ID';
+my $explicit_id_contract = $domain->contract;
+$explicit_id_contract->{components}{picker_visible_id_paths} = ['category.id'];
+my $explicit_id_domain = Selecto::Domain->parse($explicit_id_contract, strict => 1);
+ok !$config->field_map($explicit_id_domain)->{'category.id'}{picker_hidden},
+    'domain may explicitly expose a related ID in pickers';
+ok !exists($config->filter_map($domain)->{'category.id'}{picker_hidden}),
+    'column-picker defaults do not remove ID filters';
+ok $config->measure_catalog($domain)->[0], 'measure catalog remains available';
+my %measure_picker = map { $_->{path} => $_ } @{$config->measure_catalog($domain)};
+ok $measure_picker{'category.id'}{picker_hidden},
+    'generated ID aggregate is hidden from the measure picker';
+my $column_picker_html = Selecto::Components::Renderer::Builder->_field_picker(
+    $vin_format_state, $config->detail_column_catalog($domain), $config,
+);
+like $column_picker_html, qr/data-sc-picker-group-key="category"[^>]*>\s*<summary>Category/s,
+    'related columns appear beneath a collapsible association header';
+like $column_picker_html, qr/data-sc-picker-group-key="_actions"[^>]*>\s*<summary>Actions/s,
+    'governed actions have their own picker header';
+unlike $column_picker_html, qr/data-sc-picker-available-item data-field="category\.id"/,
+    'related ID is absent from new column choices';
+my $saved_id_state = Selecto::Components::State->from_input(
+    $config, $domain,
+    {q => 1, view => 'detail', field => ['category.id'], limit => 25, page => 1},
+);
+ok $saved_id_state->valid, 'an existing view may still select a hidden related ID';
+like(Selecto::Components::Renderer::Builder->_field_picker(
+    $saved_id_state, $config->detail_column_catalog($domain), $config,
+), qr/name="field" value="category\.id"/,
+    'the saved ID remains present in Set even though Available hides it');
+my $filter_picker_html = Selecto::Components::Renderer::Builder->_filter_picker(
+    $vin_format_state, $config->filter_catalog($domain), $config,
+);
+like $filter_picker_html, qr/data-sc-picker-group-key="category"[^>]*>\s*<summary>Category/s,
+    'filters use the same collapsible association grouping';
+
 my $curated_state = Selecto::Components::State->from_input(
     $config, $curated_domain,
     {
@@ -898,6 +939,26 @@ like $grid_axis_selection_statement->sql,
     'a full row remains one SQL condition while a remaining cell stays paired';
 is_deeply $grid_axis_selection_statement->params, ['East', 'West', '2'],
     'compact grid-axis and cell parameters remain aligned';
+
+my $ordinary_alternatives_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'product_name',
+    filter_field => ['unit_price', 'product_name', 'category.category_name'],
+    filter_op => ['gte', 'eq', 'eq'],
+    filter_value => ['10', 'Open', 'Preferred'],
+    filter_clause => ['', 1, 2],
+});
+ok $ordinary_alternatives_state->valid,
+    'ordinary OR alternatives validate without grid groups';
+my $ordinary_alternatives_statement = $postgresql->compile(
+    $domain, Selecto::Components::QueryBuilder->build(
+        $config, $domain, $ordinary_alternatives_state,
+    )->{query},
+);
+like $ordinary_alternatives_statement->sql,
+    qr/"s0"\."unit_price" >= \$1.*"s0"\."product_name" = \$2.*"j_category"\."category_name" = \$3/s,
+    'ordinary alternatives combine with regular filters through governed SQL';
+is_deeply $ordinary_alternatives_statement->params,
+    ['10', 'Open', 'Preferred'], 'ordinary alternatives use bound values';
 
 my $between_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,

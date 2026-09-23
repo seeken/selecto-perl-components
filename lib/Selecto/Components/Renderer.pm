@@ -149,7 +149,7 @@ sub websocket_message ($class, $model) {
     my $content = $results_only ? $class->results_fragment($model) : $class->surface($model);
     my $query_summary = $results_only
         ? Selecto::Components::Renderer::Builder->_query_summary_for_model(
-            $model, $model->{config}->field_catalog($model->{domain}),
+            $model, $model->{config}->filter_catalog($model->{domain}),
         ) : undef;
     my $render_ms = int((time - $started) * 1000 + 0.5);
     return {

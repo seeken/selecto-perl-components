@@ -262,6 +262,42 @@
     return output.sort(compareSemanticFields);
   }
 
+  function collectFilterFields(domain, fields) {
+    const components = domain && domain.components || {};
+    const hidden = Array.isArray(components.filter_picker_hidden_paths)
+      ? components.filter_picker_hidden_paths : [];
+    const choices = components.filter_choices || {};
+    const available = fields.map((field) => {
+      const spec = choices[field.path] || {};
+      return {
+        ...field,
+        pickerHidden: Boolean(spec.picker_hidden) || hidden.some((path) =>
+          path.endsWith(".") ? field.path.startsWith(path) : field.path === path),
+        ...(Array.isArray(spec.choices) ? {filterChoices: spec.choices.map((choice) => ({
+          value: String(choice.value), label: String(choice.label),
+        }))} : {}),
+      };
+    });
+    Object.entries(choices).forEach(([path, spec]) => {
+      if (!spec || !spec.conditional || !Array.isArray(spec.choices)) return;
+      const branch = available.find((field) => field.path === spec.conditional.present_field);
+      available.push({
+        path, label: spec.label || humanize(path), type: branch && branch.type || "integer",
+        filterChoices: spec.choices.map((choice) => ({
+          value: String(choice.value), label: String(choice.label),
+        })),
+        conditional: true, pickerHidden: Boolean(spec.picker_hidden),
+      });
+    });
+    return available.sort(compareSemanticFields);
+  }
+
+  function operatorsForField(field) {
+    return Array.isArray(field && field.filterChoices)
+      ? ["eq", "ne", "in", "not_in", "is_null", "not_null"]
+      : operatorsForType(field.type);
+  }
+
   function associationIsMany(association, schemas) {
     if (!association || typeof association !== "object") return false;
     if (association.cardinality) return association.cardinality === "many";
@@ -314,6 +350,7 @@
       between: "between",
       date_shortcut: "quick select",
       in: "one of",
+      not_in: "not one of",
       is_null: "is empty",
       not_null: "is not empty",
     })[operator] || operator;
@@ -395,6 +432,8 @@
       this.queryResponseFormats = [Object.assign({}, QUERY_RESPONSE_FORMATS[0])];
       this.fields = [];
       this.fieldMap = new Map();
+      this.filterFields = [];
+      this.filterFieldMap = new Map();
       this.nextSelectedFieldId = 1;
       this.state = {
         mode: "select",
@@ -447,6 +486,8 @@
         );
         this.fields = collectFields(discovery.domain);
         this.fieldMap = new Map(this.fields.map((field) => [field.path, field]));
+        this.filterFields = collectFilterFields(discovery.domain, this.fields);
+        this.filterFieldMap = new Map(this.filterFields.map((field) => [field.path, field]));
         this.seedState();
         let initialRequest = null;
         let initialRequestError = null;
@@ -581,9 +622,12 @@
               </section>
               <section class="sac-card">
                 <div class="sac-card-heading"><div><span class="sac-step">2</span><h2>Constrain</h2></div></div>
-                <label class="sac-label" for="sac-segments">Named segments</label>
-                <select id="sac-segments" multiple size="4" data-sac-segments></select>
-                <p class="sac-help">Use Ctrl/⌘ to choose more than one reusable segment.</p>
+                <div data-sac-segment-list>
+                  <label class="sac-label" for="sac-segments">Named segments</label>
+                  <select id="sac-segments" multiple size="4" data-sac-segments></select>
+                  <p class="sac-help">Use Ctrl/⌘ to choose more than one reusable segment.</p>
+                </div>
+                <div class="sac-segment-groups" data-sac-segment-groups></div>
                 <div class="sac-parameters" data-sac-parameters></div>
                 <div class="sac-filter-list" data-sac-filters></div>
                 <label class="sac-label" for="sac-filter-search">Available filters</label>
@@ -732,7 +776,81 @@
       appendOptions(this.root.querySelector("[data-sac-projection]"), definitions("projections"), "", "Choose a projection");
       appendOptions(this.root.querySelector("[data-sac-view]"), definitions("views"), "", "Choose a view");
       appendOptions(this.root.querySelector("[data-sac-ordering]"), definitions("orderings"), "", "Custom ordering");
-      appendOptions(this.root.querySelector("[data-sac-segments]"), definitions("segments"), "");
+    }
+
+    segmentOptions() {
+      const segments = (this.domain.query_library || {}).segments || {};
+      const grouped = new Set(this.segmentGroups().flatMap((group) => group.choices.map((choice) => choice.segment)));
+      return Object.entries(segments)
+        .filter(([id, spec]) => !grouped.has(id) && (!(spec && spec.picker_hidden) || this.state.segments.includes(id)))
+        .map(([id, spec]) => ({value: id, label: (spec && spec.label) || humanize(id)}));
+    }
+
+    segmentGroups() {
+      const groups = (this.domain.query_library || {}).segment_picker_groups || {};
+      return Object.entries(groups).map(([id, spec]) => ({
+        id,
+        label: spec.label,
+        description: spec.description || "",
+        offLabel: spec.off_label || "Off",
+        choices: spec.choices || [],
+      }));
+    }
+
+    setSegmentGroupChoice(groupId, choice) {
+      const group = this.segmentGroups().find((entry) => entry.id === groupId);
+      if (!group || (choice && !group.choices.some((entry) => entry.segment === choice))) return false;
+      const choices = new Set(group.choices.map((entry) => entry.segment));
+      this.state.segments = this.state.segments.filter((id) => !choices.has(id));
+      if (choice) this.state.segments.push(choice);
+      return true;
+    }
+
+    setUngroupedSegments(ids) {
+      const grouped = new Set(this.segmentGroups().flatMap((group) => group.choices.map((choice) => choice.segment)));
+      this.state.segments = [
+        ...this.state.segments.filter((id) => grouped.has(id)),
+        ...ids,
+      ];
+    }
+
+    conflictingSegmentGroup(ids) {
+      return this.segmentGroups().find((group) =>
+        group.choices.filter((choice) => ids.includes(choice.segment)).length > 1
+      );
+    }
+
+    renderSegmentGroups() {
+      const container = this.root.querySelector("[data-sac-segment-groups]");
+      container.replaceChildren();
+      const library = this.domain.query_library || {};
+      const viewSegments = this.state.mode === "view"
+        ? (((library.views || {})[this.state.view] || {}).segments || []) : [];
+      for (const group of this.segmentGroups()) {
+        const fieldset = element("fieldset", "sac-segment-group");
+        fieldset.append(element("legend", "", group.label));
+        if (group.description) fieldset.append(element("small", "sac-help", group.description));
+        const selected = group.choices.filter((choice) =>
+          this.state.segments.includes(choice.segment) || viewSegments.includes(choice.segment));
+        const inherited = group.choices.some((choice) => viewSegments.includes(choice.segment));
+        fieldset.disabled = inherited;
+        const choices = [{segment: "", label: group.offLabel}, ...group.choices];
+        if (selected.length > 1) choices.push({segment: "__conflict__", label: "Multiple selected; choose one"});
+        for (const choice of choices) {
+          const label = element("label", "sac-segment-group-choice");
+          const radio = element("input");
+          radio.type = "radio";
+          radio.name = `sac-segment-group-${group.id}`;
+          radio.value = choice.segment;
+          radio.dataset.sacSegmentGroup = group.id;
+          radio.checked = selected.length > 1 ? choice.segment === "__conflict__"
+            : selected.length ? choice.segment === selected[0].segment : choice.segment === "";
+          label.append(radio, document.createTextNode(choice.label));
+          fieldset.append(label);
+        }
+        if (inherited) fieldset.append(element("small", "sac-help", "Set by the named view; change the view to change this choice."));
+        container.append(fieldset);
+      }
     }
 
     rootFields() {
@@ -1183,9 +1301,13 @@
       this.root.querySelector("[data-sac-limit]").value = this.state.limit;
       this.root.querySelector("[data-sac-offset]").value = this.state.offset;
       this.root.querySelector("[data-sac-timezone]").value = this.state.timezone;
+      const segmentOptions = this.segmentOptions();
+      this.root.querySelector("[data-sac-segment-list]").hidden = !segmentOptions.length;
+      appendOptions(this.root.querySelector("[data-sac-segments]"), segmentOptions, "");
       Array.from(this.root.querySelector("[data-sac-segments]").options).forEach((option) => {
         option.selected = this.state.segments.includes(option.value);
       });
+      this.renderSegmentGroups();
       this.renderSelectedFields();
       this.renderNormalization();
       this.renderFieldList();
@@ -1382,13 +1504,14 @@
       const container = this.root.querySelector("[data-sac-filters]");
       container.replaceChildren();
       this.state.filters.forEach((filter) => {
-        const field = this.fieldMap.get(filter.field) || this.fields[0];
+        const field = this.filterFieldMap.get(filter.field) || this.filterFields[0];
         if (!field) return;
         const row = element("article", "sac-filter-row");
         row.dataset.filterId = filter.id;
         const heading = element("div", "sac-filter-heading");
         const copy = element("span", "sac-selected-copy");
-        copy.append(element("strong", "", field.label), element("code", "", field.path));
+        copy.append(element("strong", "", field.label));
+        if (!field.conditional) copy.append(element("code", "", field.path));
         const remove = element("button", "sac-icon-button", "×");
         remove.type = "button";
         remove.dataset.sacRemoveFilter = filter.id;
@@ -1398,7 +1521,7 @@
         const operator = element("select", "");
         operator.dataset.sacFilterOp = "";
         operator.setAttribute("aria-label", `Filter mode for ${field.label}`);
-        appendOptions(operator, operatorsForType(field.type).map((op) => ({value: op, label: optionLabel(op)})), filter.op);
+        appendOptions(operator, operatorsForField(field).map((op) => ({value: op, label: optionLabel(op)})), filter.op);
         controls.append(operator);
         if (!/^(is_null|not_null)$/.test(filter.op)) {
           controls.append(this.filterValueControl(filter, field, false));
@@ -1426,14 +1549,15 @@
       const selected = new Set(this.state.filters.map((filter) => filter.field));
       const container = this.root.querySelector("[data-sac-filter-field-list]");
       container.replaceChildren();
-      const matches = this.fields.filter((field) => !selected.has(field.path)
+      const matches = this.filterFields.filter((field) => !field.pickerHidden && !selected.has(field.path)
         && (!query || `${field.path} ${field.label} ${field.type}`.toLowerCase().includes(query)));
       matches.slice(0, 150).forEach((field) => {
         const button = element("button", "sac-available-field");
         button.type = "button";
         button.dataset.sacAddFilter = field.path;
         const copy = element("span", "");
-        copy.append(element("strong", "", field.label), element("code", "", field.path));
+        copy.append(element("strong", "", field.label));
+        if (!field.conditional) copy.append(element("code", "", field.path));
         button.append(copy, element("small", "", field.type), element("b", "", "+"));
         container.append(button);
       });
@@ -1442,7 +1566,23 @@
 
     filterValueControl(filter, field, end) {
       let input;
-      if (filter.op === "date_shortcut") {
+      if (!end && Array.isArray(field.filterChoices)
+        && ["eq", "ne", "in", "not_in"].includes(filter.op)) {
+        input = element("select", "");
+        const multiple = filter.op === "in" || filter.op === "not_in";
+        input.multiple = multiple;
+        if (multiple) input.size = Math.min(8, Math.max(3, field.filterChoices.length));
+        else input.append(new Option("Choose a value", ""));
+        const selected = String(filter.value || "").split(",").map((value) => value.trim());
+        field.filterChoices.forEach((choice) => {
+          input.append(new Option(choice.label, choice.value, false, selected.includes(choice.value)));
+        });
+        selected.filter(Boolean).forEach((value) => {
+          if (!field.filterChoices.some((choice) => choice.value === value)) {
+            input.append(new Option("Unavailable option", value, true, true));
+          }
+        });
+      } else if (filter.op === "date_shortcut") {
         input = element("select", "");
         const groups = new Map();
         this.dateShortcuts().forEach(([group, value, label]) => {
@@ -1501,14 +1641,14 @@
     }
 
     filterPayloads(filter) {
-      const field = this.fieldMap.get(filter.field);
+      const field = this.filterFieldMap.get(filter.field);
       const payload = {field: filter.field, op: filter.op};
       if (filter.op === "date_shortcut") {
         payload.value = filter.value;
         return [payload];
       }
       if (/^(is_null|not_null)$/.test(filter.op)) return [payload];
-      if (filter.op === "in") {
+      if (filter.op === "in" || filter.op === "not_in") {
         payload.value = String(filter.value).split(",").map((value) => value.trim()).filter(Boolean);
       } else if (field && field.type === "boolean") {
         payload.value = String(filter.value) === "true";
@@ -1652,6 +1792,10 @@
         if (new Set(payload.segments).size !== payload.segments.length) throw new Error("The chooser cannot represent repeated named segments.");
         draft.segments = payload.segments.slice();
       }
+      const selectedSegmentIds = draft.segments.slice();
+      if (draft.mode === "view") selectedSegmentIds.push(...(((library.views || {})[draft.view] || {}).segments || []));
+      const segmentConflict = this.conflictingSegmentGroup(selectedSegmentIds);
+      if (segmentConflict) throw new Error(`${segmentConflict.label} allows only one choice.`);
       if (payload.parameters !== undefined) {
         if (!isPlainObject(payload.parameters)) throw new Error("parameters must be a JSON object.");
         const segmentIds = draft.segments.slice();
@@ -1668,15 +1812,15 @@
           if (!isPlainObject(filter)) throw new Error("Each filter must be a JSON object.");
           const extra = onlyKeys(filter, ["field", "op", "value", "end"]);
           if (extra.length) throw new Error(`Unsupported filter properties: ${extra.join(", ")}.`);
-          const field = this.fieldMap.get(filter.field);
+          const field = this.filterFieldMap.get(filter.field);
           if (!field) throw new Error(`The chooser does not know the filter field ${JSON.stringify(filter.field)}.`);
-          if (typeof filter.op !== "string" || !operatorsForType(field.type).includes(filter.op)) throw new Error(`The ${filter.op} filter is not available for ${filter.field}.`);
-          if (filter.op === "in" && (!Array.isArray(filter.value) || filter.value.some((value) => typeof value !== "string"))) throw new Error("The chooser supports in-filter values as an array of strings.");
+          if (typeof filter.op !== "string" || !operatorsForField(field).includes(filter.op)) throw new Error(`The ${filter.op} filter is not available for ${filter.field}.`);
+          if (["in", "not_in"].includes(filter.op) && (!Array.isArray(filter.value) || filter.value.some((value) => typeof value !== "string"))) throw new Error("The chooser supports membership-filter values as an array of strings.");
           if (!/^(is_null|not_null)$/.test(filter.op) && !Object.prototype.hasOwnProperty.call(filter, "value")) throw new Error(`The ${filter.op} filter requires a value.`);
           if (filter.op === "between" && !Object.prototype.hasOwnProperty.call(filter, "end")) throw new Error("A between filter requires an end value.");
           return {
             id: String(filterId++), field: filter.field, op: filter.op,
-            value: filter.op === "in" ? filter.value.join(", ") : (filter.value === undefined ? "" : filter.value),
+            value: ["in", "not_in"].includes(filter.op) ? filter.value.join(", ") : (filter.value === undefined ? "" : filter.value),
             end: filter.end === undefined ? "" : filter.end,
           };
         });
@@ -2514,12 +2658,12 @@
       if (fieldAction) return this.moveField(fieldAction.closest("[data-selection-id]").dataset.selectionId, fieldAction.dataset.sacFieldAction);
       const addFilter = event.target.closest("[data-sac-add-filter]");
       if (addFilter) {
-        const initialField = this.fieldMap.get(addFilter.dataset.sacAddFilter);
+        const initialField = this.filterFieldMap.get(addFilter.dataset.sacAddFilter);
         if (!initialField || this.state.filters.some((filter) => filter.field === initialField.path)) return;
         this.state.filters.push({
           id: String(this.nextFilterId++),
           field: initialField.path,
-          op: "eq",
+          op: initialField.filterChoices ? "in" : "eq",
           value: initialField.type === "boolean" ? "true" : "",
           end: "",
         });
@@ -2658,7 +2802,12 @@
       if (target.matches("[data-sac-mode]")) this.state.mode = target.value;
       else if (target.matches("[data-sac-projection]")) this.state.projection = target.value;
       else if (target.matches("[data-sac-view]")) this.state.view = target.value;
-      else if (target.matches("[data-sac-segments]")) this.state.segments = Array.from(target.selectedOptions).map((option) => option.value);
+      else if (target.matches("[data-sac-segments]")) {
+        this.setUngroupedSegments(Array.from(target.selectedOptions).map((option) => option.value));
+      }
+      else if (target.matches("[data-sac-segment-group]")) {
+        if (!this.setSegmentGroupChoice(target.dataset.sacSegmentGroup, target.value)) return;
+      }
       else if (target.matches("[data-sac-ordering]")) this.state.ordering = target.value;
       else if (target.matches("[data-sac-row-format]")) this.state.rowFormat = target.value;
       else if (target.matches("[data-sac-response-format]")) {
@@ -2686,11 +2835,17 @@
       else if (target.matches("[data-sac-filter-op]")) {
         const filter = this.filterFor(target);
         filter.op = target.value;
-        const field = this.fieldMap.get(filter.field);
+        const field = this.filterFieldMap.get(filter.field);
         if (filter.op === "date_shortcut") filter.value = "this_week";
         else if (field && field.type === "boolean") filter.value = "true";
         else filter.value = "";
         filter.end = "";
+      } else if (target.matches("[data-sac-filter-value]")) {
+        this.filterFor(target).value = target.multiple
+          ? Array.from(target.selectedOptions).map((option) => option.value).join(", ")
+          : target.value;
+        this.syncRequest(true);
+        return;
       } else if (target.matches("[data-sac-order-field]")) this.orderFor(target).field = target.value;
       else if (target.matches("[data-sac-order-direction]")) this.orderFor(target).direction = target.value;
       else return;
@@ -2764,7 +2919,9 @@
         this.selectedFieldFor(target).alias = target.value;
       }
       else if (target.matches("[data-sac-parameter]")) this.state.parameters[target.dataset.sacParameter] = target.value;
-      else if (target.matches("[data-sac-filter-value]")) this.filterFor(target).value = target.value;
+      else if (target.matches("[data-sac-filter-value]")) this.filterFor(target).value = target.multiple
+        ? Array.from(target.selectedOptions).map((option) => option.value).join(", ")
+        : target.value;
       else if (target.matches("[data-sac-filter-end]")) this.filterFor(target).end = target.value;
       else if (target.matches("[data-sac-limit]")) this.state.limit = target.value;
       else if (target.matches("[data-sac-offset]")) this.state.offset = target.value;
@@ -2989,6 +3146,8 @@
     DATE_SHORTCUTS,
     associationIsMany,
     collectFields,
+    collectFilterFields,
+    operatorsForField,
     compareSemanticFields,
     discoverQueryResponseFormats,
     downloadFilename,

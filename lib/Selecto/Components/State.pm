@@ -59,7 +59,7 @@ sub from_input ($class, $config, $domain, $input) {
     );
     my ($limit, $page) = _parse_pagination($config, $input, $view, \@errors);
     my $filters = _parse_filters(
-        $config, $input, $field_map, $valid_groups, $group_configs, \@errors,
+        $config, $input, $config->filter_map($domain), $valid_groups, $group_configs, \@errors,
     );
 
     my $state = $class->new(
@@ -249,7 +249,7 @@ sub api_query_payload ($self, $config, $domain) {
     for my $filter (grep { !$_->{draft} } @{$self->filters}) {
         my $translated = {field => $filter->{field}, op => $filter->{op}};
         unless ($filter->{op} =~ /\A(?:is_null|not_null)\z/) {
-            $translated->{value} = $filter->{op} eq 'in'
+            $translated->{value} = $filter->{op} eq 'in' || $filter->{op} eq 'not_in'
                 ? [grep { length } map { _trim($_) } split /,/, $filter->{value}, -1]
                 : $filter->{value};
         }
@@ -894,24 +894,13 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
         $filter->{draft} = 1
             if defined($filter->{clause}) && $draft_clause{$filter->{clause}};
     }
-    if (keys %seen_clause) {
-        if (@$valid_groups != 2) {
-            push @$errors, 'Alternative filter clauses require the two grid group fields.';
-        } else {
-            my @expected = @{_grid_group_filters($field_map, $valid_groups, $group_configs)};
-            my %expected = map { $_->{field} => $_->{grouped} ? 1 : 0 } @expected;
-            for my $clause (keys %seen_clause) {
-                my @conditions = grep {
-                    defined($_->{clause}) && $_->{clause} == $clause
-                } @filters;
-                my %found = map { $_->{field} => $_->{grouped} ? 1 : 0 } @conditions;
-                if (!@conditions || @conditions > 2 || keys(%found) != @conditions
-                    || grep { !exists($expected{$_}) || $found{$_} != $expected{$_} }
-                        keys %found) {
-                    push @$errors, 'Each alternative filter clause must contain a grid row, column, or paired cell condition.';
-                    last;
-                }
-            }
+    for my $clause (keys %seen_clause) {
+        my @conditions = grep {
+            defined($_->{clause}) && $_->{clause} == $clause
+        } @filters;
+        if (!@conditions || @conditions > 5) {
+            push @$errors, 'Each alternative filter clause must contain one to five conditions.';
+            last;
         }
     }
     return \@filters;
@@ -1035,6 +1024,19 @@ sub _query_library_state ($domain, $input, $errors) {
     my $materialized_view = _trim(_first($input, 'query_library_materialized_view'));
     my @segments = grep { length } map { _trim($_) }
         @{_values($input, 'query_library_segment')};
+    for my $group (@{Selecto::QueryLibrary->segment_picker_groups($domain)}) {
+        my $name = 'query_library_segment_choice_' . $group->{id};
+        next unless exists $input->{$name};
+        push @$errors, 'Choose only one segment-group option.'
+            if @{_values($input, $name)} != 1;
+        my %choices = map { $_->{segment} => 1 } @{$group->{choices}};
+        @segments = grep { !$choices{$_} } @segments;
+        my $choice = _trim(_first($input, $name));
+        if (length($choice)) {
+            if ($choices{$choice}) { push @segments, $choice }
+            else { push @$errors, 'Choose an available segment-group option.' }
+        }
+    }
     my %seen_segment;
     @segments = grep { !$seen_segment{$_}++ } @segments;
 
@@ -1047,6 +1049,16 @@ sub _query_library_state ($domain, $input, $errors) {
             unless _library_definition_exists($library->{segments}, $segment);
     }
     @segments = grep { _library_definition_exists($library->{segments}, $_) } @segments;
+    my @effective_segments = @segments;
+    push @effective_segments, @{Selecto::QueryLibrary->view_segments($domain, $view)}
+        if length($view);
+    my %seen_effective;
+    @effective_segments = grep { !$seen_effective{$_}++ } @effective_segments;
+    for my $group (@{Selecto::QueryLibrary->segment_picker_groups($domain)}) {
+        my %choices = map { $_->{segment} => 1 } @{$group->{choices}};
+        push @$errors, "$group->{label} allows only one choice."
+            if (grep { $choices{$_} } @effective_segments) > 1;
+    }
 
     my $parameter_names = _values($input, 'query_library_param_name');
     my $parameter_values = _values($input, 'query_library_param_value');

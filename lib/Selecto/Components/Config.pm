@@ -26,6 +26,7 @@ has max_action_rows => 1000;
 has show_sql       => 0;
 has action_handlers => sub { return {} };
 has choice_sources  => sub { return {} };
+has filter_fields   => sub { return [] };
 has lookup_sources  => sub { return {} };
 has co_domain_engines => sub { return {} };
 has co_domain_scopes  => sub { return {} };
@@ -72,6 +73,10 @@ sub new ($class, @args) {
             && $self->max_action_rows >= 1 && $self->max_action_rows <= 1000;
     die "action_handlers must be an object\n" unless ref($self->action_handlers) eq 'HASH';
     die "choice_sources must be an object\n" unless ref($self->choice_sources) eq 'HASH';
+    die "filter_fields must be an array of field paths\n"
+        unless ref($self->filter_fields) eq 'ARRAY'
+            && !grep { !defined($_) || ref($_) || $_ !~ /\A[a-z][a-z0-9_.]*\z/ }
+                @{$self->filter_fields};
     die "lookup_sources must be an object\n" unless ref($self->lookup_sources) eq 'HASH';
     die "co_domain_engines must be an object\n"
         unless ref($self->co_domain_engines) eq 'HASH';
@@ -397,6 +402,25 @@ sub field_catalog ($self, $domain, $options = undef) {
     my $contract = $domain->contract;
     my $source = ref($contract) eq 'HASH' && ref($contract->{source}) eq 'HASH'
         ? $contract->{source} : {};
+    my $components = $domain->components;
+    my %visible_id = map { $_ => 1 }
+        @{$components->{picker_visible_id_paths} // []};
+    my $schemas = ref($contract->{schemas}) eq 'HASH' ? $contract->{schemas} : {};
+    my $source_associations = ref($source->{associations}) eq 'HASH'
+        ? $source->{associations} : {};
+    my (%client_profile_keys, %other_reference_keys);
+    for my $name (keys %$source_associations) {
+        my $spec = $source_associations->{$name};
+        next unless ref($spec) eq 'HASH';
+        my $owner_key = $spec->{owner_key};
+        next unless defined($owner_key) && $owner_key ne ($source->{primary_key} // 'id');
+        my $schema = $schemas->{$spec->{queryable} // ''};
+        if (ref($schema) eq 'HASH' && ($schema->{source_table} // '') eq 'client_profile') {
+            $client_profile_keys{$owner_key} = 1;
+        } else {
+            $other_reference_keys{$owner_key} = 1;
+        }
+    }
     for my $path (sort keys %$fields) {
         next if !$include_internal && !$domain->field_is_public($path);
         my $link = _field_link($domain, $path, $source->{columns}{$path});
@@ -414,6 +438,10 @@ sub field_catalog ($self, $domain, $options = undef) {
             type => $fields->{$path},
             association => undef,
             internal => $domain->field_is_public($path) ? 0 : 1,
+            (_picker_hidden_id($path, $source->{primary_key}, $dimension,
+                \%visible_id, \%client_profile_keys, \%other_reference_keys,
+                $source->{source_table})
+                ? (picker_hidden => 1) : ()),
             (defined($domain->field_unit($path))
                 ? (unit => $domain->field_unit($path)) : ()),
             (defined($domain->field_behavior($path))
@@ -429,11 +457,13 @@ sub field_catalog ($self, $domain, $options = undef) {
         my $association_fields = $association->fields;
         my $association_spec = ref($source->{associations}) eq 'HASH'
             ? $source->{associations}{$association_name} : undef;
+        my $group_label = _picker_group_label($self, $domain, $contract, $association_name);
         my $queryable = ref($association_spec) eq 'HASH'
             ? $association_spec->{queryable} : undef;
         my $schema = defined($queryable) && ref($contract) eq 'HASH'
             && ref($contract->{schemas}) eq 'HASH'
             ? $contract->{schemas}{$queryable} : undef;
+        $schema = {} unless ref($schema) eq 'HASH';
         for my $field (sort keys %$association_fields) {
             my $path = "$association_name.$field";
             next if !$include_internal && !$domain->field_is_public($path);
@@ -464,8 +494,12 @@ sub field_catalog ($self, $domain, $options = undef) {
                 label => $label,
                 type => $association_fields->{$field},
                 association => $association_name,
+                picker_group_label => $group_label,
                 internal => $domain->field_is_public($path) ? 0 : 1,
                 denormalizing => $association->cardinality eq 'many' ? 1 : 0,
+                (_picker_hidden_id($path, $schema->{primary_key}, $dimension,
+                    \%visible_id, {}, {}, $schema->{source_table})
+                    ? (picker_hidden => 1) : ()),
                 (defined($domain->field_unit($path))
                     ? (unit => $domain->field_unit($path)) : ()),
                 (defined($domain->field_behavior($path))
@@ -496,6 +530,9 @@ sub field_catalog ($self, $domain, $options = undef) {
             label => $label,
             type => $dimension->{display_type},
             association => $dimension->{association},
+            picker_group_label => _picker_group_label(
+                $self, $domain, $contract, $dimension->{association},
+            ),
             internal => $domain->field_is_public($path) ? 0 : 1,
             denormalizing => $dimension->{denormalizing} ? 1 : 0,
             (defined($domain->field_unit($path))
@@ -513,6 +550,30 @@ sub field_catalog ($self, $domain, $options = undef) {
     my $catalog = \@catalog;
     $cache->{$cache_key} = $catalog if ref($cache) eq 'HASH';
     return $catalog;
+}
+
+sub _picker_hidden_id ($path, $primary_key, $dimension, $visible, $client_keys,
+    $other_keys, $source_table) {
+    return 0 if $visible->{$path};
+    return 1 if $dimension && $path eq $dimension->{key_field};
+    my ($field) = $path =~ /([^.]+)\z/;
+    return 0 unless $field eq 'id' || $field =~ /_id\z/
+        || (index($path, '.') < 0 && $other_keys->{$field});
+    return 0 if index($path, '.') < 0 && $field eq ($primary_key // 'id');
+    return 0 if ($source_table // '') eq 'client_profile' && $field eq 'id';
+    return 0 if index($path, '.') < 0 && $client_keys->{$field};
+    return 1;
+}
+
+sub _picker_group_label ($self, $domain, $contract, $association_path) {
+    my ($first) = split /\./, $association_path;
+    my $join = ref($contract->{joins}) eq 'HASH' ? $contract->{joins}{$first} : undef;
+    my $default = ref($join) eq 'HASH' && defined($join->{name})
+        ? $join->{name} : _humanize($first);
+    return $self->localize(
+        $domain, "associations.$first.label", $default,
+        {kind => 'association', path => $first, attribute => 'label'},
+    );
 }
 
 sub _star_dimensions ($domain) {
@@ -636,6 +697,64 @@ sub field_map ($self, $domain) {
     return $map;
 }
 
+sub filter_catalog ($self, $domain) {
+    my %extra = map { $_ => 1 } @{$self->filter_fields};
+    my $components = $domain->components;
+    my $choice_specs = ref($components->{filter_choices}) eq 'HASH'
+        ? $components->{filter_choices} : {};
+    my $hidden_paths = ref($components->{filter_picker_hidden_paths}) eq 'ARRAY'
+        ? $components->{filter_picker_hidden_paths} : [];
+    my @catalog = map {
+        my $field = $_;
+        my %filter_field = %$field;
+        delete $filter_field{picker_hidden};
+        my $choice = $choice_specs->{$field->{path}};
+        my $picker_hidden = (ref($choice) eq 'HASH' && $choice->{picker_hidden})
+            || grep {
+                /\.\z/ ? index($field->{path}, $_) == 0 : $field->{path} eq $_
+            } @$hidden_paths;
+        ref($choice) eq 'HASH' ? {
+            %filter_field,
+            label => $self->localize(
+                $domain, "components.filter_choices.$field->{path}.label",
+                $choice->{label},
+                {kind => 'filter_choice', path => $field->{path}, attribute => 'label'},
+            ),
+            filter_choices => [map { {%$_} } @{$choice->{choices}}],
+            ($picker_hidden ? (picker_hidden => 1) : ()),
+        } : {%filter_field, ($picker_hidden ? (picker_hidden => 1) : ())}
+    } grep { !$_->{internal} || $extra{$_->{path}} || $choice_specs->{$_->{path}} }
+        @{$self->field_catalog($domain, {include_internal => 1})};
+    for my $path (sort keys %$choice_specs) {
+        my $choice = $choice_specs->{$path};
+        next unless ref($choice->{conditional}) eq 'HASH';
+        my $conditional = $choice->{conditional};
+        my $when = $domain->resolve($conditional->{when_field});
+        my $present = $domain->resolve($conditional->{present_field});
+        my $absent = $domain->resolve($conditional->{absent_field});
+        die "conditional filter $path references an unavailable field\n"
+            unless $when && $present && $absent;
+        die "conditional filter $path must compare the same field type\n"
+            unless $present->{type} eq $absent->{type};
+        push @catalog, {
+            path => $path,
+            label => $self->localize(
+                $domain, "components.filter_choices.$path.label", $choice->{label},
+                {kind => 'filter_choice', path => $path, attribute => 'label'},
+            ),
+            type => $present->{type},
+            filter_choices => [map { {%$_} } @{$choice->{choices}}],
+            conditional => {%$conditional},
+            ($choice->{picker_hidden} ? (picker_hidden => 1) : ()),
+        };
+    }
+    return \@catalog;
+}
+
+sub filter_map ($self, $domain) {
+    return {map { $_->{path} => { %$_ } } @{$self->filter_catalog($domain)}};
+}
+
 sub query_field_map ($self, $domain) {
     my $cache_key = join "\x1f", 'query-field-map', $domain->fingerprint;
     my $cache = $self->{_catalog_cache};
@@ -652,7 +771,7 @@ sub resolved_default_fields ($self, $domain) {
     my $map = $self->detail_column_map($domain);
     my @configured = grep { $map->{$_} } @{$self->default_fields // []};
     return \@configured if @configured;
-    my $catalog = $self->field_catalog($domain);
+    my $catalog = [grep { !$_->{picker_hidden} } @{$self->field_catalog($domain)}];
     return [map { $_->{path} } @{$catalog}[0 .. _last_index($catalog, 6)]];
 }
 
@@ -661,7 +780,9 @@ sub resolved_default_group ($self, $domain) {
     my @configured = grep { $map->{$_} } @{$self->default_group // []};
     return \@configured if @configured;
     my ($first) = grep { $_->{type} !~ /\A(?:integer|decimal|number|float|boolean)\z/i }
-        @{$self->field_catalog($domain)};
+        grep { !$_->{picker_hidden} } @{$self->field_catalog($domain)};
+    ($first) = grep { !$_->{picker_hidden} } @{$self->field_catalog($domain)}
+        unless $first;
     $first //= $self->field_catalog($domain)->[0];
     return [$first->{path}];
 }
@@ -697,6 +818,8 @@ sub measures_for_domain ($self, $domain) {
             (defined($source_unit) ? (source_unit => $source_unit) : ()),
             (ref($source) eq 'HASH' && defined($source->{behavior})
                 ? (source_behavior => $source->{behavior}) : ()),
+            (ref($source) eq 'HASH' && defined($source->{picker_group_label})
+                ? (picker_group_label => $source->{picker_group_label}) : ()),
             (defined($unit) ? (unit => $unit) : ()),
         }
     } grep {
@@ -729,6 +852,9 @@ sub measures_for_domain ($self, $domain) {
             field => $column->{path},
             type => $column->{type},
             curated => 0,
+            ($column->{picker_hidden} ? (picker_hidden => 1) : ()),
+            (defined($column->{picker_group_label})
+                ? (picker_group_label => $column->{picker_group_label}) : ()),
             (defined($column->{unit}) ? (source_unit => $column->{unit}) : ()),
             (defined($column->{behavior})
                 ? (source_behavior => $column->{behavior}) : ()),
@@ -755,6 +881,9 @@ sub measure_catalog ($self, $domain) {
             type => $measure->{type},
             field => $measure->{field},
             default_function => $measure->{aggregate},
+            ($measure->{picker_hidden} ? (picker_hidden => 1) : ()),
+            (defined($measure->{picker_group_label})
+                ? (picker_group_label => $measure->{picker_group_label}) : ()),
             (defined($measure->{source_unit})
                 ? (source_unit => $measure->{source_unit}) : ()),
             (defined($measure->{source_behavior})

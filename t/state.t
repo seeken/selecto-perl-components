@@ -315,6 +315,17 @@ is_deeply $single_axis_grid_clause->filters, [{
     field => 'category.category_name', op => 'eq', value => '7', value_end => '', clause => 1,
 }], 'a complete axis remains one condition instead of expanding into cell pairs';
 
+my $ordinary_alternatives = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'product_name',
+    filter_field => ['product_name', 'category.category_name'],
+    filter_op => ['eq', 'eq'], filter_value => ['Open', 'Preferred'],
+    filter_clause => [1, 2],
+});
+ok $ordinary_alternatives->valid,
+    'alternative ordinary filters do not require a grid or aggregate groups';
+is_deeply [map { $_->{clause} } @{$ordinary_alternatives->filters}], [1, 2],
+    'ordinary alternatives retain their OR grouping';
+
 my $compacted_grid_selection = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
     view => 'detail',
