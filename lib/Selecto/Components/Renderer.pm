@@ -36,6 +36,8 @@ sub page ($class, $model) {
         '<title>' . $title . '</title>' .
         ($page_shell->{head_start_html} // '') .
         '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' . asset_revision() . '">' .
+        '<noscript><style>.sc-chart .sc-chart-canvas{display:none!important}' .
+        '.sc-chart .sc-chart-fallback{display:block!important}</style></noscript>' .
         '<script defer src="/selecto-components/htmx.min.js?v=' . asset_revision() . '"></script>' .
         '<script defer src="/selecto-components/hx-ws.min.js?v=' . asset_revision() . '"></script>' .
         '<script defer src="/selecto-components/selecto-components.js?v=' . asset_revision() . '"></script>' .
