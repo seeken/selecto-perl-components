@@ -13,6 +13,43 @@ async function load(page, html) {
   await page.addScriptTag({path: bundle});
 }
 
+test("a loaded saved view stays identified while its query is rerun", async ({page}) => {
+  await page.route("http://saved.test/**", route => route.fulfill({
+    contentType: "text/html",
+    body: `<section id="selecto-surface-load" hx-ws:connect="/explorer/load/ws">
+      <div class="sc-workspace"><aside class="sc-builder" data-sc-builder-shell="load">
+        <form action="/explorer/load" method="get" data-sc-builder="load"
+          data-sc-builder-query hx-ws:send>
+          <input name="q" value="1"><input name="field" value="city">
+          <input name="page" value="1">
+          <input type="hidden" name="saved_query_id" value="user:Daily">
+          <button type="submit">Run query</button>
+        </form>
+        <form class="sc-saved-query-form" data-sc-saved-original-url="/explorer/load?q=1&amp;field=id&amp;page=1"
+          data-sc-saved-name="Daily">
+          <input name="saved_query_url" value="/explorer/load?q=1&amp;field=id&amp;page=1">
+          <input name="return_to" value="/explorer/load?q=1&amp;field=id&amp;page=1">
+          <p data-sc-saved-edit-status>Editing Daily — unchanged</p>
+        </form>
+      </aside></div>
+    </section>`,
+  }));
+  await page.goto("http://saved.test/explorer/load?q=1&saved_query_id=user%3ADaily");
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => document.querySelector("[data-sc-builder-query]")
+    .dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
+  await expect(page.locator('.sc-saved-query-form input[name="saved_query_url"]'))
+    .toHaveValue(/saved_query_id=user%3ADaily/);
+  await page.evaluate(() => document.dispatchEvent(new CustomEvent(
+    "htmx:ws:after:message:incoming", {detail: {message: {json: async () => ({
+      selecto: {url: "/explorer/load?q=1&field=city&page=1"},
+    })}}},
+  )));
+  await expect(page.locator("[data-sc-saved-edit-status]"))
+    .toHaveText("Editing Daily — unsaved changes");
+  await expect(page).toHaveURL(/saved_query_id=user%3ADaily/);
+});
+
 test("wide detail results remain inside a bounded host layout", async ({page}) => {
   await page.setViewportSize({width: 1400, height: 900});
   await page.setContent(`

@@ -95,6 +95,8 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         _h(encode_json([map { [$_->{group}, $_->{id}, $_->{label}] } @{$config->date_shortcuts}])) . '">' .
         _hidden('q', 1) .
         _hidden('query_signature', $state->query_signature) .
+        ($model->{loaded_saved_query} && $model->{loaded_saved_query}{id}
+            ? _hidden('saved_query_id', $model->{loaded_saved_query}{id}) : '') .
         $query_summary . $view_panel . $filter_panel .
         '<div class="sc-builder-apply-note"><span>Changes apply only when you run the query.</span>' .
         '<strong data-sc-builder-pending role="status" aria-live="polite" aria-atomic="true"></strong></div>' .
@@ -137,33 +139,77 @@ sub _saved_queries ($class, $model, $panel_id, $tab_id) {
     return '' unless $config->saved_queries_enabled($model->{domain});
     my $csrf = _h($model->{csrf_token} // '');
     my $current_url = _h($model->{canonical_url});
+    my $return_url = Mojo::URL->new($model->{canonical_url});
+    $return_url->query->param(saved_query_id => $model->{loaded_saved_query}{id})
+        if $model->{loaded_saved_query} && $model->{loaded_saved_query}{id};
+    $return_url = _h($return_url->to_string);
     my $items = join '', map {
         my $saved_url = Mojo::URL->new($_->{url});
         $saved_url->query->param(saved_query_name => $_->{name});
+        $saved_url->query->param(saved_query_id => $_->{id}) if $_->{id};
+        my $scope = $_->{scope} // ($_->{readonly} ? 'client' : 'user');
+        my $scope_label = $scope eq 'priv' ? 'Privilege' :
+            $scope eq 'client' ? 'Client' : 'Personal';
         '<li><a href="' . _h($saved_url->to_string) . '">' . _h($_->{name}) . '</a>' .
+        '<span class="sc-saved-query-shared">' . _h($scope_label) . '</span>' .
+        ($_->{folder} ? '<small>' . _h($_->{folder}) . '</small>' : '') .
         ($_->{readonly}
-            ? '<span class="sc-saved-query-shared">Shared</span>'
+            ? ''
             : '<form method="post" action="' . _h($config->path) . '/saved-queries/delete">' .
                 '<input type="hidden" name="csrf_token" value="' . $csrf . '">' .
                 '<input type="hidden" name="saved_query_name" value="' . _h($_->{name}) . '">' .
-                '<input type="hidden" name="return_to" value="' . $current_url . '">' .
+                ($_->{id} ? '<input type="hidden" name="saved_query_id" value="' . _h($_->{id}) . '">' : '') .
+                ($_->{revision} ? '<input type="hidden" name="saved_query_revision" value="' . _h($_->{revision}) . '">' : '') .
+                '<input type="hidden" name="return_to" value="' . $return_url . '">' .
                 '<button type="submit" class="sc-saved-query-delete" aria-label="Delete saved query ' .
                 _h($_->{name}) . '">Delete</button></form>') . '</li>'
     } @{$model->{saved_queries} // []};
     my $list = length($items)
         ? '<ul class="sc-saved-query-list">' . $items . '</ul>'
         : '<p class="sc-note">No saved queries yet.</p>';
+    my $loaded = $model->{loaded_saved_query};
+    my $target_options = join '', map {
+        ref($_) eq 'HASH' && defined($_->{id}) && defined($_->{label})
+            ? '<option value="' . _h($_->{id}) . '">' . _h($_->{label}) . '</option>' : ''
+    } @{$model->{saved_query_targets} // []};
+    my $target_picker = length($target_options)
+        ? '<label>Save for<select name="saved_query_target" required>' . $target_options . '</select></label>'
+        : '<input type="hidden" name="saved_query_target" value="user">';
+    my $update_form = $loaded && $loaded->{id} && !$loaded->{readonly}
+        && $loaded->{revision}
+        ? '<form class="sc-saved-query-form" method="post" action="' . _h($config->path) .
+            '/saved-queries" data-sc-saved-original-url="' . _h($loaded->{url}) .
+            '" data-sc-saved-name="' . _h($loaded->{name}) . '">' .
+            '<input type="hidden" name="csrf_token" value="' . $csrf . '">' .
+            '<input type="hidden" name="saved_query_operation" value="update">' .
+            '<input type="hidden" name="saved_query_id" value="' . _h($loaded->{id}) . '">' .
+            '<input type="hidden" name="saved_query_revision" value="' . _h($loaded->{revision}) . '">' .
+            '<input type="hidden" name="saved_query_name" value="' . _h($loaded->{name}) . '">' .
+            '<input type="hidden" name="saved_query_url" value="' . $current_url . '">' .
+            '<input type="hidden" name="return_to" value="' . $return_url . '">' .
+            '<p data-sc-saved-edit-status>Editing ' . _h($loaded->{name}) .
+                ($model->{saved_query_dirty} ? ' — unsaved changes' : ' — unchanged') . '</p>' .
+            '<label><input type="checkbox" name="confirm_saved_query_update" value="1" required>' .
+                ' Replace this saved view with the current query</label>' .
+            '<button class="sc-button sc-secondary" type="submit">Update this view</button></form>'
+        : '';
+    my $loaded_note = $loaded && $loaded->{readonly}
+        ? '<p class="sc-note">This shared view is read-only for you. Save a new view to keep your changes.</p>'
+        : '';
     return '<section class="sc-builder-panel sc-saved-queries" role="tabpanel" id="' .
         _h($panel_id) . '" aria-labelledby="' . _h($tab_id) .
         '" data-sc-builder-panel="saved" data-sc-saved-queries hidden>' .
         '<div class="sc-saved-query-heading">' .
-        '<h2>Saved queries</h2></div>' . $list .
+        '<h2>Saved queries</h2></div>' . $loaded_note . $list .
         '<form class="sc-saved-query-form" method="post" action="' . _h($config->path) . '/saved-queries">' .
         '<input type="hidden" name="csrf_token" value="' . $csrf . '">' .
+        '<input type="hidden" name="saved_query_operation" value="new">' .
         '<input type="hidden" name="saved_query_url" value="' . $current_url . '">' .
-        '<input type="hidden" name="return_to" value="' . $current_url . '">' .
+        '<input type="hidden" name="return_to" value="' . $return_url . '">' .
+        $target_picker .
         '<label>Name<input name="saved_query_name" maxlength="30" required autocomplete="off"></label>' .
-        '<button class="sc-button sc-secondary" type="submit">Save query</button></form></section>';
+        '<button class="sc-button sc-secondary" type="submit">Save new view</button></form>' .
+        $update_form . '</section>';
 }
 
 sub _query_library_view_controls ($class, $state, $domain, $config = undef) {

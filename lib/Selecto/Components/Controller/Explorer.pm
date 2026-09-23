@@ -13,6 +13,7 @@ sub _decorate_model ($controller, $model) {
     $model->{saved_query_notice} = $controller->flash('selecto_saved_query_notice');
     $model->{saved_query_error} = $controller->flash('selecto_saved_query_error');
     $model->{saved_queries} = [];
+    $model->{saved_query_targets} = [];
     my $results_only = ref($model->{input}) eq 'HASH'
         && ($model->{input}{render_scope} // '') eq 'results';
     if (!$results_only && $model->{domain}
@@ -23,6 +24,14 @@ sub _decorate_model ($controller, $model) {
             );
             die "saved query store returned an invalid list\n" unless ref($queries) eq 'ARRAY';
             $model->{saved_queries} = Selecto::Components::Controller::SavedQueries::_normalize_saved_queries($model->{config}, $queries);
+            if ($model->{config}->saved_query_store->can('targets')) {
+                my $targets = $model->{config}->saved_query_store->targets(
+                    $controller, $model->{config},
+                );
+                die "saved query store returned invalid destinations\n"
+                    unless ref($targets) eq 'ARRAY';
+                $model->{saved_query_targets} = $targets;
+            }
             _apply_saved_query_title($controller, $model);
             1;
         };
@@ -65,18 +74,27 @@ sub _decorate_model ($controller, $model) {
 }
 
 sub _apply_saved_query_title ($controller, $model) {
+    my $requested_id = $controller->param('saved_query_id');
     my $requested_name = $controller->param('saved_query_name');
-    return unless defined($requested_name) && !ref($requested_name)
-        && length("$requested_name");
-
-    my $requested_url = $controller->req->url->clone;
-    $requested_url->query->remove('saved_query_name');
-    my $target = $requested_url->to_string;
+    return unless (defined($requested_id) && !ref($requested_id) && length("$requested_id"))
+        || (defined($requested_name) && !ref($requested_name) && length("$requested_name"));
+    my $legacy_url = $controller->req->url->clone;
+    $legacy_url->query->remove('saved_query_name');
+    my $current_url = $legacy_url->clone;
+    $current_url->query->remove('saved_query_id');
     for my $query (@{$model->{saved_queries} // []}) {
-        next unless $query->{name} eq "$requested_name";
-        next unless $query->{url} eq $target;
+        next if defined($requested_id) && length("$requested_id")
+            ? !defined($query->{id}) || $query->{id} ne "$requested_id"
+            : $query->{name} ne "$requested_name";
+        next if (!defined($requested_id) || !length("$requested_id"))
+            && $query->{url} ne $legacy_url->to_string;
         $model->{saved_query_name} = $query->{name};
-        $model->{page_title} = $query->{name};
+        $model->{loaded_saved_query} = $query;
+        $model->{saved_query_dirty} =
+            (!defined($requested_id) || !length("$requested_id"))
+                ? 0 : ($query->{url} eq $current_url->to_string ? 0 : 1);
+        $model->{page_title} = $query->{name} .
+            ($model->{saved_query_dirty} ? ' (modified)' : '');
         return;
     }
 }

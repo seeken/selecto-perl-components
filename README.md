@@ -101,9 +101,9 @@ Chromium with Playwright.
   dependencies, safe URL substitution, and keyboard access;
 - htmx 4 `hx-ws` updates using server-rendered HTML fragments;
 - ordinary HTTP GET fallback, permalinks, and browser-refresh recovery;
-- an optional dedicated Saved queries tab backed by a host-provided object with
-  `list`, `save`, and `delete` methods; saved URLs are validated, canonicalized,
-  and reset to page one while the host owns user and tenant scoping;
+- an optional dedicated Saved queries tab backed by a host-provided store;
+  saved URLs are validated, canonicalized, and reset to page one while the
+  host owns user, tenant, destination, and privilege scoping;
 - a domain-selected private URL mode with WebSocket/POST body state and no
   query-state history, permalink, or query-string export link;
 - Excel, CSV, TSV, and JSON exports for every row matched by the active query,
@@ -223,6 +223,35 @@ transport for the same state:
 Refresh, copy/paste, bookmarks, and ordinary form submission therefore resolve
 to the same governed query as a WebSocket interaction. The server keeps no
 hidden query-builder state.
+
+### Saved-view host interface
+
+`saved_query_store` is an application-owned object. The minimal legacy
+contract remains `list($controller, $config)`, `save($controller, $config,
+{name, url})`, and `delete($controller, $config, {name})`. Hosts that support
+multiple destinations and guarded edits can additionally implement:
+
+- `targets($controller, $config)` → `[{id, label}, ...]` for destinations the
+  current user may write. Recheck permissions in the write methods; options
+  in HTML are not an authorization boundary.
+- `list(...)` → `[{id, name, url, scope, folder?, readonly?, revision}, ...]`.
+  `id` identifies the stored record across scopes; `revision` is an opaque
+  optimistic-concurrency token. Only return items readable by this user and
+  whose URL belongs to this Explorer endpoint.
+- `save_new(..., {name, url, target})` → `{id}`. It must refuse an existing
+  name in that destination, even if the existing record belongs to another
+  endpoint; never silently replace it.
+- `update(..., {id, name, url, revision})` → `{id}`. It must reauthorize the
+  item and reject a stale revision. The browser presents an explicit overwrite
+  checkbox and keeps Save new separate from Update this view.
+- `delete(..., {id, name, revision})` reauthorizes and, when a revision is
+  supplied, rejects stale deletes.
+
+The generic UI knows nothing about storage tables, workgroups, folders, or
+email delivery. A host may implement those behind this interface. Scheduled
+exports can later reference a saved-view `id` and delegate recipient policy
+and delivery to a separate host service; no scheduling is implied by saving a
+view.
 
 For a domain whose filters may contain sensitive values, set
 `components.query_params` to false in the domain contract:
