@@ -851,7 +851,6 @@ sub _graph ($class, $result, $model) {
         _h($chart_data) . '"><div class="sc-chart-canvas"><canvas role="img" aria-label="' .
         _h(_humanize($model->{state}->chart_type) . ' chart of selected measures by selected groups') .
         '"></canvas></div><div class="sc-chart-fallback"><ul>' . $bars . '</ul></div>' .
-        '<noscript><style>.sc-chart-canvas{display:none!important}.sc-chart-fallback{display:block!important}</style></noscript>' .
         '<p class="sc-chart-hint">Click a data point or horizontal-axis label to drill down to detail rows.</p>' .
         '<div class="sc-chart-drilldowns" hidden>' . $drilldown_forms . '</div></div>' .
         ($model->{state}->graph_show_table ? $class->_table(\%raw_result, $model) : '');

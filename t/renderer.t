@@ -109,6 +109,8 @@ like $html, qr/saved &lt;b&gt;ok&lt;\/b&gt;/,
     'action notices are HTML-escaped';
 like $html, qr/data-selecto-url="\/explore\/products\?q=1&amp;filter_value=&lt;script&gt;"/,
     'canonical URLs are escaped in attributes';
+like $html, qr{<head>.*<noscript><style>\.sc-chart \.sc-chart-canvas\{display:none!important\}.*</style></noscript>}s,
+    'no-JavaScript chart fallback styles live in the initial document head';
 
 my $saved_title_html = Selecto::Components::Renderer->page({
     config => $config,
@@ -590,6 +592,8 @@ my $graph = Selecto::Components::Renderer::Results->_graph(
         canonical_url => '/explore/products',
     },
 );
+unlike $graph, qr{<noscript>},
+    'replaceable graph fragments do not activate no-JavaScript styles during a WebSocket swap';
 unlike $graph, qr/<img src=x/, 'chart labels do not emit raw HTML';
 like $graph, qr/data-chart-data="[^"]*&lt;img src=x onerror=alert\(1\)&gt;/,
     'JSON chart data is HTML-escaped inside the attribute';
