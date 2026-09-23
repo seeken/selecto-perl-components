@@ -10,6 +10,22 @@
   }
   function normalize(value) { return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, ""); }
   function json(value) { return JSON.stringify(value, null, 2); }
+  function targetGroupLabel(domain, field) {
+    const path = String(field).split(".");
+    if (path.length === 1) return domain && domain.name || "Main record";
+    const join = domain && domain.joins && domain.joins[path[0]] || {};
+    return join.name || path[0].replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+  function addGroupedOption(select, groups, groupLabel, option) {
+    let group = groups.get(groupLabel);
+    if (!group) {
+      group = document.createElement("optgroup");
+      group.label = groupLabel;
+      groups.set(groupLabel, group);
+      select.add(group);
+    }
+    group.append(option);
+  }
 
   class Importer {
     constructor(root) {
@@ -275,12 +291,13 @@
         const target = element("select", "");
         target.dataset.saiColumn = column.id;
         target.add(new Option("Do not send", "", false, !mappedColumns.has(column.id)));
+        const targetGroups = new Map();
         Object.entries(fields).sort(([a], [b]) => a.localeCompare(b)).forEach(([field, spec]) => {
           if (!(spec.sources || []).includes("column")) return;
           const option = new Option(`${this.fieldLabel(field)} (${field})`, field, false, mappedColumns.get(column.id) === field);
           const existing = this.mappings.get(field);
           option.disabled = Boolean(existing && existing.kind === "column" && existing.column_id !== column.id);
-          target.add(option);
+          addGroupedOption(target, targetGroups, targetGroupLabel(this.domain, field), option);
         });
         this.actionInputEntries().sort((a, b) => a.label.localeCompare(b.label)).forEach(({action, input, spec, label}) => {
           if (!(spec.sources || []).includes("column")) return;
@@ -288,7 +305,7 @@
           const existing = this.actionMappings.get(key);
           const option = new Option(`${label} (${action}.${input})`, `action:${key}`, false, mappedColumns.get(column.id) === `action:${key}`);
           option.disabled = Boolean(existing && existing.kind === "column" && existing.column_id !== column.id);
-          target.add(option);
+          addGroupedOption(target, targetGroups, "Actions", option);
         });
         const field = mappedColumns.get(column.id);
         const matchSets = field && !field.startsWith("action:")
@@ -409,12 +426,17 @@
     renderExtraMappings(fields) {
       const add = this.root.querySelector("[data-sai-add-extra]");
       add.replaceChildren(new Option("Choose a field…", ""));
+      const addGroups = new Map();
       Object.entries(fields).sort(([a], [b]) => a.localeCompare(b)).forEach(([field, spec]) => {
-        if ((spec.sources || []).some((source) => source !== "column")) add.add(new Option(`${this.fieldLabel(field)} (${field})`, field));
+        if ((spec.sources || []).some((source) => source !== "column")) {
+          addGroupedOption(add, addGroups, targetGroupLabel(this.domain, field),
+            new Option(`${this.fieldLabel(field)} (${field})`, field));
+        }
       });
       this.actionInputEntries().sort((a, b) => a.label.localeCompare(b.label)).forEach(({action, input, spec, label}) => {
         if ((spec.sources || []).some((source) => source !== "column")) {
-          add.add(new Option(`${label} (${action}.${input})`, `action:${action}:${input}`));
+          addGroupedOption(add, addGroups, "Actions",
+            new Option(`${label} (${action}.${input})`, `action:${action}:${input}`));
         }
       });
       const body = this.root.querySelector("[data-sai-extra-mappings]");
@@ -722,7 +744,7 @@
   }
 
   function mountAll(documentRoot) { return Array.from((documentRoot || global.document).querySelectorAll("[data-selecto-importer]"), (root) => { const importer = new Importer(root); importer.start(); return importer; }); }
-  global.SelectoImporter = {Importer, mountAll};
+  global.SelectoImporter = {Importer, mountAll, targetGroupLabel};
   if (typeof module !== "undefined" && module.exports) module.exports = global.SelectoImporter;
   if (global.document && global.addEventListener) global.addEventListener("DOMContentLoaded", () => mountAll(global.document));
 })(typeof globalThis !== "undefined" ? globalThis : this);

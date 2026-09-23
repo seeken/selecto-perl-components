@@ -727,7 +727,8 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         (($kind eq 'field' && ($_->{type} // '') ne 'action') || $kind eq 'measure'
             ? ' data-sc-picker-repeatable' : '') .
         '><span><strong>' . _h(_picker_leaf_label($_)) .
-        '</strong><small>' . _h($_->{type}) . '</small></span><span aria-hidden="true">+</span></button>'
+        '</strong><small>' . _h($_->{path} . ' - ' . $_->{type}) .
+        '</small></span><span aria-hidden="true">+</span></button>'
     });
     $available_items ||= '<p class="sc-picker-empty">Every available field is set.</p>';
 
@@ -767,7 +768,7 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         '><input type="hidden" name="' . _h($kind) . '" value="' . _h($path) . '">' .
         '<button class="sc-picker-grip" type="button" title="Drag to reorder" aria-label="Drag ' .
         _h($field->{label}) . ' to reorder">⠿</button><span class="sc-picker-set-label"><strong>' .
-        _h($field->{label}) . '</strong><small>' . _h($field->{type}) . '</small></span>' .
+        _h($field->{label}) . '</strong><small>' . _h($path . ' - ' . $field->{type}) . '</small></span>' .
         '<span class="sc-picker-controls">' .
         '<button type="button" data-sc-picker-action="up" aria-label="Move ' . _h($field->{label}) .
         ' up" title="Move up"' . $up_disabled . '>↑</button>' .
@@ -994,7 +995,8 @@ sub _filter_picker ($class, $state, $catalog, $config, $root_label = 'Main recor
         _h($group_key) . '"' .
         _filter_choice_attribute($_) . ' data-search="' .
         _h(lc($_->{label} . ' ' . $_->{type} . ' ' . $_->{path})) . '"><span><strong>' . _h(_picker_leaf_label($_)) .
-        '</strong><small>' . _h($_->{type}) . '</small></span><span aria-hidden="true">+</span></button>'
+        '</strong><small>' . _h($_->{path} . ' - ' . $_->{type}) .
+        '</small></span><span aria-hidden="true">+</span></button>'
     });
     $available_items ||= '<p class="sc-picker-empty">' .
         ($at_limit ? 'Maximum of ' . _h($max_filters) . ' filters set.' : 'Every available filter is set.') .
@@ -1025,7 +1027,8 @@ sub _filter_picker ($class, $state, $catalog, $config, $root_label = 'Main recor
         _hidden('filter_group', $filter->{grouped} ? 1 : 0) .
         _hidden('filter_clause', '') .
         '<div class="sc-filter-set-heading"><span><strong>' . _h($field->{label}) . '</strong><small>' .
-        _h($field->{type}) . '</small></span><button type="button" data-sc-filter-action="remove" ' .
+        _h($filter->{field} . ' - ' . $field->{type}) .
+        '</small></span><button type="button" data-sc-filter-action="remove" ' .
         'aria-label="Remove ' . _h($field->{label}) . ' filter" title="Remove filter">×</button></div>' .
         '<div class="sc-filter-editor">' . $filter_controls . '</div>' .
         ($filter->{draft} ? '<p class="sc-filter-draft-note">' .

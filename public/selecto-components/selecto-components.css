@@ -233,9 +233,26 @@ a { color: inherit; }
 .sc-picker-choice:disabled { cursor: wait; opacity: .5; }
 .sc-picker-choice span:first-child, .sc-picker-set-label { min-width: 0; }
 .sc-picker-choice strong, .sc-picker-set-label strong { display: block; font-size: .76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sc-picker-choice small, .sc-picker-set-label small { color: var(--sc-hint); display: block; font-size: .64rem; font-weight: 500; }
+.sc-picker-choice small, .sc-picker-set-label small { color: var(--sc-hint); display: block; font-size: .64rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-picker-hint { color: var(--sc-hint); font-size: .67rem; margin: -1px 0 7px; }
 .sc-picker-set-item { align-items: center; background: var(--sc-item-bg); border: 1px solid var(--sc-border); border-radius: 9px; display: flex; flex-wrap: wrap; gap: 7px; min-width: 0; padding: 7px; }
+.sc-pick-tone-0 { --sc-pick-accent: #4c9acc; }
+.sc-pick-tone-1 { --sc-pick-accent: #d89149; }
+.sc-pick-tone-2 { --sc-pick-accent: #809c46; }
+.sc-pick-tone-3 { --sc-pick-accent: #a980c5; }
+.sc-pick-tone-4 { --sc-pick-accent: #d36d86; }
+.sc-pick-tone-5 { --sc-pick-accent: #47a99f; }
+.sc-pick-tone-6 { --sc-pick-accent: #c29042; }
+.sc-pick-tone-7 { --sc-pick-accent: #6990cb; }
+.sc-picker-choice.sc-is-picked,
+.sc-picker-set-item.sc-is-picked,
+.sc-filter-set-item.sc-is-picked {
+  background: color-mix(in srgb, var(--sc-panel) 82%, var(--sc-pick-accent));
+  box-shadow: inset 3px 0 var(--sc-pick-accent);
+}
+.sc-picker-choice.sc-is-picked:hover {
+  background: color-mix(in srgb, var(--sc-panel) 72%, var(--sc-pick-accent));
+}
 .sc-picker-set-item.is-dragging { border-color: var(--sc-accent); opacity: .55; }
 .sc-picker-grip { background: transparent; border: 0; color: var(--sc-muted); cursor: grab; padding: 4px; }
 .sc-picker-grip:active { cursor: grabbing; }
@@ -266,7 +283,7 @@ a { color: inherit; }
 .sc-filter-set-heading { align-items: start; display: flex; gap: 8px; justify-content: space-between; min-width: 0; }
 .sc-filter-set-heading > span { min-width: 0; }
 .sc-filter-set-heading strong { display: block; font-size: .76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sc-filter-set-heading small { color: var(--sc-hint); display: block; font-size: .64rem; }
+.sc-filter-set-heading small { color: var(--sc-hint); display: block; font-size: .64rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-filter-set-heading button { background: var(--sc-control-button-bg); border: 1px solid var(--sc-border); border-radius: 6px; color: var(--sc-ink); cursor: pointer; height: 26px; line-height: 1; padding: 0; width: 26px; }
 .sc-filter-set-heading button:hover { border-color: var(--sc-danger); color: var(--sc-danger); }
 .sc-filter-editor { display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }

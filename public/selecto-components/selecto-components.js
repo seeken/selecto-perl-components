@@ -187,12 +187,17 @@
       }
     }
     root.querySelectorAll("[data-sc-picker-root]").forEach(refreshColumnPicker);
+    root.querySelectorAll("[data-sc-filter-root]").forEach(refreshFilterPicker);
   }
 
   function restoreResultViews() {
     document.querySelectorAll("[data-sc-builder]").forEach(function (root) {
       var selected = root.querySelector('input[name="view"]:checked');
       if (selected) stageResultView(root, selected.value);
+      else {
+        root.querySelectorAll("[data-sc-picker-root]").forEach(refreshColumnPicker);
+        root.querySelectorAll("[data-sc-filter-root]").forEach(refreshFilterPicker);
+      }
     });
   }
 
@@ -2043,15 +2048,35 @@
     return Array.from(root.querySelectorAll("[data-sc-picker-set-item]"));
   }
 
+  function pickerTone(path) {
+    var hash = 2166136261;
+    Array.from(String(path || "")).forEach(function (character) {
+      hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+    });
+    hash ^= hash >>> 16;
+    return (hash >>> 0) % 8;
+  }
+
+  function refreshPickerHighlights(items, available) {
+    var selected = new Set(items.map(function (item) { return item.dataset.field; }));
+    items.concat(available).forEach(function (item) {
+      for (var tone = 0; tone < 8; tone += 1) item.classList.remove("sc-pick-tone-" + tone);
+      item.classList.remove("sc-is-picked");
+      if (selected.has(item.dataset.field)) {
+        item.classList.add("sc-is-picked", "sc-pick-tone-" + pickerTone(item.dataset.field));
+      }
+    });
+  }
+
   var activeDraggedItem = null;
 
-  function appendLabel(parent, label, type, className) {
+  function appendLabel(parent, label, type, field, className) {
     var wrapper = document.createElement("span");
     if (className) wrapper.className = className;
     var strong = document.createElement("strong");
     strong.textContent = label;
     var small = document.createElement("small");
-    small.textContent = type;
+    small.textContent = field + " - " + type;
     wrapper.appendChild(strong);
     wrapper.appendChild(small);
     parent.appendChild(wrapper);
@@ -2077,7 +2102,7 @@
       choice.dataset.scPickerAction = "add";
       choice.setAttribute("data-sc-picker-available-item", "");
     }
-    appendLabel(choice, label, type);
+    appendLabel(choice, label, type, field);
     var plus = document.createElement("span");
     plus.setAttribute("aria-hidden", "true");
     plus.textContent = "+";
@@ -2127,7 +2152,7 @@
     grip.setAttribute("aria-label", "Drag " + label + " to reorder");
     grip.textContent = "⠿";
     item.appendChild(grip);
-    appendLabel(item, label, type, "sc-picker-set-label");
+    appendLabel(item, label, type, field, "sc-picker-set-label");
     var controls = document.createElement("span");
     controls.className = "sc-picker-controls";
     controls.appendChild(createColumnControl("up", label, "↑"));
@@ -2440,6 +2465,7 @@
   function refreshColumnPicker(root) {
     var items = setItems(root);
     var available = Array.from(root.querySelectorAll("[data-sc-picker-available-item]"));
+    refreshPickerHighlights(items, available);
     var availableList = root.querySelector("[data-sc-picker-available]");
     var availableEmpty = availableList && availableList.querySelector(".sc-picker-empty");
     if (available.length && availableEmpty) availableEmpty.remove();
@@ -2779,7 +2805,7 @@
     item.appendChild(hiddenFilterValue("filter_clause", ""));
     var heading = document.createElement("div");
     heading.className = "sc-filter-set-heading";
-    appendLabel(heading, label, type);
+    appendLabel(heading, label, type, field);
     var remove = document.createElement("button");
     remove.type = "button";
     remove.dataset.scFilterAction = "remove";
@@ -2864,6 +2890,7 @@
   function refreshFilterPicker(root) {
     var items = Array.from(root.querySelectorAll("[data-sc-filter-set-item]"));
     var available = Array.from(root.querySelectorAll("[data-sc-filter-available-item]"));
+    refreshPickerHighlights(items, available);
     var availableList = root.querySelector("[data-sc-filter-available]");
     var availableEmpty = availableList && availableList.querySelector(".sc-picker-empty");
     if (available.length && availableEmpty) availableEmpty.remove();

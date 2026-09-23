@@ -520,7 +520,7 @@ test("columns, measures, and filters can add the same field more than once", asy
     <form data-sc-builder>
       <div data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
         <div data-sc-picker-available>
-          <button type="button" data-sc-picker-action="add" data-sc-picker-available-item
+          <button class="sc-picker-choice" type="button" data-sc-picker-action="add" data-sc-picker-available-item
             data-sc-picker-repeatable data-field="created_on" data-label="Created"
             data-type="datetime" data-search="created datetime">Add Created</button>
         </div>
@@ -529,7 +529,7 @@ test("columns, measures, and filters can add the same field more than once", asy
       </div>
       <div data-sc-filter-root data-sc-filter-max="10">
         <div data-sc-filter-available>
-          <button type="button" data-sc-filter-action="add" data-sc-filter-available-item
+          <button class="sc-picker-choice" type="button" data-sc-filter-action="add" data-sc-filter-available-item
             data-field="created_on" data-label="Created" data-type="datetime"
             data-search="created datetime">Add Created filter</button>
         </div>
@@ -538,7 +538,7 @@ test("columns, measures, and filters can add the same field more than once", asy
       </div>
       <div data-sc-picker-root data-sc-picker-kind="measure" data-sc-picker-max="10">
         <div data-sc-picker-available>
-          <button type="button" data-sc-picker-action="add" data-sc-picker-available-item
+          <button class="sc-picker-choice" type="button" data-sc-picker-action="add" data-sc-picker-available-item
             data-sc-picker-repeatable data-field="customer_price" data-label="Customer Price"
             data-type="decimal" data-default-function="sum"
             data-search="customer price decimal">Add Customer Price</button>
@@ -548,12 +548,27 @@ test("columns, measures, and filters can add the same field more than once", asy
       </div>
     </form>
   `);
+  await page.addStyleTag({path: stylesheet});
 
   const addColumn = page.locator('[data-sc-picker-kind="field"] [data-sc-picker-action="add"]');
+  const unpickedBackground = await addColumn.evaluate((node) => getComputedStyle(node).backgroundColor);
   await addColumn.click();
   await addColumn.click();
   await expect(page.locator('[data-sc-picker-set-item][data-field="created_on"]')).toHaveCount(2);
+  await expect(page.locator('[data-sc-picker-set-item][data-field="created_on"] .sc-picker-set-label small').first())
+    .toHaveText("created_on - datetime");
   await expect(addColumn).toBeVisible();
+  await expect(addColumn).toHaveClass(/sc-is-picked/);
+  const columnTone = (await addColumn.getAttribute("class")).match(/sc-pick-tone-\d/)[0];
+  await expect(page.locator('[data-sc-picker-set-item][data-field="created_on"]').first())
+    .toHaveClass(new RegExp(columnTone));
+  await expect(page.locator('[data-sc-picker-set-item][data-field="created_on"]').last())
+    .toHaveClass(new RegExp(columnTone));
+  await page.mouse.move(0, 0);
+  const pickedBackground = await addColumn.evaluate((node) => getComputedStyle(node).backgroundColor);
+  expect(pickedBackground).not.toBe(unpickedBackground);
+  expect(pickedBackground).toBe(await page.locator('[data-sc-picker-set-item][data-field="created_on"]').first()
+    .evaluate((node) => getComputedStyle(node).backgroundColor));
 
   const addMeasure = page.locator('[data-sc-picker-kind="measure"] [data-sc-picker-action="add"]');
   await addMeasure.click();
@@ -590,7 +605,43 @@ test("columns, measures, and filters can add the same field more than once", asy
   await addFilter.click();
   await addFilter.click();
   await expect(page.locator('[data-sc-filter-set-item][data-field="created_on"]')).toHaveCount(2);
+  await expect(page.locator('[data-sc-filter-set-item][data-field="created_on"] .sc-filter-set-heading small').first())
+    .toHaveText("created_on - datetime");
   await expect(addFilter).toBeVisible();
+  await expect(addFilter).toHaveClass(/sc-is-picked/);
+  const filterTone = (await addFilter.getAttribute("class")).match(/sc-pick-tone-\d/)[0];
+  await expect(page.locator('[data-sc-filter-set-item][data-field="created_on"]').first())
+    .toHaveClass(new RegExp(filterTone));
+  await page.mouse.move(0, 0);
+  expect(await addFilter.evaluate((node) => getComputedStyle(node).backgroundColor))
+    .toBe(await page.locator('[data-sc-filter-set-item][data-field="created_on"]').first()
+      .evaluate((node) => getComputedStyle(node).backgroundColor));
+  await page.locator('[data-sc-filter-set-item][data-field="created_on"] [data-sc-filter-action="remove"]').first().click();
+  await expect(addFilter).toHaveClass(/sc-is-picked/);
+  await page.locator('[data-sc-filter-set-item][data-field="created_on"] [data-sc-filter-action="remove"]').click();
+  await expect(addFilter).not.toHaveClass(/sc-is-picked/);
+});
+
+test("server-rendered set items highlight their available choices on initialization", async ({page}) => {
+  await load(page, `<form data-sc-builder>
+    <div data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
+      <div data-sc-picker-available><button class="sc-picker-choice" data-sc-picker-available-item
+        data-field="bill_to.co_name">Company Name</button></div>
+      <div data-sc-picker-set><article class="sc-picker-set-item" data-sc-picker-set-item
+        data-field="bill_to.co_name"></article></div>
+    </div>
+    <div data-sc-filter-root data-sc-filter-max="10">
+      <div data-sc-filter-available><button class="sc-picker-choice" data-sc-filter-available-item
+        data-field="created_on">Created</button></div>
+      <div data-sc-filter-set><article class="sc-filter-set-item" data-sc-filter-set-item
+        data-field="created_on"></article></div>
+    </div>
+  </form>`);
+  await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded")));
+  await expect(page.locator("[data-sc-picker-available-item]")).toHaveClass(/sc-is-picked/);
+  await expect(page.locator("[data-sc-picker-set-item]")).toHaveClass(/sc-is-picked/);
+  await expect(page.locator("[data-sc-filter-available-item]")).toHaveClass(/sc-is-picked/);
+  await expect(page.locator("[data-sc-filter-set-item]")).toHaveClass(/sc-is-picked/);
 });
 
 test("date-only values remain stable for datetime filters", async ({page}) => {
