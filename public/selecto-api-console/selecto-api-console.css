@@ -242,6 +242,11 @@ code, pre, textarea.sac-request-editor {
 }
 
 .sac-segment-groups { display: grid; gap: .6rem; margin-top: .75rem; }
+.sac-segment-options { display: grid; gap: .25rem; margin: .35rem 0 .6rem; }
+.sac-segment-option { display: flex; align-items: flex-start; gap: .5rem; padding: .2rem .15rem; }
+.sac-card .sac-segment-option input[type="checkbox"] { width: auto; min-height: 0; margin: .25rem 0 0; }
+.sac-segment-option strong { font-weight: 700; }
+.sac-segment-option .sac-help { display: block; margin: .15rem 0 0; }
 .sac-segment-group { border: 0; padding: 0 0 0 1rem; }
 .sac-segment-group legend { color: var(--sac-text); font-weight: 700; padding: 0; }
 .sac-segment-group > .sac-help { display: block; margin: .2rem 0 .25rem; }
@@ -337,7 +342,7 @@ code, pre, textarea.sac-request-editor {
 .sac-field-configuration input, .sac-field-configuration select { min-height: 2.25rem; }
 
 .sac-field-list {
-  display: grid;
+  display: block;
   max-height: 19rem;
   margin-top: .45rem;
   overflow: auto;
@@ -346,9 +351,14 @@ code, pre, textarea.sac-request-editor {
   background: var(--sac-surface);
 }
 
+.sac-available-group { border-bottom: 1px solid var(--sac-border); }
+.sac-available-group:last-child { border-bottom: 0; }
+.sac-available-group > summary { padding: .6rem .7rem; font-weight: 700; cursor: pointer; background: var(--sac-surface-2); }
+.sac-available-group > .sac-available-field { width: 100%; padding-left: 1.3rem; }
+
 .sac-available-field {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: .5rem;
   padding: .58rem .65rem;
@@ -377,9 +387,29 @@ code, pre, textarea.sac-request-editor {
   background: var(--sac-surface-2);
 }
 
+.sac-pick-tone-0 { --sac-pick-accent: #4c9acc; }
+.sac-pick-tone-1 { --sac-pick-accent: #d89149; }
+.sac-pick-tone-2 { --sac-pick-accent: #809c46; }
+.sac-pick-tone-3 { --sac-pick-accent: #a980c5; }
+.sac-pick-tone-4 { --sac-pick-accent: #d36d86; }
+.sac-pick-tone-5 { --sac-pick-accent: #47a99f; }
+.sac-pick-tone-6 { --sac-pick-accent: #c29042; }
+.sac-pick-tone-7 { --sac-pick-accent: #6990cb; }
+
+.sac-selected-field.sac-is-picked,
+.sac-filter-row.sac-is-picked,
+.sac-available-field.sac-is-picked {
+  background: color-mix(in srgb, var(--sac-surface) 82%, var(--sac-pick-accent));
+  box-shadow: inset 3px 0 var(--sac-pick-accent);
+}
+
+.sac-available-field.sac-is-picked:hover {
+  background: color-mix(in srgb, var(--sac-surface) 72%, var(--sac-pick-accent));
+}
+
 .sac-filter-heading {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: .5rem;
   margin-bottom: .45rem;

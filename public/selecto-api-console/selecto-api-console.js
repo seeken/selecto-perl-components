@@ -215,6 +215,23 @@
     }).join(" · ");
   }
 
+  function pickTone(path) {
+    let hash = 2166136261;
+    for (const character of String(path || "")) {
+      hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+    }
+    hash ^= hash >>> 16;
+    return (hash >>> 0) % 8;
+  }
+
+  function markPicked(node, path) {
+    node.classList.add("sac-is-picked", `sac-pick-tone-${pickTone(path)}`);
+  }
+
+  function fieldSignature(field) {
+    return `${field.path} - ${field.type}`;
+  }
+
   function relationFields(relation, schemas, joins, prefix, depth, schemaStack, output) {
     if (!relation || depth > MAX_RELATION_DEPTH) return;
     const columns = relation.columns || {};
@@ -228,8 +245,11 @@
         path,
         name,
         label: prefix ? `${relationshipLabel(prefix, joins)}: ${fieldLabel}` : fieldLabel,
+        leafLabel: fieldLabel,
         type: String(column.type || "string").toLowerCase(),
         relation: prefix || "Root",
+        groupKey: prefix ? prefix.split(".")[0] : "",
+        groupLabel: prefix ? relationshipLabel(prefix.split(".")[0], joins) : "",
       });
     });
 
@@ -259,6 +279,37 @@
       (domain && domain.joins) || {},
       "", 0, [], output
     );
+    const source = domain && domain.source || {};
+    const schemas = domain && domain.schemas || {};
+    const visible = new Set((domain && domain.components && domain.components.picker_visible_id_paths) || []);
+    const clientKeys = new Set();
+    const referenceKeys = new Set();
+    Object.values(source.associations || {}).forEach((association) => {
+      if (!association || !association.owner_key || association.owner_key === (source.primary_key || "id")) return;
+      const schema = schemas[association.queryable] || {};
+      (schema.source_table === "client_profile" ? clientKeys : referenceKeys).add(association.owner_key);
+    });
+    const starKeys = new Set();
+    Object.entries(domain && domain.joins || {}).forEach(([path, join]) => {
+      if (!join || join.type !== "star_dimension") return;
+      const parent = path.split(".").slice(0, -1).join(".");
+      starKeys.add(parent ? `${parent}.${join.dimension_key}` : join.dimension_key);
+    });
+    output.forEach((field) => {
+      const segments = field.path.split(".");
+      const name = segments.at(-1);
+      const root = segments.length === 1;
+      const relation = root ? source : schemas[(source.associations || {})[segments[0]]?.queryable] || {};
+      const isClientProfile = relation.source_table === "client_profile";
+      field.pickerHidden = !visible.has(field.path) && (
+        starKeys.has(field.path)
+        || (root && referenceKeys.has(name) && !clientKeys.has(name))
+        || ((name === "id" || name.endsWith("_id"))
+          && !(root && name === (source.primary_key || "id"))
+          && !(root && clientKeys.has(name))
+          && !(isClientProfile && name === "id"))
+      );
+    });
     return output.sort(compareSemanticFields);
   }
 
@@ -434,6 +485,8 @@
       this.fieldMap = new Map();
       this.filterFields = [];
       this.filterFieldMap = new Map();
+      this.availableGroupOpen = {field: new Map(), filter: new Map()};
+      this.availableSearch = {field: "", filter: ""};
       this.nextSelectedFieldId = 1;
       this.state = {
         mode: "select",
@@ -623,9 +676,8 @@
               <section class="sac-card">
                 <div class="sac-card-heading"><div><span class="sac-step">2</span><h2>Constrain</h2></div></div>
                 <div data-sac-segment-list>
-                  <label class="sac-label" for="sac-segments">Named segments</label>
-                  <select id="sac-segments" multiple size="4" data-sac-segments></select>
-                  <p class="sac-help">Use Ctrl/⌘ to choose more than one reusable segment.</p>
+                  <span class="sac-label">Named segments</span>
+                  <div class="sac-segment-options" data-sac-segments></div>
                 </div>
                 <div class="sac-segment-groups" data-sac-segment-groups></div>
                 <div class="sac-parameters" data-sac-parameters></div>
@@ -779,11 +831,16 @@
     }
 
     segmentOptions() {
-      const segments = (this.domain.query_library || {}).segments || {};
+      const library = this.domain.query_library || {};
+      const segments = library.segments || {};
+      const inherited = this.state.mode === "view"
+        ? (((library.views || {})[this.state.view] || {}).segments || []) : [];
       const grouped = new Set(this.segmentGroups().flatMap((group) => group.choices.map((choice) => choice.segment)));
       return Object.entries(segments)
-        .filter(([id, spec]) => !grouped.has(id) && (!(spec && spec.picker_hidden) || this.state.segments.includes(id)))
-        .map(([id, spec]) => ({value: id, label: (spec && spec.label) || humanize(id)}));
+        .filter(([id, spec]) => !grouped.has(id) && (!(spec && spec.picker_hidden)
+          || this.state.segments.includes(id) || inherited.includes(id)))
+        .map(([id, spec]) => ({value: id, label: (spec && spec.label) || humanize(id),
+          description: spec && spec.description || ""}));
     }
 
     segmentGroups() {
@@ -818,6 +875,28 @@
       return this.segmentGroups().find((group) =>
         group.choices.filter((choice) => ids.includes(choice.segment)).length > 1
       );
+    }
+
+    renderSegments(options) {
+      const container = this.root.querySelector("[data-sac-segments]");
+      container.replaceChildren();
+      const library = this.domain.query_library || {};
+      const inherited = this.state.mode === "view"
+        ? (((library.views || {})[this.state.view] || {}).segments || []) : [];
+      options.forEach((option) => {
+        const label = element("label", "sac-segment-option");
+        const checkbox = element("input");
+        checkbox.type = "checkbox";
+        checkbox.value = option.value;
+        checkbox.dataset.sacSegmentChoice = "";
+        checkbox.checked = this.state.segments.includes(option.value) || inherited.includes(option.value);
+        checkbox.disabled = inherited.includes(option.value);
+        const copy = element("span");
+        copy.append(element("strong", "", option.label));
+        if (option.description) copy.append(element("small", "sac-help", option.description));
+        label.append(checkbox, copy);
+        container.append(label);
+      });
     }
 
     renderSegmentGroups() {
@@ -1303,10 +1382,7 @@
       this.root.querySelector("[data-sac-timezone]").value = this.state.timezone;
       const segmentOptions = this.segmentOptions();
       this.root.querySelector("[data-sac-segment-list]").hidden = !segmentOptions.length;
-      appendOptions(this.root.querySelector("[data-sac-segments]"), segmentOptions, "");
-      Array.from(this.root.querySelector("[data-sac-segments]").options).forEach((option) => {
-        option.selected = this.state.segments.includes(option.value);
-      });
+      this.renderSegments(segmentOptions);
       this.renderSegmentGroups();
       this.renderSelectedFields();
       this.renderNormalization();
@@ -1369,14 +1445,15 @@
       }
       this.state.selectedFields.forEach((selection, index) => {
         const path = selection.field;
-        const field = this.fieldMap.get(path) || {label: path, type: "field"};
+        const field = this.fieldMap.get(path) || {path, label: path, type: "field"};
         const row = element("div", "sac-selected-field");
+        markPicked(row, path);
         row.dataset.field = path;
         row.dataset.selectionId = selection.id;
         const handle = element("span", "sac-drag", "⋮⋮");
         handle.setAttribute("aria-hidden", "true");
         const copy = element("div", "sac-selected-copy");
-        copy.append(element("strong", "", field.label), element("code", "", path));
+        copy.append(element("strong", "", field.label), element("code", "", fieldSignature(field)));
         const configured = [selection.alias && `as ${selection.alias}`, selection.format].filter(Boolean).join(" · ");
         if (configured) copy.append(element("small", "sac-field-config-summary", configured));
         const actions = element("div", "sac-field-actions");
@@ -1442,20 +1519,57 @@
     }
 
     renderFieldList() {
-      const query = (this.root.querySelector("[data-sac-field-search]").value || "").trim().toLowerCase();
-      const container = this.root.querySelector("[data-sac-field-list]");
-      container.replaceChildren();
-      const matches = this.fields.filter((field) => !query || `${field.path} ${field.label} ${field.type}`.toLowerCase().includes(query));
-      matches.slice(0, 150).forEach((field) => {
-        const button = element("button", "sac-available-field");
-        button.type = "button";
-        button.dataset.sacAddField = field.path;
-        const copy = element("span", "");
-        copy.append(element("strong", "", field.label), element("code", "", field.path));
-        button.append(copy, element("small", "", field.type), element("b", "", "+"));
-        container.append(button);
+      this.renderAvailableFields("field", this.fields.filter((field) => !field.pickerHidden));
+    }
+
+    renderAvailableFields(kind, fields) {
+      const query = (this.root.querySelector(kind === "field" ? "[data-sac-field-search]" : "[data-sac-filter-search]").value || "").trim().toLowerCase();
+      const container = this.root.querySelector(kind === "field" ? "[data-sac-field-list]" : "[data-sac-filter-field-list]");
+      const selected = new Set(kind === "field"
+        ? this.state.selectedFields.map((selection) => selection.field)
+        : this.state.filters.map((filter) => filter.field));
+      if (!this.availableSearch[kind]) container.querySelectorAll("[data-sac-available-group]").forEach((group) => {
+        this.availableGroupOpen[kind].set(group.dataset.sacAvailableGroup, group.open);
       });
-      if (!matches.length) container.append(element("p", "sac-muted", "No matching available fields."));
+      container.replaceChildren();
+      const groups = new Map();
+      fields.forEach((field) => {
+        const key = field.groupKey || "";
+        if (!groups.has(key)) groups.set(key, {label: field.groupLabel || this.domain.name || "Main record", fields: []});
+        groups.get(key).fields.push(field);
+      });
+      const ordered = [...groups].sort(([a, left], [b, right]) =>
+        !a ? -1 : !b ? 1 : left.label.localeCompare(right.label));
+      let shown = 0;
+      ordered.forEach(([key, group]) => {
+        const headingMatches = query && `${group.label} ${key}`.toLowerCase().includes(query);
+        const matches = group.fields.filter((field) => !query || headingMatches
+          || `${field.path} ${field.label} ${field.type}`.toLowerCase().includes(query));
+        if (!matches.length) return;
+        shown += matches.length;
+        const details = element("details", "sac-available-group");
+        details.dataset.sacAvailableGroup = key;
+        details.open = query ? true : (this.availableGroupOpen[kind].get(key) ?? !key);
+        details.append(element("summary", "", `${group.label} (${matches.length})`));
+        matches.forEach((field) => {
+          const button = element("button", "sac-available-field");
+          button.type = "button";
+          if (kind === "field") button.dataset.sacAddField = field.path;
+          else button.dataset.sacAddFilter = field.path;
+          if (selected.has(field.path)) {
+            markPicked(button, field.path);
+            button.setAttribute("aria-label", `Add another ${field.label} ${kind === "field" ? "column" : "filter"}`);
+          }
+          const copy = element("span");
+          copy.append(element("strong", "", field.groupKey ? field.leafLabel || field.label : field.label));
+          copy.append(element("code", "", fieldSignature(field)));
+          button.append(copy, element("b", "", "+"));
+          details.append(button);
+        });
+        container.append(details);
+      });
+      if (!shown) container.append(element("p", "sac-muted", `No matching available ${kind === "field" ? "fields" : "filters"}.`));
+      this.availableSearch[kind] = query;
     }
 
     renderViewHelp() {
@@ -1507,16 +1621,17 @@
         const field = this.filterFieldMap.get(filter.field) || this.filterFields[0];
         if (!field) return;
         const row = element("article", "sac-filter-row");
+        markPicked(row, field.path);
         row.dataset.filterId = filter.id;
         const heading = element("div", "sac-filter-heading");
         const copy = element("span", "sac-selected-copy");
         copy.append(element("strong", "", field.label));
-        if (!field.conditional) copy.append(element("code", "", field.path));
+        copy.append(element("code", "", fieldSignature(field)));
         const remove = element("button", "sac-icon-button", "×");
         remove.type = "button";
         remove.dataset.sacRemoveFilter = filter.id;
         remove.setAttribute("aria-label", `Remove ${field.label} filter`);
-        heading.append(copy, element("small", "", field.type), remove);
+        heading.append(copy, remove);
         const controls = element("div", "sac-filter-controls");
         const operator = element("select", "");
         operator.dataset.sacFilterOp = "";
@@ -1544,24 +1659,8 @@
     }
 
     renderFilterFieldList() {
-      const search = this.root.querySelector("[data-sac-filter-search]");
-      const query = (search.value || "").trim().toLowerCase();
-      const selected = new Set(this.state.filters.map((filter) => filter.field));
-      const container = this.root.querySelector("[data-sac-filter-field-list]");
-      container.replaceChildren();
-      const matches = this.filterFields.filter((field) => !field.pickerHidden && !selected.has(field.path)
-        && (!query || `${field.path} ${field.label} ${field.type}`.toLowerCase().includes(query)));
-      matches.slice(0, 150).forEach((field) => {
-        const button = element("button", "sac-available-field");
-        button.type = "button";
-        button.dataset.sacAddFilter = field.path;
-        const copy = element("span", "");
-        copy.append(element("strong", "", field.label));
-        if (!field.conditional) copy.append(element("code", "", field.path));
-        button.append(copy, element("small", "", field.type), element("b", "", "+"));
-        container.append(button);
-      });
-      if (!matches.length) container.append(element("p", "sac-muted", "No matching available filters."));
+      this.renderAvailableFields("filter", this.filterFields.filter((field) =>
+        !field.pickerHidden));
     }
 
     filterValueControl(filter, field, end) {
@@ -2659,7 +2758,7 @@
       const addFilter = event.target.closest("[data-sac-add-filter]");
       if (addFilter) {
         const initialField = this.filterFieldMap.get(addFilter.dataset.sacAddFilter);
-        if (!initialField || this.state.filters.some((filter) => filter.field === initialField.path)) return;
+        if (!initialField) return;
         this.state.filters.push({
           id: String(this.nextFilterId++),
           field: initialField.path,
@@ -2802,8 +2901,9 @@
       if (target.matches("[data-sac-mode]")) this.state.mode = target.value;
       else if (target.matches("[data-sac-projection]")) this.state.projection = target.value;
       else if (target.matches("[data-sac-view]")) this.state.view = target.value;
-      else if (target.matches("[data-sac-segments]")) {
-        this.setUngroupedSegments(Array.from(target.selectedOptions).map((option) => option.value));
+      else if (target.matches("[data-sac-segment-choice]")) {
+        this.setUngroupedSegments(Array.from(this.root.querySelectorAll("[data-sac-segment-choice]:checked"))
+          .filter((choice) => !choice.disabled).map((choice) => choice.value));
       }
       else if (target.matches("[data-sac-segment-group]")) {
         if (!this.setSegmentGroupChoice(target.dataset.sacSegmentGroup, target.value)) return;
@@ -3147,6 +3247,8 @@
     associationIsMany,
     collectFields,
     collectFilterFields,
+    fieldSignature,
+    pickTone,
     operatorsForField,
     compareSemanticFields,
     discoverQueryResponseFormats,

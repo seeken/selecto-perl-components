@@ -236,7 +236,7 @@
     item.appendChild(hiddenFilterValue("filter_clause", ""));
     var heading = document.createElement("div");
     heading.className = "sc-filter-set-heading";
-    appendLabel(heading, label, type);
+    appendLabel(heading, label, type, field);
     var remove = document.createElement("button");
     remove.type = "button";
     remove.dataset.scFilterAction = "remove";
@@ -321,6 +321,7 @@
   function refreshFilterPicker(root) {
     var items = Array.from(root.querySelectorAll("[data-sc-filter-set-item]"));
     var available = Array.from(root.querySelectorAll("[data-sc-filter-available-item]"));
+    refreshPickerHighlights(items, available);
     var availableList = root.querySelector("[data-sc-filter-available]");
     var availableEmpty = availableList && availableList.querySelector(".sc-picker-empty");
     if (available.length && availableEmpty) availableEmpty.remove();

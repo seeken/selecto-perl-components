@@ -993,8 +993,11 @@ $t->get_ok('/explore/products?q=1&view=detail&field=created_on&field_alias=Creat
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-set-item]:nth-child(2) input[name="field_alias"][value="Created time"]')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-set-item]:nth-child(2) select[name="field_format"] option[value="time"][selected]')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available-item][data-field="created_on"][data-sc-picker-repeatable]')
+    ->text_is('[data-sc-picker-kind="field"] [data-sc-picker-available-item][data-field="created_on"] small' => 'created_on - date')
+    ->text_is('[data-sc-picker-kind="field"] [data-sc-picker-set-item][data-field="created_on"]:nth-child(1) small' => 'created_on - date')
     ->element_count_is('[data-sc-filter-set-item][data-field="created_on"]', 2)
-    ->element_exists('[data-sc-filter-available-item][data-field="created_on"]');
+    ->text_is('[data-sc-filter-available-item][data-field="created_on"] small' => 'created_on - date')
+    ->text_is('[data-sc-filter-set-item][data-field="created_on"]:nth-child(1) .sc-filter-set-heading small' => 'created_on - date');
 
 $t->get_ok('/explore/products?q=1&view=detail&field=created_on&filter_field=created_on&filter_op=eq&filter_value=2026-08-15&filter_value_end=&order=created_on')
     ->status_is(200)
