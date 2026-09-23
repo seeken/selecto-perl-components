@@ -412,6 +412,98 @@ test("a live Explorer builder sends its complete query over the WebSocket", asyn
   });
 });
 
+test("pagination shows the chosen page loading until its WebSocket results arrive", async ({page}) => {
+  await page.route("http://selecto.test/**", route => route.fulfill({
+    contentType: "text/html",
+    body: `<section id="selecto-channel-truck" hx-ext="ws" hx-ws:connect="/explorer/truck/ws">
+      <section id="selecto-surface-truck"><section id="selecto-results-truck">
+        <nav class="sc-pagination"><span>Page 1 of 3
+          <span data-sc-pagination-status role="status" aria-live="polite" hidden></span></span>
+          <form action="/explorer/truck" method="get" hx-ws:send>
+            <input name="render_scope" value="results"><input name="q" value="1">
+            <button type="submit" name="page" value="2">2</button>
+            <button type="submit" name="page" value="3">3</button>
+          </form>
+        </nav>
+      </section></section>
+    </section>`,
+  }));
+  await page.addInitScript(() => {
+    class FakeWebSocket extends EventTarget {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      constructor() {
+        super();
+        this.readyState = FakeWebSocket.CONNECTING;
+        window.fakeSelectoSocket = this;
+        queueMicrotask(() => {
+          this.readyState = FakeWebSocket.OPEN;
+          this.dispatchEvent(new Event("open"));
+        });
+      }
+      send(message) { window.fakeSelectoMessage = JSON.parse(message); }
+      close() { this.readyState = FakeWebSocket.CLOSED; }
+    }
+    window.WebSocket = FakeWebSocket;
+  });
+  await page.goto("http://selecto.test/explorer/truck");
+  await page.addStyleTag({path: stylesheet});
+  await page.addScriptTag({path: htmxBundle});
+  await page.addScriptTag({path: websocketBundle});
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => window.htmx.process(document.body));
+
+  const navigation = page.locator(".sc-pagination");
+  await navigation.locator('button[value="2"]').click();
+  await expect(navigation).toHaveClass(/is-loading/);
+  await expect(navigation.locator("[data-sc-pagination-status]"))
+    .toHaveText("Loading page 2…");
+  await expect(navigation.locator('button[value="2"]')).toHaveClass(/is-loading/);
+  await expect(navigation.locator("form")).toHaveAttribute("aria-busy", "true");
+  expect(await navigation.locator('button[value="2"]').evaluate(button =>
+    getComputedStyle(button, "::before").content
+  )).toBe('""');
+  expect(new URL(page.url()).searchParams.get("page")).toBe("2");
+  await expect.poll(() => page.evaluate(() => window.fakeSelectoMessage?.page)).toBe("2");
+
+  await page.evaluate(() => {
+    const requestId = window.fakeSelectoMessage.selecto_request_id;
+    window.fakeSelectoSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
+      content: '<section id="selecto-results-truck">Page 2 results</section>',
+      target: "#selecto-results-truck",
+      swap: "outerHTML",
+      selecto: {request_id: requestId},
+    })}));
+  });
+  await expect(page.locator("#selecto-results-truck")).toHaveText("Page 2 results");
+  await expect(page.locator(".sc-pagination")).toHaveCount(0);
+});
+
+test("HTTP pagination fallback submits the clicked page and shows loading", async ({page}) => {
+  await load(page, `<nav class="sc-pagination"><span>Page 1 of 3
+      <span data-sc-pagination-status role="status" aria-live="polite" hidden></span></span>
+    <form action="/explorer/truck" method="get" hx-ws:send>
+      <input name="q" value="1">
+      <button type="submit" name="page" value="2">2</button>
+      <button type="submit" name="page" value="3">3</button>
+    </form></nav>`);
+  await page.evaluate(() => {
+    HTMLFormElement.prototype.submit = function () {
+      window.selectoHttpFallback = Object.fromEntries(new FormData(this));
+    };
+  });
+  const navigation = page.locator(".sc-pagination");
+  await navigation.locator('button[value="3"]').click();
+  await expect(navigation.locator("[data-sc-pagination-status]"))
+    .toHaveText("Loading page 3…");
+  await expect(navigation.locator('button[value="3"]')).toHaveClass(/is-loading/);
+  await expect(navigation.locator('button[value="3"]')).toBeDisabled();
+  await expect(navigation.locator('button[value="2"]')).not.toHaveAttribute("disabled");
+  expect(await page.evaluate(() => window.selectoHttpFallback)).toEqual({q: "1", page: "3"});
+});
+
 test("a results-only graph swap keeps the no-JavaScript fallback hidden", async ({page}) => {
   await page.route("http://selecto.test/**", route => route.fulfill({
     contentType: "text/html",

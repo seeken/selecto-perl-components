@@ -448,6 +448,13 @@ a { color: inherit; }
 .sc-pagination .sc-page-number { min-height: 32px; }
 .sc-pagination .sc-page-current { background: var(--sc-accent); color: var(--sc-panel); }
 .sc-pagination .sc-page-direction { font-size: .78rem; min-height: 32px; padding: 5px 10px; }
+.sc-pagination.is-loading { background: color-mix(in srgb, var(--sc-accent) 6%, var(--sc-panel)); }
+.sc-pagination-status { color: var(--sc-accent); font-size: .75rem; font-weight: 800; margin-left: 10px; white-space: nowrap; }
+.sc-pagination-status[hidden] { display: none; }
+.sc-pagination button[aria-disabled="true"] { pointer-events: none; }
+.sc-pagination button.is-loading { border-color: var(--sc-accent); }
+.sc-pagination button.is-loading::before { animation: sc-page-spin .7s linear infinite; border: 2px solid color-mix(in srgb, var(--sc-accent) 25%, var(--sc-border)); border-radius: 50%; border-top-color: var(--sc-accent); content: ""; display: inline-block; height: 10px; margin-right: 6px; vertical-align: -1px; width: 10px; }
+@keyframes sc-page-spin { to { transform: rotate(360deg); } }
 .sc-page-gap { color: var(--sc-muted); min-width: 18px; text-align: center; }
 .sc-drilldown-form { margin: 0; }
 .sc-drilldown-value { appearance: none; background: transparent; border: 0; color: var(--sc-accent); cursor: pointer; font: inherit; margin: 0; padding: 0 0 0 calc((var(--sc-rollup-level, 1) - 1) * 16px); text-align: left; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; white-space: nowrap; }
@@ -685,6 +692,9 @@ a { color: inherit; }
   .sc-builder-toggle { transition: border-color .16s ease, color .16s ease, transform .3s cubic-bezier(.22, 1, .36, 1); }
   .sc-results { transition: opacity .12s ease; }
   .sc-results-spinner { animation: sc-results-spin .72s linear infinite; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-pagination button.is-loading::before { animation: none; }
 }
 @keyframes sc-results-spin { to { transform: rotate(360deg); } }
 .sc-query-library { background: var(--sc-subpanel); border: 1px solid var(--sc-border); border-radius: 10px; display: grid; gap: 1rem; padding: 11px; }
