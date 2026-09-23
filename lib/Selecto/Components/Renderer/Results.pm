@@ -921,7 +921,9 @@ sub _pagination ($class, $model, $position = 'bottom') {
     return '<nav class="sc-pagination sc-pagination-' . _h($position) .
         '" data-sc-pagination-position="' . _h($position) .
         '" aria-label="Results pages, ' . _h($position) . '"><span>Page ' . _h($current_page) .
-        ' of ' . _h($total_pages) . '</span>' . $controls . '</nav>';
+        ' of ' . _h($total_pages) . '<span class="sc-pagination-status" ' .
+        'data-sc-pagination-status role="status" aria-live="polite" hidden></span></span>' .
+        $controls . '</nav>';
 }
 
 sub _pagination_pages ($current_page, $total_pages) {

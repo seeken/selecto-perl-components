@@ -1517,14 +1517,15 @@
     return snapshot;
   }
 
-  function formNavigationUrl(form) {
+  function formNavigationUrl(form, submitter) {
     if (!form) return null;
     try {
       var target = new URL(form.getAttribute("action") || window.location.href, window.location.href);
       if (target.origin !== window.location.origin) return null;
       if ((form.getAttribute("method") || "get").toLowerCase() === "get") {
         var query = new URLSearchParams();
-        new FormData(form).forEach(function (value, name) {
+        var data = submitter ? new FormData(form, submitter) : new FormData(form);
+        data.forEach(function (value, name) {
           if (typeof File !== "undefined" && value instanceof File) return;
           if (name === "selecto_request_id") return;
           query.append(name, value);
@@ -1558,8 +1559,8 @@
     });
   }
 
-  function beginSelectoNavigation(form) {
-    var url = formNavigationUrl(form);
+  function beginSelectoNavigation(form, submitter) {
+    var url = formNavigationUrl(form, submitter);
     if (!url) return;
     syncSavedQueryForms(url);
     var requestId = "selecto-" + Date.now() + "-" + (++selectoRequestCounter);
@@ -1663,10 +1664,13 @@
     connectionStatus = socket && socket.readyState === WebSocket.OPEN
       ? "Live" : "Reconnecting";
     renderConnectionStatus();
-    if (connectionStatus === "Live") return;
-    scheduleSelectoWebSocketRecovery(750);
     var target = event.target instanceof Element ? event.target : null;
     var form = target && (target.matches("form") ? target : target.closest("form"));
+    if (connectionStatus === "Live") {
+      clearPaginationLoading(form);
+      return;
+    }
+    scheduleSelectoWebSocketRecovery(750);
     if (!form || !form.hasAttribute("hx-ws:send")) return;
     // A channel can be present in the DOM while its HTMX connection object is
     // absent (for example after browser restoration or a reconnect race).
@@ -1674,7 +1678,8 @@
     // submitted state and finish through the equivalent HTTP route.
     submitWithoutWebSocket(
       form,
-      form.matches("[data-sc-builder]") ? "Running…" : "Opening…"
+      form.matches("[data-sc-builder]") ? "Running…" : "Opening…",
+      form.querySelector('button[name="page"].is-loading')
     );
   });
 
@@ -1716,6 +1721,11 @@
     if (!form) {
       var websocketForm = event.target.closest("form");
       if (!websocketForm || !websocketForm.hasAttribute("hx-ws:send")) return;
+      if (websocketForm.dataset.scPaginationPending === "true") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
       if (websocketForm.hasAttribute("data-selecto-template-event")) {
         if (usesSelectoWebSocket(websocketForm)) {
           event.preventDefault();
@@ -1730,13 +1740,15 @@
       var websocketConnection = document.querySelector("[data-selecto-connection]");
       if (usesSelectoWebSocket(websocketForm)) {
         event.preventDefault();
-        beginSelectoNavigation(websocketForm);
+        beginSelectoNavigation(websocketForm, event.submitter);
+        showPaginationLoading(websocketForm, event.submitter);
         return;
       }
+      showPaginationLoading(websocketForm, event.submitter);
       if (websocketConnection && websocketConnection.classList.contains("is-live")) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      submitWithoutWebSocket(websocketForm);
+      submitWithoutWebSocket(websocketForm, "Loading…", event.submitter);
       return;
     }
     rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
@@ -1769,12 +1781,56 @@
     submitWithoutWebSocket(form, "Running…");
   }, true);
 
-  function submitWithoutWebSocket(form, buttonLabel) {
+  function showPaginationLoading(form, submitter) {
+    var pagination = form && form.closest(".sc-pagination");
+    if (!pagination || !submitter || submitter.name !== "page") return;
+    form.dataset.scPaginationPending = "true";
+    var requestId = form.querySelector('input[name="selecto_request_id"]');
+    if (requestId) form.dataset.scPaginationRequestId = requestId.value;
+    pagination.classList.add("is-loading");
+    form.setAttribute("aria-busy", "true");
+    pagination.querySelectorAll('button[name="page"]').forEach(function (button) {
+      button.setAttribute("aria-disabled", "true");
+    });
+    submitter.classList.add("is-loading");
+    var status = pagination.querySelector("[data-sc-pagination-status]");
+    if (status) {
+      status.textContent = "Loading page " + submitter.value + "…";
+      status.hidden = false;
+    }
+  }
+
+  function clearPaginationLoading(form) {
+    var pagination = form && form.closest(".sc-pagination");
+    if (!pagination) return;
+    delete form.dataset.scPaginationPending;
+    delete form.dataset.scPaginationRequestId;
+    pagination.classList.remove("is-loading");
+    form.removeAttribute("aria-busy");
+    pagination.querySelectorAll('button[name="page"]').forEach(function (button) {
+      button.removeAttribute("aria-disabled");
+      button.classList.remove("is-loading");
+    });
+    var status = pagination.querySelector("[data-sc-pagination-status]");
+    if (status) {
+      status.hidden = true;
+      status.textContent = "";
+    }
+  }
+
+  function submitWithoutWebSocket(form, buttonLabel, submitter) {
     if (!form || form.dataset.scHttpSubmitting === "true") return;
     form.dataset.scHttpSubmitting = "true";
+    if (submitter && submitter.name) {
+      var submittedValue = document.createElement("input");
+      submittedValue.type = "hidden";
+      submittedValue.name = submitter.name;
+      submittedValue.value = submitter.value;
+      form.appendChild(submittedValue);
+    }
     var requestId = form.querySelector('input[name="selecto_request_id"]');
     if (requestId) requestId.disabled = true;
-    var button = form.querySelector('button[type="submit"]');
+    var button = submitter || form.querySelector('button[type="submit"]');
     if (button) {
       button.disabled = true;
       if (buttonLabel) button.textContent = buttonLabel;
@@ -1848,6 +1904,11 @@
         reconcileTemplateWebSocketMessage(message);
         var requestId = message && message.selecto && message.selecto.request_id;
         if (requestId && requestId === activeSelectoRequestId) activeSelectoRequestId = null;
+        if (requestId) {
+          document.querySelectorAll("form[data-sc-pagination-pending]").forEach(function (form) {
+            if (form.dataset.scPaginationRequestId === requestId) clearPaginationLoading(form);
+          });
+        }
         var nextUrl = message && message.selecto && message.selecto.url;
         if (message && message.selecto
             && typeof message.selecto.api_console_control === "string") {
