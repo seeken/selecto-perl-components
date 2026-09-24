@@ -96,6 +96,7 @@ sub register ($self, $app, $plugin_config) {
         template_path => $template_path,
         instance_path => $instance_path,
         event_id_generator => $event_id_generator,
+        clock => $clock,
     );
     my %by_release = map { $templates->{$_}{release_id} => $templates->{$_} }
         keys %$templates;
@@ -128,6 +129,10 @@ sub register ($self, $app, $plugin_config) {
     $app->routes->get("$template_path/:selecto_template_id")->to(cb => sub ($controller) {
         return Selecto::Components::Controller::Templates->show($controller, $runtime);
     });
+    $app->routes->get("$instance_path/:selecto_template_instance_id")
+        ->to(cb => sub ($controller) {
+            return Selecto::Components::Controller::Templates->reopen($controller, $runtime);
+        });
     $app->routes->post("$instance_path/:selecto_template_instance_id/events")
         ->to(cb => sub ($controller) {
             return Selecto::Components::Controller::Templates->event($controller, $runtime);
@@ -136,6 +141,16 @@ sub register ($self, $app, $plugin_config) {
         ->post("$instance_path/:selecto_template_instance_id/sources/:selecto_template_source_id")
         ->to(cb => sub ($controller) {
             return Selecto::Components::Controller::Templates->source($controller, $runtime);
+        });
+    $app->routes
+        ->post("$instance_path/:selecto_template_instance_id/pages/:selecto_template_source_id")
+        ->to(cb => sub ($controller) {
+            return Selecto::Components::Controller::Templates->page($controller, $runtime);
+        });
+    $app->routes
+        ->post("$instance_path/:selecto_template_instance_id/root-pages/:selecto_template_source_id")
+        ->to(cb => sub ($controller) {
+            return Selecto::Components::Controller::Templates->root_page($controller, $runtime);
         });
     $app->routes->websocket("$instance_path/:selecto_template_instance_id/ws")
         ->to(cb => sub ($controller) {
@@ -166,14 +181,47 @@ sub _templates ($specs, $default_source_timeout_seconds) {
             if $releases{$release}++;
         die "template $id requires a renderer registry\n"
             unless ref($registry) eq 'HASH';
-        for my $callback (qw(resolve_inputs resolve_source_context source_authorizer source_runner)) {
+        for my $callback (qw(resolve_inputs resolve_source_context resolve_page_scope source_authorizer source_runner)) {
             die "template $id $callback must be a coderef\n"
                 if defined($spec->{$callback}) && ref($spec->{$callback}) ne 'CODE';
         }
         my $has_sources = ref($manifest->{sources}) eq 'ARRAY'
             && @{$manifest->{sources}};
+        my $root_sources = $spec->{root_cursor_sources} // [];
+        die "template $id root_cursor_sources must be a list of declared source IDs\n"
+            unless ref($root_sources) eq 'ARRAY';
+        my %declared_sources = map { ($_->{id} // '') => $_ }
+            grep { ref($_) eq 'HASH' }
+            @{ref($manifest->{sources}) eq 'ARRAY' ? $manifest->{sources} : []};
+        my %seen_root_sources;
+        for my $source_id (@$root_sources) {
+            die "template $id root_cursor_sources contains an invalid source\n"
+                unless _scalar($source_id, 128)
+                && !$seen_root_sources{$source_id}++
+                && ref($declared_sources{$source_id}) eq 'HASH';
+            my $query = $declared_sources{$source_id}{query};
+            die "template $id root cursor source $source_id has no keyset root query\n"
+                unless ref($query) eq 'HASH'
+                && ref($query->{select}) eq 'ARRAY'
+                && ref($query->{order_by}) eq 'ARRAY'
+                && (@{$query->{order_by}}
+                    || (ref($query->{ordering_choice}) eq 'HASH'
+                        && ref($query->{ordering_choice}{choices}) eq 'ARRAY'
+                        && @{$query->{ordering_choice}{choices}}
+                        && ref($query->{ordering_choice}{binding}) eq 'HASH'))
+                && defined($query->{limit}) && !ref($query->{limit})
+                && "$query->{limit}" =~ /\A[1-9][0-9]*\z/
+                && !exists($query->{page});
+        }
         die "template $id requires source_authorizer for its declared sources\n"
             if $has_sources && ref($spec->{source_authorizer}) ne 'CODE';
+        if (_manifest_has_pages($manifest) || @$root_sources) {
+            die "template $id requires a page_secret of at least 32 bytes\n"
+                unless defined($spec->{page_secret}) && !ref($spec->{page_secret})
+                && length($spec->{page_secret}) >= 32;
+            die "template $id requires resolve_page_scope for its paged sources\n"
+                unless ref($spec->{resolve_page_scope}) eq 'CODE';
+        }
         my $ttl_seconds = _positive_integer(
             $spec->{ttl_seconds} // 3600, 86_400,
             "template $id ttl_seconds",
@@ -185,6 +233,9 @@ sub _templates ($specs, $default_source_timeout_seconds) {
         my $source_timeout_seconds = _positive_number(
             $spec->{source_timeout_seconds} // $default_source_timeout_seconds,
             300, "template $id source_timeout_seconds",
+        );
+        my $source_resource_budget = _source_resource_budget(
+            $spec->{source_resource_budget}, "template $id source_resource_budget",
         );
         die "template $id source_timeout_seconds must be less than lease_seconds\n"
             if $has_sources && $source_timeout_seconds >= $lease_seconds;
@@ -198,11 +249,51 @@ sub _templates ($specs, $default_source_timeout_seconds) {
             ttl_seconds => $ttl_seconds,
             lease_seconds => $lease_seconds,
             source_timeout_seconds => $source_timeout_seconds,
+            source_resource_budget => $source_resource_budget,
             public_inputs => $public_inputs,
             title => _scalar($spec->{title}, 256) ? "$spec->{title}" : "$id",
         };
     }
     return \%templates;
+}
+
+sub _manifest_has_pages ($manifest) {
+    return 0 unless ref($manifest->{sources}) eq 'ARRAY';
+    for my $source (@{$manifest->{sources}}) {
+        next unless ref($source) eq 'HASH'
+            && ref($source->{query}) eq 'HASH';
+        return 1 if _collection_has_page($source->{query}{collections});
+    }
+    return 0;
+}
+
+sub _collection_has_page ($collections) {
+    return 0 unless ref($collections) eq 'ARRAY';
+    for my $collection (@$collections) {
+        next unless ref($collection) eq 'HASH';
+        return 1 if exists($collection->{page_size});
+        return 1 if _collection_has_page($collection->{collections});
+    }
+    return 0;
+}
+
+sub _source_resource_budget ($value, $name) {
+    return undef unless defined($value);
+    die "$name must be an object\n" unless ref($value) eq 'HASH';
+    my %maximum = (
+        max_root_rows => 10_000,
+        max_result_nodes => 1_000_000,
+        max_collection_depth => 8,
+        max_source_statements => 32,
+        max_input_bytes => 16_777_216,
+        max_result_bytes => 16_777_216,
+    );
+    my %budget;
+    for my $key (keys %$value) {
+        die "$name has an unknown field $key\n" unless exists($maximum{$key});
+        $budget{$key} = _positive_integer($value->{$key}, $maximum{$key}, "$name $key");
+    }
+    return \%budget;
 }
 
 sub _path ($value, $name) {

@@ -487,6 +487,13 @@ plugin 'Selecto::Components::Templates' => {
             ttl_seconds => 3600,
             lease_seconds => 30,
             source_timeout_seconds => 15,
+            source_resource_budget => {
+                max_root_rows => 100,
+                max_result_nodes => 10_000,
+                max_collection_depth => 3,
+                max_input_bytes => 1_048_576,
+                max_result_bytes => 1_048_576,
+            },
             resolve_inputs => sub ($controller) {
                 return trusted_server_inputs($controller);
             },
@@ -514,8 +521,11 @@ The plugin adds these ordinary HTTP routes by default:
 | Route | Purpose |
 | --- | --- |
 | `GET /templates/:id` | Mount an opaque owner-bound instance and render the full page |
+| `GET /template-instances/:instance` | Reopen an existing owner-bound instance without rerunning sources |
 | `POST /template-instances/:instance/events` | Normalize and dispatch one declared event |
 | `POST /template-instances/:instance/sources/:source` | Claim and execute one current declared source generation |
+| `POST /template-instances/:instance/pages/:source` | Advance one nested collection with an opaque parent-bound cursor |
+| `POST /template-instances/:instance/root-pages/:source` | Replace the visible root page through a guarded keyset continuation |
 | `WS /template-instances/:instance/ws` | Dispatch typed events with the pinned HTMX 4 WebSocket envelope |
 
 `template_path` and `instance_path` can replace the two prefixes. Every response is
@@ -523,9 +533,43 @@ private and `no-store`; state-changing requests require the session-bound Mojoli
 CSRF token. POST responses return the same stable instance root as an HTML fragment
 when `HX-Request: true`, and a complete page otherwise. The root carries state and
 store revisions, disables HTMX history snapshots, and pending source forms use the
-packaged htmx runtime with an ordinary submit fallback. It also declares the htmx 4
+packaged htmx runtime with an ordinary submit fallback. A pending portable source
+form carries the matching instance GET as its bounded lost-response recovery URL.
+The GET reloads the pinned release under fresh owner resolution and never creates
+a new instance or executes a source. HTMX 4 requests marked
+`HX-Request-Type: full` receive a complete document even when `HX-Request: true`;
+partial requests receive the instance root or affected regions. A template link
+can use `hx-get`, `hx-target="body"`, `hx-swap="outerHTML"`, and
+`hx-push-url="true"` to mount another template without a browser document reload,
+while its ordinary `href` handles JavaScript-disabled navigation. The new mount
+gets a new instance; revision guards continue to apply to updates of each
+existing instance. The root also declares the htmx 4
 status policy explicitly: bounded 4xx and 5xx fragments replace the stable root.
 Browser tests pin successful swaps plus 409 conflict and 422 validation behavior.
+
+To expose a root keyset control, list the compiled source in
+`root_cursor_sources`, give the template a server-only `page_secret` of at
+least 32 bytes, and provide `resolve_page_scope` with current tenant,
+principal, authorization revision, and membership revision. The source
+authorizer must return the same fresh scope as `page_scope` alongside its
+engine and query. The normal source route then executes its first read with
+`root_cursor => 'first'`; a ready result containing
+`root_page` then renders an opaque Next form. Its POST reauthorizes the source,
+resolves the token against the current owner-bound snapshot, and commits the
+visible root result through the store compare-and-set transition. The form
+submits no raw order tuple. The route supports HTMX replacement and ordinary
+POST fallback; `t/templates_root_page_http.t` exercises mount, first read,
+continuation, and stale-result rejection with a synthetic adapter.
+
+```perl
+root_cursor_sources => ['orders'],
+page_secret => $server_only_page_secret,
+resolve_page_scope => sub ($controller, $snapshot, $source_id) {
+    return current_page_scope($controller, $snapshot, $source_id);
+},
+# source_authorizer returns {status => 'ok', engine => $engine,
+#     query => $authorized_query, page_scope => $same_fresh_scope}
+```
 
 `public_inputs` is the host's explicit allowlist for bookmarkable GET filters. Each
 name must be an input declared by the compiled manifest with type `string`, `integer`,
@@ -577,6 +621,18 @@ limit; `source_max_payload_bytes` and `source_max_result_bytes` can lower or rai
 that bound up to 16 MiB. A host can inject an object implementing `execute` as
 `source_scheduler` when it needs an existing supervised worker service.
 
+Every source is also checked before query execution against a host-owned
+cardinality budget. Defaults are 100 root rows, 10,000 projected root/child
+nodes, three collection levels, two source statements, and 1 MiB each for
+source-effect input and projected JSON. A collection must
+declare `max-items` to admit a finite bound. A template's
+`source_resource_budget` can change those limits, including
+`max_source_statements` for declared external totals; browser state and the
+compiled template cannot raise them. The check
+uses the effective root limit after the host query and template plan are
+combined. The scheduler's independent payload/result byte, time, and worker
+limits still apply to the full worker exchange.
+
 The route test starts a slow source and an unrelated HTTP request concurrently. The
 unrelated route completes first, while child-process audit evidence confirms that
 source authorization and DB-handle creation run outside the web process. Scheduler
@@ -591,18 +647,21 @@ want ordinary Mojolicious EP markup instead of the generic compiled renderer:
 ```perl
 my $model = $controller->selecto_template_model(
     template => 'order_browser',
+    expected_template_id => 'order_browser',
     instance_path => '/native-template-instances',
     target => '#native-order-browser',
 );
 
 my $next = $controller->selecto_template_dispatch_event(
     instance => $controller->stash('instance'),
+    expected_template_id => 'order_browser',
     instance_path => '/native-template-instances',
     target => '#native-order-browser',
 );
 
 my $scheduled = $controller->selecto_template_dispatch_source(
     instance => $controller->stash('instance'),
+    expected_template_id => 'order_browser',
     source => $controller->stash('source'),
     instance_path => '/native-template-instances',
     target => '#native-order-browser',
@@ -613,6 +672,7 @@ my $scheduled = $controller->selecto_template_dispatch_source(
 
 $controller->selecto_template_websocket(
     instance => $controller->stash('instance'),
+    expected_template_id => 'order_browser',
     instance_path => '/native-template-instances',
     target => '#native-order-browser',
     render => sub ($next_model) {
@@ -632,6 +692,31 @@ CSRF fields, component lifetime, and revisions as escaped values. Editable event
 values stay in the field named by `input_name`. The `transport` object supplies a
 stable channel ID and WebSocket path; event descriptors advertise `hx_ws_send` when
 the EP chooses the packaged HTMX WebSocket transport.
+Pass the host-owned `expected_template_id` on every instance-bound native route.
+It must identify the template that the EP file renders. A different stored
+template returns not found before an event or source runs, and a mismatched
+WebSocket is closed before accepting messages.
+Native event forms using that browser transport carry
+`data-selecto-template-event` with the descriptor's event name and live beneath
+the model's `data-selecto-template-instance` root. The shared browser code uses
+those values with the descriptor's component lifetime and form revision to reject
+stale replies; an EP form does not need a generic renderer node wrapper. Keep the
+ordinary form method and action so the same event works without JavaScript.
+For HTTP events, the browser retains the submitted event ID before HTMX swaps
+the root. Completion releases that event's queue even when HTMX reports the
+replacement root as the response source, so a second event can use the new
+server-issued form fields.
+An EP source form may opt into lost-response recovery with
+`data-selecto-template-resume-url="/native-template-instances/<instance>"`.
+The shared browser code accepts only a same-origin instance GET matching the
+form's source POST path and the enclosing instance ID. On a network failure it
+reopens that owner-checked instance once, allowing a committed source to render
+without rerunning its query. If the source request fails again, the form shows
+an alert and waits for an explicit page reload. HTTP error responses are not
+automatically retried. A ready reopened page clears that source's retry marker
+so a later source generation can recover independently. Install the component
+browser script before HTMX on pages with load-triggered source forms so its
+completion listener is ready.
 
 The dispatch helpers use the same owner resolution, CSRF validation, component
 identity, effect leases, source workers, reducer, and instance store as the generic

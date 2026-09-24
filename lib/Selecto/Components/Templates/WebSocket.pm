@@ -21,6 +21,7 @@ sub connect ($class, $controller, $runtime, %options) {
         // $controller->stash('selecto_template_instance_id');
     my $context = Selecto::Components::Controller::Templates->instance_context(
         $controller, $runtime, $instance_id,
+        expected_template_id => $options{expected_template_id},
     );
     return $controller->finish(1008 => 'Template connection is not authorized')
         unless $context->{status} eq 'ok';
@@ -51,6 +52,7 @@ sub connect ($class, $controller, $runtime, %options) {
             $socket, $runtime,
             instance_id => $instance_id,
             params => $params,
+            expected_template_id => $options{expected_template_id},
         );
         return $socket->finish(1008 => 'Template connection is not authorized')
             if ($result->{status} // '') eq 'unauthenticated'
