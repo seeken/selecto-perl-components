@@ -10,6 +10,7 @@ use Mojo::WebSocket qw(WS_PING);
 use Scalar::Util qw(blessed);
 use Time::HiRes qw(time);
 use Selecto::Components::Config ();
+use Selecto::Components::CannedPage ();
 use Selecto::Components::Controller::Actions ();
 use Selecto::Components::Controller::Explorer ();
 use Selecto::Components::Controller::Lookups ();
@@ -69,9 +70,11 @@ sub register ($self, $app, $plugin_config) {
     $plugin_config //= {};
     die "Selecto::Components plugin configuration must be an object\n"
         unless ref($plugin_config) eq 'HASH';
-    my $specs = $plugin_config->{explorers};
-    die "Selecto::Components requires an explorers object\n"
-        unless ref($specs) eq 'HASH' && keys %$specs;
+    my $specs = $plugin_config->{explorers} // {};
+    my $page_specs = $plugin_config->{pages} // {};
+    die "Selecto::Components requires explorers or pages\n"
+        unless ref($specs) eq 'HASH' && ref($page_specs) eq 'HASH'
+            && (keys(%$specs) || keys(%$page_specs));
     my $origin_check = $plugin_config->{origin_check}
         // \&Selecto::Components::WebSocketPolicy::same_origin;
     die "origin_check must be a coderef\n" unless ref($origin_check) eq 'CODE';
@@ -123,9 +126,41 @@ sub register ($self, $app, $plugin_config) {
             0 + $websocket_heartbeat_interval,
         );
     }
+    my %pages;
+    my %registered_path = map { $_->config->path => 1 } values %explorers;
+    for my $id (sort keys %$page_specs) {
+        my $spec = $page_specs->{$id};
+        die "canned page $id configuration must be an object\n" unless ref($spec) eq 'HASH';
+        my $engine_factory = $spec->{engine_factory};
+        my $scope_factory = $spec->{scope_factory};
+        my $path = $spec->{path} // "/pages/$id";
+        die "duplicate Selecto Components route $path\n" if $registered_path{$path}++;
+        my %definition = %$spec;
+        delete @definition{qw(engine_factory scope_factory path title)};
+        my $page = Selecto::CannedPage->new(%definition, id => $id);
+        my $component = Selecto::Components::CannedPage->new(
+            page => $page, engine_factory => $engine_factory,
+            scope_factory => $scope_factory,
+            path => $path, title => $spec->{title} // _humanize($id),
+        );
+        my $route_path = _mounted_route_path($path, $route_prefix);
+        $routes->get($route_path)->to(cb => sub ($controller) { $component->handle($controller) });
+        $routes->post($route_path)->to(cb => sub ($controller) { $component->handle($controller) });
+        $routes->websocket($route_path . '/ws')->to(cb => sub ($controller) {
+            return $controller->finish(1008 => 'WebSocket origin is not allowed')
+                unless $origin_check->($controller);
+            $controller->inactivity_timeout($websocket_inactivity_timeout);
+            $component->handle_websocket($controller);
+        });
+        $pages{$id} = $component;
+    }
     $app->helper(selecto_components_explorer => sub ($controller, $id) {
         die "unknown Selecto Components explorer $id\n" unless $explorers{$id};
         return $explorers{$id};
+    });
+    $app->helper(selecto_components_page => sub ($controller, $id) {
+        die "unknown Selecto Components page $id\n" unless $pages{$id};
+        return $pages{$id};
     });
     return $self;
 }

@@ -745,6 +745,52 @@ This registers:
 - `GET /explore/products?format=xlsx|csv|tsv|json` for the current result page; and
 - `WS /explore/products/ws` for htmx 4 incremental updates.
 
+## Canned search pages
+
+The plugin accepts `pages` alongside `explorers`, or by itself. Each page
+definition is passed to `Selecto::CannedPage`; `engine_factory` supplies the
+authorized engine for the current request. For example:
+
+```perl
+plugin 'Selecto::Components' => {
+    pages => {
+        products => {
+            path => '/products', title => 'Product Search',
+            domain => $domain,
+            engine_factory => sub ($controller) { authorized_engine($controller) },
+            scope_factory => sub ($controller, $engine) {
+                return authorized_predicate($controller);
+            },
+            dataset => {query => $base_query, entity_key => ['id']},
+            views => [
+                {id => 'list', kind => 'detail', query => $detail_query},
+                {id => 'categories', kind => 'aggregate', query => $aggregate_query},
+            ],
+            controls => [
+                {id => 'brand', label => 'Brand', kind => 'facet', field => 'brand',
+                    values => {source => 'dataset', limit => 30, searchable => 1}},
+                {id => 'price', label => 'Price', kind => 'range', field => 'price'},
+            ],
+            initial_state => {view => 'list', filters => {}},
+        },
+    },
+};
+```
+
+The route renders a complete page with editable controls, exact facet counts,
+detail/aggregate views, aggregate-to-detail drilldowns, and bounded pagination.
+htmx WebSocket submissions replace the page surface; the request ID prevents
+stale responses from overwriting newer selections. With query parameters
+enabled, accepted updates refresh the shareable URL, and ordinary GET forms
+remain a fallback. With Domain `components.query_params` set to false, the form
+uses POST, GET query state redirects to the plain path, and responses carry
+`Cache-Control: no-store`. These paths also work without JavaScript. The page
+does not expose the explorer's freeform builder or export actions. See
+`selecto-perl` for planner semantics and current query restrictions.
+`scope_factory` is optional, but hosts with request-specific row scope should
+use it. Its expression stays in every result and facet query, including
+aggregate drilldowns.
+
 ## Host themes
 
 An application can adapt an Explorer to request-specific branding without
@@ -1321,6 +1367,13 @@ mise run server
 ```
 
 Open [http://127.0.0.1:4128/explore/products](http://127.0.0.1:4128/explore/products).
+The authored faceted page is at
+[http://127.0.0.1:4128/pages/products](http://127.0.0.1:4128/pages/products).
+It uses the Explorer page shell, theme, field labels, and result table. Its
+controls expose only the programmer-defined views and promoted filters; users
+cannot edit the underlying query's fields, joins, groups, or measures. Its
+WebSocket script is separate from Explorer's query-builder transport so each
+page accepts only responses for its own request state.
 Set `PORT` or `PHX_DEV_HOSTNAME` to change the development endpoint.
 
 ## Verification boundary
