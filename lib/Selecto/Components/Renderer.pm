@@ -15,7 +15,6 @@ sub page ($class, $model) {
     my $config = $model->{config};
     my $title = _h($class->_page_title($model));
     my $surface = $class->surface($model);
-    my $ws_path = _h($config->path . '/ws');
     # Resolve the shell first because a host may resolve and cache its shell
     # and theme together.  The shell needs the model's effective page title.
     my $page_shell = $config->page_shell($model);
@@ -30,23 +29,36 @@ sub page ($class, $model) {
     my $main_class = 'sc-page';
     $main_class .= ' ' . $page_shell->{content_class}
         if length($page_shell->{content_class} // '');
-    return '<!doctype html><html lang="en"' . $scheme_attribute . $theme_attribute .
+    return $class->page_document(
+        title => $title, scheme_attribute => $scheme_attribute,
+        theme_attribute => $theme_attribute, body_class => $body_class,
+        page_shell => $page_shell, main_class => $main_class,
+        channel_id => 'selecto-channel-' . $config->id,
+        ws_path => $config->path . '/ws', surface => $surface,
+    );
+}
+
+sub page_document ($class, %args) {
+    my $page_shell = $args{page_shell} // {};
+    return '<!doctype html><html lang="en"' . ($args{scheme_attribute} // '') . ($args{theme_attribute} // '') .
         '><head><meta charset="utf-8">' .
         '<meta name="viewport" content="width=device-width,initial-scale=1">' .
-        '<title>' . $title . '</title>' .
+        '<title>' . $args{title} . '</title>' .
         ($page_shell->{head_start_html} // '') .
         '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' . asset_revision() . '">' .
         '<noscript><style>.sc-chart .sc-chart-canvas{display:none!important}' .
         '.sc-chart .sc-chart-fallback{display:block!important}</style></noscript>' .
         '<script defer src="/selecto-components/htmx.min.js?v=' . asset_revision() . '"></script>' .
         '<script defer src="/selecto-components/hx-ws.min.js?v=' . asset_revision() . '"></script>' .
-        '<script defer src="/selecto-components/selecto-components.js?v=' . asset_revision() . '"></script>' .
-        ($page_shell->{head_html} // '') .
-        '</head><body' . $body_class . '>' . ($page_shell->{body_start_html} // '') .
-        '<main class="' . _h($main_class) . '"><div class="sc-shell">' .
-        '<section id="selecto-channel-' . _h($config->id) . '" hx-ext="ws" hx-ws:connect="' .
-        $ws_path . '" hx-swap="none">' .
-        $surface . '</section></div></main></body></html>';
+        (($args{include_explorer_script} // 1)
+            ? '<script defer src="/selecto-components/selecto-components.js?v=' . asset_revision() . '"></script>'
+            : '') .
+        ($args{extra_head_html} // '') . ($page_shell->{head_html} // '') .
+        '</head><body' . ($args{body_class} // '') . '>' . ($page_shell->{body_start_html} // '') .
+        '<main class="' . _h($args{main_class} // 'sc-page') . '"><div class="sc-shell">' .
+        '<section id="' . _h($args{channel_id}) . '" hx-ext="ws" hx-ws:connect="' .
+        _h($args{ws_path}) . '" hx-swap="none">' .
+        $args{surface} . '</section></div></main></body></html>';
 }
 
 sub surface ($class, $model) {

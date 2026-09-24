@@ -7,6 +7,9 @@ lib/Selecto/Components/Actions.pm
 lib/Selecto/Components/APIConsole.pm
 lib/Selecto/Components/AssetManifest.pm
 lib/Selecto/Components/BucketParser.pm
+lib/Selecto/Components/CannedPage.pm
+public/selecto-components/canned-page.js
+public/selecto-components/canned-page.css
 lib/Selecto/Components/Config.pm
 lib/Selecto/Components/Controller/Actions.pm
 lib/Selecto/Components/Controller/Explorer.pm
@@ -90,9 +93,11 @@ src/browser/shell.js
 src/browser/templates.js
 t/00-load.t
 t/api_console.t
+t/browser/canned-page.spec.js
 t/browser/components.spec.js
 t/browser/templates.spec.js
 t/bucket_parser.t
+t/canned_page_http.t
 t/date_shortcut.t
 t/graph_axis_planner.t
 t/i18n.t
