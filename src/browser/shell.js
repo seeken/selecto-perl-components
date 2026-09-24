@@ -163,11 +163,16 @@
       }
     }
     root.querySelectorAll("[data-sc-picker-root]").forEach(refreshColumnPicker);
+    root.querySelectorAll("[data-sc-filter-root]").forEach(refreshFilterPicker);
   }
 
   function restoreResultViews() {
     document.querySelectorAll("[data-sc-builder]").forEach(function (root) {
       var selected = root.querySelector('input[name="view"]:checked');
       if (selected) stageResultView(root, selected.value);
+      else {
+        root.querySelectorAll("[data-sc-picker-root]").forEach(refreshColumnPicker);
+        root.querySelectorAll("[data-sc-filter-root]").forEach(refreshFilterPicker);
+      }
     });
   }

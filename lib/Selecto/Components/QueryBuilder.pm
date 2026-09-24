@@ -529,15 +529,38 @@ sub _with_filters ($query, $state, $config, $domain) {
     my @expressions;
     my %clause_expressions;
     my @clause_order;
-    my $field_map = $config->field_map($domain);
+    my $field_map = $config->filter_map($domain);
     for my $filter (@{$state->filters}) {
         my ($field, $op, $value, $value_end) = @{$filter}{qw(field op value value_end)};
         next if $filter->{draft};
         my $type = $field_map->{$field}{type};
-        my $operand = $filter->{grouped}
-            ? _group_expression({field => $field, type => $type}, $state->group_configs->{$field} // {})
-            : _temporal_expression($field, $type);
-        my $expression = _filter_expression($operand, $op, $value, $value_end);
+        my $catalog_field = $field_map->{$field};
+        my $expression;
+        if (ref($catalog_field->{conditional}) eq 'HASH') {
+            my $conditional = $catalog_field->{conditional};
+            my $when = Selecto::Expression->field($conditional->{when_field});
+            my $present = _filter_expression(
+                Selecto::Expression->field($conditional->{present_field}),
+                $op, $value, $value_end,
+            );
+            my $absent = _filter_expression(
+                Selecto::Expression->field($conditional->{absent_field}),
+                $op, $value, $value_end,
+            );
+            $expression = Selecto::Expression->any([
+                Selecto::Expression->all([
+                    Selecto::Expression->not_null($when), $present,
+                ]),
+                Selecto::Expression->all([
+                    Selecto::Expression->is_null($when), $absent,
+                ]),
+            ]);
+        } else {
+            my $operand = $filter->{grouped}
+                ? _group_expression({field => $field, type => $type}, $state->group_configs->{$field} // {})
+                : _temporal_expression($field, $type);
+            $expression = _filter_expression($operand, $op, $value, $value_end);
+        }
         if (defined($filter->{clause})) {
             push @clause_order, $filter->{clause}
                 unless exists($clause_expressions{$filter->{clause}});
