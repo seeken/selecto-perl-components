@@ -922,8 +922,18 @@ sub execute_query ($self, $statement) {
 package TestSelectoComponents::Controller;
 
 use Mojo::Base -base, -signatures;
+use Mojo::Message::Request ();
 
 has params => sub { {} };
+
+sub req ($self) {
+    my $request = Mojo::Message::Request->new;
+    for my $name (keys %{$self->params}) {
+        my $value = $self->params->{$name};
+        $request->params->append($name => $_) for ref($value) eq 'ARRAY' ? @$value : ($value);
+    }
+    return $request;
+}
 
 sub every_param ($self, $name) {
     my $value = $self->params->{$name};
