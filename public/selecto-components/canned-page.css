@@ -1,0 +1,42 @@
+/* Canned pages share the Explorer shell, results table, and theme. */
+.selecto-canned-page .sc-workspace {
+  --sc-tray-width: clamp(300px, 29vw, 390px);
+}
+
+.selecto-canned-controls {
+  border-left: 1px solid var(--sc-border);
+  border-radius: var(--sc-radius);
+  padding: 18px;
+}
+
+.selecto-canned-controls form { gap: 16px; }
+.selecto-canned-controls .sc-eyebrow { margin: 0; }
+.selecto-canned-controls fieldset {
+  border-top: 1px solid var(--sc-border);
+  padding-top: 14px;
+}
+.selecto-canned-controls fieldset label { display: block; margin: 8px 0; }
+.selecto-canned-controls fieldset label:has(input[type="checkbox"]) {
+  align-items: center;
+  color: var(--sc-ink);
+  display: flex;
+  font-size: .88rem;
+  font-weight: 500;
+  gap: 8px;
+}
+.selecto-canned-controls input[type="checkbox"] {
+  accent-color: var(--sc-accent);
+  height: 16px;
+  width: 16px;
+}
+.selecto-canned-controls fieldset label span {
+  color: var(--sc-muted);
+  margin-left: auto;
+}
+.selecto-canned-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.selecto-canned-results form { margin: 0; }
+.selecto-canned-results .sc-pagination form { display: flex; gap: 6px; }
+
+@media (max-width: 850px) {
+  .selecto-canned-page .sc-workspace { grid-template-columns: 1fr; }
+}
