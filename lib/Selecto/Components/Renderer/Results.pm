@@ -13,8 +13,7 @@ sub _results ($class, $model) {
     return '<div class="sc-empty"><h2>Query unavailable</h2><p>Correct the controls and try again.</p></div>'
         unless $model->{state}->valid && $model->{result};
     my $result = $model->{result};
-    my $heading = $model->{state}->view eq 'detail' ? 'Detail results'
-        : $model->{state}->view eq 'aggregate' ? 'Aggregate results' : 'Graph results';
+    my $heading = $class->heading_for_view($model->{state}->view);
     my $row_label = $result->{total_count} == 1 ? 'row matched' : 'rows matched';
     my $page_label = $result->{total_pages} == 1 ? 'page' : 'pages';
     my $meta = '<div class="sc-result-meta"><div><h2>' . _h($heading) .
@@ -40,6 +39,11 @@ sub _results ($class, $model) {
     my $debug = Selecto::Components::Renderer::Debug->_debug_panel($result, $model);
     return $meta . $actions . $grid_warning . $top_pagination . $body .
         $bottom_pagination . $debug;
+}
+
+sub heading_for_view ($class, $kind) {
+    return $kind eq 'detail' ? 'Detail results'
+        : $kind eq 'aggregate' ? 'Aggregate results' : 'Graph results';
 }
 sub _bulk_actions ($class, $model) {
     my $actions = $model->{bulk_actions} // [];
@@ -255,6 +259,9 @@ sub _table ($class, $result, $model) {
                 _h($column->{label}) . '</th>';
         }
     } @columns;
+    my $extra_column = $result->{extra_column};
+    $head .= '<th scope="col">' . _h($extra_column->{label}) . '</th>'
+        if $extra_column;
     my @group_indexes = grep { !$columns[$_]{measure} && !$columns[$_]{action_id} } 0 .. $#columns;
     my %group_position = map { $group_indexes[$_] => $_ } 0 .. $#group_indexes;
     my $rows = '';
@@ -406,17 +413,22 @@ sub _table ($class, $result, $model) {
             : defined($result->{action_key}) ? $record->{$result->{action_key}} : undef;
         my $record_attribute = defined($record_id) && !ref($record_id)
             ? ' data-sc-record-id="' . _h($record_id) . '"' : '';
+        $cells .= '<td>' . $extra_column->{cell}->($record, $index) . '</td>'
+            if $extra_column;
         $rows .= '<tr' . $record_attribute . $row_class . '>' . $cells . '</tr>';
     }
-    my $column_count = scalar(@columns);
+    my $column_count = scalar(@columns) + ($extra_column ? 1 : 0);
     $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count . '">No rows matched this query.</td></tr>';
     my $dialog = !$row_dialog_action ? ''
         : $row_dialog_action->{type} eq 'record_editor'
             ? _row_record_editor_dialog($row_dialog_id, $row_dialog_action, $row_dialog_count)
             : _row_iframe_dialog($row_dialog_id, $row_dialog_action, $row_dialog_count);
+    return $class->table_markup($head, $rows) . $dialog;
+}
+
+sub table_markup ($class, $head, $rows) {
     return '<div class="sc-table-wrap"><table><caption class="sc-visually-hidden">Query results</caption>' .
-        '<thead><tr>' . $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>' .
-        $dialog;
+        '<thead><tr>' . $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>';
 }
 
 sub _grid ($class, $result, $model) {
