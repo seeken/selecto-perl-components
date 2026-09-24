@@ -71,6 +71,76 @@ test("a template event swaps its stable root with the pinned htmx runtime", asyn
   expect(requests[0].headers()["hx-target"]).toBe("main#template-root");
 });
 
+test("collection page controls advance two parents through the pinned htmx runtime", async ({page}) => {
+  const requests = [];
+  const pageForm = (parent, cursor) => `<form class="selecto-template-page"
+    method="post" action="/template-instances/one/pages/orders"
+    hx-post="/template-instances/one/pages/orders"
+    hx-target="#template-root" hx-swap="outerHTML"
+    data-selecto-template-page="lines">
+    <input type="hidden" name="csrf_token" value="csrf-one">
+    <input type="hidden" name="page_cursor" value="${cursor}">
+    <button type="submit">Load more lines for ${parent}</button>
+  </form>`;
+  const root = (revision, rows, controls) => `<main id="template-root"
+    data-selecto-template-instance="one" data-selecto-state-revision="0"
+    data-selecto-store-revision="${revision}" hx-history="false">
+    <div id="paged-order-rows">${rows.map(row =>
+      `<span data-page-row="${row}">${row}</span>`).join("")}</div>
+    ${controls}
+  </main>`;
+  const states = [
+    root(1, ["A1", "B1"], pageForm("A", "cursor-a") + pageForm("B", "cursor-b")),
+    root(2, ["A1", "A2", "B1"], pageForm("B", "cursor-b")),
+    root(3, ["A1", "A2", "B1", "B2"], ""),
+  ];
+  await page.route("http://selecto.test/**", route => {
+    const request = route.request();
+    if (request.method() === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: `<!doctype html><html><body>${states[0]}</body></html>`,
+      });
+    }
+    requests.push(request);
+    return route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      headers: {
+        "X-Selecto-Template-Instance": "one",
+        "X-Selecto-State-Revision": "0",
+        "X-Selecto-Store-Revision": String(requests.length + 1),
+        "X-Selecto-Source": "orders",
+        "X-Selecto-Source-Generation": "1",
+      },
+      body: states[requests.length],
+    });
+  });
+
+  await page.goto("http://selecto.test/templates/orders");
+  await page.addScriptTag({path: htmxBundle});
+  await page.addScriptTag({path: componentsBundle});
+  await page.evaluate(() => window.htmx.process(document.body));
+
+  await page.getByRole("button", {name: "Load more lines for A"}).click();
+  await expect(page.locator("[data-page-row]")).toHaveCount(3);
+  await expect(page.locator("#template-root")).toHaveAttribute("data-selecto-store-revision", "2");
+  await page.getByRole("button", {name: "Load more lines for B"}).click();
+  await expect(page.locator("[data-page-row]")).toHaveCount(4);
+  await expect(page.locator("#template-root")).toHaveAttribute("data-selecto-store-revision", "3");
+  await expect(page.locator(".selecto-template-page")).toHaveCount(0);
+
+  expect(requests).toHaveLength(2);
+  expect(requests.map(request => new URLSearchParams(request.postData()).get("page_cursor")))
+    .toEqual(["cursor-a", "cursor-b"]);
+  expect(requests.every(request => request.headers()["hx-request"] === "true")).toBe(true);
+  expect(requests.every(request => request.headers()["hx-target"] === "main#template-root")).toBe(true);
+  expect(requests.every(request =>
+    [...new URLSearchParams(request.postData()).keys()].sort().join(",")
+      === "csrf_token,page_cursor")).toBe(true);
+});
+
 test("native EP source and event controls swap the host-owned root", async ({page}) => {
   const requests = [];
   await page.route("http://selecto.test/**", async route => {
@@ -396,6 +466,75 @@ test("a template event uses the pinned WebSocket envelope without replacing its 
   await expect(page.locator("#template-root")).toContainText("Second update");
 });
 
+test("a native EP event accepts its WebSocket reply without a generic node wrapper", async ({page}) => {
+  await page.route("http://selecto.test/**", route => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: `<!doctype html><html><body>
+      <section hx-ext="ws" hx-ws:connect="/native-template-instances/one/ws">
+        <section id="native-root" data-selecto-template-instance="one"
+          data-selecto-state-revision="0" data-selecto-store-revision="0">
+          <form method="post" action="/native-template-instances/one/events"
+            data-selecto-template-event="product_selected" hx-ws:send>
+            <input type="hidden" name="template_action" value="event">
+            <input type="hidden" name="csrf_token" value="csrf-one">
+            <input type="hidden" name="event" value="product_selected">
+            <input type="hidden" name="event_id" value="event-one">
+            <input type="hidden" name="state_revision" value="0">
+            <input type="hidden" name="component_id" value="root.children.3">
+            <input type="hidden" name="component_lifetime" value="lifetime-one">
+            <input type="hidden" name="form_revision" value="0">
+            <input type="hidden" name="value" value="10">
+            <button type="submit">Select</button>
+          </form>
+        </section>
+      </section>
+    </body></html>`,
+  }));
+  await page.addInitScript(() => {
+    class FakeWebSocket extends EventTarget {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      constructor(url) {
+        super();
+        this.url = url;
+        this.readyState = FakeWebSocket.CONNECTING;
+        queueMicrotask(() => {
+          this.readyState = FakeWebSocket.OPEN;
+          this.dispatchEvent(new Event("open"));
+        });
+      }
+      send(message) {
+        const sent = JSON.parse(message);
+        queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
+          data: JSON.stringify({
+            content: `<section id="native-root" data-selecto-template-instance="one"
+              data-selecto-state-revision="1" data-selecto-store-revision="1">Selected product 10</section>`,
+            target: "#native-root",
+            swap: "outerHTML",
+            selecto: {
+              instance_id: "one", state_revision: 1, store_revision: 1,
+              event_id: sent.event_id, component_id: sent.component_id,
+              component_lifetime: sent.component_lifetime, form_revision: 0,
+            },
+          }),
+        })));
+      }
+      close() {}
+    }
+    window.WebSocket = FakeWebSocket;
+  });
+
+  await page.goto("http://selecto.test/native-templates/product-catalog");
+  await page.addScriptTag({path: htmxBundle});
+  await page.addScriptTag({path: websocketBundle});
+  await page.addScriptTag({path: componentsBundle});
+  await page.evaluate(() => window.htmx.process(document.body));
+  await page.getByRole("button", {name: "Select"}).click();
+  await expect(page.locator("#native-root")).toContainText("Selected product 10");
+  await expect(page.locator("#native-root")).toHaveAttribute("data-selecto-state-revision", "1");
+});
+
 test("an HTTP template swap preserves other dirty fields and focused selection", async ({page}) => {
   await page.route("http://selecto.test/**", route => {
     if (route.request().method() === "POST") {
@@ -584,6 +723,60 @@ test("HTTP template events wait per form and rebuild queued requests from fresh 
     "data-selecto-state-revision", "2",
   );
   await expect(page.locator("#template-search")).toHaveValue("Second server search");
+});
+
+test("HTTP template events can submit again after a full-root swap", async ({page}) => {
+  const requests = [];
+  await page.route("http://selecto.test/**", async route => {
+    const request = route.request();
+    const revision = request.method() === "POST" ? requests.push(request) : 0;
+    const eventId = `event-${revision + 1}`;
+    const value = revision === 1 ? "PO-100" : "";
+    return route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      headers: request.method() === "POST" ? {
+        "X-Selecto-Template-Instance": "one",
+        "X-Selecto-State-Revision": String(revision),
+        "X-Selecto-Store-Revision": String(revision),
+        "X-Selecto-Event-ID": `event-${revision}`,
+        "X-Selecto-Component-ID": "root.children.0",
+        "X-Selecto-Component-Lifetime": "lifetime-one",
+        "X-Selecto-Form-Revision": String(revision),
+      } : {},
+      body: `<!doctype html><html><body>
+        <main id="template-root" data-selecto-template-instance="one"
+          data-selecto-state-revision="${revision}" data-selecto-store-revision="${revision}">
+          <form method="post" action="/events" hx-post="/events"
+            hx-target="#template-root" hx-swap="outerHTML"
+            data-selecto-template-event="search_changed">
+            <input type="hidden" name="template_action" value="event">
+            <input type="hidden" name="csrf_token" value="csrf-one">
+            <input type="hidden" name="event" value="search_changed">
+            <input type="hidden" name="event_id" value="${eventId}">
+            <input type="hidden" name="state_revision" value="${revision}">
+            <input type="hidden" name="component_id" value="root.children.0">
+            <input type="hidden" name="component_lifetime" value="lifetime-one">
+            <input type="hidden" name="form_revision" value="${revision}">
+            <input id="template-search" name="value" value="${value}">
+            <button type="submit">Search</button>
+          </form>
+        </main></body></html>`,
+    });
+  });
+  await page.goto("http://selecto.test/templates/orders");
+  await page.addScriptTag({path: htmxBundle});
+  await page.addScriptTag({path: componentsBundle});
+  await page.evaluate(() => window.htmx.process(document.body));
+
+  await page.locator("#template-search").fill("PO-100");
+  await page.getByRole("button", {name: "Search"}).click();
+  await expect(page.locator("#template-root")).toHaveAttribute("data-selecto-state-revision", "1");
+  await page.locator("#template-search").fill("");
+  await page.getByRole("button", {name: "Search"}).click();
+  await expect.poll(() => requests.length).toBe(2);
+  await expect(page.locator("#template-root")).toHaveAttribute("data-selecto-state-revision", "2");
+  expect(new URLSearchParams(requests[1].postData()).get("value")).toBe("");
 });
 
 test("a late HTTP validation response cannot replace a newer local draft", async ({page}) => {

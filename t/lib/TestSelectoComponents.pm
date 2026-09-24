@@ -256,6 +256,11 @@ sub template_event_transport_fixture {
     };
 }
 
+sub template_render_url_fixture {
+    return _protocol_fixture('render-url.cases.json')
+        // die "selecto-protocol render URL fixture is required\n";
+}
+
 sub _protocol_fixture {
     my ($name) = @_;
     my $repo = File::Spec->rel2abs(File::Spec->catdir(dirname(__FILE__), '..', '..'));

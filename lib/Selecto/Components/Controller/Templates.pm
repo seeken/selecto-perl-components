@@ -22,6 +22,19 @@ sub show ($class, $controller, $runtime) {
     );
 }
 
+sub reopen ($class, $controller, $runtime) {
+    my $context = $class->instance_context(
+        $controller, $runtime,
+        $controller->stash('selecto_template_instance_id'),
+    );
+    return $runtime->{transport}->respond_error($controller, $context)
+        unless $context->{status} eq 'ok';
+    return _snapshot_response(
+        $controller, $runtime, $context->{template},
+        $context->{loaded}{snapshot}, $context->{loaded}{revision},
+    );
+}
+
 sub mount_instance ($class, $controller, $runtime, $template_id) {
     my $owner = _owner($controller, $runtime);
     return $owner unless $owner->{status} eq 'ok';
@@ -80,6 +93,7 @@ sub dispatch_event_request ($class, $controller, $runtime, %args) {
     return $class->dispatch_event(
         $controller, $runtime,
         instance_id => $args{instance_id}, params => $params,
+        expected_template_id => $args{expected_template_id},
     );
 }
 
@@ -89,6 +103,7 @@ sub dispatch_event ($class, $controller, $runtime, %args) {
         unless ref($params) eq 'HASH';
     my $context = $class->instance_context(
         $controller, $runtime, $args{instance_id},
+        expected_template_id => $args{expected_template_id},
     );
     return $context unless $context->{status} eq 'ok';
     my $duplicate = ref($context->{loaded}{snapshot}{processed_event_ids}) eq 'ARRAY'
@@ -147,6 +162,8 @@ sub source ($class, $controller, $runtime) {
         instance_id => $controller->stash('selecto_template_instance_id'),
         source_id => $controller->stash('selecto_template_source_id'),
         on_finish => sub ($finished) {
+            my $tx = $controller->tx;
+            return unless $tx && !$tx->is_finished;
             return $runtime->{transport}->respond_error($controller, $finished)
                 unless $finished->{status} eq 'ok';
             return _snapshot_response(
@@ -164,6 +181,275 @@ sub source ($class, $controller, $runtime) {
     return undef;
 }
 
+sub page ($class, $controller, $runtime) {
+    my $result = $class->dispatch_page_request(
+        $controller, $runtime,
+        instance_id => $controller->stash('selecto_template_instance_id'),
+        source_id => $controller->stash('selecto_template_source_id'),
+        on_finish => sub ($finished) {
+            my $tx = $controller->tx;
+            return unless $tx && !$tx->is_finished;
+            return $runtime->{transport}->respond_error($controller, $finished)
+                unless $finished->{status} eq 'ok';
+            return _snapshot_response(
+                $controller, $runtime, $finished->{template},
+                $finished->{snapshot}, $finished->{store_revision},
+                source_id => $finished->{source_id},
+                source_generation => $finished->{source_generation},
+                region_node_ids => $finished->{region_node_ids},
+            );
+        },
+    );
+    return $runtime->{transport}->respond_error($controller, $result)
+        unless $result->{status} eq 'scheduled';
+    $controller->render_later;
+    return undef;
+}
+
+sub root_page ($class, $controller, $runtime) {
+    my $result = $class->dispatch_root_page_request(
+        $controller, $runtime,
+        instance_id => $controller->stash('selecto_template_instance_id'),
+        source_id => $controller->stash('selecto_template_source_id'),
+        on_finish => sub ($finished) {
+            my $tx = $controller->tx;
+            return unless $tx && !$tx->is_finished;
+            return $runtime->{transport}->respond_error($controller, $finished)
+                unless $finished->{status} eq 'ok';
+            return _snapshot_response(
+                $controller, $runtime, $finished->{template},
+                $finished->{snapshot}, $finished->{store_revision},
+                source_id => $finished->{source_id},
+                source_generation => $finished->{source_generation},
+                region_node_ids => $finished->{region_node_ids},
+            );
+        },
+    );
+    return $runtime->{transport}->respond_error($controller, $result)
+        unless $result->{status} eq 'scheduled';
+    $controller->render_later;
+    return undef;
+}
+
+sub dispatch_page_request ($class, $controller, $runtime, %args) {
+    return _csrf_error() unless _csrf_valid($controller);
+    my $params = _page_params($controller);
+    return $params unless $params->{status} eq 'ok';
+    my $on_finish = $args{on_finish};
+    return _invalid_request('invalid_page_callback', 'Template page callback is invalid.')
+        unless ref($on_finish) eq 'CODE';
+    my $context = $class->instance_context(
+        $controller, $runtime, $args{instance_id},
+        expected_template_id => $args{expected_template_id},
+    );
+    return $context unless $context->{status} eq 'ok';
+    my $source_id = $args{source_id};
+    my $snapshot = $context->{loaded}{snapshot};
+    my $source = ref($snapshot->{sources}) eq 'HASH'
+        ? $snapshot->{sources}{$source_id} : undef;
+    my $declared = ref($context->{template}{manifest}{sources}) eq 'ARRAY'
+        ? scalar(grep {
+            ref($_) eq 'HASH' && ($_->{id} // '') eq $source_id
+        } @{$context->{template}{manifest}{sources}}) : 0;
+    return _invalid_request('invalid_page_cursor', 'Collection page cursor is invalid.')
+        unless $declared && ref($source) eq 'HASH'
+        && ($source->{status} // '') eq 'ready'
+        && ref($source->{result}) eq 'HASH'
+        && ref($source->{result}{pages}) eq 'ARRAY'
+        && defined($source->{generation}) && !ref($source->{generation})
+        && "$source->{generation}" =~ /\A[1-9][0-9]*\z/
+        && defined($source->{page}) && !ref($source->{page})
+        && "$source->{page}" =~ /\A[1-9][0-9]*\z/;
+    my $template = $context->{template};
+    return _invalid_request('invalid_page_cursor', 'Collection page cursor is invalid.')
+        unless defined($template->{page_secret})
+        && !ref($template->{page_secret})
+        && length($template->{page_secret}) >= 32;
+    my $effect = {
+        schema => 'selecto.template.runtime-effect.v1',
+        effect_id => "$context->{instance_id}:source:$source_id:$source->{generation}",
+        kind => 'load_source', source => "$source_id",
+        generation => 0 + $source->{generation},
+        bindings => {input => $snapshot->{inputs}, state => $snapshot->{state}},
+    };
+    my $source_context = _source_context($controller, $context, $effect);
+    return $source_context unless $source_context->{status} eq 'ok';
+    my $source_authorizer = $template->{source_authorizer};
+    my $source_runner = $template->{source_runner};
+    my $scheduled = $runtime->{source_scheduler}->execute(
+        payload => {
+            manifest => $template->{manifest}, effect => $effect,
+            source_context => $source_context->{source_context},
+            page_snapshot => $snapshot, page_cursor => $params->{page_cursor},
+        },
+        timeout_seconds => $template->{source_timeout_seconds},
+        work => sub ($payload) {
+            return Selecto::Components::Templates::SourceExecutor->execute(
+                manifest => $payload->{manifest}, effect => $payload->{effect},
+                authorize => sub ($declared_source, $declared_effect) {
+                    return $source_authorizer->(
+                        $payload->{source_context}, $declared_source,
+                        $declared_effect,
+                    );
+                },
+                (defined($source_runner) ? (run => $source_runner) : ()),
+                resource_budget => $template->{source_resource_budget},
+                page_snapshot => $payload->{page_snapshot},
+                page_cursor => $payload->{page_cursor},
+                page_secret => $template->{page_secret},
+                page_now => int($runtime->{clock}->()),
+            );
+        },
+        on_finish => sub ($execution) {
+            return $on_finish->($execution)
+                unless ($execution->{status} // '') eq 'ok';
+            my $commit = {
+                schema => 'selecto.template.runtime-page-commit.v1',
+                instance_id => "$context->{instance_id}",
+                release_id => "$template->{release_id}",
+                source => "$source_id",
+                generation => 0 + $source->{generation},
+                expected_state_revision => 0 + $snapshot->{state_revision},
+                expected_page => 0 + $source->{page},
+                result => $execution->{result},
+            };
+            my $committed = $runtime->{dispatcher}->commit_page(
+                owner_scope => $context->{owner_scope},
+                instance_id => $context->{instance_id},
+                manifest => $template->{manifest}, commit => $commit,
+            );
+            return $on_finish->($committed)
+                unless ($committed->{status} // '') eq 'ok';
+            return $on_finish->({
+                status => 'conflict', code => 'stale_page_commit',
+                message => 'The collection changed. Reload and try again.',
+            }) unless ($committed->{observation}{outcome} // '') eq 'accepted';
+            return $on_finish->({
+                status => 'ok', template => $template,
+                snapshot => $committed->{observation}{snapshot},
+                store_revision => $committed->{store_revision},
+                source_id => "$source_id",
+                source_generation => 0 + $source->{generation},
+                region_node_ids => Selecto::Components::Templates::Regions->for_source(
+                    $template->{manifest}, $source_id,
+                ),
+            });
+        },
+    );
+    return $scheduled;
+}
+
+sub dispatch_root_page_request ($class, $controller, $runtime, %args) {
+    return _csrf_error() unless _csrf_valid($controller);
+    my $params = _root_page_params($controller);
+    return $params unless $params->{status} eq 'ok';
+    my $on_finish = $args{on_finish};
+    return _invalid_request('invalid_root_page_callback', 'Template root page callback is invalid.')
+        unless ref($on_finish) eq 'CODE';
+    my $context = $class->instance_context(
+        $controller, $runtime, $args{instance_id},
+        expected_template_id => $args{expected_template_id},
+    );
+    return $context unless $context->{status} eq 'ok';
+    my $source_id = $args{source_id};
+    my $snapshot = $context->{loaded}{snapshot};
+    my $source = ref($snapshot->{sources}) eq 'HASH'
+        ? $snapshot->{sources}{$source_id} : undef;
+    my $template = $context->{template};
+    my $root_enabled = ref($template->{root_cursor_sources}) eq 'ARRAY'
+        && scalar(grep { $_ eq $source_id } @{$template->{root_cursor_sources}});
+    my $declared = ref($template->{manifest}{sources}) eq 'ARRAY'
+        ? scalar(grep {
+            ref($_) eq 'HASH' && ($_->{id} // '') eq $source_id
+        } @{$template->{manifest}{sources}}) : 0;
+    return _invalid_request('invalid_root_cursor', 'Root page cursor is invalid.')
+        unless $root_enabled && $declared && ref($source) eq 'HASH'
+        && ($source->{status} // '') eq 'ready'
+        && ref($source->{result}) eq 'HASH'
+        && ref($source->{result}{root_page}) eq 'HASH'
+        && $source->{result}{root_page}{has_more}
+        && ref($source->{result}{root_page}{after_values}) eq 'ARRAY'
+        && defined($source->{generation}) && !ref($source->{generation})
+        && "$source->{generation}" =~ /\A[1-9][0-9]*\z/
+        && defined($source->{page}) && !ref($source->{page})
+        && "$source->{page}" =~ /\A[1-9][0-9]*\z/
+        && defined($template->{page_secret})
+        && !ref($template->{page_secret})
+        && length($template->{page_secret}) >= 32;
+    my $effect = {
+        schema => 'selecto.template.runtime-effect.v1',
+        effect_id => "$context->{instance_id}:source:$source_id:$source->{generation}",
+        kind => 'load_source', source => "$source_id",
+        generation => 0 + $source->{generation},
+        bindings => {input => $snapshot->{inputs}, state => $snapshot->{state}},
+    };
+    my $source_context = _source_context($controller, $context, $effect);
+    return $source_context unless $source_context->{status} eq 'ok';
+    my $source_authorizer = $template->{source_authorizer};
+    my $source_runner = $template->{source_runner};
+    return $runtime->{source_scheduler}->execute(
+        payload => {
+            manifest => $template->{manifest}, effect => $effect,
+            source_context => $source_context->{source_context},
+            root_snapshot => $snapshot, root_cursor => $params->{root_cursor},
+        },
+        timeout_seconds => $template->{source_timeout_seconds},
+        work => sub ($payload) {
+            return Selecto::Components::Templates::SourceExecutor->execute(
+                manifest => $payload->{manifest}, effect => $payload->{effect},
+                authorize => sub ($declared_source, $declared_effect) {
+                    return $source_authorizer->(
+                        $payload->{source_context}, $declared_source,
+                        $declared_effect,
+                    );
+                },
+                (defined($source_runner) ? (run => $source_runner) : ()),
+                resource_budget => $template->{source_resource_budget},
+                root_snapshot => $payload->{root_snapshot},
+                root_cursor => $payload->{root_cursor},
+                root_secret => $template->{page_secret},
+                root_now => int($runtime->{clock}->()),
+            );
+        },
+        on_finish => sub ($execution) {
+            return $on_finish->($execution)
+                unless ($execution->{status} // '') eq 'ok';
+            my $commit = {
+                schema => 'selecto.template.runtime-root-page-commit.v1',
+                instance_id => "$context->{instance_id}",
+                release_id => "$template->{release_id}",
+                source => "$source_id",
+                generation => 0 + $source->{generation},
+                expected_state_revision => 0 + $snapshot->{state_revision},
+                expected_page => 0 + $source->{page},
+                expected_after_values => $source->{result}{root_page}{after_values},
+                result => $execution->{result},
+            };
+            my $committed = $runtime->{dispatcher}->commit_root_page(
+                owner_scope => $context->{owner_scope},
+                instance_id => $context->{instance_id},
+                manifest => $template->{manifest}, commit => $commit,
+            );
+            return $on_finish->($committed)
+                unless ($committed->{status} // '') eq 'ok';
+            return $on_finish->({
+                status => 'conflict', code => 'stale_root_page_commit',
+                message => 'The root page changed. Reload and try again.',
+            }) unless ($committed->{observation}{outcome} // '') eq 'accepted';
+            return $on_finish->({
+                status => 'ok', template => $template,
+                snapshot => $committed->{observation}{snapshot},
+                store_revision => $committed->{store_revision},
+                source_id => "$source_id",
+                source_generation => 0 + $source->{generation},
+                region_node_ids => Selecto::Components::Templates::Regions->for_source(
+                    $template->{manifest}, $source_id,
+                ),
+            });
+        },
+    );
+}
+
 sub dispatch_source_request ($class, $controller, $runtime, %args) {
     return _csrf_error() unless _csrf_valid($controller);
     my $params = _source_params($controller);
@@ -174,6 +460,7 @@ sub dispatch_source_request ($class, $controller, $runtime, %args) {
     ) unless ref($on_finish) eq 'CODE';
     my $context = $class->instance_context(
         $controller, $runtime, $args{instance_id},
+        expected_template_id => $args{expected_template_id},
     );
     return $context unless $context->{status} eq 'ok';
     my $source_id = $args{source_id};
@@ -209,11 +496,15 @@ sub dispatch_source_request ($class, $controller, $runtime, %args) {
     my $manifest = $context->{template}{manifest};
     my $source_authorizer = $context->{template}{source_authorizer};
     my $source_runner = $context->{template}{source_runner};
+    my $root_first = ref($context->{template}{root_cursor_sources}) eq 'ARRAY'
+        && scalar(grep { $_ eq $source_id }
+            @{$context->{template}{root_cursor_sources}});
     my $scheduled = $runtime->{source_scheduler}->execute(
         payload => {
             manifest => $manifest,
             effect => $effect,
             source_context => $source_context->{source_context},
+            root_first => $root_first ? 1 : 0,
         },
         timeout_seconds => $context->{template}{source_timeout_seconds},
         work => sub ($payload) {
@@ -228,6 +519,8 @@ sub dispatch_source_request ($class, $controller, $runtime, %args) {
                     );
                 },
                 (defined($source_runner) ? (run => $source_runner) : ()),
+                resource_budget => $context->{template}{source_resource_budget},
+                ($payload->{root_first} ? (root_cursor => 'first') : ()),
             );
         },
         on_finish => sub ($execution) {
@@ -340,7 +633,7 @@ sub _event_error ($result, $context, $params) {
     };
 }
 
-sub instance_context ($class, $controller, $runtime, $instance_id) {
+sub instance_context ($class, $controller, $runtime, $instance_id, %options) {
     my $owner = _owner($controller, $runtime);
     return $owner unless $owner->{status} eq 'ok';
     return _invalid_request('invalid_instance_id', 'Template instance is invalid.')
@@ -352,6 +645,10 @@ sub instance_context ($class, $controller, $runtime, $instance_id) {
     my $template = $runtime->{templates_by_release}{$loaded->{release}};
     return {status => 'not_found', code => 'template_release_not_found',
         message => 'Template release was not found.'} unless $template;
+    return {status => 'not_found', code => 'template_instance_not_found',
+        message => 'Template instance was not found.'}
+        if defined($options{expected_template_id})
+        && ($template->{id} // '') ne $options{expected_template_id};
     return {
         status => 'ok', owner_scope => $owner->{owner_scope},
         instance_id => "$instance_id", loaded => $loaded, template => $template,
@@ -439,6 +736,34 @@ sub _source_params ($controller) {
     return _invalid_request('invalid_source_params', 'Template source parameters are invalid.')
         unless ref($csrf) eq 'ARRAY' && @$csrf == 1 && !ref($csrf->[0]);
     return {status => 'ok'};
+}
+
+sub _page_params ($controller) {
+    my %allowed = map { $_ => 1 } qw(csrf_token page_cursor);
+    my @names = @{$controller->req->params->names};
+    return _invalid_request('invalid_page_params', 'Template page parameters are invalid.')
+        if grep { !$allowed{$_} } @names;
+    my $csrf = $controller->every_param('csrf_token');
+    my $cursor = $controller->every_param('page_cursor');
+    return _invalid_request('invalid_page_params', 'Template page parameters are invalid.')
+        unless ref($csrf) eq 'ARRAY' && @$csrf == 1 && !ref($csrf->[0])
+        && ref($cursor) eq 'ARRAY' && @$cursor == 1
+        && _scalar($cursor->[0], 128);
+    return {status => 'ok', page_cursor => "$cursor->[0]"};
+}
+
+sub _root_page_params ($controller) {
+    my %allowed = map { $_ => 1 } qw(csrf_token root_cursor);
+    my @names = @{$controller->req->params->names};
+    return _invalid_request('invalid_root_page_params', 'Template root page parameters are invalid.')
+        if grep { !$allowed{$_} } @names;
+    my $csrf = $controller->every_param('csrf_token');
+    my $cursor = $controller->every_param('root_cursor');
+    return _invalid_request('invalid_root_page_params', 'Template root page parameters are invalid.')
+        unless ref($csrf) eq 'ARRAY' && @$csrf == 1 && !ref($csrf->[0])
+        && ref($cursor) eq 'ARRAY' && @$cursor == 1
+        && _scalar($cursor->[0], 128);
+    return {status => 'ok', root_cursor => "$cursor->[0]"};
 }
 
 sub _csrf_valid ($controller) {

@@ -8,6 +8,7 @@ use lib "$FindBin::Bin/lib";
 use File::Temp qw(tempfile);
 use JSON::PP ();
 use Mojolicious;
+use Mojo::IOLoop ();
 use Mojo::JSON qw(decode_json encode_json);
 use Mojo::Promise;
 use Test::More;
@@ -248,6 +249,24 @@ $t->post_ok(
             $public_source_form->at('input[name="csrf_token"]')->attr('value')},
 )->status_is(200)
     ->element_exists('[data-order-number="STATUS-open"]');
+my $public_resume = '/template-instances/' . $public_instance_id;
+my $instances_before_reopen = $instance_sequence;
+$t->get_ok($public_resume => {'X-Test-Actor' => 'alice'})
+    ->status_is(200)
+    ->element_exists('[data-order-number="STATUS-open"]')
+    ->element_exists_not('form.selecto-template-source')
+    ->header_is('Cache-Control' => 'no-store, private');
+is $instance_sequence, $instances_before_reopen,
+    'reopening a completed source does not allocate another instance';
+$t->get_ok($public_resume => {'X-Test-Actor' => 'mallory'})
+    ->status_is(404)
+    ->element_exists('[data-selecto-template-error="template_not_found"]');
+$t->get_ok($public_resume => {
+    'X-Test-Actor' => 'alice', 'X-Test-Tenant' => 8,
+})->status_is(404);
+$t->get_ok($public_resume => {
+    'X-Test-Actor' => 'alice', 'X-Test-Session' => 'rotated',
+})->status_is(404);
 is $source_context_calls, 1,
     'public filters reach source execution through the ordinary authority boundary';
 is scalar(_worker_audit($worker_audit_path)), 1,
@@ -275,6 +294,8 @@ $t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})
     ->element_exists('form[data-template-event="search_changed"][hx-ws\\:send]')
     ->element_exists('form.selecto-template-source[data-selecto-template-source="orders"]' .
         '[hx-trigger="load"][hx-swap="outerHTML"]')
+    ->element_exists('p.selecto-template-source-loading[role="status"]' .
+        '[data-selecto-template-source="orders"]')
     ->element_exists_not('[data-order-number]');
 
 my $initial_dom = $t->tx->res->dom;
@@ -285,6 +306,9 @@ unlike $t->tx->res->body, qr/selecto\.template\.compile-manifest/,
     'compiled manifest is not sent to the browser';
 my $source_form = $initial_dom->at('form.selecto-template-source');
 my $source_path = $source_form->attr('action');
+is $source_form->attr('data-selecto-template-resume-url'),
+    '/template-instances/' . $instance_id,
+    'pending portable source has an owner-scoped resume target';
 my $source_csrf = $source_form->at('input[name="csrf_token"]')->attr('value');
 my $event_form = $initial_dom->at('form[data-template-event="search_changed"]');
 my $event_path = $event_form->attr('action');
@@ -303,6 +327,20 @@ my $second_tab_id = $t->tx->res->dom->at('main.selecto-template-instance')
     ->attr('data-selecto-template-instance');
 isnt $second_tab_id, $instance_id,
     'a second page mount receives an independent tab-specific instance';
+
+$t->get_ok('/templates/orders' => {
+    'X-Test-Actor' => 'alice', 'HX-Request' => 'true',
+    'HX-Request-Type' => 'full',
+})->status_is(200)
+    ->content_like(qr{\A<!doctype html>})
+    ->element_exists('section.selecto-template-channel[hx-ext="ws"]')
+    ->element_exists('script[src^="/selecto-components/htmx.min.js"]');
+$t->get_ok('/templates/orders' => {
+    'X-Test-Actor' => 'alice', 'HX-Request' => 'true',
+    'HX-Request-Type' => 'partial',
+})->status_is(200)
+    ->content_unlike(qr{\A<!doctype html>})
+    ->element_exists('main.selecto-template-instance');
 
 $t->post_ok(
     $source_path => {'X-Test-Actor' => 'mallory', 'HX-Request' => 'true'} =>
@@ -519,7 +557,29 @@ $t->get_ok('/templates/slow_orders' => {'X-Test-Actor' => 'alice'})
 my $slow_form = $t->tx->res->dom->at('form.selecto-template-source');
 my $slow_path = $slow_form->attr('action');
 my $slow_csrf = $slow_form->at('input[name="csrf_token"]')->attr('value');
-my (@completion_order, $slow_tx, $probe_tx);
+$t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})->status_is(200);
+my $responsive_root = $t->tx->res->dom->at('main.selecto-template-instance');
+my $responsive_form = $t->tx->res->dom->at('form[data-template-event="search_changed"]');
+my %responsive_event = map {
+    $_->attr('name') => $_->attr('value')
+} $responsive_form->find('input[type="hidden"]')->each;
+$responsive_event{value} = 'PO-RESPONSIVE';
+my $responsive_path = '/template-instances/' .
+    $responsive_root->attr('data-selecto-template-instance') . '/ws';
+my $responsive_socket;
+$t->ua->websocket_p($responsive_path => {'X-Test-Actor' => 'alice'})
+    ->then(sub { ($responsive_socket) = @_ })->wait;
+ok $responsive_socket && $responsive_socket->is_websocket,
+    'independent template WebSocket connects before slow source work';
+my (@completion_order, $slow_tx, $probe_tx, $responsive_reply);
+my $responsive_promise = Mojo::Promise->new;
+$responsive_socket->on(message => sub {
+    my ($socket, $message) = @_;
+    $responsive_reply = decode_json($message);
+    push @completion_order, 'websocket';
+    $responsive_promise->resolve;
+});
+my $worker_audit_before = scalar(_worker_audit($worker_audit_path));
 my $slow_promise = $t->ua->post_p(
     $slow_path => {'X-Test-Actor' => 'alice', 'HX-Request' => 'true'} =>
         form => {csrf_token => $slow_csrf},
@@ -531,14 +591,36 @@ my $probe_promise = $t->ua->get_p('/template-probe')->then(sub {
     ($probe_tx) = @_;
     push @completion_order, 'probe';
 });
-Mojo::Promise->all($slow_promise, $probe_promise)->wait;
+my $worker_started = Mojo::Promise->new;
+my $worker_poll;
+$worker_poll = Mojo::IOLoop->recurring(0.01 => sub {
+    return unless scalar(_worker_audit($worker_audit_path)) > $worker_audit_before;
+    Mojo::IOLoop->remove($worker_poll);
+    $worker_started->resolve(1);
+});
+my $worker_timeout = Mojo::IOLoop->timer(1 => sub {
+    Mojo::IOLoop->remove($worker_poll);
+    $worker_started->resolve(0);
+});
+my $started;
+$worker_started->then(sub { ($started) = @_ })->wait;
+Mojo::IOLoop->remove($worker_timeout);
+ok $started, 'slow source child starts before the WebSocket event';
+$responsive_socket->send({text => encode_json({headers => {}, %responsive_event})});
+Mojo::Promise->all($slow_promise, $probe_promise, $responsive_promise)->wait;
 is $probe_tx->res->code, 200, 'unrelated HTTP request completes during source work';
 is $probe_tx->res->text, 'ready', 'unrelated route returns its normal response';
-is_deeply \@completion_order, ['probe', 'source'],
-    'slow DBI-shaped source work does not freeze the Mojolicious event loop';
+is $completion_order[-1], 'source',
+    'slow DBI-shaped source work does not freeze HTTP or WebSocket events';
+is scalar(@completion_order), 3, 'both independent probes complete before the source';
+is $responsive_reply->{selecto}{state_revision}, 1,
+    'template WebSocket commits an event while the slow source is running';
+like $responsive_reply->{content}, qr/value="PO-RESPONSIVE"/,
+    'WebSocket response renders its own accepted state';
 is $slow_tx->res->code, 200, 'slow source request completes after the probe';
 ok $slow_tx->res->dom->at('[data-order-number="PO-100"]'),
     'slow source result is committed and rendered';
+$responsive_socket->finish;
 
 $t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})->status_is(200);
 my $ws_root = $t->tx->res->dom->at('main.selecto-template-instance');
@@ -602,6 +684,9 @@ is $ws_conflict->{selecto}{code}, 'duplicate_event',
 $alice_revoked = 1;
 $t->send_ok({text => encode_json({headers => {}, %ws_event})})
     ->finished_ok(1008);
+$t->get_ok($public_resume => {'X-Test-Actor' => 'alice'})
+    ->status_is(403)
+    ->element_exists('[data-selecto-template-error="template_forbidden"]');
 $alice_revoked = 0;
 
 $t->websocket_ok($ws_path => {'X-Test-Actor' => 'alice'})
@@ -658,11 +743,18 @@ my %expired_params = map {
     $_->attr('name') => $_->attr('value')
 } $expired_event->find('input[type="hidden"]')->each;
 $expired_params{value} = 'late';
+$t->get_ok('/templates/orders' => {'X-Test-Actor' => 'alice'})->status_is(200);
+my $expiring_instance_id = $t->tx->res->dom->at('main.selecto-template-instance')
+    ->attr('data-selecto-template-instance');
 $now += 61;
 $t->post_ok(
     $expired_event->attr('action') => {'X-Test-Actor' => 'alice'} =>
         form => \%expired_params,
 )->status_is(410)
+    ->element_exists('[data-selecto-template-error="template_expired"]');
+$t->get_ok('/template-instances/' . $expiring_instance_id =>
+    {'X-Test-Actor' => 'alice'})
+    ->status_is(410)
     ->element_exists('[data-selecto-template-error="template_expired"]');
 
 done_testing;

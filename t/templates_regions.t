@@ -33,6 +33,33 @@ is_deeply(
     'source completion updates its data region and every event-form lifetime',
 );
 
+my $included = TestSelectoComponents::template_order_manifest();
+push @{$included->{view}{nodes}}, {
+    node_id => 'root.children.8', kind => 'include',
+    template => 'customer_compact',
+    bindings => {customer => {
+        kind => 'binding', type => 'source', expression => 'orders.customer',
+    }},
+};
+is_deeply(
+    Selecto::Components::Templates::Regions->for_source($included, 'orders'),
+    ['root.children.5', 'root.children.6', 'root.children.8'],
+    'source completion refreshes a relationship include as well as row components',
+);
+
+push @{$included->{view}{nodes}}, {
+    node_id => 'root.children.9', kind => 'include',
+    template => 'order_quantity',
+    bindings => {order => {
+        kind => 'binding', type => 'source', expression => 'orders',
+    }},
+};
+is_deeply(
+    Selecto::Components::Templates::Regions->for_source($included, 'orders'),
+    ['root.children.5', 'root.children.6', 'root.children.8', 'root.children.9'],
+    'source completion refreshes a root-source include',
+);
+
 is_deeply(
     Selecto::Components::Templates::Regions->for_event($manifest, 'unknown'),
     [],

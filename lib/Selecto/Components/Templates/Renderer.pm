@@ -4,6 +4,7 @@ use 5.034;
 use strict;
 use warnings;
 use B qw(SVp_IOK SVp_NOK SVp_POK svref_2object);
+use Encode qw(encode_utf8);
 use JSON::PP ();
 use Scalar::Util qw(blessed);
 use Selecto::Components::Util qw(html_escape);
@@ -53,7 +54,14 @@ sub _render_input {
         && ($manifest->{view}{schema} // '') eq 'selecto.template.view.v1'
         && ref($manifest->{view}{nodes}) eq 'ARRAY'
         && ref($snapshot) eq 'HASH' && ref($registry) eq 'HASH';
-    my $context = _render_context($snapshot);
+    my $context = _render_context($snapshot, $manifest);
+    my $slots = $args{slots} // {};
+    _die('invalid_render_input', 'template slots are invalid')
+        unless ref($slots) eq 'HASH'
+        && !grep {
+            ref($slots->{$_}) ne 'Selecto::Components::Templates::Renderer::SafeHTML'
+        } keys %$slots;
+    $context->{slots} = $slots;
     return ($manifest, $snapshot, $registry, $context);
 }
 
@@ -104,11 +112,13 @@ sub _render_node {
         my $renderer = _registry_renderer(
             $registry, 'components', $node->{name}, $node_id,
         );
+        my $props = _resolve_values($node->{props}, $context, $node_id);
+        _validate_component_urls($props, $registry, $node->{name}, $node_id);
         return _invoke_renderer($renderer, {
             node_id => "$node_id",
             dom_id => _dom_id($context->{instance_id}, $node_id),
             name => "$node->{name}",
-            props => _resolve_values($node->{props}, $context, $node_id),
+            props => $props,
             events => {%{$node->{events}}},
             children => __PACKAGE__->safe_html(
                 _render_nodes($node->{children}, $context, $registry),
@@ -122,11 +132,13 @@ sub _render_node {
         my $renderer = _registry_renderer(
             $registry, 'elements', $node->{name}, $node_id,
         );
+        my $attributes = _resolve_values($node->{attributes}, $context, $node_id);
+        _validate_url_attributes($attributes, $node_id);
         return _invoke_renderer($renderer, {
             node_id => "$node_id",
             dom_id => _dom_id($context->{instance_id}, $node_id),
             name => "$node->{name}",
-            attributes => _resolve_values($node->{attributes}, $context, $node_id),
+            attributes => $attributes,
             children => __PACKAGE__->safe_html(
                 _render_nodes($node->{children}, $context, $registry),
             ),
@@ -142,6 +154,14 @@ sub _render_node {
             $test ? $node->{then} : $node->{else}, $context, $registry,
         );
     }
+    if ($kind eq 'slot') {
+        _die('invalid_render_node', 'compiled slot node is invalid', $node_id)
+            unless defined($node->{name}) && !ref($node->{name})
+            && ref($node->{children}) eq 'ARRAY';
+        return "$context->{slots}{$node->{name}}"
+            if exists $context->{slots}{$node->{name}};
+        return _render_nodes($node->{children}, $context, $registry);
+    }
     if ($kind eq 'include') {
         _die('invalid_render_node', 'compiled include node is invalid', $node_id)
             unless defined($node->{template}) && length($node->{template})
@@ -149,18 +169,99 @@ sub _render_node {
         my $renderer = $registry->{include};
         _die('unavailable_include_renderer', 'include renderer is unavailable', $node_id)
             unless ref($renderer) eq 'CODE';
-        return _invoke_renderer($renderer, {
-            node_id => "$node_id",
-            dom_id => _dom_id($context->{instance_id}, $node_id),
-            template => "$node->{template}",
-            bindings => _resolve_values($node->{bindings}, $context, $node_id),
-        }, $node_id);
+        return _render_include($node, $context, $registry, $renderer);
     }
     _die('invalid_render_node', 'compiled render node is invalid', $node_id);
 }
 
+sub _render_include {
+    my ($node, $context, $registry, $renderer) = @_;
+    my $node_id = $node->{node_id};
+    my $fills = $node->{slots} // {};
+    _die('invalid_render_node', 'compiled slots are invalid', $node_id)
+        unless ref($fills) eq 'HASH';
+    my %slots;
+    for my $name (keys %$fills) {
+        _die('invalid_render_node', 'compiled slots are invalid', $node_id)
+            unless ref($fills->{$name}) eq 'ARRAY';
+        $slots{$name} = __PACKAGE__->safe_html(
+            _render_nodes($fills->{$name}, $context, $registry),
+        );
+    }
+    my %source_bindings = map {
+        my $value = $node->{bindings}{$_};
+        ref($value) eq 'HASH' && ($value->{kind} // '') eq 'binding'
+            && ($value->{type} // '') eq 'source'
+            ? ($_ => $value) : ()
+    } keys %{$node->{bindings}};
+    if (!%source_bindings) {
+        my $assigns = {
+            node_id => "$node_id",
+            dom_id => _dom_id($context->{instance_id}, $node_id),
+            template => "$node->{template}",
+            bindings => _resolve_values($node->{bindings}, $context, $node_id),
+        };
+        $assigns->{slots} = \%slots if %slots;
+        return _invoke_renderer($renderer, $assigns, $node_id);
+    }
+
+    my $source;
+    my %relationships;
+    for my $name (keys %source_bindings) {
+        my $expression = $source_bindings{$name}{expression};
+        _die('render_type_mismatch', 'include source binding is invalid', $node_id)
+            unless defined($expression) && !ref($expression);
+        my ($candidate, $relationship);
+        if ($expression =~ /\A([A-Za-z_][A-Za-z0-9_]*)\z/) {
+            $candidate = $1;
+        }
+        elsif ($expression =~ /\A([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\z/
+            && $2 ne 'rows') {
+            ($candidate, $relationship) = ($1, $2);
+        }
+        _die('render_type_mismatch', 'include source binding is invalid', $node_id)
+            unless defined($candidate) && exists($context->{sources}{$candidate});
+        _die('render_type_mismatch', 'include source bindings are incompatible', $node_id)
+            if defined($source) && $source ne $candidate;
+        $source = $candidate;
+        $relationships{$name} = $relationship;
+    }
+
+    my %fixed = map {
+        $_ => _resolve_value($node->{bindings}{$_}, $context, $node_id)
+    } grep { !exists($source_bindings{$_}) } keys %{$node->{bindings}};
+    my $rows = $context->{sources}{$source};
+    return '' unless defined $rows;
+    _die('render_type_mismatch', 'include source rows are invalid', $node_id)
+        unless ref($rows) eq 'ARRAY';
+
+    my $html = '';
+    for my $index (0 .. $#$rows) {
+        my $row = $rows->[$index];
+        _die('render_type_mismatch', 'include source row is invalid', $node_id)
+            unless ref($row) eq 'HASH';
+        my %resolved = %fixed;
+        for my $name (keys %relationships) {
+            my $value = defined($relationships{$name})
+                ? $row->{$relationships{$name}} : $row;
+            _die('render_type_mismatch', 'include relationship is not an object', $node_id)
+                if defined($value) && ref($value) ne 'HASH';
+            $resolved{$name} = $value;
+        }
+        my $item_id = "$node_id.row.$index";
+        my $assigns = {
+            node_id => $item_id,
+            dom_id => _dom_id($context->{instance_id}, $item_id),
+            template => "$node->{template}", bindings => \%resolved,
+        };
+        $assigns->{slots} = \%slots if %slots;
+        $html .= _invoke_renderer($renderer, $assigns, $item_id);
+    }
+    return $html;
+}
+
 sub _render_context {
-    my ($snapshot) = @_;
+    my ($snapshot, $manifest) = @_;
     _die('invalid_render_snapshot', 'template snapshot is invalid')
         unless defined($snapshot->{instance_id}) && length($snapshot->{instance_id})
         && ref($snapshot->{inputs}) eq 'HASH'
@@ -168,14 +269,40 @@ sub _render_context {
         && ref($snapshot->{sources}) eq 'HASH';
     my %sources = map {
         my $source = $snapshot->{sources}{$_};
-        $_ => ref($source) eq 'HASH' ? $source->{result} : undef;
+        my $result = ref($source) eq 'HASH' ? $source->{result} : undef;
+        $_ => _public_rows($result);
     } keys %{$snapshot->{sources}};
+    my %source_totals = map {
+        my $source = $snapshot->{sources}{$_};
+        my $result = ref($source) eq 'HASH' ? $source->{result} : undef;
+        $_ => (ref($result) eq 'HASH' ? $result->{totals} : undef);
+    } keys %{$snapshot->{sources}};
+    my %source_ready = map {
+        my $source = $snapshot->{sources}{$_};
+        $_ => (ref($source) eq 'HASH' && ($source->{status} // '') eq 'ready');
+    } keys %{$snapshot->{sources}};
+    my %source_page_sizes = map {
+        $_->{id} => $_->{query}{limit}
+    } @{$manifest->{sources} // []};
     return {
         instance_id => "$snapshot->{instance_id}",
         inputs => $snapshot->{inputs},
         state => $snapshot->{state},
         sources => \%sources,
+        source_totals => \%source_totals,
+        source_ready => \%source_ready,
+        source_page_sizes => \%source_page_sizes,
     };
+}
+
+sub _public_rows {
+    my ($result) = @_;
+    return $result if ref($result) eq 'ARRAY';
+    return $result->{rows}
+        if ref($result) eq 'HASH'
+        && ref($result->{rows}) eq 'ARRAY'
+        && (!exists($result->{pages}) || ref($result->{pages}) eq 'ARRAY');
+    return undef;
 }
 
 sub _resolve_values {
@@ -184,6 +311,58 @@ sub _resolve_values {
         $_ => _resolve_value($values->{$_}, $context, $node_id)
     } keys %$values;
     return \%resolved;
+}
+
+sub _validate_url_attributes {
+    my ($attributes, $node_id) = @_;
+    my %url_names = map { $_ => 1 }
+        qw(href src poster action formaction xlink:href);
+    for my $name (keys %$attributes) {
+        next unless $url_names{$name};
+        _die('invalid_url_attribute', 'element URL attribute is invalid', $node_id)
+            unless _valid_url($name, $attributes->{$name});
+    }
+}
+
+sub _validate_component_urls {
+    my ($props, $registry, $component, $node_id) = @_;
+    my $policies = $registry->{url_props};
+    return unless defined $policies;
+    _die('invalid_render_input', 'component URL policy is invalid', $node_id)
+        unless ref($policies) eq 'HASH';
+    my $policy = $policies->{$component};
+    return unless defined $policy;
+    _die('invalid_render_input', 'component URL policy is invalid', $node_id)
+        unless ref($policy) eq 'HASH';
+    my %url_names = map { $_ => 1 }
+        qw(href src poster action formaction xlink:href);
+    for my $prop (keys %$policy) {
+        my $attribute = $policy->{$prop};
+        _die('invalid_render_input', 'component URL policy is invalid', $node_id)
+            unless defined($attribute) && !ref($attribute) && $url_names{$attribute};
+        next unless exists $props->{$prop};
+        _die('invalid_url_attribute', 'component URL prop is invalid', $node_id)
+            unless _valid_url($attribute, $props->{$prop});
+    }
+}
+
+sub _valid_url {
+    my ($name, $value) = @_;
+    return 1 unless defined $value;
+    return 0 if ref($value) || !length($value)
+        || length(encode_utf8("$value")) > 2048
+        || $value =~ /[\x00-\x20\x7F\\]/;
+    return 1 if $value =~ m{\A/(?!/)};
+    return 1 if ($name eq 'href' || $name eq 'xlink:href')
+        && $value =~ /\A[?#].+/s;
+    return 1 if $name eq 'href' && $value =~ /\A(?:mailto|tel):.+/s;
+    return 0 if $name eq 'action' || $name eq 'formaction';
+    if ($value =~ m{\Ahttps?://([^/?#]+)(?:[/?#].*)?\z}s) {
+        my $authority = $1;
+        return $authority !~ /@/
+            && $authority =~ /\A(?:[A-Za-z0-9]|\[)[A-Za-z0-9.:\-\[\]]*\z/;
+    }
+    return 0;
 }
 
 sub _resolve_value {
@@ -223,6 +402,28 @@ sub _resolve_expression {
     if ($expression =~ /\A([A-Za-z_][A-Za-z0-9_]*)\.rows\z/
         && exists($context->{sources}{$1})) {
         return $context->{sources}{$1};
+    }
+    if ($expression =~ /\A([A-Za-z_][A-Za-z0-9_]*)\.ready\z/
+        && exists($context->{source_ready}{$1})) {
+        return $context->{source_ready}{$1}
+            ? JSON::PP::true : JSON::PP::false;
+    }
+    if ($expression =~ /\A([A-Za-z_][A-Za-z0-9_]*)\.page_size\z/
+        && exists($context->{source_page_sizes}{$1})) {
+        my $size = $context->{source_page_sizes}{$1};
+        _die('unsupported_expression', 'render expression is not supported', $node_id)
+            unless defined($size) && !ref($size) && "$size" =~ /\A[1-9][0-9]*\z/;
+        return 0 + $size;
+    }
+    if ($expression =~ /\A([A-Za-z_][A-Za-z0-9_]*)\.totals\.([A-Za-z_][A-Za-z0-9_]*)\z/
+        && exists($context->{source_totals}{$1})) {
+        my ($source, $total) = ($1, $2);
+        my $totals = $context->{source_totals}{$source};
+        return $totals->{$total}
+            if ref($totals) eq 'HASH' && exists($totals->{$total});
+        _die('unsupported_expression', 'render expression is not supported', $node_id)
+            if $context->{source_ready}{$source};
+        return undef;
     }
     if ($expression =~ /\A([A-Za-z_][A-Za-z0-9_]*)(?:\.(.+))?\z/
         && exists($context->{inputs}{$1})) {

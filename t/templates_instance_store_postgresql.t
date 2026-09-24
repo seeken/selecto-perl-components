@@ -5,12 +5,31 @@ use warnings;
 use FindBin ();
 use lib "$FindBin::Bin/lib";
 use JSON::PP ();
+use POSIX qw(_exit);
+use Storable qw(dclone);
 use Test::More;
 use Time::HiRes qw(time);
 use TestSelectoComponents ();
 
 use Selecto::Components::Templates::Dispatcher;
 use Selecto::Components::Templates::InstanceStore::PostgreSQL;
+
+{
+    package Selecto::Components::Templates::PausedPageStore;
+    use parent 'Selecto::Components::Templates::InstanceStore::PostgreSQL';
+
+    sub compare_and_set {
+        my ($self, %args) = @_;
+        if (my $ready = delete $self->{race_ready_fh}) {
+            my $go = delete $self->{race_go_fh};
+            syswrite($ready, 'R') == 1 or die "page race readiness failed\n";
+            my $signal;
+            sysread($go, $signal, 1) == 1 && $signal eq 'G'
+                or die "page race release failed\n";
+        }
+        return $self->SUPER::compare_and_set(%args);
+    }
+}
 
 my $dsn = $ENV{SELECTO_TEMPLATES_POSTGRES_DSN};
 plan skip_all => 'template PostgreSQL DSN is not configured'
@@ -269,6 +288,139 @@ is(
     'ok',
     'a PostgreSQL claim can be released explicitly',
 );
+
+my $page_fixture_path =
+    "$FindBin::Bin/../../selecto-protocol/spec/fixtures/templates/runtime-page-commit.cases.json";
+open my $page_fixture, '<:raw', $page_fixture_path
+    or die "cannot read $page_fixture_path: $!";
+my $page_fixture_text = do { local $/; <$page_fixture> };
+close $page_fixture;
+my $page_case = JSON::PP->new->utf8(1)->decode($page_fixture_text)->{cases}[0];
+my $page_mount = $dispatcher_one->mount(
+    owner_scope => $owner, manifest => $manifest,
+    release_id => 'release-perl-page-race', inputs => {},
+    expires_at => time() + 30,
+);
+is $page_mount->{status}, 'ok', 'worker one mounts the shared paged instance';
+my $page_instance = $page_mount->{instance_id};
+my $initial_pages = dclone($page_case->{snapshot}{sources}{orders}{result});
+push @{$initial_pages->{rows}}, {id => 2, lines => [{id => 21}]};
+push @{$initial_pages->{pages}}, {
+    collection_path => ['lines'], parent_path => [2],
+    has_more => JSON::PP::true, after_values => [21],
+};
+push @{$initial_pages->{identities}}, {
+    collection_path => ['lines'], parent_path => [2], row_keys => [21],
+};
+my $page_ready = $dispatcher_two->complete(
+    owner_scope => $owner, instance_id => $page_instance,
+    manifest => $manifest,
+    completion => _completion(
+        $page_instance, 'release-perl-page-race', 1, $initial_pages,
+    ),
+);
+is $page_ready->{store_revision}, 1,
+    'worker two stores the two-parent first page';
+
+my $page_commit_for = sub {
+    my ($snapshot, $parent_index) = @_;
+    my $result = dclone($snapshot->{sources}{orders}{result});
+    my $next_line_id = $parent_index ? 22 : 12;
+    push @{$result->{rows}[$parent_index]{lines}}, {id => $next_line_id};
+    $result->{pages}[$parent_index]{has_more} = JSON::PP::false;
+    $result->{pages}[$parent_index]{after_values} = undef;
+    push @{$result->{identities}[$parent_index]{row_keys}}, $next_line_id;
+    return {
+        schema => 'selecto.template.runtime-page-commit.v1',
+        instance_id => $page_instance,
+        release_id => 'release-perl-page-race', source => 'orders',
+        generation => $snapshot->{sources}{orders}{generation},
+        expected_state_revision => $snapshot->{state_revision},
+        expected_page => $snapshot->{sources}{orders}{page},
+        result => $result,
+    };
+};
+
+pipe(my $child_result_read, my $child_result_write)
+    or die "cannot create page-race result pipe: $!";
+pipe(my $child_go_read, my $child_go_write)
+    or die "cannot create page-race release pipe: $!";
+my $page_race_pid = fork();
+defined($page_race_pid) or die "cannot fork page-race worker: $!";
+if ($page_race_pid == 0) {
+    close $child_result_read;
+    close $child_go_write;
+    my $child_dbh = _connect();
+    my $child_store = Selecto::Components::Templates::PausedPageStore->new(
+        dbh_provider => sub { $child_dbh },
+        table => $table, claims_table => $claims_table,
+    );
+    $child_store->{race_ready_fh} = $child_result_write;
+    $child_store->{race_go_fh} = $child_go_read;
+    my $child_dispatcher = Selecto::Components::Templates::Dispatcher->new(
+        store => $child_store,
+    );
+    my $child_result = $child_dispatcher->commit_page(
+        owner_scope => $owner, instance_id => $page_instance,
+        manifest => $manifest,
+        commit => $page_commit_for->($page_ready->{observation}{snapshot}, 1),
+    );
+    my $encoded = JSON::PP->new->canonical(1)->encode($child_result);
+    syswrite($child_result_write, $encoded) == length($encoded)
+        or _exit(2);
+    close $child_result_write;
+    close $child_go_read;
+    _exit(0);
+}
+close $child_result_write;
+close $child_go_read;
+my $ready_signal;
+sysread($child_result_read, $ready_signal, 1) == 1
+    && $ready_signal eq 'R'
+    or die "page-race worker did not reach the store commit\n";
+my $winning_page = $dispatcher_one->commit_page(
+    owner_scope => $owner, instance_id => $page_instance,
+    manifest => $manifest,
+    commit => $page_commit_for->($page_ready->{observation}{snapshot}, 0),
+);
+is $winning_page->{status}, 'ok',
+    'worker one commits a page while worker two holds an older snapshot';
+is $winning_page->{store_revision}, 2,
+    'the first page commit advances the shared PostgreSQL revision';
+syswrite($child_go_write, 'G') == 1 or die "cannot release page-race worker\n";
+close $child_go_write;
+my $child_result_json = do { local $/; <$child_result_read> };
+close $child_result_read;
+waitpid($page_race_pid, 0);
+is $?, 0, 'the second page worker exits cleanly';
+my $losing_page = JSON::PP->new->decode($child_result_json);
+is_deeply $losing_page, {status => 'conflict', revision => 2},
+    'the paused worker cannot overwrite the other parent page';
+my $after_race = $dispatcher_two->load(
+    owner_scope => $owner, instance_id => $page_instance,
+);
+is_deeply [map { $_->{id} }
+    @{$after_race->{snapshot}{sources}{orders}{result}{rows}[0]{lines}}],
+    [11, 12], 'the winning parent retains its advanced rows';
+is_deeply [map { $_->{id} }
+    @{$after_race->{snapshot}{sources}{orders}{result}{rows}[1]{lines}}],
+    [21], 'the losing parent remains on its first page';
+my $retried_page = $dispatcher_two->commit_page(
+    owner_scope => $owner, instance_id => $page_instance,
+    manifest => $manifest,
+    commit => $page_commit_for->($after_race->{snapshot}, 1),
+);
+is $retried_page->{status}, 'ok',
+    'the other worker can retry the untouched parent from fresh state';
+is $retried_page->{store_revision}, 3,
+    'the retry advances the shared revision exactly once';
+my $after_retry = $dispatcher_one->load(
+    owner_scope => $owner, instance_id => $page_instance,
+);
+is_deeply [map { [map { $_->{id} } @{$_->{lines}}] }
+    @{$after_retry->{snapshot}{sources}{orders}{result}{rows}}],
+    [[11, 12], [21, 22]],
+    'both workers observe both parent continuations after retry';
 
 my $small_store = Selecto::Components::Templates::InstanceStore::PostgreSQL->new(
     dbh_provider => sub { $worker_one_dbh },

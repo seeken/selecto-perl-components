@@ -67,7 +67,7 @@ sub create {
     $self->{instances}{$instance_id} = {
         owner_scope => $scope_key,
         release => "$release",
-        snapshot => dclone($snapshot),
+        snapshot => _copy_snapshot($snapshot),
         revision => 0,
         expires_at => 0 + $expires_at,
         effect_claims => {},
@@ -93,7 +93,7 @@ sub load {
     return {
         status => 'ok',
         release => $record->{release},
-        snapshot => dclone($record->{snapshot}),
+        snapshot => _copy_snapshot($record->{snapshot}),
         revision => $record->{revision},
         expires_at => $record->{expires_at},
     };
@@ -118,7 +118,7 @@ sub compare_and_set {
     $self->_validate_snapshot($snapshot);
 
     my $record = $self->{instances}{$args{instance_id}};
-    $record->{snapshot} = dclone($snapshot);
+    $record->{snapshot} = _copy_snapshot($snapshot);
     $record->{revision}++;
     return {status => 'ok', revision => $record->{revision}};
 }
@@ -192,7 +192,7 @@ sub commit_claimed_effect {
         unless ref($snapshot) eq 'HASH'
         && _snapshot_matches($snapshot, $args{instance_id}, $loaded->{release});
     $self->_validate_snapshot($snapshot);
-    $record->{snapshot} = dclone($snapshot);
+    $record->{snapshot} = _copy_snapshot($snapshot);
     $record->{revision}++;
     delete $record->{effect_claims}{$key};
     return {status => 'ok', revision => $record->{revision}};
@@ -280,6 +280,15 @@ sub _scope_key {
     die "invalid_owner_scope: template owner scope exceeds the storage budget\n"
         if length($json) > $self->{max_owner_scope_bytes};
     return $json;
+}
+
+sub _copy_snapshot {
+    my ($value) = @_;
+    return $value unless ref($value);
+    return {map { $_ => _copy_snapshot($value->{$_}) } keys %$value}
+        if ref($value) eq 'HASH';
+    return [map { _copy_snapshot($_) } @$value] if ref($value) eq 'ARRAY';
+    return dclone($value);
 }
 
 sub _validate_snapshot {
