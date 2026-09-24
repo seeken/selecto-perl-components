@@ -5,6 +5,7 @@ use warnings;
 use FindBin ();
 use lib "$FindBin::Bin/lib";
 use JSON::PP ();
+use Storable qw(dclone);
 use Test::More;
 use TestSelectoComponents ();
 
@@ -273,6 +274,52 @@ is $completion->{store_revision}, 2, 'accepted completion advances the CAS revis
 is $completion->{observation}{snapshot}{sources}{orders}{status}, 'ready',
     'accepted completion updates source state';
 
+my $page_fixture_path = "$FindBin::Bin/../../selecto-protocol/spec/fixtures/templates/runtime-page-commit.cases.json";
+open my $page_fixture_handle, '<:raw', $page_fixture_path
+    or die "cannot read $page_fixture_path: $!";
+my $page_fixture_text;
+{ local $/; $page_fixture_text = <$page_fixture_handle>; }
+my $page_case = JSON::PP->new->utf8(1)->decode($page_fixture_text)->{cases}[0];
+close $page_fixture_handle;
+my $page_mount = $dispatcher->mount(
+    owner_scope => $owner, manifest => $manifest,
+    release_id => 'release-perl-1', inputs => {}, expires_at => 200,
+);
+my $page_instance = $page_mount->{instance_id};
+my $page_ready = $dispatcher->complete(
+    owner_scope => $owner, instance_id => $page_instance,
+    manifest => $manifest,
+    completion => _completion(
+        $page_instance, 1, $page_case->{snapshot}{sources}{orders}{result},
+    ),
+);
+is $page_ready->{store_revision}, 1, 'ready page source is stored once';
+my $page_commit = dclone($page_case->{commit});
+$page_commit->{instance_id} = $page_instance;
+$page_commit->{release_id} = 'release-perl-1';
+my $page_advanced = $dispatcher->commit_page(
+    owner_scope => $owner, instance_id => $page_instance,
+    manifest => $manifest, commit => $page_commit,
+);
+is $page_advanced->{status}, 'ok', 'owner-scoped page transition succeeds';
+is $page_advanced->{store_revision}, 2, 'accepted page advances store CAS revision';
+is $page_advanced->{observation}{snapshot}{sources}{orders}{page}, 2,
+    'accepted page advances only its source page counter';
+my $page_repeated = $dispatcher->commit_page(
+    owner_scope => $owner, instance_id => $page_instance,
+    manifest => $manifest, commit => $page_commit,
+);
+is $page_repeated->{observation}{code}, 'stale_page_commit',
+    'stale page is ignored after the first commit';
+is $page_repeated->{store_revision}, 2,
+    'ignored page leaves store CAS revision unchanged';
+my $page_foreign_owner = $dispatcher->commit_page(
+    owner_scope => {%$owner, actor_id => 'other-actor'},
+    instance_id => $page_instance, manifest => $manifest, commit => $page_commit,
+);
+is $page_foreign_owner->{status}, 'not_found',
+    'foreign owner cannot disclose or mutate the paged instance';
+
 my $claimed_mount = $dispatcher->mount(
     owner_scope => $owner,
     manifest => $manifest,
@@ -329,6 +376,41 @@ my $expired = $dispatcher->load(owner_scope => $owner, instance_id => $instance_
 is $expired->{status}, 'expired', 'expired instances return an explicit result';
 my $gone = $dispatcher->load(owner_scope => $owner, instance_id => $instance_id);
 is $gone->{status}, 'not_found', 'expired instances are removed from memory storage';
+
+my $lazy_manifest = TestSelectoComponents::_protocol_fixture('order-lazy-source.compile.json');
+ok($lazy_manifest, 'protocol lazy-source manifest is available');
+$now = 250;
+my $lazy_mount = $dispatcher->mount(
+    owner_scope => $owner, manifest => $lazy_manifest,
+    release_id => 'lazy-release', inputs => {}, expires_at => 300,
+);
+is $lazy_mount->{status}, 'ok', 'lazy instance mounts';
+is $lazy_mount->{observation}{snapshot}{sources}{selected_order}{status}, 'idle',
+    'selected source remains idle at mount';
+is_deeply [map { $_->{source} } @{$lazy_mount->{observation}{effects}}], ['orders'],
+    'only the eager source loads at mount';
+my $lazy_first = $dispatcher->dispatch(
+    owner_scope => $owner, instance_id => $lazy_mount->{instance_id},
+    manifest => $lazy_manifest, event_id => 'lazy-select-1',
+    name => 'order_selected', expected_state_revision => 0,
+    payload => {value => 'PO-100'},
+);
+is $lazy_first->{status}, 'ok', 'selection activates the lazy source';
+is $lazy_first->{observation}{effects}[0]{source}, 'selected_order',
+    'selection loads only the selected source';
+is $lazy_first->{observation}{effects}[0]{generation}, 1,
+    'first activation uses generation one';
+my $lazy_second = $dispatcher->dispatch(
+    owner_scope => $owner, instance_id => $lazy_mount->{instance_id},
+    manifest => $lazy_manifest, event_id => 'lazy-select-2',
+    name => 'order_selected', expected_state_revision => 1,
+    payload => {value => 'PO-200'},
+);
+is $lazy_second->{status}, 'ok', 'later selection remains accepted';
+is $lazy_second->{observation}{effects}[0]{generation}, 2,
+    'later selection supersedes the first lazy load';
+is $lazy_second->{observation}{effects}[0]{bindings}{state}{selected_order_number},
+    'PO-200', 'later load carries the latest selection';
 
 done_testing;
 

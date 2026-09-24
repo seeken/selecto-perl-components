@@ -33,11 +33,14 @@ sub model {
     my ($self, $controller, %args) = @_;
     my $template_id = delete $args{template};
     my $instance_id = delete $args{instance};
+    my $expected_template_id = delete $args{expected_template_id};
     return _error('invalid_native_template_request',
         'Specify exactly one template or instance.')
         if (defined($template_id) ? 1 : 0) + (defined($instance_id) ? 1 : 0) != 1;
 
     if (defined($template_id)) {
+        return _error('template_instance_not_found', 'Template instance was not found.')
+            if defined($expected_template_id) && $template_id ne $expected_template_id;
         my $mounted = Selecto::Components::Controller::Templates->mount_instance(
             $controller, $self->{runtime}, $template_id,
         );
@@ -51,6 +54,7 @@ sub model {
 
     my $context = Selecto::Components::Controller::Templates->instance_context(
         $controller, $self->{runtime}, $instance_id,
+        expected_template_id => $expected_template_id,
     );
     return $context unless ($context->{status} // '') eq 'ok';
     return $self->_build_model(
@@ -62,8 +66,10 @@ sub model {
 sub dispatch_event {
     my ($self, $controller, %args) = @_;
     my $instance_id = delete $args{instance};
+    my $expected_template_id = delete $args{expected_template_id};
     my $result = Selecto::Components::Controller::Templates->dispatch_event_request(
         $controller, $self->{runtime}, instance_id => $instance_id,
+        expected_template_id => $expected_template_id,
     );
     return $result unless ($result->{status} // '') eq 'ok';
     return $self->_build_model(
@@ -79,6 +85,7 @@ sub dispatch_event {
 sub dispatch_source {
     my ($self, $controller, %args) = @_;
     my $instance_id = delete $args{instance};
+    my $expected_template_id = delete $args{expected_template_id};
     my $source_id = delete $args{source};
     my $on_finish = delete $args{on_finish};
     return _error('invalid_native_template_callback',
@@ -87,6 +94,7 @@ sub dispatch_source {
     return Selecto::Components::Controller::Templates->dispatch_source_request(
         $controller, $self->{runtime},
         instance_id => $instance_id,
+        expected_template_id => $expected_template_id,
         source_id => $source_id,
         on_finish => sub {
             my ($result) = @_;
@@ -106,6 +114,7 @@ sub dispatch_source {
 sub websocket {
     my ($self, $controller, %args) = @_;
     my $instance_id = delete $args{instance};
+    my $expected_template_id = delete $args{expected_template_id};
     my $render = delete $args{render};
     my $render_error = delete $args{render_error};
     return _error('invalid_native_template_callback',
@@ -118,6 +127,7 @@ sub websocket {
     return Selecto::Components::Templates::WebSocket->connect(
         $controller, $self->{runtime},
         instance_id => $instance_id,
+        expected_template_id => $expected_template_id,
         snapshot_response => sub {
             my ($socket, $result) = @_;
             my $model = $self->_build_model(
@@ -172,13 +182,28 @@ sub _build_model {
     );
 
     my (%sources, %source_forms);
+    my %page_sizes = map {
+        $_->{id} => $_->{query}{limit}
+    } @{$template->{manifest}{sources} // []};
     for my $source_id (sort keys %{$snapshot->{sources}}) {
         my $source = $snapshot->{sources}{$source_id};
         next unless ref($source) eq 'HASH';
+        my $rows = _public_rows($source->{result});
+        return _error('invalid_native_sources', 'Native template sources are invalid.')
+            if defined($source->{result}) && !defined($rows);
+        my $totals = _public_totals($source->{result});
+        return _error('invalid_native_sources', 'Native template sources are invalid.')
+            if ref($source->{result}) eq 'HASH'
+            && exists($source->{result}{totals}) && !defined($totals);
+        my $page_size = $page_sizes{$source_id};
+        return _error('invalid_native_sources', 'Native template sources are invalid.')
+            if defined($page_size) && (ref($page_size) || "$page_size" !~ /\A[1-9][0-9]*\z/);
         $sources{$source_id} = {
             status => $source->{status},
             generation => 0 + $source->{generation},
-            (defined($source->{result}) ? (rows => dclone($source->{result})) : ()),
+            (defined($rows) ? (rows => dclone($rows)) : ()),
+            (defined($totals) ? (totals => dclone($totals)) : ()),
+            (defined($page_size) ? (page_size => 0 + $page_size) : ()),
             (defined($source->{error}) ? (error => dclone($source->{error})) : ()),
         };
         next unless ($source->{status} // '') eq 'loading';
@@ -225,6 +250,29 @@ sub _build_model {
         },
         response => \%metadata,
     };
+}
+
+sub _public_rows {
+    my ($result) = @_;
+    return undef unless defined($result);
+    return $result if ref($result) eq 'ARRAY';
+    return $result->{rows}
+        if ref($result) eq 'HASH'
+        && ref($result->{rows}) eq 'ARRAY'
+        && (!exists($result->{pages}) || ref($result->{pages}) eq 'ARRAY');
+    return undef;
+}
+
+sub _public_totals {
+    my ($result) = @_;
+    return undef unless ref($result) eq 'HASH' && exists($result->{totals});
+    my $totals = $result->{totals};
+    return undef unless ref($totals) eq 'HASH';
+    for my $name (keys %$totals) {
+        return undef unless length($name) && !ref($totals->{$name})
+            && defined($totals->{$name}) && $totals->{$name} =~ /\A(?:0|[1-9][0-9]*)\z/;
+    }
+    return $totals;
 }
 
 sub _event_forms {

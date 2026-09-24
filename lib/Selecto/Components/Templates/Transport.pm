@@ -3,10 +3,12 @@ package Selecto::Components::Templates::Transport;
 use Mojo::Base -base, -signatures;
 use Selecto::Components::AssetManifest qw(asset_revision);
 use Selecto::Components::Templates::ComponentIdentity ();
+use Selecto::Components::Templates::PageCursor ();
+use Selecto::Components::Templates::RootCursor ();
 use Selecto::Components::Templates::Renderer ();
 use Selecto::Components::Util qw(html_escape);
 
-has [qw(template_path instance_path event_id_generator)];
+has [qw(template_path instance_path event_id_generator clock)];
 
 sub respond_snapshot ($self, $controller, %args) {
     my $rendered = eval { $self->_render_snapshot($controller, %args) };
@@ -129,7 +131,9 @@ sub _render_snapshot ($self, $controller, %args) {
         manifest => $template->{manifest}, snapshot => $snapshot,
         registry => $registry,
     );
-    my $sources = $self->_source_region($snapshot, $csrf_token, $root_id);
+    my $sources = $self->_source_region(
+        $controller, $template, $snapshot, $csrf_token, $root_id,
+    );
     my $root = '<main id="' . html_escape($root_id) . '"' .
         ' class="selecto-template-instance" hx-history="false"' .
         ' hx-status:4xx="swap: outerHTML" hx-status:5xx="swap: outerHTML"' .
@@ -208,24 +212,66 @@ sub _event_descriptor (
     };
 }
 
-sub _source_region ($self, $snapshot, $csrf_token, $root_id) {
-    my $content = $self->_source_controls($snapshot, $csrf_token, $root_id);
+sub _source_region ($self, $controller, $template, $snapshot, $csrf_token, $root_id) {
+    my $content = $self->_source_controls(
+        $controller, $template, $snapshot, $csrf_token, $root_id,
+    );
     return '<div id="' . html_escape(_source_region_id($root_id)) . '"' .
         ' data-selecto-template-sources>' . $content . '</div>';
 }
 
-sub _source_controls ($self, $snapshot, $csrf_token, $root_id) {
+sub _source_controls ($self, $controller, $template, $snapshot, $csrf_token, $root_id) {
     my $html = '';
     for my $source_id (sort keys %{$snapshot->{sources}}) {
         my $source = $snapshot->{sources}{$source_id};
         next unless ref($source) eq 'HASH';
+        if (($source->{status} // '') eq 'ready'
+            && ref($source->{result}) eq 'HASH'
+            && ref($source->{result}{root_page}) eq 'HASH'
+            && ref($template->{root_cursor_sources}) eq 'ARRAY'
+            && scalar(grep { $_ eq $source_id } @{$template->{root_cursor_sources}})
+            && ref($template->{resolve_page_scope}) eq 'CODE'
+            && defined($template->{page_secret})) {
+            my ($source_plan) = grep {
+                ref($_) eq 'HASH' && ($_->{id} // '') eq $source_id
+            } @{$template->{manifest}{sources}};
+            if ($source_plan) {
+                my $scope = $template->{resolve_page_scope}->(
+                    $controller, $snapshot, $source_id,
+                );
+                my $issued = Selecto::Components::Templates::RootCursor->issue(
+                    snapshot => $snapshot, source_id => $source_id,
+                    source_plan => $source_plan, scope => $scope,
+                    secret => $template->{page_secret},
+                    now => int($self->clock->()),
+                );
+                if ($issued->{status} eq 'ok' && $issued->{has_more}
+                    && defined($issued->{token})) {
+                    my $action = $self->instance_path . '/' . $snapshot->{instance_id} .
+                        '/root-pages/' . $source_id;
+                    $html .= '<form class="selecto-template-root-page" method="post" action="' .
+                        html_escape($action) . '" hx-post="' . html_escape($action) .
+                        '" hx-target="#' . html_escape($root_id) .
+                        '" hx-swap="outerHTML" data-selecto-template-root-page="' .
+                        html_escape($source_id) . '"><input type="hidden" name="csrf_token" value="' .
+                        html_escape($csrf_token) . '"><input type="hidden" name="root_cursor" value="' .
+                        html_escape($issued->{token}) . '"><button type="submit">Next ' .
+                        html_escape($source_id) . '</button></form>';
+                }
+            }
+        }
         if (($source->{status} // '') eq 'loading') {
             my $action = $self->instance_path . '/' . $snapshot->{instance_id} .
                 '/sources/' . $source_id;
+            my $resume = $self->instance_path . '/' . $snapshot->{instance_id};
+            $html .= '<p class="selecto-template-source-loading" role="status"' .
+                ' data-selecto-template-source="' . html_escape($source_id) . '">' .
+                html_escape("Loading $source_id...") . '</p>';
             $html .= '<form class="selecto-template-source" method="post" action="' .
                 html_escape($action) . '" hx-post="' . html_escape($action) .
                 '" hx-trigger="load" hx-target="#' . html_escape($root_id) .
-                '" hx-swap="outerHTML" data-selecto-template-source="' .
+                '" hx-swap="outerHTML" data-selecto-template-resume-url="' .
+                html_escape($resume) . '" data-selecto-template-source="' .
                 html_escape($source_id) . '"><input type="hidden" name="csrf_token" value="' .
                 html_escape($csrf_token) . '"><noscript><button type="submit">Load ' .
                 html_escape($source_id) . '</button></noscript></form>';
@@ -236,6 +282,39 @@ sub _source_controls ($self, $snapshot, $csrf_token, $root_id) {
             $html .= '<p class="selecto-template-source-error" role="alert"' .
                 ' data-selecto-template-source="' . html_escape($source_id) . '">' .
                 html_escape("Source $source_id failed: $code") . '</p>';
+        }
+        elsif (($source->{status} // '') eq 'ready'
+            && ref($source->{result}) eq 'HASH'
+            && ref($source->{result}{pages}) eq 'ARRAY'
+            && @{$source->{result}{pages}}) {
+            my ($source_plan) = grep {
+                ref($_) eq 'HASH' && ($_->{id} // '') eq $source_id
+            } @{$template->{manifest}{sources}};
+            next unless $source_plan;
+            my $resolver = $template->{resolve_page_scope};
+            next unless ref($resolver) eq 'CODE';
+            my $scope = $resolver->($controller, $snapshot, $source_id);
+            my $issued = Selecto::Components::Templates::PageCursor->issue(
+                snapshot => $snapshot, source_id => $source_id,
+                source_plan => $source_plan, scope => $scope,
+                secret => $template->{page_secret},
+                now => int($self->clock->()),
+            );
+            next unless $issued->{status} eq 'ok';
+            my $action = $self->instance_path . '/' . $snapshot->{instance_id} .
+                '/pages/' . $source_id;
+            for my $page (@{$issued->{pages}}) {
+                next unless $page->{has_more} && defined($page->{token});
+                my $collection = join ' / ', @{$page->{collection_path}};
+                $html .= '<form class="selecto-template-page" method="post" action="' .
+                    html_escape($action) . '" hx-post="' . html_escape($action) .
+                    '" hx-target="#' . html_escape($root_id) .
+                    '" hx-swap="outerHTML" data-selecto-template-page="' .
+                    html_escape($collection) . '"><input type="hidden" name="csrf_token" value="' .
+                    html_escape($csrf_token) . '"><input type="hidden" name="page_cursor" value="' .
+                    html_escape($page->{token}) . '"><button type="submit">Load more ' .
+                    html_escape($collection) . '</button></form>';
+            }
         }
     }
     return $html;
@@ -322,7 +401,8 @@ sub _error_headers ($controller, $result) {
 }
 
 sub _is_fragment ($controller) {
-    return lc($controller->req->headers->header('HX-Request') // '') eq 'true';
+    return 0 unless lc($controller->req->headers->header('HX-Request') // '') eq 'true';
+    return lc($controller->req->headers->header('HX-Request-Type') // '') ne 'full';
 }
 
 sub _status ($result) {

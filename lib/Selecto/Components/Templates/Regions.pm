@@ -68,6 +68,10 @@ sub _dependencies {
             if $expression =~ /(?:\A|\()state\.([A-Za-z_][A-Za-z0-9_]*)/;
         $dependencies->{"source:$1"} = 1
             if $expression =~ /\A([A-Za-z_][A-Za-z0-9_]*)\.rows\z/;
+        $dependencies->{"source:$1"} = 1
+            if ($value->{kind} // '') eq 'binding'
+            && ($value->{type} // '') eq 'source'
+            && $expression =~ /\A([A-Za-z_][A-Za-z0-9_]*)(?:\.[A-Za-z_][A-Za-z0-9_]*)?\z/;
     }
     _dependencies($_, $dependencies) for values %$value;
 }

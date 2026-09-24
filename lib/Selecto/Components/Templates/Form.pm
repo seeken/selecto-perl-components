@@ -18,11 +18,14 @@ sub new {
     die "invalid_form_host: instance store is required\n"
         unless $args{store} && $args{store}->can('create')
         && $args{store}->can('load') && $args{store}->can('compare_and_set');
+    die "invalid_form_host: lookup_receipt must be a callback\n"
+        if defined($args{lookup_receipt}) && ref($args{lookup_receipt}) ne 'CODE';
     return bless {
         store => $args{store},
         resolve_form => $args{resolve_form},
         load_record => $args{load_record},
         write_record => $args{write_record},
+        lookup_receipt => $args{lookup_receipt},
         clock => $args{clock} // sub { time },
         ttl_seconds => $args{ttl_seconds} // 1800,
         row_id_generator => $args{row_id_generator} // \&_row_id,
@@ -118,6 +121,13 @@ sub save {
     my $loaded = $self->load(%args);
     return $loaded unless $loaded->{status} eq 'ok';
     my $snapshot = $loaded->{snapshot};
+    if ($self->{lookup_receipt}) {
+        return {status => 'saved', snapshot => $snapshot,
+            result => $snapshot->{operation_result}}
+            if ($snapshot->{status} // '') eq 'saved';
+        return $self->_recover_saving($args{owner_scope}, $args{instance_id}, $loaded)
+            if ($snapshot->{status} // '') eq 'saving';
+    }
     return {status => 'conflict', revision => $loaded->{revision}}
         unless defined($args{revision}) && !ref($args{revision})
         && "$args{revision}" =~ /\A[0-9]+\z/
@@ -126,7 +136,10 @@ sub save {
     return {status => 'unchanged', form => $loaded->{form}, snapshot => $snapshot}
         unless $snapshot->{dirty};
 
-    my $saving = {%$snapshot, status => 'saving', revision => $loaded->{revision} + 1};
+    my $operation_key = join ':', $snapshot->{instance_id}, $loaded->{revision};
+    my $saving = {%$snapshot, status => 'saving',
+        revision => $loaded->{revision} + 1,
+        operation_key => $operation_key};
     my $reserved = $self->{store}->compare_and_set(
         owner_scope => $args{owner_scope}, instance_id => $args{instance_id},
         revision => $loaded->{revision}, next_snapshot => $saving,
@@ -138,18 +151,81 @@ sub save {
         $result = $self->{write_record}->(
             $args{owner_scope}, $snapshot->{record_id},
             $loaded->{form}, $snapshot->{baseline}, $snapshot->{draft},
+            $operation_key,
         );
         die "write_rejected: host rejected the draft\n"
             unless ref($result) eq 'HASH' && ($result->{status} // '') eq 'ok';
         1;
     } or $error = $@;
+    if ($error && $self->{lookup_receipt}) {
+        my ($receipt, $lookup_error) = $self->_lookup_receipt(
+            $args{owner_scope}, $operation_key,
+        );
+        return {status => 'uncertain', snapshot => $saving}
+            if $lookup_error;
+        if ($receipt) {
+            $result = $receipt;
+            $error = undef;
+        } elsif (_error_code($error) eq 'operation_outcome_unknown'
+            || _error_code($error) eq 'form_host_error') {
+            return {status => 'uncertain', snapshot => $saving};
+        }
+    }
+    return $self->_finish_save($args{owner_scope}, $args{instance_id},
+        $reserved->{revision}, $saving, $result, $error);
+}
+
+sub recover {
+    my ($self, %args) = @_;
+    my $loaded = $self->load(%args);
+    return $loaded unless $loaded->{status} eq 'ok';
+    my $snapshot = $loaded->{snapshot};
+    return {status => 'saved', snapshot => $snapshot,
+        result => $snapshot->{operation_result}}
+        if ($snapshot->{status} // '') eq 'saved';
+    return $self->_recover_saving($args{owner_scope}, $args{instance_id}, $loaded)
+        if ($snapshot->{status} // '') eq 'saving';
+    return {status => 'ok', form => $loaded->{form}, snapshot => $snapshot};
+}
+
+sub _recover_saving {
+    my ($self, $owner, $instance, $loaded) = @_;
+    my $snapshot = $loaded->{snapshot};
+    return {status => 'uncertain', snapshot => $snapshot}
+        unless $self->{lookup_receipt} && defined($snapshot->{operation_key});
+    my ($receipt, $lookup_error) = $self->_lookup_receipt(
+        $owner, $snapshot->{operation_key},
+    );
+    return {status => 'uncertain', snapshot => $snapshot}
+        if $lookup_error || !$receipt;
+    return $self->_finish_save($owner, $instance, $loaded->{revision},
+        $snapshot, $receipt, undef);
+}
+
+sub _lookup_receipt {
+    my ($self, $owner, $key) = @_;
+    my $receipt = eval { $self->{lookup_receipt}->($owner, $key) };
+    return (undef, 1) if $@;
+    return (undef, 0) unless defined($receipt);
+    return (undef, 1) unless ref($receipt) eq 'HASH'
+        && ($receipt->{status} // '') eq 'ok';
+    return ($receipt, 0);
+}
+
+sub _finish_save {
+    my ($self, $owner, $instance, $revision, $saving, $result, $error) = @_;
     my $finished = {%$saving,
         status => $error ? 'ready' : 'saved',
-        revision => $reserved->{revision} + 1,
+        revision => $revision + 1,
     };
+    if ($error) {
+        delete $finished->{operation_key};
+    } else {
+        $finished->{operation_result} = $result;
+    }
     my $stored = $self->{store}->compare_and_set(
-        owner_scope => $args{owner_scope}, instance_id => $args{instance_id},
-        revision => $reserved->{revision}, next_snapshot => $finished,
+        owner_scope => $owner, instance_id => $instance,
+        revision => $revision, next_snapshot => $finished,
     );
     return $stored unless $stored->{status} eq 'ok';
     return {status => 'write_rejected', code => _error_code($error), snapshot => $finished}
