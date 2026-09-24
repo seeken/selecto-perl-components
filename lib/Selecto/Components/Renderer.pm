@@ -120,7 +120,7 @@ sub surface ($class, $model) {
         $alert . '<div class="sc-workspace' . ($builder_collapsed ? ' is-builder-collapsed' : '') .
         '" data-sc-workspace>' .
         $class->_form($model, $field_catalog, $detail_catalog) .
-        $class->results_fragment($model, $field_catalog) .
+        $class->results_fragment($model, $config->filter_catalog($model->{domain})) .
         '</div></section>';
 }
 
@@ -137,11 +137,13 @@ sub _page_title ($class, $model) {
     );
 }
 
-sub results_fragment ($class, $model, $field_catalog = undef) {
-    $field_catalog //= $model->{config}->field_catalog($model->{domain});
+sub results_fragment ($class, $model, $filter_catalog = undef) {
+    # Promoted cards need the filter catalog: it carries components.filter_choices,
+    # choice labels, and filter-only paths that the plain field catalog omits.
+    $filter_catalog //= $model->{config}->filter_catalog($model->{domain});
     return '<section id="selecto-results-' . _h($model->{config}->id) .
         '" class="sc-results" aria-live="polite">' .
-        $class->_promoted_filter_header($model, $field_catalog) .
+        $class->_promoted_filter_header($model, $filter_catalog) .
         $class->_results($model) . '</section>';
 }
 
