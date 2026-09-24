@@ -2,6 +2,7 @@ use 5.034;
 use strict;
 use warnings;
 use Test::More;
+use Mojo::DOM ();
 use Mojo::JSON qw(decode_json);
 use Mojo::Util qw(url_unescape);
 use lib 't/lib';
@@ -612,5 +613,82 @@ is(
     html_escape(q{<script>alert(1)</script>}),
     'VIN formatter falls back to escaping values that are not 17-character VINs',
 );
+
+my $choice_config = Selecto::Components::Config->new(
+    %{TestSelectoComponents::config()},
+    id => 'products',
+    engine_factory => sub {
+        return Selecto::Engine->new(
+            domain => TestSelectoComponents::_domain({filter_choices => {
+                product_name => {
+                    label => 'Product choice',
+                    choices => [
+                        {value => 'chai', label => 'Chai tea'},
+                        {value => 'chang', label => 'Chang beer'},
+                        {value => 'syrup', label => 'Aniseed syrup'},
+                    ],
+                },
+            }}),
+            adapter => TestSelectoComponents::Adapter->new(
+                dbh => bless({}, 'TestSelectoComponents::DBH'),
+            ),
+        );
+    },
+);
+my $choice_explorer = Selecto::Components::Explorer->new(config => $choice_config);
+my $choice_model = $choice_explorer->model(TestSelectoComponents::Controller->new, {
+    q => 1, view => 'detail', field => ['product_name'], limit => 25, page => 1,
+    filter_field => 'product_name', filter_op => 'in', filter_value => 'chai,syrup',
+    filter_promote_field => 'product_name',
+});
+ok $choice_model->{state}->valid, 'a promoted choice filter is a valid query state';
+my $choice_dom = Mojo::DOM->new(Selecto::Components::Renderer->surface($choice_model));
+my $promoted_choice = $choice_dom->at(
+    '[data-sc-promoted-filter][data-field="product_name"]',
+);
+ok $promoted_choice, 'the promoted choice filter renders a Quick filter card';
+is $promoted_choice->at('header strong')->text, 'Product choice',
+    'the promoted card uses the governed filter_choices label';
+my $promoted_select = $promoted_choice->at(
+    'select[multiple][data-sc-promoted-filter-input="value"][data-filter-field="product_name"]',
+);
+ok $promoted_select, 'a promoted filter_choices field renders a governed multi-select';
+ok !$promoted_choice->at('input[data-sc-promoted-filter-input="value"]'),
+    'a promoted filter_choices field does not fall back to a free-text value input';
+is_deeply [map { $_->{value} } $promoted_select->find('option')->each],
+    [qw(chai chang syrup)], 'the promoted select lists exactly the governed choices';
+is_deeply [map { $_->{value} } $promoted_select->find('option[selected]')->each],
+    [qw(chai syrup)], 'the promoted select preserves the canonical in value';
+is_deeply [map { $_->{value} } $promoted_choice->find('select[data-sc-promoted-filter-input="op"] option')->each],
+    [qw(eq ne in not_in is_null not_null)],
+    'the promoted match modes match the Filters tab choice operators';
+ok $promoted_choice->at('select[data-sc-promoted-filter-input="op"] option[value="in"][selected]'),
+    'the promoted match mode keeps the canonical in operator';
+my $tab_choice = $choice_dom->at('[data-sc-filter-set-item][data-field="product_name"]');
+is_deeply [map { $_->{value} } $tab_choice->find('select[data-sc-filter-choice-select] option')->each],
+    [map { $_->{value} } $promoted_select->find('option')->each],
+    'the promoted select and Filters tab select offer the same choices';
+ok $tab_choice->at('input[name="filter_value"][value="chai,syrup"]'),
+    'the Filters tab still carries the comma-joined canonical value';
+like $choice_model->{canonical_url}, qr/filter_op=in/,
+    'the canonical URL keeps the in operator for the promoted choice filter';
+like url_unescape($choice_model->{canonical_url}), qr/filter_value=chai,syrup/,
+    'the canonical URL keeps the comma-joined choice IDs';
+my $results_only = Mojo::DOM->new(Selecto::Components::Renderer->results_fragment($choice_model));
+ok $results_only->at(
+    '[data-sc-promoted-filter][data-field="product_name"] select[multiple][data-sc-promoted-filter-input="value"]',
+), 'results-only WebSocket fragments render the same governed promoted select';
+my $eq_model = $choice_explorer->model(TestSelectoComponents::Controller->new, {
+    q => 1, view => 'detail', field => ['product_name'], limit => 25, page => 1,
+    filter_field => 'product_name', filter_op => 'eq', filter_value => 'chang',
+    filter_promote_field => 'product_name',
+});
+my $eq_select = Mojo::DOM->new(Selecto::Components::Renderer->results_fragment($eq_model))->at(
+    '[data-sc-promoted-filter][data-field="product_name"] select[data-sc-promoted-filter-input="value"]',
+);
+ok $eq_select && !exists($eq_select->attr->{multiple}),
+    'an eq promoted choice filter renders a single-value governed select';
+is $eq_select->at('option[selected]')->{value}, 'chang',
+    'the single-value promoted select keeps the canonical eq value';
 
 done_testing;
