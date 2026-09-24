@@ -20,6 +20,14 @@ sub input_from_controller ($self, $controller) {
         next unless @values;
         $input{$name} = @values == 1 ? $values[0] : \@values;
     }
+    my @group_names = grep { /\Aquery_library_segment_choice_[A-Za-z][A-Za-z0-9_]*\z/ && length($_) <= 128 }
+        @{$controller->req->params->names};
+    for my $name (@group_names[0 .. ($#group_names < 31 ? $#group_names : 31)]) {
+        next unless defined $name;
+        my @values = $controller->every_param($name);
+        next unless @values;
+        $input{$name} = @values == 1 ? $values[0] : \@values;
+    }
     return \%input;
 }
 

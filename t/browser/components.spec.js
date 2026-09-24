@@ -6,11 +6,261 @@ const bundle = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..
 const htmxBundle = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/selecto-components/htmx.min.js");
 const websocketBundle = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/selecto-components/hx-ws.min.js");
 const stylesheet = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/selecto-components/selecto-components.css");
+const chartBundle = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/selecto-components/chart.umd.min.js");
 
 async function load(page, html) {
   await page.setContent(html);
   await page.addScriptTag({path: bundle});
 }
+
+test("segment choice radios keep one choice or Off and update the filter count", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote">
+    <span data-sc-filter-badge>0</span>
+    <fieldset><legend>PDF sent to customer</legend>
+      <label><input type="radio" name="query_library_segment_choice_pdf" value="" data-sc-query-library-group-choice checked>Off</label>
+      <label><input type="radio" name="query_library_segment_choice_pdf" value="pdf_yes" data-sc-query-library-group-choice>Yes</label>
+      <label><input type="radio" name="query_library_segment_choice_pdf" value="pdf_no" data-sc-query-library-group-choice>No</label>
+    </fieldset>
+  </form>`);
+  await page.locator('input[value="pdf_yes"]').check();
+  await expect(page.locator("[data-sc-filter-badge]")).toHaveText("1");
+  await page.locator('input[value="pdf_no"]').check();
+  await expect(page.locator("[data-sc-filter-badge]")).toHaveText("1");
+  await expect(page.locator('input[value="pdf_yes"]')).not.toBeChecked();
+  await page.locator('input[value=""]').check();
+  await expect(page.locator("[data-sc-filter-badge]")).toHaveText("0");
+});
+
+test("field and filter searches open matching source groups and restore collapsed state", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote">
+    <div data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
+      <input data-sc-picker-filter aria-label="Filter available fields">
+      <div data-sc-picker-available>
+        <details data-sc-picker-group data-sc-picker-group-key="bill_to" data-search-label="bill to">
+          <summary>Bill To <small>2</small></summary><div data-sc-picker-group-items>
+            <button data-sc-picker-available-item data-search="company name string bill_to.co_name">Company Name</button>
+            <button data-sc-picker-available-item data-search="city string bill_to.city">City</button>
+          </div>
+        </details>
+        <details data-sc-picker-group data-sc-picker-group-key="_actions" data-search-label="actions">
+          <summary>Actions <small>1</small></summary><div data-sc-picker-group-items>
+            <button data-sc-picker-available-item data-search="send quote action">Send Quote</button>
+          </div>
+        </details>
+      </div><span data-sc-picker-available-count></span><span data-sc-picker-set-count></span>
+      <div data-sc-picker-set></div>
+    </div>
+    <div data-sc-filter-root data-sc-filter-max="10">
+      <input data-sc-filter-search aria-label="Filter available filters">
+      <div data-sc-filter-available>
+        <details data-sc-picker-group data-sc-picker-group-key="bill_to" data-search-label="bill to">
+          <summary>Bill To <small>1</small></summary><div data-sc-picker-group-items>
+            <button data-sc-filter-available-item data-search="state string bill_to.state">State</button>
+          </div>
+        </details>
+      </div><span data-sc-filter-available-count></span><span data-sc-filter-set-count></span>
+      <div data-sc-filter-set></div>
+    </div>
+  </form>`);
+  const billTo = page.locator('[data-sc-picker-root] [data-sc-picker-group-key="bill_to"]');
+  const actions = page.locator('[data-sc-picker-root] [data-sc-picker-group-key="_actions"]');
+  await expect(billTo).not.toHaveAttribute("open");
+  await billTo.locator("summary").click();
+  await expect(billTo).toHaveAttribute("open", "");
+  await billTo.locator("summary").click();
+  await expect(billTo).not.toHaveAttribute("open");
+  await page.getByLabel("Filter available fields").fill("bill to");
+  await expect(billTo).toHaveAttribute("open", "");
+  await expect(billTo.getByText("Company Name")).toBeVisible();
+  await expect(actions).toBeHidden();
+  await page.getByLabel("Filter available fields").fill("actions");
+  await expect(actions).toHaveAttribute("open", "");
+  await expect(actions.getByText("Send Quote")).toBeVisible();
+  await page.getByLabel("Filter available fields").fill("");
+  await expect(actions).not.toHaveAttribute("open");
+  await expect(billTo).not.toHaveAttribute("open");
+  await page.getByLabel("Filter available filters").fill("state");
+  const filterBillTo = page.locator('[data-sc-filter-root] [data-sc-picker-group-key="bill_to"]');
+  await expect(filterBillTo).toHaveAttribute("open", "");
+  await expect(filterBillTo.getByText("State")).toBeVisible();
+});
+
+test("Available stays beside Set until the picker truly lacks room", async ({page}) => {
+  await page.setViewportSize({width: 1400, height: 900});
+  await page.setContent(`<section class="sc-surface"><div class="sc-workspace">
+    <aside class="sc-builder"><div data-sc-builder-content><form data-sc-builder="quote">
+      <fieldset class="sc-picker-fieldset"><legend>Columns</legend>
+        <div class="sc-list-picker" data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
+          <section class="sc-picker-pane sc-picker-available-pane">
+            <div class="sc-picker-heading"><span>Available</span>
+              <button type="button" class="sc-picker-available-close" data-sc-picker-available-close>Close</button>
+              <span data-sc-picker-available-count>1</span></div>
+            <input class="sc-picker-filter" data-sc-picker-filter aria-label="Filter available fields">
+            <div class="sc-picker-list" data-sc-picker-available>
+              <button type="button" class="sc-picker-choice" data-sc-picker-action="add"
+                data-sc-picker-available-item data-field="id" data-label="Quote ID" data-type="integer">Quote ID</button>
+            </div>
+          </section>
+          <section class="sc-picker-pane sc-picker-set-pane">
+            <div class="sc-picker-heading"><span>Set</span>
+              <button type="button" class="sc-picker-available-toggle" data-sc-picker-available-toggle
+                aria-expanded="false">Available</button><span data-sc-picker-set-count>0</span></div>
+            <div class="sc-picker-list" data-sc-picker-set></div>
+          </section>
+        </div>
+      </fieldset>
+      <fieldset class="sc-picker-fieldset"><legend>Filters</legend>
+        <div class="sc-list-picker" data-sc-filter-root data-sc-filter-max="10">
+          <section class="sc-picker-pane sc-picker-available-pane">
+            <div class="sc-picker-heading"><span>Available</span>
+              <button type="button" class="sc-picker-available-close" data-sc-picker-available-close>Close</button>
+              <span data-sc-filter-available-count>1</span></div>
+            <input class="sc-picker-filter" data-sc-filter-search aria-label="Filter available filters">
+            <div class="sc-picker-list" data-sc-filter-available><button type="button"
+              data-sc-filter-available-item>Quote ID</button></div>
+          </section>
+          <section class="sc-picker-pane sc-picker-set-pane">
+            <div class="sc-picker-heading"><span>Set</span>
+              <button type="button" class="sc-picker-available-toggle" data-sc-picker-available-toggle
+                aria-expanded="false">Available</button><span data-sc-filter-set-count>0</span></div>
+            <div class="sc-picker-list" data-sc-filter-set></div>
+          </section>
+        </div>
+      </fieldset>
+    </form></div></aside><section class="sc-results"></section>
+  </div></section>`);
+  await page.addStyleTag({path: stylesheet});
+  await page.addScriptTag({path: bundle});
+
+  const columns = page.locator("[data-sc-picker-root]");
+  const filters = page.locator("[data-sc-filter-root]");
+  const wideLayout = await columns.evaluate(root => {
+    const available = root.querySelector(".sc-picker-available-pane").getBoundingClientRect();
+    const set = root.querySelector(".sc-picker-set-pane").getBoundingClientRect();
+    return {availableRight: available.right, setLeft: set.left, setWidth: set.width};
+  });
+  expect(wideLayout.availableRight).toBeLessThan(wideLayout.setLeft);
+  expect(wideLayout.setWidth).toBeGreaterThan(350);
+  await expect(columns.locator(".sc-picker-available-pane")).toBeVisible();
+  await expect(columns.locator("[data-sc-picker-available-toggle]")).toBeHidden();
+
+  await page.setViewportSize({width: 600, height: 900});
+  await expect(columns.locator(".sc-picker-available-pane")).toBeHidden();
+  await expect(columns.locator("[data-sc-picker-available-toggle]")).toBeVisible();
+
+  await page.setViewportSize({width: 480, height: 900});
+  await expect(columns.locator(".sc-picker-available-pane")).toBeHidden();
+  await columns.locator("[data-sc-picker-available]").evaluate(list => {
+    for (let index = 0; index < 160; index += 1) {
+      const choice = document.createElement("button");
+      choice.type = "button";
+      choice.className = "sc-picker-choice";
+      choice.dataset.scPickerAvailableItem = "";
+      choice.textContent = `Quote Field ${index}`;
+      list.appendChild(choice);
+    }
+  });
+  await columns.locator("[data-sc-picker-available-toggle]").click();
+  await expect(columns.locator(".sc-picker-available-pane")).toBeVisible();
+  await expect(columns.locator(".sc-picker-available-pane")).toHaveAttribute("popover", "manual");
+  await expect(columns.locator(".sc-picker-available-pane")).toHaveAttribute("aria-modal", "true");
+  await expect(columns.locator("[data-sc-picker-available-toggle]")).toHaveAttribute("aria-expanded", "true");
+  await expect(columns.locator("[data-sc-picker-filter]")).toBeFocused();
+  const sheetBounds = await columns.locator(".sc-picker-available-pane").evaluate(node => {
+    const bounds = node.getBoundingClientRect();
+    return {left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height};
+  });
+  expect(sheetBounds.left).toBe(0);
+  expect(sheetBounds.top).toBe(0);
+  expect(sheetBounds.width).toBe(480);
+  expect(sheetBounds.height).toBe(900);
+  await expect(page.locator("body")).toHaveCSS("overflow-y", "hidden");
+  const availableList = columns.locator("[data-sc-picker-available]");
+  const rowSizes = await availableList.evaluate(list => ({
+    first: list.querySelector("[data-sc-picker-available-item]").getBoundingClientRect().height,
+    scroll: list.scrollHeight,
+    viewport: list.clientHeight,
+  }));
+  expect(rowSizes.first).toBeGreaterThan(25);
+  expect(rowSizes.scroll).toBeGreaterThan(rowSizes.viewport);
+  await availableList.evaluate(list => { list.scrollTop = list.scrollHeight; });
+  await expect(columns.locator("[data-sc-picker-filter]")).toBeInViewport();
+  await availableList.locator("[data-sc-picker-available-item]").last().focus();
+  await page.keyboard.press("Tab");
+  await expect(columns.locator("[data-sc-picker-available-close]")).toBeFocused();
+  await columns.locator('[data-sc-picker-available-item][data-field="id"]').click();
+  await expect(columns.locator(".sc-picker-available-pane")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(columns.locator(".sc-picker-available-pane")).toBeHidden();
+  await expect(columns.locator("[data-sc-picker-available-toggle]")).toBeFocused();
+
+  await filters.locator("[data-sc-picker-available-toggle]").click();
+  await expect(filters.locator(".sc-picker-available-pane")).toBeVisible();
+  await filters.locator("[data-sc-picker-available-close]").click();
+  await expect(filters.locator(".sc-picker-available-pane")).toBeHidden();
+
+  await columns.locator("[data-sc-picker-set]").evaluate(list => {
+    for (let index = 0; index < 12; index += 1) {
+      const item = document.createElement("article");
+      item.className = "sc-picker-set-item";
+      item.style.minHeight = "80px";
+      item.textContent = `Selected field ${index}`;
+      list.appendChild(item);
+    }
+  });
+  const setScroll = await columns.locator("[data-sc-picker-set]").evaluate(list => ({
+    overflow: getComputedStyle(list).overflowY,
+    maxHeight: getComputedStyle(list).maxHeight,
+    scroll: list.scrollHeight,
+    viewport: list.clientHeight,
+  }));
+  expect(setScroll.overflow).toBe("visible");
+  expect(setScroll.maxHeight).toBe("none");
+  expect(setScroll.scroll).toBe(setScroll.viewport);
+  const pageScroll = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
+  expect(pageScroll).toBeGreaterThan(0);
+
+  await page.setViewportSize({width: 1600, height: 900});
+  await expect(columns.locator(".sc-picker-available-pane")).toBeVisible();
+  await expect(columns.locator("[data-sc-picker-available-toggle]")).toBeHidden();
+});
+
+test("a loaded saved view stays identified while its query is rerun", async ({page}) => {
+  await page.route("http://saved.test/**", route => route.fulfill({
+    contentType: "text/html",
+    body: `<section id="selecto-surface-load" hx-ws:connect="/explorer/load/ws">
+      <div class="sc-workspace"><aside class="sc-builder" data-sc-builder-shell="load">
+        <form action="/explorer/load" method="get" data-sc-builder="load"
+          data-sc-builder-query hx-ws:send>
+          <input name="q" value="1"><input name="field" value="city">
+          <input name="page" value="1">
+          <input type="hidden" name="saved_query_id" value="user:Daily">
+          <button type="submit">Run query</button>
+        </form>
+        <form class="sc-saved-query-form" data-sc-saved-original-url="/explorer/load?q=1&amp;field=id&amp;page=1"
+          data-sc-saved-name="Daily">
+          <input name="saved_query_url" value="/explorer/load?q=1&amp;field=id&amp;page=1">
+          <input name="return_to" value="/explorer/load?q=1&amp;field=id&amp;page=1">
+          <p data-sc-saved-edit-status>Editing Daily — unchanged</p>
+        </form>
+      </aside></div>
+    </section>`,
+  }));
+  await page.goto("http://saved.test/explorer/load?q=1&saved_query_id=user%3ADaily");
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => document.querySelector("[data-sc-builder-query]")
+    .dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
+  await expect(page.locator('.sc-saved-query-form input[name="saved_query_url"]'))
+    .toHaveValue(/saved_query_id=user%3ADaily/);
+  await page.evaluate(() => document.dispatchEvent(new CustomEvent(
+    "htmx:ws:after:message:incoming", {detail: {message: {json: async () => ({
+      selecto: {url: "/explorer/load?q=1&field=city&page=1"},
+    })}}},
+  )));
+  await expect(page.locator("[data-sc-saved-edit-status]"))
+    .toHaveText("Editing Daily — unsaved changes");
+  await expect(page).toHaveURL(/saved_query_id=user%3ADaily/);
+});
 
 test("wide detail results remain inside a bounded host layout", async ({page}) => {
   await page.setViewportSize({width: 1400, height: 900});
@@ -160,6 +410,174 @@ test("a live Explorer builder sends its complete query over the WebSocket", asyn
     query_library_segment: "active",
     render_scope: "results",
   });
+});
+
+test("pagination shows the chosen page loading until its WebSocket results arrive", async ({page}) => {
+  await page.route("http://selecto.test/**", route => route.fulfill({
+    contentType: "text/html",
+    body: `<section id="selecto-channel-truck" hx-ext="ws" hx-ws:connect="/explorer/truck/ws">
+      <section id="selecto-surface-truck"><section id="selecto-results-truck">
+        <nav class="sc-pagination"><span>Page 1 of 3
+          <span data-sc-pagination-status role="status" aria-live="polite" hidden></span></span>
+          <form action="/explorer/truck" method="get" hx-ws:send>
+            <input name="render_scope" value="results"><input name="q" value="1">
+            <button type="submit" name="page" value="2">2</button>
+            <button type="submit" name="page" value="3">3</button>
+          </form>
+        </nav>
+      </section></section>
+    </section>`,
+  }));
+  await page.addInitScript(() => {
+    class FakeWebSocket extends EventTarget {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      constructor() {
+        super();
+        this.readyState = FakeWebSocket.CONNECTING;
+        window.fakeSelectoSocket = this;
+        queueMicrotask(() => {
+          this.readyState = FakeWebSocket.OPEN;
+          this.dispatchEvent(new Event("open"));
+        });
+      }
+      send(message) { window.fakeSelectoMessage = JSON.parse(message); }
+      close() { this.readyState = FakeWebSocket.CLOSED; }
+    }
+    window.WebSocket = FakeWebSocket;
+  });
+  await page.goto("http://selecto.test/explorer/truck");
+  await page.addStyleTag({path: stylesheet});
+  await page.addScriptTag({path: htmxBundle});
+  await page.addScriptTag({path: websocketBundle});
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => window.htmx.process(document.body));
+
+  const navigation = page.locator(".sc-pagination");
+  await navigation.locator('button[value="2"]').click();
+  await expect(navigation).toHaveClass(/is-loading/);
+  await expect(navigation.locator("[data-sc-pagination-status]"))
+    .toHaveText("Loading page 2…");
+  await expect(navigation.locator('button[value="2"]')).toHaveClass(/is-loading/);
+  await expect(navigation.locator("form")).toHaveAttribute("aria-busy", "true");
+  expect(await navigation.locator('button[value="2"]').evaluate(button =>
+    getComputedStyle(button, "::before").content
+  )).toBe('""');
+  expect(new URL(page.url()).searchParams.get("page")).toBe("2");
+  await expect.poll(() => page.evaluate(() => window.fakeSelectoMessage?.page)).toBe("2");
+
+  await page.evaluate(() => {
+    const requestId = window.fakeSelectoMessage.selecto_request_id;
+    window.fakeSelectoSocket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({
+      content: '<section id="selecto-results-truck">Page 2 results</section>',
+      target: "#selecto-results-truck",
+      swap: "outerHTML",
+      selecto: {request_id: requestId},
+    })}));
+  });
+  await expect(page.locator("#selecto-results-truck")).toHaveText("Page 2 results");
+  await expect(page.locator(".sc-pagination")).toHaveCount(0);
+});
+
+test("HTTP pagination fallback submits the clicked page and shows loading", async ({page}) => {
+  await load(page, `<nav class="sc-pagination"><span>Page 1 of 3
+      <span data-sc-pagination-status role="status" aria-live="polite" hidden></span></span>
+    <form action="/explorer/truck" method="get" hx-ws:send>
+      <input name="q" value="1">
+      <button type="submit" name="page" value="2">2</button>
+      <button type="submit" name="page" value="3">3</button>
+    </form></nav>`);
+  await page.evaluate(() => {
+    HTMLFormElement.prototype.submit = function () {
+      window.selectoHttpFallback = Object.fromEntries(new FormData(this));
+    };
+  });
+  const navigation = page.locator(".sc-pagination");
+  await navigation.locator('button[value="3"]').click();
+  await expect(navigation.locator("[data-sc-pagination-status]"))
+    .toHaveText("Loading page 3…");
+  await expect(navigation.locator('button[value="3"]')).toHaveClass(/is-loading/);
+  await expect(navigation.locator('button[value="3"]')).toBeDisabled();
+  await expect(navigation.locator('button[value="2"]')).not.toHaveAttribute("disabled");
+  expect(await page.evaluate(() => window.selectoHttpFallback)).toEqual({q: "1", page: "3"});
+});
+
+test("a results-only graph swap keeps the no-JavaScript fallback hidden", async ({page}) => {
+  await page.route("http://selecto.test/**", route => route.fulfill({
+    contentType: "text/html",
+    body: `
+      <section id="selecto-channel-load" hx-ext="ws" hx-ws:connect="/explorer/load/ws">
+        <section id="selecto-surface-load" data-sc-chart-src="/chart.js">
+          <div data-sc-workspace>
+            <form action="/explorer/load" method="get" hx-ws:send hx-trigger="submit"
+              data-sc-builder="load">
+              <input name="q" value="1"><input name="view" value="graph">
+              <button type="submit">Run query</button>
+            </form>
+            <section id="selecto-results-load" class="sc-results">Old results</section>
+          </div>
+        </section>
+      </section>
+    `,
+  }));
+  await page.route("http://selecto.test/chart.js", route => route.fulfill({
+    path: chartBundle, contentType: "text/javascript",
+  }));
+  await page.addInitScript(() => {
+    class FakeWebSocket extends EventTarget {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      constructor(url) {
+        super();
+        this.url = url;
+        this.readyState = FakeWebSocket.CONNECTING;
+        window.fakeSelectoSocket = this;
+        queueMicrotask(() => {
+          this.readyState = FakeWebSocket.OPEN;
+          this.dispatchEvent(new Event("open"));
+        });
+      }
+      send(message) { window.fakeSelectoMessage = message; }
+      close() {
+        this.readyState = FakeWebSocket.CLOSED;
+        this.dispatchEvent(new CloseEvent("close", {code: 1000}));
+      }
+    }
+    window.WebSocket = FakeWebSocket;
+  });
+  await page.goto("http://selecto.test/explorer/load");
+  await page.addStyleTag({path: stylesheet});
+  await page.addScriptTag({path: htmxBundle});
+  await page.addScriptTag({path: websocketBundle});
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => window.htmx.process(document.body));
+  await page.locator('button[type="submit"]').click();
+  await expect.poll(() => page.evaluate(() => window.fakeSelectoMessage)).toBeTruthy();
+  await page.evaluate(() => {
+    const content = `<section id="selecto-results-load" class="sc-results">
+      <div data-sc-chart data-chart-type="bar"
+        data-chart-data='{"labels":["Jan"],"datasets":[{"label":"Loads","data":[3]}]}'
+        aria-busy="true">
+        <div class="sc-chart-canvas"><canvas></canvas></div>
+        <div class="sc-chart-fallback">Fallback values</div>
+      </div></section>`;
+    window.fakeSelectoSocket.dispatchEvent(new MessageEvent("message", {
+      data: JSON.stringify({content, target: "#selecto-results-load", swap: "outerHTML"}),
+    }));
+  });
+  await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-ready/);
+  await expect(page.locator("[data-sc-chart]")).not.toHaveClass(/is-fallback/);
+  await expect(page.locator("#selecto-results-load noscript")).toHaveCount(0);
+  expect(await page.locator("[data-sc-chart] .sc-chart-fallback").evaluate(
+    element => getComputedStyle(element).display
+  )).toBe("none");
+  expect(await page.evaluate(() => window.Chart.getChart(
+    document.querySelector("[data-sc-chart] canvas")
+  ) !== undefined)).toBe(true);
 });
 
 test("a missing WebSocket connection falls back to the complete HTTP query", async ({page}) => {
@@ -334,7 +752,7 @@ test("columns, measures, and filters can add the same field more than once", asy
     <form data-sc-builder>
       <div data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
         <div data-sc-picker-available>
-          <button type="button" data-sc-picker-action="add" data-sc-picker-available-item
+          <button class="sc-picker-choice" type="button" data-sc-picker-action="add" data-sc-picker-available-item
             data-sc-picker-repeatable data-field="created_on" data-label="Created"
             data-type="datetime" data-search="created datetime">Add Created</button>
         </div>
@@ -343,7 +761,7 @@ test("columns, measures, and filters can add the same field more than once", asy
       </div>
       <div data-sc-filter-root data-sc-filter-max="10">
         <div data-sc-filter-available>
-          <button type="button" data-sc-filter-action="add" data-sc-filter-available-item
+          <button class="sc-picker-choice" type="button" data-sc-filter-action="add" data-sc-filter-available-item
             data-field="created_on" data-label="Created" data-type="datetime"
             data-search="created datetime">Add Created filter</button>
         </div>
@@ -352,7 +770,7 @@ test("columns, measures, and filters can add the same field more than once", asy
       </div>
       <div data-sc-picker-root data-sc-picker-kind="measure" data-sc-picker-max="10">
         <div data-sc-picker-available>
-          <button type="button" data-sc-picker-action="add" data-sc-picker-available-item
+          <button class="sc-picker-choice" type="button" data-sc-picker-action="add" data-sc-picker-available-item
             data-sc-picker-repeatable data-field="customer_price" data-label="Customer Price"
             data-type="decimal" data-default-function="sum"
             data-search="customer price decimal">Add Customer Price</button>
@@ -362,12 +780,27 @@ test("columns, measures, and filters can add the same field more than once", asy
       </div>
     </form>
   `);
+  await page.addStyleTag({path: stylesheet});
 
   const addColumn = page.locator('[data-sc-picker-kind="field"] [data-sc-picker-action="add"]');
+  const unpickedBackground = await addColumn.evaluate((node) => getComputedStyle(node).backgroundColor);
   await addColumn.click();
   await addColumn.click();
   await expect(page.locator('[data-sc-picker-set-item][data-field="created_on"]')).toHaveCount(2);
+  await expect(page.locator('[data-sc-picker-set-item][data-field="created_on"] .sc-picker-set-label small').first())
+    .toHaveText("created_on - datetime");
   await expect(addColumn).toBeVisible();
+  await expect(addColumn).toHaveClass(/sc-is-picked/);
+  const columnTone = (await addColumn.getAttribute("class")).match(/sc-pick-tone-\d/)[0];
+  await expect(page.locator('[data-sc-picker-set-item][data-field="created_on"]').first())
+    .toHaveClass(new RegExp(columnTone));
+  await expect(page.locator('[data-sc-picker-set-item][data-field="created_on"]').last())
+    .toHaveClass(new RegExp(columnTone));
+  await page.mouse.move(0, 0);
+  const pickedBackground = await addColumn.evaluate((node) => getComputedStyle(node).backgroundColor);
+  expect(pickedBackground).not.toBe(unpickedBackground);
+  expect(pickedBackground).toBe(await page.locator('[data-sc-picker-set-item][data-field="created_on"]').first()
+    .evaluate((node) => getComputedStyle(node).backgroundColor));
 
   const addMeasure = page.locator('[data-sc-picker-kind="measure"] [data-sc-picker-action="add"]');
   await addMeasure.click();
@@ -404,7 +837,43 @@ test("columns, measures, and filters can add the same field more than once", asy
   await addFilter.click();
   await addFilter.click();
   await expect(page.locator('[data-sc-filter-set-item][data-field="created_on"]')).toHaveCount(2);
+  await expect(page.locator('[data-sc-filter-set-item][data-field="created_on"] .sc-filter-set-heading small').first())
+    .toHaveText("created_on - datetime");
   await expect(addFilter).toBeVisible();
+  await expect(addFilter).toHaveClass(/sc-is-picked/);
+  const filterTone = (await addFilter.getAttribute("class")).match(/sc-pick-tone-\d/)[0];
+  await expect(page.locator('[data-sc-filter-set-item][data-field="created_on"]').first())
+    .toHaveClass(new RegExp(filterTone));
+  await page.mouse.move(0, 0);
+  expect(await addFilter.evaluate((node) => getComputedStyle(node).backgroundColor))
+    .toBe(await page.locator('[data-sc-filter-set-item][data-field="created_on"]').first()
+      .evaluate((node) => getComputedStyle(node).backgroundColor));
+  await page.locator('[data-sc-filter-set-item][data-field="created_on"] [data-sc-filter-action="remove"]').first().click();
+  await expect(addFilter).toHaveClass(/sc-is-picked/);
+  await page.locator('[data-sc-filter-set-item][data-field="created_on"] [data-sc-filter-action="remove"]').click();
+  await expect(addFilter).not.toHaveClass(/sc-is-picked/);
+});
+
+test("server-rendered set items highlight their available choices on initialization", async ({page}) => {
+  await load(page, `<form data-sc-builder>
+    <div data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
+      <div data-sc-picker-available><button class="sc-picker-choice" data-sc-picker-available-item
+        data-field="bill_to.co_name">Company Name</button></div>
+      <div data-sc-picker-set><article class="sc-picker-set-item" data-sc-picker-set-item
+        data-field="bill_to.co_name"></article></div>
+    </div>
+    <div data-sc-filter-root data-sc-filter-max="10">
+      <div data-sc-filter-available><button class="sc-picker-choice" data-sc-filter-available-item
+        data-field="created_on">Created</button></div>
+      <div data-sc-filter-set><article class="sc-filter-set-item" data-sc-filter-set-item
+        data-field="created_on"></article></div>
+    </div>
+  </form>`);
+  await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded")));
+  await expect(page.locator("[data-sc-picker-available-item]")).toHaveClass(/sc-is-picked/);
+  await expect(page.locator("[data-sc-picker-set-item]")).toHaveClass(/sc-is-picked/);
+  await expect(page.locator("[data-sc-filter-available-item]")).toHaveClass(/sc-is-picked/);
+  await expect(page.locator("[data-sc-filter-set-item]")).toHaveClass(/sc-is-picked/);
 });
 
 test("date-only values remain stable for datetime filters", async ({page}) => {
@@ -427,6 +896,126 @@ test("date-only values remain stable for datetime filters", async ({page}) => {
   await page.locator('[name="filter_op"]').selectOption("lt");
   await expect(page.locator('[name="filter_value"]')).toHaveAttribute("type", "date");
   await expect(page.locator('[name="filter_value"]')).toHaveValue("2024-10-01");
+});
+
+test("CustomOption filters offer named multi-select choices and retain IDs", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote">
+    <div data-sc-filter-root data-sc-filter-max="10">
+      <div data-sc-filter-available>
+        <button type="button" data-sc-filter-action="add" data-sc-filter-available-item
+          data-field="lhf_option_2.option_item_id" data-label="Billing Class (Quote)"
+          data-type="integer" data-sc-filter-choices='[{"value":"191","label":"Corporate"},{"value":"192","label":"Retail"}]'
+          data-search="billing class quote">Add Billing Class</button>
+      </div>
+      <span data-sc-filter-available-count></span><span data-sc-filter-set-count></span>
+      <div data-sc-filter-set></div>
+    </div>
+  </form>`);
+  await page.locator('[data-sc-filter-action="add"]').click();
+  const item = page.locator('[data-sc-filter-set-item]');
+  await expect(item.locator('[name="filter_op"]')).toHaveValue("in");
+  const choices = item.locator('[data-sc-filter-choice-select]');
+  await expect(choices).toBeVisible();
+  await expect(choices.locator("option")).toHaveText(["Corporate", "Retail"]);
+  await choices.selectOption(["191", "192"]);
+  await expect(item.locator('[name="filter_value"]')).toHaveValue("191,192");
+  await expect(item).not.toHaveClass(/is-draft/);
+  await item.locator('[name="filter_op"]').selectOption("eq");
+  await expect(item.locator('[data-sc-filter-choice-select]')).toBeVisible();
+  await expect(item.locator('[name="filter_value"]')).toHaveValue("191");
+  await item.locator('[data-sc-filter-choice-select]').selectOption("192");
+  await expect(item.locator('[name="filter_value"]')).toHaveValue("192");
+});
+
+test("a saved CustomOption filter shows its selected names on initial load", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote">
+    <article data-sc-filter-set-item data-field="lhf_option_2.option_item_id"
+      data-label="Billing Class (Quote)" data-type="integer"
+      data-sc-filter-choices='[{"value":"191","label":"Corporate"},{"value":"192","label":"Retail"}]'>
+      <div class="sc-filter-editor"><select name="filter_op"><option value="in" selected>one of</option></select>
+        <div data-sc-filter-values><label>
+          <input data-sc-filter-choice-value name="filter_value" value="191,192">
+          <select data-sc-filter-choice-select multiple hidden aria-label="Choices for Billing Class (Quote)">
+            <option value="191" selected>Corporate</option><option value="192" selected>Retail</option>
+          </select>
+        </label><input type="hidden" name="filter_value_end" value=""></div>
+      </div>
+    </article>
+  </form>`);
+  const select = page.locator('[data-sc-filter-choice-select]');
+  await expect(select).toBeVisible();
+  await expect(page.locator('[data-sc-filter-choice-value]')).toBeHidden();
+  expect(await select.evaluate(element => Array.from(element.selectedOptions).map(option => option.text))).toEqual(
+    ["Corporate", "Retail"]
+  );
+});
+
+test("promoted CustomOption choices update the governed filter without showing IDs", async ({page}) => {
+  await load(page, `<form id="selecto-query-quote" data-sc-builder="quote">
+    <article data-sc-filter-set-item data-field="lhf_option_2.option_item_id"
+      data-filter-instance="1" data-label="Billing Class (Quote)" data-type="integer">
+      <div class="sc-filter-editor"><select name="filter_op"><option value="in" selected>one of</option></select>
+        <div data-sc-filter-values><input name="filter_value" value="191">
+          <input type="hidden" name="filter_value_end" value=""></div>
+      </div>
+    </article>
+  </form>
+  <section data-sc-promoted-filters><button form="selecto-query-quote">Run query</button>
+    <select multiple data-sc-promoted-filter-input="value"
+      data-filter-field="lhf_option_2.option_item_id" data-filter-instance="1"
+      aria-label="Choices for Billing Class (Quote)">
+      <option value="191" selected>Corporate</option><option value="192">Retail</option>
+    </select>
+  </section>`);
+  const choices = page.getByLabel("Choices for Billing Class (Quote)");
+  await choices.selectOption(["191", "192"]);
+  await expect(page.locator('[name="filter_value"]')).toHaveValue("191,192");
+  await expect(choices).toHaveText(/Corporate/);
+});
+
+test("a newly added Move Type filter can be promoted immediately", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote">
+    <div data-sc-filter-root data-sc-filter-max="10">
+      <div data-sc-filter-available><button type="button" data-sc-filter-action="add"
+        data-sc-filter-available-item data-field="lhf_option_1.option_item_id"
+        data-label="Move Type (Quote)" data-type="integer"
+        data-sc-filter-choices='[{"value":"71","label":"Open"},{"value":"72","label":"Enclosed"}]'
+        data-search="move type">Add Move Type</button></div>
+      <span data-sc-filter-available-count></span><span data-sc-filter-set-count></span>
+      <div data-sc-filter-set></div>
+    </div>
+  </form>`);
+  await page.locator('[data-sc-filter-action="add"]').click();
+  const item = page.locator('[data-sc-filter-set-item]');
+  const promote = item.getByLabel("Promote to View Controller");
+  await expect(promote).toBeVisible();
+  await expect(promote).toHaveValue("1");
+  await promote.check();
+  expect(await page.locator("form").evaluate(form =>
+    new FormData(form).getAll("filter_promote_index"))).toEqual(["1"]);
+});
+
+test("saved ordinary alternatives keep editable filter values", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote" data-sc-builder-query>
+    <fieldset data-sc-filter-clauses data-sc-filter-clause-mode="ordinary">
+      <article data-sc-filter-clause="1"><div class="sc-filter-clause-conditions">
+        <section data-sc-filter-condition data-field="billing_class_id"
+          data-label="Billing Class ID" data-type="integer">
+          <div class="sc-filter-editor">
+            <select name="filter_op"><option value="eq" selected>equals</option>
+              <option value="in">one of</option><option value="is_null">is empty</option></select>
+            <div data-sc-filter-values><input name="filter_value" value="14">
+              <input type="hidden" name="filter_value_end" value=""></div>
+          </div>
+        </section>
+      </div></article>
+    </fieldset>
+  </form>`);
+  await page.locator('[name="filter_op"]').selectOption("in");
+  await expect(page.locator('[name="filter_value"]')).toHaveValue("14");
+  await page.locator('[name="filter_value"]').fill("14,17");
+  await expect(page.locator('[name="filter_value"]')).toHaveValue("14,17");
+  await expect(page.locator('[data-sc-filter-condition]')).not.toHaveClass(/is-draft/);
 });
 
 test("mixed graph series configure independent left and right axes", async ({page}) => {

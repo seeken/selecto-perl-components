@@ -157,13 +157,15 @@ $t->get_ok('/explore/products')
     ->element_exists('[data-sc-builder-pending][role="status"][aria-live="polite"][aria-atomic="true"]')
     ->element_exists('[data-sc-picker-root]')
     ->element_exists('[data-sc-picker-root][data-sc-picker-kind="field"]')
+    ->element_exists('[data-sc-picker-root][data-sc-picker-kind="field"] [data-sc-picker-available-toggle][aria-expanded="false"]')
+    ->element_exists('[data-sc-picker-root][data-sc-picker-kind="field"] [data-sc-picker-available-close]')
     ->element_exists('[data-sc-picker-root][data-sc-picker-kind="group"]')
     ->element_exists('[data-sc-picker-root][data-sc-picker-kind="measure"]')
     ->element_exists('[data-sc-picker-kind="measure"] input[name="measure_stack"]')
     ->element_exists('[data-sc-picker-kind="measure"] [data-sc-picker-available] button[data-field="unit_price"][data-default-function="count"]')
     ->element_exists('[data-sc-picker-kind="measure"] [data-sc-picker-available] button[data-field="category.category_name"]')
     ->element_exists('[data-sc-picker-root][data-sc-picker-kind="order"]')
-    ->element_exists('[data-sc-picker-available] button[data-field="category_id"]')
+    ->element_exists_not('[data-sc-picker-available] button[data-field="category_id"]')
     ->element_exists('[data-sc-picker-set-item][data-field="category.category_name"] input[name="field"]')
     ->element_exists('[data-sc-picker-set-item][draggable="true"]')
     ->element_exists('button[data-sc-picker-action="up"]')
@@ -171,6 +173,8 @@ $t->get_ok('/explore/products')
     ->element_exists('[data-sc-picker-kind="field"] .sc-column-config')
     ->element_exists('[data-sc-picker-kind="order"] [name="direction"]')
     ->element_exists('[data-sc-filter-root]')
+    ->element_exists('[data-sc-filter-root] [data-sc-picker-available-toggle][aria-expanded="false"]')
+    ->element_exists('[data-sc-filter-root] [data-sc-picker-available-close]')
     ->element_exists('input[data-sc-filter-search][aria-label="Filter available filters"]')
     ->element_exists('[data-sc-filter-available] button[data-field="unit_price"]')
     ->element_exists('[data-sc-filter-set][aria-label="Set filters"]')
@@ -198,14 +202,15 @@ $t->get_ok('/explore/products')
     ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
     ->element_count_is('.sc-pagination', 2)
     ->text_is('.sc-pagination-top > span' => 'Page 1 of 2')
+    ->element_exists('.sc-pagination-top [data-sc-pagination-status][role="status"][hidden]')
     ->element_exists('.sc-pagination-top [aria-current="page"]')
     ->element_exists('.sc-pagination-top button[name="page"][value="2"].sc-page-number')
     ->element_exists('.sc-pagination-top button[name="page"][value="2"].sc-page-direction')
     ->text_is('.sc-table-wrap > table > caption' => 'Query results')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:add_product_note"][data-type="action"]')
-    ->text_is('[data-sc-picker-kind="field"] button[data-field="action:add_product_note"] strong' => 'Action: Add Product Note')
+    ->text_is('[data-sc-picker-kind="field"] button[data-field="action:add_product_note"] strong' => 'Add Product Note')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:build_shipments"][data-type="action"]')
-    ->text_is('[data-sc-picker-kind="field"] button[data-field="action:build_shipments"] strong' => 'Action: Build Shipments')
+    ->text_is('[data-sc-picker-kind="field"] button[data-field="action:build_shipments"] strong' => 'Build Shipments')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:mark_for_review"][data-type="action"]')
     ->element_exists_not('[data-sc-bulk-actions]')
     ->element_exists_not('input[data-sc-row-select]')
@@ -993,8 +998,11 @@ $t->get_ok('/explore/products?q=1&view=detail&field=created_on&field_alias=Creat
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-set-item]:nth-child(2) input[name="field_alias"][value="Created time"]')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-set-item]:nth-child(2) select[name="field_format"] option[value="time"][selected]')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available-item][data-field="created_on"][data-sc-picker-repeatable]')
+    ->text_is('[data-sc-picker-kind="field"] [data-sc-picker-available-item][data-field="created_on"] small' => 'created_on - date')
+    ->text_is('[data-sc-picker-kind="field"] [data-sc-picker-set-item][data-field="created_on"]:nth-child(1) small' => 'created_on - date')
     ->element_count_is('[data-sc-filter-set-item][data-field="created_on"]', 2)
-    ->element_exists('[data-sc-filter-available-item][data-field="created_on"]');
+    ->text_is('[data-sc-filter-available-item][data-field="created_on"] small' => 'created_on - date')
+    ->text_is('[data-sc-filter-set-item][data-field="created_on"]:nth-child(1) .sc-filter-set-heading small' => 'created_on - date');
 
 $t->get_ok('/explore/products?q=1&view=detail&field=created_on&filter_field=created_on&filter_op=eq&filter_value=2026-08-15&filter_value_end=&order=created_on')
     ->status_is(200)
@@ -1209,7 +1217,8 @@ $t->get_ok('/explore/products?q=1&view=graph&chart_type=area&graph_show_table=1&
     ->text_is('[data-sc-limit-label]' => 'Points')
     ->element_exists('[data-sc-page-control][hidden] input[name="page"][value="1"][disabled]')
     ->element_exists('[data-sc-chart][data-chart-type="area"][data-chart-data] canvas[role="img"]')
-    ->element_exists('[data-sc-chart] noscript')
+    ->element_exists('head > noscript')
+    ->element_exists_not('[data-sc-chart] noscript')
     ->element_exists('[data-sc-picker-kind="measure"] [data-field="total_price"] select[name="measure_transform"] option[value="moving_average"][selected]')
     ->element_exists('[data-sc-picker-kind="measure"] [data-field="total_price"] input[name="measure_transform_window"][value="2"]')
     ->element_exists('[data-sc-picker-kind="measure"] [data-field="total_price"] select[name="measure_ignore_nulls"] option[value="auto"][selected]')
@@ -1521,5 +1530,26 @@ is_deeply(
     [1, 18, 19, 20, 21, 22, 42],
     'pagination keeps first, last, and neighboring pages for a large result set',
 );
+
+{
+    package TestSavedViewConfig;
+    sub path { '/explore/products' }
+}
+my $scoped_saved_views =
+    Selecto::Components::Controller::SavedQueries::_normalize_saved_queries(
+        bless({}, 'TestSavedViewConfig'), [
+            {id => 'user:Daily', name => 'Daily', scope => 'user',
+                url => '/explore/products?q=1', revision => 'a' x 64},
+            {id => 'client:42:Daily', name => 'Daily', scope => 'client',
+                url => '/explore/products?q=1', readonly => 1,
+                revision => 'b' x 64},
+            {id => 'priv:7', name => 'Dispatch', scope => 'priv', folder => 'Operations',
+                url => '/explore/products?q=1', revision => 'c' x 64},
+        ],
+    );
+is scalar(@$scoped_saved_views), 3,
+    'same-name views in different host destinations remain separately selectable';
+is $scoped_saved_views->[2]{folder}, 'Operations',
+    'privilege folder metadata survives normalization';
 
 done_testing;

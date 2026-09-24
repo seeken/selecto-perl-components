@@ -46,7 +46,10 @@ Chromium with Playwright.
 - a left-side view tray that participates in normal page scrolling, collapses
   to a chevron rail, and automatically collapses when a query is applied;
 - domain-derived Available/Set field picker with filtering, add/remove controls,
-  drag ordering, and accessible move-up/move-down controls;
+  drag ordering, and accessible move-up/move-down controls; Available fields,
+  groups, measures, sorts, and filters are arranged in collapsible source
+  sections (with governed actions under Actions). Searching opens sections
+  whose heading or fields match and restores their prior state when cleared;
 - per-column presentation aliases and governed date/time formats for Detail
   columns and Aggregate grouping buckets;
 - an ordered Available/Set sort picker with independent ascending/descending
@@ -101,9 +104,9 @@ Chromium with Playwright.
   dependencies, safe URL substitution, and keyboard access;
 - htmx 4 `hx-ws` updates using server-rendered HTML fragments;
 - ordinary HTTP GET fallback, permalinks, and browser-refresh recovery;
-- an optional dedicated Saved queries tab backed by a host-provided object with
-  `list`, `save`, and `delete` methods; saved URLs are validated, canonicalized,
-  and reset to page one while the host owns user and tenant scoping;
+- an optional dedicated Saved queries tab backed by a host-provided store;
+  saved URLs are validated, canonicalized, and reset to page one while the
+  host owns user, tenant, destination, and privilege scoping;
 - a domain-selected private URL mode with WebSocket/POST body state and no
   query-state history, permalink, or query-string export link;
 - Excel, CSV, TSV, and JSON exports for every row matched by the active query,
@@ -224,6 +227,35 @@ Refresh, copy/paste, bookmarks, and ordinary form submission therefore resolve
 to the same governed query as a WebSocket interaction. The server keeps no
 hidden query-builder state.
 
+### Saved-view host interface
+
+`saved_query_store` is an application-owned object. The minimal legacy
+contract remains `list($controller, $config)`, `save($controller, $config,
+{name, url})`, and `delete($controller, $config, {name})`. Hosts that support
+multiple destinations and guarded edits can additionally implement:
+
+- `targets($controller, $config)` → `[{id, label}, ...]` for destinations the
+  current user may write. Recheck permissions in the write methods; options
+  in HTML are not an authorization boundary.
+- `list(...)` → `[{id, name, url, scope, folder?, readonly?, revision}, ...]`.
+  `id` identifies the stored record across scopes; `revision` is an opaque
+  optimistic-concurrency token. Only return items readable by this user and
+  whose URL belongs to this Explorer endpoint.
+- `save_new(..., {name, url, target})` → `{id}`. It must refuse an existing
+  name in that destination, even if the existing record belongs to another
+  endpoint; never silently replace it.
+- `update(..., {id, name, url, revision})` → `{id}`. It must reauthorize the
+  item and reject a stale revision. The browser presents an explicit overwrite
+  checkbox and keeps Save new separate from Update this view.
+- `delete(..., {id, name, revision})` reauthorizes and, when a revision is
+  supplied, rejects stale deletes.
+
+The generic UI knows nothing about storage tables, workgroups, folders, or
+email delivery. A host may implement those behind this interface. Scheduled
+exports can later reference a saved-view `id` and delegate recipient policy
+and delivery to a separate host service; no scheduling is implied by saving a
+view.
+
 For a domain whose filters may contain sensitive values, set
 `components.query_params` to false in the domain contract:
 
@@ -261,8 +293,22 @@ In the default shareable mode, canonical parameters are:
 - aligned, repeated `filter_field`, `filter_op`, `filter_value`, and
   `filter_value_end` values; server-generated aggregate drilldowns also align
   a `filter_group` marker so the governed grouping expression is reused as the
-  Detail predicate. Multi-cell grid drilldowns align `filter_clause` markers:
-  conditions in one numbered clause use AND, while numbered clauses use OR.
+  Detail predicate. Multi-cell grid drilldowns and ordinary alternative filters
+  align `filter_clause` markers: conditions in one numbered clause use AND,
+  while numbered clauses use OR. Ordinary filters without a clause apply to
+  every alternative. A host can expose a domain-internal key only in the
+  filter picker with `filter_fields => ['association.key']`; this does not add
+  it to selectable Detail columns. When the domain declares
+  `components.filter_choices` for a path, the filter picker shows named
+  options in a single- or multi-select (depending on the operator), submitting
+  stable values through the same canonical `filter_value` parameter. Such
+  internal filter fields are available without adding them to Detail columns.
+  A domain-defined conditional choice exposes one virtual filter backed by
+  separate physical fields; `filter_picker_hidden_paths` hides legacy fields
+  from Available while preserving their saved URLs and validation.
+  Column and generated aggregate pickers hide numeric IDs except the root ID
+  and `client_profile` IDs; the paths remain valid for saved views, and the
+  domain may explicitly expose another with `components.picker_visible_id_paths`.
   The browser's repeated `grid_cell` JSON pairs are a bounded submission format
   only and are replaced by these validated canonical filters;
   newly added filters remain URL-visible drafts and do not constrain the query
@@ -284,6 +330,14 @@ query alongside visual filters. They are included in the applied-filter count
 and shown as non-removable segment summaries; remove them by changing the named
 view or segment controls. Query-library `capability` values are rendered as
 metadata only and are not an authorization decision.
+Hosts can set `picker_hidden => 1` on a segment retained for saved-link
+compatibility. It is omitted from new selections but remains visible and
+removable when an existing query selects it.
+`query_library.segment_picker_groups` renders domain-declared alternatives as
+radio groups with an Off default. The form submits the chosen segment through
+the same canonical `query_library_segment` state, so existing saved URLs and
+API requests do not change. An old URL selecting conflicting alternatives is
+shown as invalid until the user chooses one.
 
 Projection association shapes are adapted to the Perl component builder as
 validated dotted field paths. Parameter values are type-checked by

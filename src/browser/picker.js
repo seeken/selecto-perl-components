@@ -2,15 +2,128 @@
     return Array.from(root.querySelectorAll("[data-sc-picker-set-item]"));
   }
 
+  function setAvailablePickerOpen(root, open) {
+    if (!root) return;
+    var available = root.querySelector(".sc-picker-available-pane");
+    var mobile = window.matchMedia("(max-width: 620px)").matches;
+    var focusWasInside = available && available.contains(document.activeElement);
+    if (available && typeof available.showPopover === "function"
+      && available.matches(":popover-open")) available.hidePopover();
+    if (available) {
+      available.removeAttribute("popover");
+      available.removeAttribute("role");
+      available.removeAttribute("aria-modal");
+      available.removeAttribute("aria-label");
+    }
+    root.classList.toggle("is-available-open", open);
+    var toggle = root.querySelector("[data-sc-picker-available-toggle]");
+    if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) {
+      if (mobile && available && typeof available.showPopover === "function") {
+        available.setAttribute("popover", "manual");
+        available.setAttribute("role", "dialog");
+        available.setAttribute("aria-modal", "true");
+        available.setAttribute("aria-label", root.hasAttribute("data-sc-filter-root")
+          ? "Available filters" : "Available fields");
+        available.showPopover();
+      }
+      var search = root.querySelector("[data-sc-picker-filter], [data-sc-filter-search]");
+      if (search) search.focus();
+    } else if (focusWasInside && toggle && getComputedStyle(toggle).display !== "none") {
+      toggle.focus();
+    }
+  }
+
+  window.matchMedia("(max-width: 620px)").addEventListener("change", function () {
+    document.querySelectorAll(".sc-list-picker.is-available-open").forEach(function (picker) {
+      setAvailablePickerOpen(picker, false);
+    });
+  });
+
+  document.addEventListener("click", function (event) {
+    var control = event.target.closest(
+      "[data-sc-picker-available-toggle], [data-sc-picker-available-close]"
+    );
+    if (control) {
+      var picker = control.closest(".sc-list-picker");
+      var opening = control.hasAttribute("data-sc-picker-available-toggle")
+        && !picker.classList.contains("is-available-open");
+      if (opening) {
+        document.querySelectorAll(".sc-list-picker.is-available-open").forEach(function (other) {
+          if (other !== picker) setAvailablePickerOpen(other, false);
+        });
+      }
+      setAvailablePickerOpen(picker, opening);
+      return;
+    }
+    document.querySelectorAll(".sc-list-picker.is-available-open").forEach(function (picker) {
+      if (!picker.contains(event.target)) setAvailablePickerOpen(picker, false);
+    });
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Tab") {
+      var sheet = typeof HTMLElement.prototype.showPopover === "function"
+        ? document.querySelector(".sc-picker-available-pane:popover-open") : null;
+      if (sheet) {
+        var focusable = Array.from(sheet.querySelectorAll(
+          'button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, a[href]'
+        )).filter(function (element) { return element.getClientRects().length > 0; });
+        if (focusable.length) {
+          var first = focusable[0];
+          var last = focusable[focusable.length - 1];
+          if (event.shiftKey && (document.activeElement === first || !sheet.contains(document.activeElement))) {
+            last.focus();
+            event.preventDefault();
+          } else if (!event.shiftKey && (document.activeElement === last || !sheet.contains(document.activeElement))) {
+            first.focus();
+            event.preventDefault();
+          }
+        }
+      }
+    }
+    if (event.key !== "Escape") return;
+    var openPickers = document.querySelectorAll(".sc-list-picker.is-available-open");
+    if (!openPickers.length) return;
+    openPickers.forEach(function (picker) {
+      setAvailablePickerOpen(picker, false);
+    });
+    var toggle = openPickers[openPickers.length - 1].querySelector(
+      "[data-sc-picker-available-toggle]"
+    );
+    if (toggle) toggle.focus();
+    event.preventDefault();
+  });
+
+  function pickerTone(path) {
+    var hash = 2166136261;
+    Array.from(String(path || "")).forEach(function (character) {
+      hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+    });
+    hash ^= hash >>> 16;
+    return (hash >>> 0) % 8;
+  }
+
+  function refreshPickerHighlights(items, available) {
+    var selected = new Set(items.map(function (item) { return item.dataset.field; }));
+    items.concat(available).forEach(function (item) {
+      for (var tone = 0; tone < 8; tone += 1) item.classList.remove("sc-pick-tone-" + tone);
+      item.classList.remove("sc-is-picked");
+      if (selected.has(item.dataset.field)) {
+        item.classList.add("sc-is-picked", "sc-pick-tone-" + pickerTone(item.dataset.field));
+      }
+    });
+  }
+
   var activeDraggedItem = null;
 
-  function appendLabel(parent, label, type, className) {
+  function appendLabel(parent, label, type, field, className) {
     var wrapper = document.createElement("span");
     if (className) wrapper.className = className;
     var strong = document.createElement("strong");
     strong.textContent = label;
     var small = document.createElement("small");
-    small.textContent = type;
+    small.textContent = field + " - " + type;
     wrapper.appendChild(strong);
     wrapper.appendChild(small);
     parent.appendChild(wrapper);
@@ -28,6 +141,7 @@
     choice.dataset.search = (label + " " + type).toLowerCase();
     choice.dataset.defaultFunction = metadata.defaultFunction || "";
     choice.dataset.measureField = metadata.measureField || "";
+    choice.dataset.scPickerGroupKey = metadata.groupKey || "";
     if (kind === "filter") {
       choice.dataset.scFilterAction = "add";
       choice.setAttribute("data-sc-filter-available-item", "");
@@ -35,7 +149,7 @@
       choice.dataset.scPickerAction = "add";
       choice.setAttribute("data-sc-picker-available-item", "");
     }
-    appendLabel(choice, label, type);
+    appendLabel(choice, label, type, field);
     var plus = document.createElement("span");
     plus.setAttribute("aria-hidden", "true");
     plus.textContent = "+";
@@ -69,6 +183,7 @@
     item.dataset.type = type;
     item.dataset.defaultFunction = choice.dataset.defaultFunction || "";
     item.dataset.measureField = choice.dataset.measureField || "";
+    item.dataset.scPickerGroupKey = choice.dataset.scPickerGroupKey || "";
     if (choice.hasAttribute("data-sc-picker-repeatable")) {
       item.setAttribute("data-sc-picker-repeatable", "");
     }
@@ -84,7 +199,7 @@
     grip.setAttribute("aria-label", "Drag " + label + " to reorder");
     grip.textContent = "⠿";
     item.appendChild(grip);
-    appendLabel(item, label, type, "sc-picker-set-label");
+    appendLabel(item, label, type, field, "sc-picker-set-label");
     var controls = document.createElement("span");
     controls.className = "sc-picker-controls";
     controls.appendChild(createColumnControl("up", label, "↑"));
@@ -397,6 +512,7 @@
   function refreshColumnPicker(root) {
     var items = setItems(root);
     var available = Array.from(root.querySelectorAll("[data-sc-picker-available-item]"));
+    refreshPickerHighlights(items, available);
     var availableList = root.querySelector("[data-sc-picker-available]");
     var availableEmpty = availableList && availableList.querySelector(".sc-picker-empty");
     if (available.length && availableEmpty) availableEmpty.remove();
@@ -411,8 +527,8 @@
     var maximum = Number(root.dataset.scPickerMax || available.length + items.length);
     available.forEach(function (choice) {
       choice.disabled = items.length >= maximum;
-      choice.hidden = query.length > 0 && !choice.dataset.search.includes(query);
     });
+    refreshGroupedPickerSearch(availableList, query, "[data-sc-picker-available-item]");
     var setCount = root.querySelector("[data-sc-picker-set-count]");
     var availableCount = root.querySelector("[data-sc-picker-available-count]");
     if (setCount) setCount.textContent = items.length;
@@ -425,6 +541,35 @@
       if (up) up.disabled = index === 0;
       if (down) down.disabled = index === items.length - 1;
       if (remove) remove.disabled = items.length === 1;
+    });
+  }
+
+  function refreshGroupedPickerSearch(container, query, selector) {
+    if (!container) return;
+    container.querySelectorAll("[data-sc-picker-group]").forEach(function (group) {
+      var choices = Array.from(group.querySelectorAll(selector));
+      var headingMatches = query && (group.dataset.searchLabel || "").includes(query);
+      var matching = 0;
+      choices.forEach(function (choice) {
+        choice.hidden = !!query && !headingMatches && !(choice.dataset.search || "").includes(query);
+        if (!choice.hidden) matching += 1;
+      });
+      var count = group.querySelector("summary small");
+      if (count) count.textContent = choices.length;
+      group.hidden = !choices.length || (!!query && !matching);
+      if (query) {
+        if (group.dataset.scOpenBeforeSearch === undefined) {
+          group.dataset.scOpenBeforeSearch = group.open ? "1" : "0";
+        }
+        if (!group.hidden) group.open = true;
+      } else if (group.dataset.scOpenBeforeSearch !== undefined) {
+        group.open = group.dataset.scOpenBeforeSearch === "1";
+        delete group.dataset.scOpenBeforeSearch;
+      }
+    });
+    container.querySelectorAll(selector).forEach(function (choice) {
+      if (choice.closest("[data-sc-picker-group]")) return;
+      choice.hidden = !!query && !(choice.dataset.search || "").includes(query);
     });
   }
 

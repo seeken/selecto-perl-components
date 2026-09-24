@@ -11,7 +11,7 @@ sub _expand_saved_query ($controller, $explorer) {
 
     my $types = $request_query->every_param('expand_saved_type');
     my ($name, $name_error) = @$names == 1
-        ? _saved_query_name($names->[0])
+        ? _saved_query_name($names->[0], 255)
         : (undef, 'A single saved query name is required.');
     return $controller->render(text => $name_error, status => 400)
         if $name_error;
@@ -33,7 +33,9 @@ sub _expand_saved_query ($controller, $explorer) {
     my @matching = grep {
         ref($_) eq 'HASH' && defined($_->{name}) && !ref($_->{name})
             && $_->{name} eq $name
-            && ($types->[0] eq 'client' ? $_->{readonly} : !$_->{readonly})
+            && ($types->[0] eq 'client'
+                ? (($_->{scope} // '') eq 'client' || (!$_->{scope} && $_->{readonly}))
+                : (($_->{scope} // '') eq 'user' || (!$_->{scope} && !$_->{readonly})))
     } @$queries;
     my $valid = _normalize_saved_queries($config, \@matching);
     my $saved = $valid->[0];
@@ -44,6 +46,7 @@ sub _expand_saved_query ($controller, $explorer) {
     return $controller->render(text => 'Saved query not found.', status => 404)
         if $destination->query->every_param('expand_saved')->@*;
     $destination->query->param(saved_query_name => $saved->{name});
+    $destination->query->param(saved_query_id => $saved->{id}) if $saved->{id};
     return $controller->redirect_to($destination);
 }
 
@@ -55,7 +58,11 @@ sub _save_query ($controller, $explorer) {
     my $csrf_error = _saved_query_csrf_error($controller, $return_to);
     return $csrf_error if $csrf_error;
 
-    my ($name, $name_error) = _saved_query_name(scalar $controller->param('saved_query_name'));
+    my $operation = scalar($controller->param('saved_query_operation') // 'new');
+    my ($name, $name_error) = _saved_query_name(
+        scalar $controller->param('saved_query_name'),
+        $operation eq 'update' ? 255 : 30,
+    );
     return _saved_query_response($controller, $return_to, {
         ok => 0, status => 422, message => $name_error,
     }) if $name_error;
@@ -75,22 +82,59 @@ sub _save_query ($controller, $explorer) {
         });
     }
 
-    my $save_ok = eval {
-        $config->saved_query_store->save($controller, $config, {
-            name => $name,
-            url => $url,
+    my $store = $config->saved_query_store;
+    my $target = scalar($controller->param('saved_query_target') // 'user');
+    my $id = scalar($controller->param('saved_query_id') // '');
+    my $revision = scalar($controller->param('saved_query_revision') // '');
+    return _saved_query_response($controller, $return_to, {
+        ok => 0, status => 422, message => 'Choose Save new or Update this view.',
+    }) unless $operation eq 'new' || $operation eq 'update';
+    return _saved_query_response($controller, $return_to, {
+        ok => 0, status => 422, message => 'Choose a valid saved-view destination.',
+    }) if $target =~ /[\x00-\x1f\x7f]/ || length($target) > 160;
+    if ($operation eq 'update' && (!$id || !$revision
+        || scalar($controller->param('confirm_saved_query_update') // '') ne '1')) {
+        return _saved_query_response($controller, $return_to, {
+            ok => 0, status => 422,
+            message => 'Confirm that you want to overwrite this saved view.',
         });
+    }
+    my $result;
+    my $save_ok = eval {
+        my $request = {name => $name, url => $url, target => $target,
+            id => $id, revision => $revision};
+        if ($operation eq 'update') {
+            die "SAVED_QUERY_UNSUPPORTED: This host does not support updating saved views.\n"
+                unless $store->can('update');
+            $result = $store->update($controller, $config, $request);
+        } elsif ($store->can('save_new')) {
+            $result = $store->save_new($controller, $config, $request);
+        } else {
+            $result = $store->save($controller, $config, {name => $name, url => $url});
+        }
         1;
     };
     unless ($save_ok) {
-        $controller->app->log->error("Selecto saved query save failed: $@");
+        my $error = "$@";
+        if ($error =~ /\ASAVED_QUERY_(?:CONFLICT|STALE|FORBIDDEN|UNSUPPORTED):\s*(.+)/) {
+            my $message = $1;
+            my $status = $error =~ /\ASAVED_QUERY_(?:CONFLICT|STALE):/ ? 409 : 403;
+            return _saved_query_response($controller, $return_to, {
+                ok => 0, status => $status, message => $message,
+            });
+        }
+        $controller->app->log->error("Selecto saved query save failed: $error");
         return _saved_query_response($controller, $return_to, {
             ok => 0, status => 500, message => 'The query could not be saved.',
         });
     }
-    return _saved_query_response($controller, $url, {
+    my $destination = Mojo::URL->new($url);
+    $destination->query->param(saved_query_name => $name);
+    $destination->query->param(saved_query_id => $result->{id})
+        if ref($result) eq 'HASH' && $result->{id};
+    return _saved_query_response($controller, $destination->to_string, {
         ok => 1, status => 200, name => $name, url => $url,
-        message => qq{Saved query "$name".},
+        message => $operation eq 'update' ? qq{Updated saved view "$name".} : qq{Saved query "$name".},
     });
 }
 
@@ -102,16 +146,31 @@ sub _delete_saved_query ($controller, $explorer) {
     my $csrf_error = _saved_query_csrf_error($controller, $return_to);
     return $csrf_error if $csrf_error;
 
-    my ($name, $name_error) = _saved_query_name(scalar $controller->param('saved_query_name'));
+    my ($name, $name_error) = _saved_query_name(
+        scalar $controller->param('saved_query_name'), 255,
+    );
     return _saved_query_response($controller, $return_to, {
         ok => 0, status => 422, message => $name_error,
     }) if $name_error;
     my $delete_ok = eval {
-        $config->saved_query_store->delete($controller, $config, {name => $name});
+        my $request = {name => $name};
+        my $id = scalar($controller->param('saved_query_id') // '');
+        my $revision = scalar($controller->param('saved_query_revision') // '');
+        $request->{id} = $id if length($id);
+        $request->{revision} = $revision if length($revision);
+        $config->saved_query_store->delete($controller, $config, $request);
         1;
     };
     unless ($delete_ok) {
-        $controller->app->log->error("Selecto saved query delete failed: $@");
+        my $error = "$@";
+        if ($error =~ /\ASAVED_QUERY_(?:STALE|FORBIDDEN):\s*(.+)/) {
+            my $message = $1;
+            return _saved_query_response($controller, $return_to, {
+                ok => 0, status => $error =~ /\ASAVED_QUERY_STALE:/ ? 409 : 403,
+                message => $message,
+            });
+        }
+        $controller->app->log->error("Selecto saved query delete failed: $error");
         return _saved_query_response($controller, $return_to, {
             ok => 0, status => 500, message => 'The saved query could not be deleted.',
         });
@@ -137,13 +196,13 @@ sub _saved_query_csrf_error ($controller, $return_to) {
     });
 }
 
-sub _saved_query_name ($value) {
+sub _saved_query_name ($value, $max_length = 30) {
     $value = '' unless defined($value) && !ref($value);
     $value = "$value";
     $value =~ s/\A\s+|\s+\z//g;
     return (undef, 'Enter a name for the saved query.') unless length($value);
-    return (undef, 'Saved query names must be 30 characters or fewer.')
-        if length($value) > 30;
+    return (undef, "Saved query names must be $max_length characters or fewer.")
+        if length($value) > $max_length;
     return (undef, 'The saved query name contains unsupported characters.')
         if $value =~ /[\x00-\x1f\x7f]/;
     return ($value, undef);
@@ -180,16 +239,28 @@ sub _normalize_saved_queries ($config, $queries) {
     my %seen;
     for my $query (@$queries) {
         next unless ref($query) eq 'HASH';
-        my ($name, $name_error) = _saved_query_name($query->{name});
-        next if $name_error || $seen{$name}++;
+        my ($name, $name_error) = _saved_query_name($query->{name}, 255);
+        next if $name_error;
         my $url = $query->{url} // $query->{query};
         next unless defined($url) && !ref($url) && length($url);
         my $parsed = Mojo::URL->new("$url");
         next if $parsed->is_abs || defined($parsed->host) || defined($parsed->userinfo);
         next unless $parsed->path->to_string eq $config->path;
         next if defined($parsed->fragment) && length($parsed->fragment);
+        my $id = defined($query->{id}) && !ref($query->{id}) &&
+            "$query->{id}" =~ /\A[[:print:]]{1,160}\z/ ? "$query->{id}" : undef;
+        next if $seen{defined($id) ? $id : $name}++;
         push @normalized, {
             name => $name, url => $parsed->to_string,
+            (defined($id) ? (id => $id) : ()),
+            (defined($query->{revision}) && !ref($query->{revision})
+                && "$query->{revision}" =~ /\A[0-9a-f]{64}\z/
+                ? (revision => "$query->{revision}") : ()),
+            (defined($query->{scope}) && !ref($query->{scope})
+                && $query->{scope} =~ /\A(?:user|client|priv)\z/
+                ? (scope => $query->{scope}) : ()),
+            (defined($query->{folder}) && !ref($query->{folder})
+                ? (folder => "$query->{folder}") : ()),
             ($query->{readonly} ? (readonly => 1) : ()),
         };
     }

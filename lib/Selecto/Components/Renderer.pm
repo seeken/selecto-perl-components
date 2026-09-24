@@ -46,6 +46,8 @@ sub page_document ($class, %args) {
         '<title>' . $args{title} . '</title>' .
         ($page_shell->{head_start_html} // '') .
         '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' . asset_revision() . '">' .
+        '<noscript><style>.sc-chart .sc-chart-canvas{display:none!important}' .
+        '.sc-chart .sc-chart-fallback{display:block!important}</style></noscript>' .
         '<script defer src="/selecto-components/htmx.min.js?v=' . asset_revision() . '"></script>' .
         '<script defer src="/selecto-components/hx-ws.min.js?v=' . asset_revision() . '"></script>' .
         (($args{include_explorer_script} // 1)
@@ -159,7 +161,7 @@ sub websocket_message ($class, $model) {
     my $content = $results_only ? $class->results_fragment($model) : $class->surface($model);
     my $query_summary = $results_only
         ? Selecto::Components::Renderer::Builder->_query_summary_for_model(
-            $model, $model->{config}->field_catalog($model->{domain}),
+            $model, $model->{config}->filter_catalog($model->{domain}),
         ) : undef;
     my $render_ms = int((time - $started) * 1000 + 0.5);
     return {

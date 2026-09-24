@@ -187,12 +187,17 @@
       }
     }
     root.querySelectorAll("[data-sc-picker-root]").forEach(refreshColumnPicker);
+    root.querySelectorAll("[data-sc-filter-root]").forEach(refreshFilterPicker);
   }
 
   function restoreResultViews() {
     document.querySelectorAll("[data-sc-builder]").forEach(function (root) {
       var selected = root.querySelector('input[name="view"]:checked');
       if (selected) stageResultView(root, selected.value);
+      else {
+        root.querySelectorAll("[data-sc-picker-root]").forEach(refreshColumnPicker);
+        root.querySelectorAll("[data-sc-filter-root]").forEach(refreshFilterPicker);
+      }
     });
   }
 
@@ -1512,14 +1517,15 @@
     return snapshot;
   }
 
-  function formNavigationUrl(form) {
+  function formNavigationUrl(form, submitter) {
     if (!form) return null;
     try {
       var target = new URL(form.getAttribute("action") || window.location.href, window.location.href);
       if (target.origin !== window.location.origin) return null;
       if ((form.getAttribute("method") || "get").toLowerCase() === "get") {
         var query = new URLSearchParams();
-        new FormData(form).forEach(function (value, name) {
+        var data = submitter ? new FormData(form, submitter) : new FormData(form);
+        data.forEach(function (value, name) {
           if (typeof File !== "undefined" && value instanceof File) return;
           if (name === "selecto_request_id") return;
           query.append(name, value);
@@ -1532,9 +1538,31 @@
     }
   }
 
-  function beginSelectoNavigation(form) {
-    var url = formNavigationUrl(form);
+  function syncSavedQueryForms(url) {
     if (!url) return;
+    document.querySelectorAll('form.sc-saved-query-form').forEach(function (form) {
+      var value = form.querySelector('input[name="saved_query_url"]');
+      var returnTo = form.querySelector('input[name="return_to"]');
+      if (value) value.value = url;
+      if (returnTo) returnTo.value = url;
+    });
+  }
+
+  function updateSavedQueryStatus(canonicalUrl) {
+    document.querySelectorAll('form[data-sc-saved-original-url]').forEach(function (form) {
+      var status = form.querySelector('[data-sc-saved-edit-status]');
+      if (!status) return;
+      var original = form.getAttribute('data-sc-saved-original-url') || '';
+      var name = form.getAttribute('data-sc-saved-name') || '';
+      status.textContent = 'Editing ' + name +
+        (canonicalUrl === original ? ' — unchanged' : ' — unsaved changes');
+    });
+  }
+
+  function beginSelectoNavigation(form, submitter) {
+    var url = formNavigationUrl(form, submitter);
+    if (!url) return;
+    syncSavedQueryForms(url);
     var requestId = "selecto-" + Date.now() + "-" + (++selectoRequestCounter);
     // Create the joint-history entry while the submit event is still in
     // progress. Waiting for the asynchronous WebSocket response leaves a
@@ -1636,10 +1664,13 @@
     connectionStatus = socket && socket.readyState === WebSocket.OPEN
       ? "Live" : "Reconnecting";
     renderConnectionStatus();
-    if (connectionStatus === "Live") return;
-    scheduleSelectoWebSocketRecovery(750);
     var target = event.target instanceof Element ? event.target : null;
     var form = target && (target.matches("form") ? target : target.closest("form"));
+    if (connectionStatus === "Live") {
+      clearPaginationLoading(form);
+      return;
+    }
+    scheduleSelectoWebSocketRecovery(750);
     if (!form || !form.hasAttribute("hx-ws:send")) return;
     // A channel can be present in the DOM while its HTMX connection object is
     // absent (for example after browser restoration or a reconnect race).
@@ -1647,7 +1678,8 @@
     // submitted state and finish through the equivalent HTTP route.
     submitWithoutWebSocket(
       form,
-      form.matches("[data-sc-builder]") ? "Running…" : "Opening…"
+      form.matches("[data-sc-builder]") ? "Running…" : "Opening…",
+      form.querySelector('button[name="page"].is-loading')
     );
   });
 
@@ -1689,6 +1721,11 @@
     if (!form) {
       var websocketForm = event.target.closest("form");
       if (!websocketForm || !websocketForm.hasAttribute("hx-ws:send")) return;
+      if (websocketForm.dataset.scPaginationPending === "true") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
       if (websocketForm.hasAttribute("data-selecto-template-event")) {
         if (usesSelectoWebSocket(websocketForm)) {
           event.preventDefault();
@@ -1703,13 +1740,15 @@
       var websocketConnection = document.querySelector("[data-selecto-connection]");
       if (usesSelectoWebSocket(websocketForm)) {
         event.preventDefault();
-        beginSelectoNavigation(websocketForm);
+        beginSelectoNavigation(websocketForm, event.submitter);
+        showPaginationLoading(websocketForm, event.submitter);
         return;
       }
+      showPaginationLoading(websocketForm, event.submitter);
       if (websocketConnection && websocketConnection.classList.contains("is-live")) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      submitWithoutWebSocket(websocketForm);
+      submitWithoutWebSocket(websocketForm, "Loading…", event.submitter);
       return;
     }
     rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
@@ -1742,12 +1781,56 @@
     submitWithoutWebSocket(form, "Running…");
   }, true);
 
-  function submitWithoutWebSocket(form, buttonLabel) {
+  function showPaginationLoading(form, submitter) {
+    var pagination = form && form.closest(".sc-pagination");
+    if (!pagination || !submitter || submitter.name !== "page") return;
+    form.dataset.scPaginationPending = "true";
+    var requestId = form.querySelector('input[name="selecto_request_id"]');
+    if (requestId) form.dataset.scPaginationRequestId = requestId.value;
+    pagination.classList.add("is-loading");
+    form.setAttribute("aria-busy", "true");
+    pagination.querySelectorAll('button[name="page"]').forEach(function (button) {
+      button.setAttribute("aria-disabled", "true");
+    });
+    submitter.classList.add("is-loading");
+    var status = pagination.querySelector("[data-sc-pagination-status]");
+    if (status) {
+      status.textContent = "Loading page " + submitter.value + "…";
+      status.hidden = false;
+    }
+  }
+
+  function clearPaginationLoading(form) {
+    var pagination = form && form.closest(".sc-pagination");
+    if (!pagination) return;
+    delete form.dataset.scPaginationPending;
+    delete form.dataset.scPaginationRequestId;
+    pagination.classList.remove("is-loading");
+    form.removeAttribute("aria-busy");
+    pagination.querySelectorAll('button[name="page"]').forEach(function (button) {
+      button.removeAttribute("aria-disabled");
+      button.classList.remove("is-loading");
+    });
+    var status = pagination.querySelector("[data-sc-pagination-status]");
+    if (status) {
+      status.hidden = true;
+      status.textContent = "";
+    }
+  }
+
+  function submitWithoutWebSocket(form, buttonLabel, submitter) {
     if (!form || form.dataset.scHttpSubmitting === "true") return;
     form.dataset.scHttpSubmitting = "true";
+    if (submitter && submitter.name) {
+      var submittedValue = document.createElement("input");
+      submittedValue.type = "hidden";
+      submittedValue.name = submitter.name;
+      submittedValue.value = submitter.value;
+      form.appendChild(submittedValue);
+    }
     var requestId = form.querySelector('input[name="selecto_request_id"]');
     if (requestId) requestId.disabled = true;
-    var button = form.querySelector('button[type="submit"]');
+    var button = submitter || form.querySelector('button[type="submit"]');
     if (button) {
       button.disabled = true;
       if (buttonLabel) button.textContent = buttonLabel;
@@ -1821,6 +1904,11 @@
         reconcileTemplateWebSocketMessage(message);
         var requestId = message && message.selecto && message.selecto.request_id;
         if (requestId && requestId === activeSelectoRequestId) activeSelectoRequestId = null;
+        if (requestId) {
+          document.querySelectorAll("form[data-sc-pagination-pending]").forEach(function (form) {
+            if (form.dataset.scPaginationRequestId === requestId) clearPaginationLoading(form);
+          });
+        }
         var nextUrl = message && message.selecto && message.selecto.url;
         if (message && message.selecto
             && typeof message.selecto.api_console_control === "string") {
@@ -1836,6 +1924,14 @@
           renderSelectoPerformance();
         }
         if (typeof nextUrl === "string" && nextUrl.charAt(0) === "/") {
+          updateSavedQueryStatus(nextUrl);
+          var loadedId = document.querySelector('[data-sc-builder-query] input[name="saved_query_id"]');
+          if (loadedId && loadedId.value) {
+            var trackedUrl = new URL(nextUrl, window.location.href);
+            trackedUrl.searchParams.set("saved_query_id", loadedId.value);
+            nextUrl = trackedUrl.pathname + trackedUrl.search;
+          }
+          syncSavedQueryForms(nextUrl);
           var currentUrl = window.location.pathname + window.location.search + window.location.hash;
           var pendingNavigation = window.history && window.history.state
             && window.history.state.selectoPendingNavigation;
@@ -2013,15 +2109,128 @@
     return Array.from(root.querySelectorAll("[data-sc-picker-set-item]"));
   }
 
+  function setAvailablePickerOpen(root, open) {
+    if (!root) return;
+    var available = root.querySelector(".sc-picker-available-pane");
+    var mobile = window.matchMedia("(max-width: 620px)").matches;
+    var focusWasInside = available && available.contains(document.activeElement);
+    if (available && typeof available.showPopover === "function"
+      && available.matches(":popover-open")) available.hidePopover();
+    if (available) {
+      available.removeAttribute("popover");
+      available.removeAttribute("role");
+      available.removeAttribute("aria-modal");
+      available.removeAttribute("aria-label");
+    }
+    root.classList.toggle("is-available-open", open);
+    var toggle = root.querySelector("[data-sc-picker-available-toggle]");
+    if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) {
+      if (mobile && available && typeof available.showPopover === "function") {
+        available.setAttribute("popover", "manual");
+        available.setAttribute("role", "dialog");
+        available.setAttribute("aria-modal", "true");
+        available.setAttribute("aria-label", root.hasAttribute("data-sc-filter-root")
+          ? "Available filters" : "Available fields");
+        available.showPopover();
+      }
+      var search = root.querySelector("[data-sc-picker-filter], [data-sc-filter-search]");
+      if (search) search.focus();
+    } else if (focusWasInside && toggle && getComputedStyle(toggle).display !== "none") {
+      toggle.focus();
+    }
+  }
+
+  window.matchMedia("(max-width: 620px)").addEventListener("change", function () {
+    document.querySelectorAll(".sc-list-picker.is-available-open").forEach(function (picker) {
+      setAvailablePickerOpen(picker, false);
+    });
+  });
+
+  document.addEventListener("click", function (event) {
+    var control = event.target.closest(
+      "[data-sc-picker-available-toggle], [data-sc-picker-available-close]"
+    );
+    if (control) {
+      var picker = control.closest(".sc-list-picker");
+      var opening = control.hasAttribute("data-sc-picker-available-toggle")
+        && !picker.classList.contains("is-available-open");
+      if (opening) {
+        document.querySelectorAll(".sc-list-picker.is-available-open").forEach(function (other) {
+          if (other !== picker) setAvailablePickerOpen(other, false);
+        });
+      }
+      setAvailablePickerOpen(picker, opening);
+      return;
+    }
+    document.querySelectorAll(".sc-list-picker.is-available-open").forEach(function (picker) {
+      if (!picker.contains(event.target)) setAvailablePickerOpen(picker, false);
+    });
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Tab") {
+      var sheet = typeof HTMLElement.prototype.showPopover === "function"
+        ? document.querySelector(".sc-picker-available-pane:popover-open") : null;
+      if (sheet) {
+        var focusable = Array.from(sheet.querySelectorAll(
+          'button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, a[href]'
+        )).filter(function (element) { return element.getClientRects().length > 0; });
+        if (focusable.length) {
+          var first = focusable[0];
+          var last = focusable[focusable.length - 1];
+          if (event.shiftKey && (document.activeElement === first || !sheet.contains(document.activeElement))) {
+            last.focus();
+            event.preventDefault();
+          } else if (!event.shiftKey && (document.activeElement === last || !sheet.contains(document.activeElement))) {
+            first.focus();
+            event.preventDefault();
+          }
+        }
+      }
+    }
+    if (event.key !== "Escape") return;
+    var openPickers = document.querySelectorAll(".sc-list-picker.is-available-open");
+    if (!openPickers.length) return;
+    openPickers.forEach(function (picker) {
+      setAvailablePickerOpen(picker, false);
+    });
+    var toggle = openPickers[openPickers.length - 1].querySelector(
+      "[data-sc-picker-available-toggle]"
+    );
+    if (toggle) toggle.focus();
+    event.preventDefault();
+  });
+
+  function pickerTone(path) {
+    var hash = 2166136261;
+    Array.from(String(path || "")).forEach(function (character) {
+      hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+    });
+    hash ^= hash >>> 16;
+    return (hash >>> 0) % 8;
+  }
+
+  function refreshPickerHighlights(items, available) {
+    var selected = new Set(items.map(function (item) { return item.dataset.field; }));
+    items.concat(available).forEach(function (item) {
+      for (var tone = 0; tone < 8; tone += 1) item.classList.remove("sc-pick-tone-" + tone);
+      item.classList.remove("sc-is-picked");
+      if (selected.has(item.dataset.field)) {
+        item.classList.add("sc-is-picked", "sc-pick-tone-" + pickerTone(item.dataset.field));
+      }
+    });
+  }
+
   var activeDraggedItem = null;
 
-  function appendLabel(parent, label, type, className) {
+  function appendLabel(parent, label, type, field, className) {
     var wrapper = document.createElement("span");
     if (className) wrapper.className = className;
     var strong = document.createElement("strong");
     strong.textContent = label;
     var small = document.createElement("small");
-    small.textContent = type;
+    small.textContent = field + " - " + type;
     wrapper.appendChild(strong);
     wrapper.appendChild(small);
     parent.appendChild(wrapper);
@@ -2039,6 +2248,7 @@
     choice.dataset.search = (label + " " + type).toLowerCase();
     choice.dataset.defaultFunction = metadata.defaultFunction || "";
     choice.dataset.measureField = metadata.measureField || "";
+    choice.dataset.scPickerGroupKey = metadata.groupKey || "";
     if (kind === "filter") {
       choice.dataset.scFilterAction = "add";
       choice.setAttribute("data-sc-filter-available-item", "");
@@ -2046,7 +2256,7 @@
       choice.dataset.scPickerAction = "add";
       choice.setAttribute("data-sc-picker-available-item", "");
     }
-    appendLabel(choice, label, type);
+    appendLabel(choice, label, type, field);
     var plus = document.createElement("span");
     plus.setAttribute("aria-hidden", "true");
     plus.textContent = "+";
@@ -2080,6 +2290,7 @@
     item.dataset.type = type;
     item.dataset.defaultFunction = choice.dataset.defaultFunction || "";
     item.dataset.measureField = choice.dataset.measureField || "";
+    item.dataset.scPickerGroupKey = choice.dataset.scPickerGroupKey || "";
     if (choice.hasAttribute("data-sc-picker-repeatable")) {
       item.setAttribute("data-sc-picker-repeatable", "");
     }
@@ -2095,7 +2306,7 @@
     grip.setAttribute("aria-label", "Drag " + label + " to reorder");
     grip.textContent = "⠿";
     item.appendChild(grip);
-    appendLabel(item, label, type, "sc-picker-set-label");
+    appendLabel(item, label, type, field, "sc-picker-set-label");
     var controls = document.createElement("span");
     controls.className = "sc-picker-controls";
     controls.appendChild(createColumnControl("up", label, "↑"));
@@ -2408,6 +2619,7 @@
   function refreshColumnPicker(root) {
     var items = setItems(root);
     var available = Array.from(root.querySelectorAll("[data-sc-picker-available-item]"));
+    refreshPickerHighlights(items, available);
     var availableList = root.querySelector("[data-sc-picker-available]");
     var availableEmpty = availableList && availableList.querySelector(".sc-picker-empty");
     if (available.length && availableEmpty) availableEmpty.remove();
@@ -2422,8 +2634,8 @@
     var maximum = Number(root.dataset.scPickerMax || available.length + items.length);
     available.forEach(function (choice) {
       choice.disabled = items.length >= maximum;
-      choice.hidden = query.length > 0 && !choice.dataset.search.includes(query);
     });
+    refreshGroupedPickerSearch(availableList, query, "[data-sc-picker-available-item]");
     var setCount = root.querySelector("[data-sc-picker-set-count]");
     var availableCount = root.querySelector("[data-sc-picker-available-count]");
     if (setCount) setCount.textContent = items.length;
@@ -2436,6 +2648,35 @@
       if (up) up.disabled = index === 0;
       if (down) down.disabled = index === items.length - 1;
       if (remove) remove.disabled = items.length === 1;
+    });
+  }
+
+  function refreshGroupedPickerSearch(container, query, selector) {
+    if (!container) return;
+    container.querySelectorAll("[data-sc-picker-group]").forEach(function (group) {
+      var choices = Array.from(group.querySelectorAll(selector));
+      var headingMatches = query && (group.dataset.searchLabel || "").includes(query);
+      var matching = 0;
+      choices.forEach(function (choice) {
+        choice.hidden = !!query && !headingMatches && !(choice.dataset.search || "").includes(query);
+        if (!choice.hidden) matching += 1;
+      });
+      var count = group.querySelector("summary small");
+      if (count) count.textContent = choices.length;
+      group.hidden = !choices.length || (!!query && !matching);
+      if (query) {
+        if (group.dataset.scOpenBeforeSearch === undefined) {
+          group.dataset.scOpenBeforeSearch = group.open ? "1" : "0";
+        }
+        if (!group.hidden) group.open = true;
+      } else if (group.dataset.scOpenBeforeSearch !== undefined) {
+        group.open = group.dataset.scOpenBeforeSearch === "1";
+        delete group.dataset.scOpenBeforeSearch;
+      }
+    });
+    container.querySelectorAll(selector).forEach(function (choice) {
+      if (choice.closest("[data-sc-picker-group]")) return;
+      choice.hidden = !!query && !(choice.dataset.search || "").includes(query);
     });
   }
 
@@ -2503,7 +2744,14 @@
     return /^(?:bool|boolean)$/i.test(type || "");
   }
 
-  function filterOperatorsForType(type) {
+  function filterOperatorsForType(type, choices) {
+    if (choices) {
+      return [
+        ["eq", "equals"], ["ne", "does not equal"],
+        ["in", "one of"], ["not_in", "not one of"],
+        ["is_null", "is empty"], ["not_null", "is not empty"]
+      ];
+    }
     if (booleanFilterType(type)) {
       return [["eq", "is"], ["is_null", "is empty"], ["not_null", "is not empty"]];
     }
@@ -2556,6 +2804,64 @@
     return input;
   }
 
+  function filterChoices(item) {
+    try {
+      var choices = JSON.parse(item.dataset.scFilterChoices || "[]");
+      return Array.isArray(choices) ? choices : [];
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  function enhanceFilterChoices(root) {
+    root.querySelectorAll("[data-sc-filter-choice-select]").forEach(function (select) {
+      var input = select.parentElement.querySelector("[data-sc-filter-choice-value]");
+      if (!input) return;
+      input.hidden = true;
+      select.hidden = false;
+    });
+  }
+
+  function choiceFilterControls(item, operator, previousValue, values) {
+    var label = item.dataset.label || "field";
+    var multiple = operator === "in" || operator === "not_in";
+    var selected = String(previousValue || "").split(",").map(function (id) {
+      return id.trim();
+    }).filter(Boolean);
+    if (!multiple) selected = selected.slice(0, 1);
+    var known = new Set();
+    var valueInput = filterInput("text", "filter_value", multiple ? previousValue : (selected[0] || ""),
+      "Option IDs for " + label);
+    valueInput.dataset.scFilterChoiceValue = "";
+    var select = document.createElement("select");
+    select.dataset.scFilterChoiceSelect = "";
+    select.setAttribute("aria-label", "Choices for " + label);
+    select.multiple = multiple;
+    if (multiple) select.size = Math.min(8, Math.max(3, filterChoices(item).length));
+    if (!multiple) select.add(new Option("Choose a value", ""));
+    filterChoices(item).forEach(function (choice) {
+      var id = String(choice.value);
+      known.add(id);
+      var option = new Option(choice.label, id);
+      option.selected = selected.includes(id);
+      select.add(option);
+    });
+    selected.forEach(function (id) {
+      if (!known.has(id)) select.add(new Option("Unavailable option", id, true, true));
+    });
+    var control = labeledFilterControl(multiple ? "Values" : "Value", valueInput, true);
+    control.appendChild(select);
+    if (multiple) {
+      var hint = document.createElement("small");
+      hint.className = "sc-filter-choice-hint";
+      hint.textContent = "Use Ctrl or Command to select multiple options.";
+      control.appendChild(hint);
+    }
+    values.appendChild(control);
+    values.appendChild(hiddenFilterValue("filter_value_end", ""));
+    enhanceFilterChoices(values);
+  }
+
   function rebuildFilterValues(item, previousValue, previousEnd) {
     var existing = item.querySelector("[data-sc-filter-values]");
     if (existing) existing.remove();
@@ -2605,6 +2911,8 @@
         filterInput(rangeType, "filter_value", previousValue, "Start value for " + label, "Start")));
       values.appendChild(labeledFilterControl("End",
         filterInput(rangeType, "filter_value_end", previousEnd, "End value for " + label, "End")));
+    } else if (filterChoices(item).length && /^(?:eq|ne|in|not_in)$/.test(operator)) {
+      choiceFilterControls(item, operator, previousValue, values);
     } else if (booleanFilterType(type)) {
       var booleanValue = document.createElement("select");
       booleanValue.name = "filter_value";
@@ -2641,6 +2949,7 @@
     item.dataset.field = field;
     item.dataset.label = label;
     item.dataset.type = type;
+    if (choice.dataset.scFilterChoices) item.dataset.scFilterChoices = choice.dataset.scFilterChoices;
     var fieldInput = document.createElement("input");
     fieldInput.type = "hidden";
     fieldInput.name = "filter_field";
@@ -2650,7 +2959,7 @@
     item.appendChild(hiddenFilterValue("filter_clause", ""));
     var heading = document.createElement("div");
     heading.className = "sc-filter-set-heading";
-    appendLabel(heading, label, type);
+    appendLabel(heading, label, type, field);
     var remove = document.createElement("button");
     remove.type = "button";
     remove.dataset.scFilterAction = "remove";
@@ -2666,7 +2975,7 @@
     var operator = document.createElement("select");
     operator.name = "filter_op";
     operator.setAttribute("aria-label", "Operator for " + label);
-    filterOperatorsForType(type).forEach(function (entry) {
+    filterOperatorsForType(type, !!choice.dataset.scFilterChoices).forEach(function (entry) {
       var option = document.createElement("option");
       option.value = entry[0];
       option.textContent = entry[1];
@@ -2675,7 +2984,17 @@
     operatorLabel.appendChild(operator);
     editor.appendChild(operatorLabel);
     item.appendChild(editor);
+    if (choice.dataset.scFilterChoices) operator.value = "in";
     rebuildFilterValues(item, "", "");
+    var promote = document.createElement("label");
+    promote.className = "sc-filter-promote";
+    var promoteInput = document.createElement("input");
+    promoteInput.type = "checkbox";
+    promoteInput.name = "filter_promote_index";
+    promoteInput.value = "";
+    promote.appendChild(promoteInput);
+    promote.appendChild(document.createTextNode(" Promote to View Controller"));
+    editor.appendChild(promote);
     var note = document.createElement("p");
     note.className = "sc-filter-draft-note";
     note.textContent = "Enter a value to apply this filter.";
@@ -2714,7 +3033,7 @@
         clauseNote = document.createElement("p");
         clauseNote.className = "sc-filter-draft-note";
         clauseNote.dataset.scFilterClauseNote = "";
-        clauseNote.textContent = "Complete both conditions to apply this cell.";
+        clauseNote.textContent = "Complete all conditions to apply this alternative.";
         clause.appendChild(clauseNote);
       } else if (!clauseDraft && clauseNote) {
         clauseNote.remove();
@@ -2725,6 +3044,7 @@
   function refreshFilterPicker(root) {
     var items = Array.from(root.querySelectorAll("[data-sc-filter-set-item]"));
     var available = Array.from(root.querySelectorAll("[data-sc-filter-available-item]"));
+    refreshPickerHighlights(items, available);
     var availableList = root.querySelector("[data-sc-filter-available]");
     var availableEmpty = availableList && availableList.querySelector(".sc-picker-empty");
     if (available.length && availableEmpty) availableEmpty.remove();
@@ -2743,10 +3063,20 @@
     if (availableCount) availableCount.textContent = available.length;
     available.forEach(function (choice) {
       choice.disabled = items.length >= maximum;
-      choice.hidden = query.length > 0 && !choice.dataset.search.includes(query);
     });
+    refreshGroupedPickerSearch(availableList, query, "[data-sc-filter-available-item]");
     var builder = root.closest("[data-sc-builder]");
+    refreshFilterPromoteIndices(builder);
     refreshFilterBadge(builder, items.length);
+  }
+
+  function refreshFilterPromoteIndices(builder) {
+    if (!builder) return;
+    builder.querySelectorAll('[name="filter_field"]').forEach(function (field, index) {
+      var item = field.closest("[data-sc-filter-set-item]");
+      var promote = item && item.querySelector('[name="filter_promote_index"]');
+      if (promote) promote.value = String(index + 1);
+    });
   }
 
   function queryLibrarySegmentIds(builder) {
@@ -2763,6 +3093,9 @@
     }
     builder.querySelectorAll('[name="query_library_segment"]:checked').forEach(function (input) {
       ids.add(input.value);
+    });
+    builder.querySelectorAll('[data-sc-query-library-group-choice]:checked').forEach(function (input) {
+      if (input.value) ids.add(input.value);
     });
     return ids;
   }
@@ -2801,7 +3134,9 @@
     if (!filterItem) return;
     var target = filterItem.querySelector('[name="filter_' + kind + '"]');
     if (target) {
-      target.value = control.value;
+      target.value = control.multiple
+        ? Array.from(control.selectedOptions).map(function (option) { return option.value; }).join(",")
+        : control.value;
       if (kind === "op") {
         target.dispatchEvent(new Event("change", { bubbles: true }));
         refreshPromotedFilterValues(control, filterItem);
@@ -2863,8 +3198,13 @@
     if (promotedClause) promotedClause.remove();
     if (promoted && !promoted.querySelector("[data-sc-promoted-filter]")) promoted.remove();
     refreshFilterBadge(builder);
+    refreshFilterPromoteIndices(builder);
     markBuilderDirty(builder);
   }
+
+  document.addEventListener("submit", function (event) {
+    refreshFilterPromoteIndices(event.target.closest("[data-sc-builder]"));
+  }, true);
 
   document.addEventListener("input", function (event) {
     if (event.target.matches("[data-sc-promoted-filter-input]")) {
@@ -2875,18 +3215,12 @@
     if (event.target.matches("[data-sc-picker-filter]")) {
       var pickerRoot = event.target.closest("[data-sc-picker-root]");
       if (!pickerRoot) return;
-      var pickerQuery = event.target.value.trim().toLowerCase();
-      pickerRoot.querySelectorAll("[data-sc-picker-available-item]").forEach(function (item) {
-        item.hidden = pickerQuery.length > 0 && !item.dataset.search.includes(pickerQuery);
-      });
+      refreshColumnPicker(pickerRoot);
       return;
     } else if (event.target.matches("[data-sc-filter-search]")) {
       var filterRoot = event.target.closest("[data-sc-filter-root]");
       if (!filterRoot) return;
-      var filterQuery = event.target.value.trim().toLowerCase();
-      filterRoot.querySelectorAll("[data-sc-filter-available-item]").forEach(function (item) {
-        item.hidden = filterQuery.length > 0 && !item.dataset.search.includes(filterQuery);
-      });
+      refreshFilterPicker(filterRoot);
       return;
     }
     if (event.target.matches('[name="filter_value"], [name="filter_value_end"]')) {
@@ -2896,6 +3230,17 @@
   });
 
   document.addEventListener("change", function (event) {
+    if (event.target.matches("[data-sc-filter-choice-select]")) {
+      var choiceSelect = event.target;
+      var choiceInput = choiceSelect.parentElement.querySelector("[data-sc-filter-choice-value]");
+      if (choiceInput) {
+        choiceInput.value = Array.from(choiceSelect.selectedOptions).map(function (option) {
+          return option.value;
+        }).filter(Boolean).join(",");
+        choiceInput.dispatchEvent(new Event("change", {bubbles: true}));
+      }
+      return;
+    }
     if (event.target.matches("[data-sc-promoted-filter-input]")) {
       syncPromotedFilterInput(event.target);
       markBuilderDirty(promotedFilterBuilder(event.target));
@@ -2917,7 +3262,7 @@
       updateFilterDraft(filterItem);
     } else if (event.target.matches('[name="filter_value"], [name="filter_value_end"]')) {
       updateFilterDraft(event.target.closest("[data-sc-filter-set-item], [data-sc-filter-condition]"));
-    } else if (event.target.matches('[name="query_library_view"], [name="query_library_segment"]')) {
+    } else if (event.target.matches('[name="query_library_view"], [name="query_library_segment"], [data-sc-query-library-group-choice]')) {
       refreshFilterBadge(builder);
     } else if (event.target.matches("[data-sc-group-format], [data-sc-measure-function], [data-sc-measure-transform]")) {
       syncPickerConfig(event.target.closest("[data-sc-picker-set-item]"));
@@ -2954,10 +3299,15 @@
       var availableEmpty = available && available.querySelector(".sc-picker-empty");
       if (availableEmpty) availableEmpty.remove();
       if (available && !item.hasAttribute("data-sc-picker-repeatable")) {
-        available.appendChild(createAvailableChoice(
+        var group = Array.from(available.querySelectorAll("[data-sc-picker-group]")).find(function (entry) {
+          return entry.dataset.scPickerGroupKey === (item.dataset.scPickerGroupKey || "");
+        });
+        var destination = group && group.querySelector("[data-sc-picker-group-items]") || available;
+        destination.appendChild(createAvailableChoice(
           "column", item.dataset.field, item.dataset.label, item.dataset.type, {
             defaultFunction: item.dataset.defaultFunction,
-            measureField: item.dataset.measureField
+            measureField: item.dataset.measureField,
+            groupKey: item.dataset.scPickerGroupKey
           }
         ));
       }
@@ -3045,6 +3395,12 @@
     var item = event.target.closest("[data-sc-picker-set-item]");
     if (item) item.classList.remove("is-dragging");
     activeDraggedItem = null;
+  });
+
+  document.addEventListener("DOMContentLoaded", function () { enhanceFilterChoices(document); });
+  if (document.readyState !== "loading") enhanceFilterChoices(document);
+  document.addEventListener("htmx:afterSwap", function (event) {
+    enhanceFilterChoices(event.detail && event.detail.target || document);
   });
 
   // Source: actions.js

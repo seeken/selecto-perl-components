@@ -97,15 +97,15 @@ src/browser/shell.js
 src/browser/templates.js
 t/00-load.t
 t/api_console.t
-t/browser/components.spec.js
 t/browser/canned-page.spec.js
+t/browser/components.spec.js
 t/browser/templates.spec.js
 t/bucket_parser.t
+t/canned_page_http.t
 t/date_shortcut.t
 t/graph_axis_planner.t
 t/i18n.t
 t/lib/TestSelectoComponents.pm
-t/canned_page_http.t
 t/plugin.t
 t/query_builder.t
 t/query_library.t

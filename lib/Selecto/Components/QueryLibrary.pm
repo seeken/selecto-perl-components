@@ -22,6 +22,7 @@ sub entries ($class, $domain, $registry, $config = undef) {
                 {kind => 'query_library', registry => $registry, id => $id, attribute => 'description'},
             ),
             capability => _text($spec->{capability}),
+            ($spec->{picker_hidden} ? (picker_hidden => 1) : ()),
         }
     } grep { ref($definitions->{$_}) eq 'HASH' } keys %$definitions;
     return [sort {
@@ -39,6 +40,38 @@ sub active_segment_entries ($class, $domain, $view, $segments = [], $config = un
 
     my %by_id = map { $_->{id} => $_ } @{$class->entries($domain, 'segments', $config)};
     return [map { $by_id{"$_"} } grep { exists($by_id{"$_"}) } @ids];
+}
+
+sub segment_picker_groups ($class, $domain, $config = undef) {
+    return [map {
+        my $group = $_;
+        +{
+            %$group,
+            label => _localized(
+                $config, $domain, "query_library.segment_picker_groups.$group->{id}.label",
+                $group->{label},
+                {kind => 'segment_picker_group', id => $group->{id}, attribute => 'label'},
+            ),
+            description => _localized(
+                $config, $domain, "query_library.segment_picker_groups.$group->{id}.description",
+                $group->{description},
+                {kind => 'segment_picker_group', id => $group->{id}, attribute => 'description'},
+            ),
+            off_label => _localized(
+                $config, $domain, "query_library.segment_picker_groups.$group->{id}.off_label",
+                $group->{off_label},
+                {kind => 'segment_picker_group', id => $group->{id}, attribute => 'off_label'},
+            ),
+            choices => [map {
+                +{%$_, label => _localized(
+                    $config, $domain,
+                    "query_library.segment_picker_groups.$group->{id}.choices.$_->{segment}.label",
+                    $_->{label},
+                    {kind => 'segment_picker_choice', id => $_->{segment}, group => $group->{id}, attribute => 'label'},
+                )}
+            } @{$group->{choices}}],
+        }
+    } @{Selecto::QueryLibrary->segment_picker_groups($domain)}];
 }
 
 sub view_segment_ids ($class, $domain, $view) {
