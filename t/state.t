@@ -578,6 +578,7 @@ is_deeply $column_measure_by_id{unit_price}, {
 is_deeply $column_measure_by_id{'category.category_name'}, {
     path => 'category.category_name',
     label => $column_measure_config->field_map($domain)->{'category.category_name'}{label},
+    picker_group_label => 'Category',
     type => 'string',
     field => 'category.category_name', default_function => 'count',
     unit => {kind => 'count'},
