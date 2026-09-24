@@ -1,5 +1,6 @@
 package Selecto::Components::Renderer::Markup;
 
+use utf8;
 use Mojo::Base -strict, -signatures;
 use Exporter 'import';
 use Mojo::Util qw(url_escape);
@@ -40,10 +41,14 @@ sub _html_display ($column, $value, $group = 0) {
 sub _object_link ($column, $record, $label_html) {
     my $id = $record->{$column->{link_key}};
     return $label_html unless defined($id) && !ref($id) && length("$id");
+    return $label_html if $column->{link}{numeric_id} && "$id" !~ /\A[1-9]\d*\z/;
     my $href = $column->{link}{url_template};
     my $escaped_id = url_escape("$id");
     $href =~ s/\{\{id\}\}/$escaped_id/g;
-    return '<a class="sc-object-link" href="' . _h($href) . '">' . $label_html . '</a>';
+    my $target = $column->{link}{target};
+    my $target_attr = defined($target) && $target =~ /\A_(?:self|parent|top)\z/
+        ? ' target="' . _h($target) . '"' : '';
+    return '<a class="sc-object-link" href="' . _h($href) . '"' . $target_attr . '>' . $label_html . '</a>';
 }
 sub _number ($value) {
     return 0 unless defined($value) && !ref($value) && "$value" =~ /\A-?(?:\d+(?:\.\d*)?|\.\d+)\z/;
