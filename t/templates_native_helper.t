@@ -11,6 +11,7 @@ use Test::More;
 use Test::Mojo;
 use TestSelectoComponents ();
 use Selecto::Components::Templates::InstanceStore::Memory ();
+use Selecto::Components::Templates::Native ();
 use Selecto::Components::Templates::Renderer ();
 use Selecto::Domain ();
 use Selecto::Engine ();
@@ -92,6 +93,30 @@ my $native_options = sub {
         target => '#native-orders',
     );
 };
+
+is_deeply(
+    Selecto::Components::Templates::Native::_public_rows({
+        rows => [{id => 1}], pages => [{private_position => 'must-not-expose'}],
+        identities => [{row_keys => ['private-row-key']}],
+        root_page => {after_values => ['private-root-tuple']},
+    }),
+    [{id => 1}],
+    'native EP model takes public page rows without exposing positions',
+);
+is_deeply(
+    Selecto::Components::Templates::Native::_public_rows({
+        rows => [{id => 1}], totals => {order_count => 2},
+    }),
+    [{id => 1}],
+    'native EP model accepts source totals beside public rows',
+);
+is_deeply(
+    Selecto::Components::Templates::Native::_public_totals({
+        rows => [{id => 1}], totals => {order_count => 2},
+    }),
+    {order_count => 2},
+    'native EP model exposes declared source totals',
+);
 $app->routes->get('/native/orders')->to(cb => sub {
     my ($controller) = @_;
     my $model = $controller->selecto_template_model(

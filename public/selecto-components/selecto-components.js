@@ -4614,11 +4614,12 @@
     var formRevision = form.querySelector('input[name="form_revision"]');
     var root = form.closest("[data-selecto-template-instance]");
     var region = form.closest("[data-selecto-template-node]");
+    var nativeEvent = form.getAttribute("data-selecto-template-event");
     if (!action || action.value !== "event" || !event || !event.value
         || !eventId || !eventId.value || !revision || !componentId
         || !componentId.value || !componentLifetime || !componentLifetime.value
         || !formRevision || normalizedTemplateRevision(formRevision.value) === null
-        || !root || !region) return null;
+        || !root || (!region && nativeEvent !== event.value)) return null;
     var values = new FormData(form).getAll("value");
     if (values.length !== 1 || typeof values[0] !== "string") return null;
     var key = [
@@ -5016,6 +5017,16 @@
 
   function prepareTemplateHttpSwap(ctx) {
     var metadata = httpTemplateMetadata(ctx);
+    var fullNavigation = metadata && ctx && ctx.target === document.body
+      && ctx.request && ctx.request.method === "GET"
+      && ctx.request.headers && ctx.request.headers["HX-Request-Type"] === "full"
+      && ctx.response && ctx.response.status >= 200 && ctx.response.status < 300;
+    if (fullNavigation) {
+      // A full GET mounts a new server-issued instance. Revision checks apply to
+      // updates of the current instance, not a deliberate page replacement.
+      ctx.selectoTemplateMetadata = metadata;
+      return true;
+    }
     if (templateResponseIsStale(metadata, ctx && ctx.target)) {
       completeTemplateEvent(metadata && metadata.event_id, false);
       return false;
@@ -5036,9 +5047,110 @@
     restoreTemplateControls(ctx && ctx.selectoTemplateControlSnapshot);
   }
 
+  function templateWebSocketCanSend(form) {
+    var channel = form.closest('[hx-ws\\:connect]');
+    var connection = channel && channel._htmx && channel._htmx.ws
+      && channel._htmx.ws.connection;
+    var socket = connection && connection.socket;
+    return !!socket && (socket.readyState === 0 || socket.readyState === 1);
+  }
+
+  function showTemplateSourceNetworkError(form) {
+    var status = form.querySelector('[role="status"], [role="alert"]');
+    if (!status) {
+      status = document.createElement("p");
+      form.appendChild(status);
+    }
+    status.setAttribute("role", "alert");
+    status.textContent = "Source could not be loaded. Reload this page to retry.";
+  }
+
+  function clearResolvedTemplateSourceRecoveryMarkers() {
+    for (var root of document.querySelectorAll("[data-selecto-template-instance]")) {
+      var instanceId = root.dataset.selectoTemplateInstance;
+      if (!instanceId) continue;
+      var prefix = "selecto:template:source-recovery:" + instanceId + ":";
+      try {
+        var keys = [];
+        for (var index = 0; index < window.sessionStorage.length; index += 1) {
+          var key = window.sessionStorage.key(index);
+          if (key && key.startsWith(prefix)) keys.push(key);
+        }
+        for (var key of keys) {
+          var sourceId = key.slice(prefix.length);
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(sourceId)) continue;
+          var pending = Array.from(root.querySelectorAll(
+            "form[data-selecto-template-resume-url]"
+          )).some(function (form) {
+            return form.getAttribute("data-native-source") === sourceId
+              || form.getAttribute("data-selecto-template-source") === sourceId;
+          });
+          if (!pending) window.sessionStorage.removeItem(key);
+        }
+      } catch (_error) {
+        // Storage may be unavailable; source error handling remains local.
+      }
+    }
+  }
+
+  function recoverLostTemplateSource(ctx) {
+    var source = ctx && ctx.sourceElement;
+    var form = source instanceof HTMLFormElement
+      ? source : source instanceof Element && (source.form || source.closest("form"));
+    if (!(form instanceof HTMLFormElement)
+        || !form.hasAttribute("data-selecto-template-resume-url")) return;
+    var root = form.closest("[data-selecto-template-instance]");
+    var instanceId = root && root.dataset.selectoTemplateInstance;
+    var sourceId = form.getAttribute("data-native-source")
+      || form.getAttribute("data-selecto-template-source");
+    if (!instanceId || !sourceId || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(sourceId)) return;
+    var action;
+    var resume;
+    try {
+      action = new URL(form.action, window.location.href);
+      resume = new URL(form.getAttribute("data-selecto-template-resume-url"),
+        window.location.href);
+    } catch (_error) { return; }
+    var suffix = "/sources/" + sourceId;
+    if (action.origin !== window.location.origin
+        || resume.origin !== window.location.origin
+        || !action.pathname.endsWith(suffix)
+        || resume.pathname !== action.pathname.slice(0, -suffix.length)
+        || resume.search || resume.hash
+        || !resume.pathname.endsWith("/" + instanceId)) return;
+    var key = "selecto:template:source-recovery:" + instanceId + ":" + sourceId;
+    try {
+      if (ctx.response && ctx.response.status >= 200 && ctx.response.status < 300) {
+        window.sessionStorage.removeItem(key);
+        return;
+      }
+      if (ctx.response || typeof ctx.status !== "string"
+          || !ctx.status.startsWith("error:")) return;
+      var lastAttempt = Number(window.sessionStorage.getItem(key));
+      if (lastAttempt > 0 && Date.now() - lastAttempt < 30_000) {
+        showTemplateSourceNetworkError(form);
+        return;
+      }
+      window.sessionStorage.setItem(key, String(Date.now()));
+    } catch (_error) {
+      showTemplateSourceNetworkError(form);
+      return;
+    }
+    window.location.assign(resume.href);
+  }
+
+  clearResolvedTemplateSourceRecoveryMarkers();
+
   document.addEventListener("submit", function (event) {
     var info = templateEventFormInfo(event.target);
     if (!info) return;
+    if (event.target.hasAttribute("hx-ws:send")
+        && !templateWebSocketCanSend(event.target)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      submitWithoutWebSocket(event.target);
+      return;
+    }
     var entry = templateEventQueues.get(info.key);
     if (!entry) {
       entry = {
@@ -5067,19 +5179,28 @@
     entry.pending.push({value: info.value, form_revision: info.form_revision});
   }, true);
 
-  document.addEventListener("htmx:finally:request", function (event) {
+  document.addEventListener("htmx:before:request", function (event) {
     var ctx = event.detail && event.detail.ctx;
     var source = ctx && ctx.sourceElement;
     var form = source instanceof HTMLFormElement
-      ? source : source && (source.form || source.closest("form"));
+      ? source : source instanceof Element && (source.form || source.closest("form"));
     var eventId = form && form.querySelector('input[name="event_id"]');
-    if (!eventId || !templateEventKeysById.has(eventId.value)) return;
+    if (eventId && templateEventKeysById.has(eventId.value)) {
+      ctx.selectoTemplateEventId = eventId.value;
+    }
+  });
+
+  document.addEventListener("htmx:finally:request", function (event) {
+    var ctx = event.detail && event.detail.ctx;
+    recoverLostTemplateSource(ctx);
     var metadata = httpTemplateMetadata(ctx);
+    var eventId = ctx && ctx.selectoTemplateEventId;
+    if (!eventId || !templateEventKeysById.has(eventId)) return;
     var status = ctx && ctx.response && ctx.response.status;
     completeTemplateEvent(
-      eventId.value,
+      eventId,
       status >= 200 && status < 300
-        && metadata && metadata.event_id === eventId.value
+        && metadata && metadata.event_id === eventId
     );
   });
 

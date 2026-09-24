@@ -7,6 +7,7 @@ use warnings;
 use Selecto::Components::Templates::EffectCoordinator ();
 use Selecto::Components::Templates::EventDispatcher ();
 use Selecto::Components::Templates::InstanceService ();
+use Selecto::Templates ();
 
 =head1 NAME
 
@@ -58,6 +59,34 @@ sub dispatch_params {
 sub complete {
     my ($self, %args) = @_;
     return $self->{effects}->complete(%args);
+}
+
+sub commit_page {
+    my ($self, %args) = @_;
+    my $commit = delete $args{commit};
+    return $self->{instances}->transition(
+        %args,
+        transition => sub {
+            my ($snapshot) = @_;
+            return Selecto::Templates->commit_page_runtime(
+                $args{manifest}, $snapshot, $commit,
+            );
+        },
+    );
+}
+
+sub commit_root_page {
+    my ($self, %args) = @_;
+    my $commit = delete $args{commit};
+    return $self->{instances}->transition(
+        %args,
+        transition => sub {
+            my ($snapshot) = @_;
+            return Selecto::Templates->commit_root_page_runtime(
+                $args{manifest}, $snapshot, $commit,
+            );
+        },
+    );
 }
 
 sub claim_effect {
