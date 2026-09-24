@@ -136,22 +136,28 @@ sub register ($self, $app, $plugin_config) {
         my $path = $spec->{path} // "/pages/$id";
         die "duplicate Selecto Components route $path\n" if $registered_path{$path}++;
         my %definition = %$spec;
-        delete @definition{qw(engine_factory scope_factory path title)};
+        delete @definition{qw(engine_factory scope_factory path title record_link websocket_enabled column_layout)};
         my $page = Selecto::CannedPage->new(%definition, id => $id);
         my $component = Selecto::Components::CannedPage->new(
             page => $page, engine_factory => $engine_factory,
             scope_factory => $scope_factory,
             path => $path, title => $spec->{title} // _humanize($id),
+            record_link => $spec->{record_link},
+            column_layout => $spec->{column_layout},
+            websocket_enabled => exists($spec->{websocket_enabled})
+                ? ($spec->{websocket_enabled} ? 1 : 0) : 1,
         );
         my $route_path = _mounted_route_path($path, $route_prefix);
         $routes->get($route_path)->to(cb => sub ($controller) { $component->handle($controller) });
         $routes->post($route_path)->to(cb => sub ($controller) { $component->handle($controller) });
-        $routes->websocket($route_path . '/ws')->to(cb => sub ($controller) {
-            return $controller->finish(1008 => 'WebSocket origin is not allowed')
-                unless $origin_check->($controller);
-            $controller->inactivity_timeout($websocket_inactivity_timeout);
-            $component->handle_websocket($controller);
-        });
+        if ($component->websocket_enabled) {
+            $routes->websocket($route_path . '/ws')->to(cb => sub ($controller) {
+                return $controller->finish(1008 => 'WebSocket origin is not allowed')
+                    unless $origin_check->($controller);
+                $controller->inactivity_timeout($websocket_inactivity_timeout);
+                $component->handle_websocket($controller);
+            });
+        }
         $pages{$id} = $component;
     }
     $app->helper(selecto_components_explorer => sub ($controller, $id) {

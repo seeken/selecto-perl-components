@@ -1,5 +1,6 @@
 package Selecto::Components::Renderer::Results;
 
+use utf8;
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(encode_json);
 use Mojo::Util qw(url_escape);
@@ -901,6 +902,28 @@ sub _pagination ($class, $model, $position = 'bottom') {
     return '' if $model->{result}{grid_data} || $state->view eq 'graph';
     my $current_page = $state->page;
     my $total_pages = $model->{result}{total_pages};
+    my $buttons = $class->pagination_buttons($current_page, $total_pages);
+    my $hidden = '';
+    my $pairs = $state->query_pairs;
+    for (my $index = 0; $index < @$pairs; $index += 2) {
+        next if $pairs->[$index] eq 'page';
+        $hidden .= _hidden($pairs->[$index], $pairs->[$index + 1]);
+    }
+    my $method = $model->{config}->query_params_enabled($model->{domain}) ? 'get' : 'post';
+    my $controls = $total_pages > 1
+        ? '<form action="' . _h($model->{config}->path) . '" method="' . $method . '" hx-ws:send>' .
+          _hidden('render_scope', 'results') . _hidden('reuse_count', 1) .
+          $hidden . $buttons . '</form>'
+        : '<span></span>';
+    return '<nav class="sc-pagination sc-pagination-' . _h($position) .
+        '" data-sc-pagination-position="' . _h($position) .
+        '" aria-label="Results pages, ' . _h($position) . '"><span>Page ' . _h($current_page) .
+        ' of ' . _h($total_pages) . '<span class="sc-pagination-status" ' .
+        'data-sc-pagination-status role="status" aria-live="polite" hidden></span></span>' .
+        $controls . '</nav>';
+}
+
+sub pagination_buttons ($class, $current_page, $total_pages) {
     my @buttons;
     if ($current_page > 1) {
         push @buttons, _page_button($current_page - 1, 'Previous', 'sc-page-direction');
@@ -918,24 +941,7 @@ sub _pagination ($class, $model, $position = 'bottom') {
     if ($current_page < $total_pages) {
         push @buttons, _page_button($current_page + 1, 'Next', 'sc-page-direction');
     }
-    my $hidden = '';
-    my $pairs = $state->query_pairs;
-    for (my $index = 0; $index < @$pairs; $index += 2) {
-        next if $pairs->[$index] eq 'page';
-        $hidden .= _hidden($pairs->[$index], $pairs->[$index + 1]);
-    }
-    my $method = $model->{config}->query_params_enabled($model->{domain}) ? 'get' : 'post';
-    my $controls = $total_pages > 1
-        ? '<form action="' . _h($model->{config}->path) . '" method="' . $method . '" hx-ws:send>' .
-          _hidden('render_scope', 'results') . _hidden('reuse_count', 1) .
-          $hidden . join('', @buttons) . '</form>'
-        : '<span></span>';
-    return '<nav class="sc-pagination sc-pagination-' . _h($position) .
-        '" data-sc-pagination-position="' . _h($position) .
-        '" aria-label="Results pages, ' . _h($position) . '"><span>Page ' . _h($current_page) .
-        ' of ' . _h($total_pages) . '<span class="sc-pagination-status" ' .
-        'data-sc-pagination-status role="status" aria-live="polite" hidden></span></span>' .
-        $controls . '</nav>';
+    return join '', @buttons;
 }
 
 sub _pagination_pages ($current_page, $total_pages) {

@@ -58,18 +58,26 @@ sub page_spec {
 
 my $app = Mojolicious->new;
 $app->secrets(['canned-page-test']);
-$app->plugin('Selecto::Components' => {pages => {products => page_spec(0)}});
+my $public_spec = page_spec(0);
+$public_spec->{record_link} = {field => 'id', url_prefix => '/products/view?id='};
+$app->plugin('Selecto::Components' => {pages => {products => $public_spec}});
 my $t = Test::Mojo->new($app);
 $t->get_ok('/products')->status_is(200)
     ->content_like(qr/Alpha shoe/)
     ->content_unlike(qr/Beta shoe/)
-    ->content_like(qr/2 matching items|1 matching items/);
+    ->content_like(qr{[12]</strong> rows? matched});
 $t->element_exists('main.sc-page .sc-shell .sc-surface.selecto-canned-page',
     'canned page uses the Explorer page shell');
 $t->element_exists('.sc-workspace > .sc-builder.selecto-canned-controls',
     'only promoted controls occupy the Explorer builder position');
 $t->element_exists('.sc-results .sc-table-wrap table',
     'canned results use the Explorer table renderer');
+$t->element_exists('a[href="/products/view?id=1"]',
+    'a governed selected ID can open a local record URL');
+$t->element_exists('.sc-results td:first-child > a.sc-object-link[href="/products/view?id=1"]',
+    'record ID itself links to the record');
+$t->content_unlike(qr{<th scope="col">Open</th>},
+    'no separate Open column is added');
 $t->element_exists('link[href^="/selecto-components/selecto-components.css"]',
     'canned page loads the shared Explorer theme');
 $t->element_exists_not('script[src^="/selecto-components/selecto-components.js"]',
@@ -94,7 +102,11 @@ $t->get_ok('/products?submitted=1&view=by_category&f_brand=North&drilldown_selec
     ->content_like(qr/Clear drilldown/);
 $t->get_ok('/products?submitted=1&view=bogus')->status_is(422);
 $t->get_ok('/products?submitted=1&view=list')->status_is(200)
-    ->content_like(qr/3 matching items/);
+    ->content_like(qr{3</strong> rows matched});
+$t->get_ok('/products?submitted=1&view=list&limit=1&page=2')->status_is(200)
+    ->content_like(qr/Page 2 of 3/)
+    ->element_exists('.sc-pagination-top button[name=page][value="1"]')
+    ->element_exists('.sc-pagination-bottom button[name=page][value="3"]');
 $t->websocket_ok('/products/ws')->send_ok({text => encode_json({
     headers => {}, submitted => 1, view => 'list', f_brand => 'North',
     selecto_request_id => '7',

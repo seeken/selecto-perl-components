@@ -40,6 +40,7 @@ sub page ($class, $model) {
 
 sub page_document ($class, %args) {
     my $page_shell = $args{page_shell} // {};
+    my $websocket = defined($args{ws_path}) && length($args{ws_path});
     return '<!doctype html><html lang="en"' . ($args{scheme_attribute} // '') . ($args{theme_attribute} // '') .
         '><head><meta charset="utf-8">' .
         '<meta name="viewport" content="width=device-width,initial-scale=1">' .
@@ -48,16 +49,18 @@ sub page_document ($class, %args) {
         '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' . asset_revision() . '">' .
         '<noscript><style>.sc-chart .sc-chart-canvas{display:none!important}' .
         '.sc-chart .sc-chart-fallback{display:block!important}</style></noscript>' .
-        '<script defer src="/selecto-components/htmx.min.js?v=' . asset_revision() . '"></script>' .
-        '<script defer src="/selecto-components/hx-ws.min.js?v=' . asset_revision() . '"></script>' .
+        ($websocket
+            ? '<script defer src="/selecto-components/htmx.min.js?v=' . asset_revision() . '"></script>' .
+              '<script defer src="/selecto-components/hx-ws.min.js?v=' . asset_revision() . '"></script>'
+            : '') .
         (($args{include_explorer_script} // 1)
             ? '<script defer src="/selecto-components/selecto-components.js?v=' . asset_revision() . '"></script>'
             : '') .
         ($args{extra_head_html} // '') . ($page_shell->{head_html} // '') .
         '</head><body' . ($args{body_class} // '') . '>' . ($page_shell->{body_start_html} // '') .
         '<main class="' . _h($args{main_class} // 'sc-page') . '"><div class="sc-shell">' .
-        '<section id="' . _h($args{channel_id}) . '" hx-ext="ws" hx-ws:connect="' .
-        _h($args{ws_path}) . '" hx-swap="none">' .
+        '<section id="' . _h($args{channel_id}) . '"' .
+        ($websocket ? ' hx-ext="ws" hx-ws:connect="' . _h($args{ws_path}) . '" hx-swap="none"' : '') . '>' .
         $args{surface} . '</section></div></main></body></html>';
 }
 

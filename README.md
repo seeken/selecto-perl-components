@@ -825,6 +825,7 @@ plugin 'Selecto::Components' => {
                     values => {source => 'dataset', limit => 30, searchable => 1}},
                 {id => 'price', label => 'Price', kind => 'range', field => 'price'},
             ],
+            record_link => {field => 'id', url_prefix => '/products/view?id='},
             initial_state => {view => 'list', filters => {}},
         },
     },
@@ -833,6 +834,15 @@ plugin 'Selecto::Components' => {
 
 The route renders a complete page with editable controls, exact facet counts,
 detail/aggregate views, aggregate-to-detail drilldowns, and bounded pagination.
+`record_link` optionally makes a selected detail field itself a link using a
+local URL prefix; `target => '_top'` opens out of an embedding frame. A
+`column_layout` can give a canned detail page fixed headings and ordering,
+join selected scalar fields for display, add a page-relative row number, or
+render a selected `related_collection` as a nested table or comma-separated
+list. The collection keeps one parent row per result, as in Explorer's detail
+subtables; the underlying query still governs every field. Set
+`websocket_enabled => 0` for a GET-only page that uses ordinary form navigation
+without a WebSocket connection.
 htmx WebSocket submissions replace the page surface; the request ID prevents
 stale responses from overwriting newer selections. With query parameters
 enabled, accepted updates refresh the shareable URL, and ordinary GET forms
