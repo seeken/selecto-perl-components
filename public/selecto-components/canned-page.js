@@ -1,6 +1,44 @@
 (() => {
   "use strict";
 
+  // The link remains a normal local URL when JavaScript is unavailable or the
+  // user explicitly asks to open it in another tab.
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest?.("a[data-sc-canned-modal-link]");
+    if (!link || !link.closest(".selecto-canned-page") || event.button !== 0
+      || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey
+      || typeof HTMLDialogElement === "undefined"
+      || typeof HTMLDialogElement.prototype.showModal !== "function") return;
+    event.preventDefault();
+
+    const title = link.dataset.scCannedModalTitle || "Record details";
+    const dialog = document.createElement("dialog");
+    dialog.className = "sc-canned-record-dialog";
+    dialog.setAttribute("aria-label", title);
+    const header = document.createElement("header");
+    const heading = document.createElement("h2");
+    heading.textContent = title;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "sc-button sc-secondary";
+    close.textContent = "Close";
+    close.addEventListener("click", () => dialog.close());
+    header.append(heading, close);
+    const frame = document.createElement("iframe");
+    frame.title = title;
+    frame.referrerPolicy = "same-origin";
+    dialog.append(header, frame);
+    dialog.addEventListener("close", () => {
+      frame.removeAttribute("src");
+      dialog.remove();
+      if (link.isConnected) link.focus();
+    }, { once: true });
+    document.body.append(dialog);
+    dialog.showModal();
+    frame.src = link.href;
+    close.focus();
+  });
+
   document.addEventListener("submit", (event) => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement) || !form.closest(".selecto-canned-page")) return;

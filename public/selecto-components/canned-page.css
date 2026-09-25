@@ -37,6 +37,31 @@
 .selecto-canned-results form { margin: 0; }
 .selecto-canned-results .sc-pagination form { display: flex; gap: 6px; }
 
+.sc-canned-record-dialog {
+  width: min(660px, calc(100vw - 24px));
+  height: min(540px, calc(100dvh - 24px));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 1px solid var(--sc-border, #cbd5e1);
+  border-radius: 14px;
+  background: var(--sc-surface, #fff);
+  color: var(--sc-ink, #172033);
+  box-shadow: 0 24px 64px rgb(15 23 42 / 24%);
+}
+.sc-canned-record-dialog::backdrop { background: rgb(15 23 42 / 55%); }
+.sc-canned-record-dialog[open] { display: flex; flex-direction: column; }
+.sc-canned-record-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--sc-border, #cbd5e1);
+}
+.sc-canned-record-dialog h2 { margin: 0; font-size: 1.15rem; }
+.sc-canned-record-dialog iframe { flex: 1; width: 100%; border: 0; }
+
 @media (max-width: 850px) {
   .selecto-canned-page .sc-workspace { grid-template-columns: 1fr; }
 }

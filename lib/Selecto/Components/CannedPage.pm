@@ -10,6 +10,7 @@ use Selecto::CannedPage ();
 use Selecto::Error ();
 use Selecto::Components::Renderer ();
 use Selecto::Components::Renderer::Results ();
+use Selecto::Components::AssetManifest qw(asset_revision);
 use Selecto::Components::Config ();
 use Selecto::Components::Util qw(humanize);
 
@@ -27,12 +28,15 @@ sub new ($class, @args) {
     if (my $link = $self->record_link) {
         die "canned page record_link must contain a selected field and local URL prefix\n"
             unless ref($link) eq 'HASH'
-                && !(grep { $_ ne 'field' && $_ ne 'url_prefix' && $_ ne 'target' } keys %$link)
+                && !(grep { $_ ne 'field' && $_ ne 'url_prefix' && $_ ne 'target'
+                    && $_ ne 'modal_title' } keys %$link)
                 && defined($link->{field}) && !ref($link->{field})
                 && $link->{field} =~ /\A[A-Za-z][A-Za-z0-9_.]*\z/
                 && defined($link->{url_prefix}) && !ref($link->{url_prefix})
                 && $link->{url_prefix} =~ m{\A/(?!/)[A-Za-z0-9/_-]+(?:\.[A-Za-z0-9]+)?(?:\?[A-Za-z0-9_=&%-]*)?\z}
-                && (!defined($link->{target}) || $link->{target} =~ /\A_(?:self|parent|top)\z/);
+                && (!defined($link->{target}) || $link->{target} =~ /\A_(?:self|parent|top)\z/)
+                && (!defined($link->{modal_title}) || (!ref($link->{modal_title})
+                    && length($link->{modal_title}) && !defined($link->{target})));
         for my $view (@{$self->page->views}) {
             next unless $view->{kind} eq 'detail';
             die "canned page record_link field must be selected by every detail view\n"
@@ -249,9 +253,10 @@ sub _html ($self, $result, $public) {
         (($self->websocket_enabled // 1) ? (ws_path => $self->path . '/ws') : ()),
         surface => $self->_surface($result, $public),
         include_explorer_script => 0,
-        extra_head_html => '<link rel="stylesheet" href="/selecto-components/canned-page.css">' .
-            ($self->websocket_enabled // 1
-                ? '<script defer src="/selecto-components/canned-page.js"></script>' : ''),
+        extra_head_html => '<link rel="stylesheet" href="/selecto-components/canned-page.css?v=' .
+            asset_revision() . '">' .
+            '<script defer src="/selecto-components/canned-page.js?v=' .
+            asset_revision() . '"></script>',
     );
 }
 
@@ -451,6 +456,8 @@ sub _table ($self, $result) {
         $column->{link} = {
             url_template => $link->{url_prefix} . '{{id}}',
             target => $link->{target}, numeric_id => 1,
+            (defined($link->{modal_title})
+                ? (modal_title => $link->{modal_title}) : ()),
         };
         $column->{link_key} = $column->{key};
     }

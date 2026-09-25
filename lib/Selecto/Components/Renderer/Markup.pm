@@ -48,6 +48,11 @@ sub _object_link ($column, $record, $label_html) {
     my $target = $column->{link}{target};
     my $target_attr = defined($target) && $target =~ /\A_(?:self|parent|top)\z/
         ? ' target="' . _h($target) . '"' : '';
+    if (defined(my $modal_title = $column->{link}{modal_title})) {
+        return '<a class="sc-object-link" href="' . _h($href) . '" ' .
+            'data-sc-canned-modal-link data-sc-canned-modal-title="' .
+            _h($modal_title) . '">' . $label_html . '</a>';
+    }
     return '<a class="sc-object-link" href="' . _h($href) . '"' . $target_attr . '>' . $label_html . '</a>';
 }
 sub _number ($value) {
