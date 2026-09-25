@@ -415,6 +415,7 @@ sub _status ($result) {
     return 409 if $status eq 'conflict' || $status eq 'busy'
         || $status eq 'claim_lost' || $status eq 'stale'
         || $code eq 'stale_revision' || $code eq 'duplicate_event';
+    return 422 if $code eq 'snapshot_too_large';
     return 503 if $code eq 'instance_store_unavailable'
         || $code eq 'template_host_unavailable'
         || $code eq 'source_context_unavailable'

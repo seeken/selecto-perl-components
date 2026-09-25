@@ -155,9 +155,27 @@ $t->post_ok($path => $headers => form => {
 })->status_is(422)->element_exists('[data-selecto-template-error="invalid_root_cursor"]');
 is scalar(@queries), 1, 'forged root token reaches no additional native query';
 
-$t->post_ok($path => $headers => form => {
+# Hold the valid continuation in flight; a duplicate must not run another query.
+$scheduler->{hold} = 1;
+my ($held_response, $duplicate_response);
+my $held_request = $t->ua->post_p($path => $headers => form => {
     csrf_token => $csrf, root_cursor => $cursor,
-})->status_is(200)->header_is('X-Selecto-Source' => 'orders');
+})->then(sub { $held_response = $_[0]->res });
+Mojo::IOLoop->one_tick until $scheduler->{held};
+$t->ua->post_p($path => $headers => form => {
+    csrf_token => $csrf, root_cursor => $cursor,
+})->then(sub { $duplicate_response = $_[0]->res })->wait;
+is $duplicate_response->code, 409, 'duplicate in-flight root page POST is rejected';
+like $duplicate_response->body,
+    qr/data-selecto-template-error="page_request_in_progress"/,
+    'duplicate root page POST reports the in-progress claim';
+is scalar(@queries), 1, 'duplicate root page POST runs no native query';
+$scheduler->{hold} = 0;
+Mojo::IOLoop->next_tick(delete $scheduler->{held});
+$held_request->wait;
+is $held_response->code, 200, 'the held root page POST completes';
+is $held_response->headers->header('X-Selecto-Source'), 'orders',
+    'the held root page POST reports its source';
 my $advanced = $store->load(owner_scope => $owner, instance_id => 'root-http-1');
 is $advanced->{snapshot}{sources}{orders}{page}, 2,
     'root POST committed through the guarded runtime';
@@ -210,11 +228,17 @@ sub new { return bless {}, $_[0] }
 
 sub execute {
     my ($self, %args) = @_;
-    Mojo::IOLoop->next_tick(sub {
+    my $finish = sub {
         my $result = $args{work}->($args{payload});
         $self->{before_finish}->() if $self->{before_finish};
         $args{on_finish}->($result);
-    });
+    };
+    if ($self->{hold}) {
+        $self->{held} = $finish;
+    }
+    else {
+        Mojo::IOLoop->next_tick($finish);
+    }
     return {status => 'scheduled'};
 }
 

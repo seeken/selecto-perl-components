@@ -239,7 +239,7 @@ sub _surface ($self, $result, $public) {
         : '<div class="sc-hero-actions"><span class="sc-private-mode">Private URL mode</span></div>';
     $html .= '</header><div class="sc-workspace">';
     $html .= qq{<aside class="sc-builder selecto-canned-controls"><form method="$method" action="$path"$ws_send><input type="hidden" name="submitted" value="1">};
-    $html .= qq{<input type="hidden" name="limit" value="$state->{limit}">};
+    $html .= '<input type="hidden" name="limit" value="' . _escape($state->{limit}) . '">';
     if ($state->{drilldown}) {
         $html .= '<input type="hidden" name="drilldown" value="'
             . _escape(encode_json($state->{drilldown})) . '">';

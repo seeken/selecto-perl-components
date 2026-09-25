@@ -126,6 +126,7 @@ t/templates_page_cursor.t
 t/templates_page_http.t
 t/templates_public_inputs.t
 t/templates_renderer.t
+t/templates_resource_limits.t
 t/templates_regions.t
 t/templates_runtime_host.t
 t/templates_root_cursor.t

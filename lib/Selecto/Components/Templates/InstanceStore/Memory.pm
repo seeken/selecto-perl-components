@@ -8,16 +8,27 @@ use JSON::PP ();
 use Storable qw(dclone);
 use Time::HiRes qw(time);
 
+our $DEFAULT_MAX_INSTANCES_PER_OWNER = 32;
+our $MAX_INSTANCES_PER_OWNER_LIMIT = 10_000;
+
 sub new {
     my ($class, %args) = @_;
     my $max_snapshot_bytes = $args{max_snapshot_bytes} // 1_048_576;
     my $max_owner_scope_bytes = $args{max_owner_scope_bytes} // 4_096;
     my $max_ttl_seconds = $args{max_ttl_seconds} // 86_400;
     my $max_effect_lease_seconds = $args{max_effect_lease_seconds} // 60;
+    my $max_instances_per_owner = $args{max_instances_per_owner}
+        // $DEFAULT_MAX_INSTANCES_PER_OWNER;
+    my $cleanup_limit = $args{cleanup_limit} // 1_000;
     _positive_integer('max_snapshot_bytes', $max_snapshot_bytes, 16_777_216);
     _positive_integer('max_owner_scope_bytes', $max_owner_scope_bytes, 65_536);
     _positive_integer('max_ttl_seconds', $max_ttl_seconds, 2_592_000);
     _positive_integer('max_effect_lease_seconds', $max_effect_lease_seconds, 300);
+    _positive_integer(
+        'max_instances_per_owner', $max_instances_per_owner,
+        $MAX_INSTANCES_PER_OWNER_LIMIT,
+    );
+    _positive_integer('cleanup_limit', $cleanup_limit, 100_000);
     return bless {
         clock => $args{clock} // sub { time() },
         id_generator => $args{id_generator} // \&_opaque_id,
@@ -26,10 +37,15 @@ sub new {
         max_owner_scope_bytes => 0 + $max_owner_scope_bytes,
         max_ttl_seconds => 0 + $max_ttl_seconds,
         max_effect_lease_seconds => 0 + $max_effect_lease_seconds,
+        max_instances_per_owner => 0 + $max_instances_per_owner,
+        cleanup_limit => 0 + $cleanup_limit,
         json => JSON::PP->new->canonical(1)->ascii(1)->allow_nonref(1),
         instances => {},
+        created_sequence => 0,
     }, $class;
 }
+
+sub max_instances_per_owner { return $_[0]{max_instances_per_owner} }
 
 sub new_instance_id {
     my ($self) = @_;
@@ -48,6 +64,12 @@ sub create {
     my $snapshot = $args{initial_snapshot};
     my $expires_at = $args{expires_at};
     my $instance_id = $args{instance_id} // $self->new_instance_id;
+    my $max_instances = $args{max_instances_per_owner}
+        // $self->{max_instances_per_owner};
+    _positive_integer(
+        'max_instances_per_owner', $max_instances,
+        $MAX_INSTANCES_PER_OWNER_LIMIT,
+    );
 
     my $now = $self->{clock}->();
     die "invalid_instance: template instance fields are invalid\n"
@@ -64,15 +86,72 @@ sub create {
         unless _snapshot_matches($snapshot, $instance_id, $release);
     $self->_validate_snapshot($snapshot);
 
+    $self->_evict_for_owner($scope_key, $now, $max_instances - 1);
     $self->{instances}{$instance_id} = {
         owner_scope => $scope_key,
         release => "$release",
         snapshot => _copy_snapshot($snapshot),
         revision => 0,
         expires_at => 0 + $expires_at,
+        created_sequence => ++$self->{created_sequence},
         effect_claims => {},
     };
     return "$instance_id";
+}
+
+sub _evict_for_owner {
+    my ($self, $scope_key, $now, $keep) = @_;
+    my $instances = $self->{instances};
+    my @live;
+    for my $id (keys %$instances) {
+        my $record = $instances->{$id};
+        next unless $record->{owner_scope} eq $scope_key;
+        if ($record->{expires_at} <= $now) {
+            delete $instances->{$id};
+            next;
+        }
+        push @live, $id;
+    }
+    return 0 if @live <= $keep;
+    my @oldest = sort {
+        $instances->{$a}{created_sequence} <=> $instances->{$b}{created_sequence}
+    } @live;
+    my @evicted = splice(@oldest, 0, @live - $keep);
+    delete @{$instances}{@evicted};
+    return scalar(@evicted);
+}
+
+sub cleanup_expired {
+    my ($self, %args) = @_;
+    my $limit = $args{limit} // $self->{cleanup_limit};
+    _positive_integer('cleanup limit', $limit, $self->{cleanup_limit});
+    my $now = $self->{clock}->();
+    my $removed = 0;
+    for my $id (keys %{$self->{instances}}) {
+        last if $removed >= $limit;
+        next unless $self->{instances}{$id}{expires_at} <= $now;
+        delete $self->{instances}{$id};
+        $removed++;
+    }
+    return $removed;
+}
+
+sub cleanup_expired_claims {
+    my ($self, %args) = @_;
+    my $limit = $args{limit} // $self->{cleanup_limit};
+    _positive_integer('claim cleanup limit', $limit, $self->{cleanup_limit});
+    my $now = $self->{clock}->();
+    my $removed = 0;
+    INSTANCE: for my $record (values %{$self->{instances}}) {
+        my $claims = $record->{effect_claims};
+        for my $key (keys %$claims) {
+            last INSTANCE if $removed >= $limit;
+            next unless $claims->{$key}{lease_expires_at} <= $now;
+            delete $claims->{$key};
+            $removed++;
+        }
+    }
+    return $removed;
 }
 
 sub load {
@@ -136,6 +215,12 @@ sub claim_effect {
     return {status => 'stale'}
         unless _effect_is_current($loaded->{snapshot}, \%args);
 
+    return $self->_take_claim(\%args, $validated->{lease_seconds});
+}
+
+sub _take_claim {
+    my ($self, $args, $lease_seconds) = @_;
+    my %args = %$args;
     my $record = $self->{instances}{$args{instance_id}};
     my $key = _claim_key($args{source}, $args{generation});
     my $now = $self->{clock}->();
@@ -149,7 +234,7 @@ sub claim_effect {
     my $claim_token = $self->{claim_token_generator}->();
     die "claim_token_unavailable: could not allocate a template effect claim token\n"
         unless _valid_scalar($claim_token, 256);
-    my $lease_expires_at = $now + $validated->{lease_seconds};
+    my $lease_expires_at = $now + $lease_seconds;
     $lease_expires_at = $record->{expires_at}
         if $lease_expires_at > $record->{expires_at};
     $record->{effect_claims}{$key} = {
@@ -162,6 +247,27 @@ sub claim_effect {
         claim_token => "$claim_token",
         lease_expires_at => $lease_expires_at,
     };
+}
+
+sub claim_page_effect {
+    my ($self, %args) = @_;
+    my $validated = $self->_claim_args(\%args);
+    return $validated unless $validated->{status} eq 'ok';
+    return {status => 'invalid_effect'}
+        unless _valid_scalar($args{page_source}, 256)
+        && defined($args{page}) && !ref($args{page})
+        && "$args{page}" =~ /\A[1-9][0-9]*\z/
+        && "$args{source}" eq "$args{page_source}:page:$args{page}";
+
+    my $loaded = $self->load(
+        owner_scope => $args{owner_scope},
+        instance_id => $args{instance_id},
+    );
+    return $loaded unless $loaded->{status} eq 'ok';
+    return {status => 'stale'}
+        unless _page_is_current($loaded->{snapshot}, \%args);
+
+    return $self->_take_claim(\%args, $validated->{lease_seconds});
 }
 
 sub commit_claimed_effect {
@@ -259,6 +365,18 @@ sub _effect_is_current {
         && defined($source->{generation}) && !ref($source->{generation})
         && $source->{generation} == $args->{generation}
         && ($source->{status} // '') eq 'loading';
+}
+
+sub _page_is_current {
+    my ($snapshot, $args) = @_;
+    my $source = ref($snapshot->{sources}) eq 'HASH'
+        ? $snapshot->{sources}{$args->{page_source}} : undef;
+    return ref($source) eq 'HASH'
+        && defined($source->{generation}) && !ref($source->{generation})
+        && $source->{generation} == $args->{generation}
+        && defined($source->{page}) && !ref($source->{page})
+        && "$source->{page}" eq "$args->{page}"
+        && ($source->{status} // '') eq 'ready';
 }
 
 sub _claim_key { return "$_[0]\0$_[1]" }

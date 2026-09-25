@@ -76,6 +76,51 @@ sub _render_region {
         _render_node($node, $context, $registry) . '</div>';
 }
 
+sub validate_manifest {
+    my ($class, $manifest) = @_;
+    return 1 unless ref($manifest) eq 'HASH'
+        && ref($manifest->{view}) eq 'HASH'
+        && ref($manifest->{view}{nodes}) eq 'ARRAY';
+    my @pending = @{$manifest->{view}{nodes}};
+    while (@pending) {
+        my $node = shift @pending;
+        next unless ref($node) eq 'HASH';
+        if (($node->{kind} // '') eq 'element' && ref($node->{attributes}) eq 'HASH') {
+            _validate_attribute_bindings($node->{attributes}, $node->{node_id});
+        }
+        for my $list (qw(children then else)) {
+            push @pending, @{$node->{$list}} if ref($node->{$list}) eq 'ARRAY';
+        }
+        if (ref($node->{slots}) eq 'HASH') {
+            push @pending, map { ref($_) eq 'ARRAY' ? @$_ : () }
+                values %{$node->{slots}};
+        }
+    }
+    return 1;
+}
+
+sub _validate_attribute_bindings {
+    my ($attributes, $node_id) = @_;
+    for my $name (sort keys %$attributes) {
+        next unless _literal_only_attribute($name);
+        my $value = $attributes->{$name};
+        next if ref($value) eq 'HASH' && ($value->{kind} // '') eq 'literal';
+        _die(
+            'unsafe_attribute_binding',
+            "element attribute $name only accepts a literal template value",
+            $node_id,
+        );
+    }
+}
+
+sub _literal_only_attribute {
+    my ($name) = @_;
+    return 0 unless defined($name) && !ref($name);
+    my $local = lc "$name";
+    $local =~ s/\A.*://s;
+    return $local =~ /\Aon/ || $local eq 'srcdoc' || $local eq 'style';
+}
+
 sub safe_html {
     my ($class, $html) = @_;
     _die('invalid_safe_html', 'safe HTML must be a scalar')
@@ -129,6 +174,7 @@ sub _render_node {
         _die('invalid_render_node', 'compiled element node is invalid', $node_id)
             unless defined($node->{name}) && ref($node->{attributes}) eq 'HASH'
             && ref($node->{children}) eq 'ARRAY';
+        _validate_attribute_bindings($node->{attributes}, $node_id);
         my $renderer = _registry_renderer(
             $registry, 'elements', $node->{name}, $node_id,
         );

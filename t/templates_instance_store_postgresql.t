@@ -492,6 +492,96 @@ is(
     'disposed state is gone for every worker',
 );
 
+# Per-owner live instance cap: oldest rows are evicted in the insert transaction.
+{
+    my $capped = Selecto::Components::Templates::InstanceStore::PostgreSQL->new(
+        dbh_provider => sub { $worker_one_dbh },
+        table => $table, claims_table => $claims_table,
+        max_instances_per_owner => 3,
+    );
+    is $capped->max_instances_per_owner, 3, 'store keeps its configured owner cap';
+    my $cap_owner = {tenant_id => 'tenant-cap', actor_id => 'actor-cap'};
+    my $other_owner = {tenant_id => 'tenant-cap', actor_id => 'actor-other'};
+    my $create = sub {
+        my ($store, $scope, %args) = @_;
+        my $id = $store->new_instance_id;
+        $store->create(
+            owner_scope => $scope, release => 'release-cap',
+            initial_snapshot => _snapshot($id, 'release-cap', ''),
+            expires_at => time() + ($args{ttl} // 30), instance_id => $id,
+            (exists($args{cap}) ? (max_instances_per_owner => $args{cap}) : ()),
+        );
+        return $id;
+    };
+    my $other_id = $create->($capped, $other_owner);
+    my $short_id = $create->($capped, $cap_owner, ttl => 0.15);
+    $worker_one_dbh->selectrow_array('SELECT pg_sleep(0.25)');
+    my @cap_ids = map { $create->($capped, $cap_owner) } 1 .. 5;
+    my $owner_rows = sub {
+        my ($scope) = @_;
+        return $worker_one_dbh->selectrow_array(
+            qq{SELECT count(*) FROM "$table" WHERE owner_scope_digest = ?},
+            undef, $capped->_scope_digest($scope),
+        );
+    };
+    is $owner_rows->($cap_owner), 3, 'five mounts leave three live rows for the owner';
+    is $owner_rows->($other_owner), 1, 'another owner is untouched by eviction';
+    is $capped->load(owner_scope => $cap_owner, instance_id => $short_id)->{status},
+        'not_found', 'the owner expired row was removed by the mount';
+    is $capped->load(owner_scope => $cap_owner, instance_id => $cap_ids[$_])->{status},
+        'not_found', "oldest live row $_ was evicted" for 0 .. 1;
+    is $capped->load(owner_scope => $cap_owner, instance_id => $cap_ids[$_])->{status},
+        'ok', "recent row $_ survives" for 2 .. 4;
+    is $capped->load(owner_scope => $other_owner, instance_id => $other_id)->{status},
+        'ok', 'the other owner row is still readable';
+
+    $create->($capped, $cap_owner, cap => 1);
+    is $owner_rows->($cap_owner), 1, 'a per-call cap overrides the store default';
+
+    $worker_one_dbh->begin_work;
+    my $rolled_back = $create->($capped, $cap_owner);
+    $worker_one_dbh->rollback;
+    is $capped->load(owner_scope => $cap_owner, instance_id => $rolled_back)->{status},
+        'not_found', 'a host-managed transaction controls the insert and eviction';
+    is $owner_rows->($cap_owner), 1, 'rolled-back eviction leaves the prior row';
+}
+
+# Page claims: one in-flight (source, generation, page) per instance.
+{
+    my $page_owner = {tenant_id => 'tenant-page', actor_id => 'actor-page'};
+    my $page_id = $worker_one->new_instance_id;
+    my $page_snapshot = _snapshot($page_id, 'release-page', '');
+    $page_snapshot->{sources}{orders} = {
+        status => 'ready', generation => 4, page => 2, result => {rows => []},
+    };
+    $worker_one->create(
+        owner_scope => $page_owner, release => 'release-page',
+        initial_snapshot => $page_snapshot, expires_at => time() + 30,
+        instance_id => $page_id,
+    );
+    my $page_dispatcher_one = Selecto::Components::Templates::Dispatcher->new(store => $worker_one);
+    my $page_dispatcher_two = Selecto::Components::Templates::Dispatcher->new(store => $worker_two);
+    my %page = (
+        owner_scope => $page_owner, instance_id => $page_id,
+        source => 'orders', generation => 4, page => 2, lease_seconds => 5,
+    );
+    my $page_claim = $page_dispatcher_one->claim_page_effect(%page);
+    is $page_claim->{status}, 'claimed', 'the first page request claims its page';
+    is $page_dispatcher_two->claim_page_effect(%page)->{status}, 'busy',
+        'a duplicate page request on another worker is busy';
+    is $page_dispatcher_two->claim_page_effect(%page, page => 3)->{status}, 'stale',
+        'a request for a page that is not current is stale';
+    is $page_dispatcher_two->claim_page_effect(%page, owner_scope => $owner)->{status},
+        'not_found', 'another owner cannot claim the page';
+    is $page_dispatcher_two->release_page_claim(%page, claim_token => 'wrong')->{status},
+        'claim_lost', 'a wrong token cannot release the page claim';
+    is $page_dispatcher_one->release_page_claim(
+        %page, claim_token => $page_claim->{claim_token},
+    )->{status}, 'ok', 'the owner of the claim releases it';
+    is $page_dispatcher_two->claim_page_effect(%page)->{status}, 'claimed',
+        'a released page can be claimed again';
+}
+
 $worker_two_dbh->disconnect;
 my $unavailable = $dispatcher_two->load(
     owner_scope => $owner,

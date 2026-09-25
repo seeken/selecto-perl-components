@@ -9,6 +9,8 @@ use JSON::PP ();
 use Time::HiRes qw(time);
 
 our $DEFAULT_TABLE = 'selecto_template_instances';
+our $DEFAULT_MAX_INSTANCES_PER_OWNER = 32;
+our $MAX_INSTANCES_PER_OWNER_LIMIT = 10_000;
 
 sub new {
     my ($class, %args) = @_;
@@ -21,6 +23,8 @@ sub new {
     my $max_ttl_seconds = $args{max_ttl_seconds} // 86_400;
     my $max_effect_lease_seconds = $args{max_effect_lease_seconds} // 60;
     my $cleanup_limit = $args{cleanup_limit} // 1_000;
+    my $max_instances_per_owner = $args{max_instances_per_owner}
+        // $DEFAULT_MAX_INSTANCES_PER_OWNER;
     my $claims_table = $args{claims_table} // _claims_table_name($table);
 
     _positive_integer('max_snapshot_bytes', $max_snapshot_bytes, 16_777_216);
@@ -28,11 +32,16 @@ sub new {
     _positive_integer('max_ttl_seconds', $max_ttl_seconds, 2_592_000);
     _positive_integer('max_effect_lease_seconds', $max_effect_lease_seconds, 300);
     _positive_integer('cleanup_limit', $cleanup_limit, 10_000);
+    _positive_integer(
+        'max_instances_per_owner', $max_instances_per_owner,
+        $MAX_INSTANCES_PER_OWNER_LIMIT,
+    );
 
     return bless {
         dbh_provider => $args{dbh_provider},
         table => _qualified_identifier($table),
         index => _quoted_identifier(_index_name($table, '_expires_at_idx')),
+        owner_index => _quoted_identifier(_index_name($table, '_owner_created_idx')),
         claims_table => _qualified_identifier($claims_table),
         claims_index => _quoted_identifier(
             _index_name($claims_table, '_lease_expires_at_idx')
@@ -45,14 +54,18 @@ sub new {
         max_ttl_seconds => 0 + $max_ttl_seconds,
         max_effect_lease_seconds => 0 + $max_effect_lease_seconds,
         cleanup_limit => 0 + $cleanup_limit,
+        max_instances_per_owner => 0 + $max_instances_per_owner,
         json => JSON::PP->new->canonical(1)->ascii(1)->allow_nonref(1),
     }, $class;
 }
+
+sub max_instances_per_owner { return $_[0]{max_instances_per_owner} }
 
 sub schema_sql {
     my ($self) = @_;
     my $table = $self->{table};
     my $index = $self->{index};
+    my $owner_index = $self->{owner_index};
     my $claims_table = $self->{claims_table};
     my $claims_index = $self->{claims_index};
     return (
@@ -67,6 +80,8 @@ sub schema_sql {
             updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
         )},
         qq{CREATE INDEX IF NOT EXISTS $index ON $table (expires_at)},
+        qq{CREATE INDEX IF NOT EXISTS $owner_index
+            ON $table (owner_scope_digest, created_at)},
         qq{CREATE TABLE IF NOT EXISTS $claims_table (
             instance_id text NOT NULL REFERENCES $table (instance_id) ON DELETE CASCADE,
             source_id text NOT NULL,
@@ -110,6 +125,12 @@ sub create {
     my $snapshot = $args{initial_snapshot};
     my $expires_at = $args{expires_at};
     my $instance_id = $args{instance_id} // $self->new_instance_id;
+    my $max_instances = $args{max_instances_per_owner}
+        // $self->{max_instances_per_owner};
+    _positive_integer(
+        'max_instances_per_owner', $max_instances,
+        $MAX_INSTANCES_PER_OWNER_LIMIT,
+    );
     my $now = $self->{clock}->();
 
     die "invalid_instance: template instance fields are invalid\n"
@@ -123,16 +144,62 @@ sub create {
         unless _snapshot_matches($snapshot, $instance_id, $release);
 
     my $snapshot_json = $self->_snapshot_json($snapshot);
-    my $sql = qq{
-        INSERT INTO $self->{table}
-            (instance_id, owner_scope_digest, release_id, snapshot, revision, expires_at)
-        VALUES (?, ?, ?, ?::jsonb, 0, to_timestamp(?))
-    };
-    $self->_dbh->do(
-        $sql, undef, "$instance_id", $scope_digest, "$release", $snapshot_json,
-        0 + $expires_at,
-    );
+    my $dbh = $self->_dbh;
+    $self->_in_transaction($dbh, sub {
+        # Serialize mounts for one owner so concurrent requests cannot
+        # overshoot the per-owner cap. Other owners are unaffected.
+        $dbh->do(
+            q{SELECT pg_advisory_xact_lock(hashtextextended(?, 0))},
+            undef, "selecto_template_owner:$scope_digest",
+        );
+        $dbh->do(qq{
+            INSERT INTO $self->{table}
+                (instance_id, owner_scope_digest, release_id, snapshot, revision, expires_at)
+            VALUES (?, ?, ?, ?::jsonb, 0, to_timestamp(?))
+        }, undef, "$instance_id", $scope_digest, "$release", $snapshot_json,
+            0 + $expires_at);
+        # Drop this owner's expired rows and its oldest live rows beyond the cap.
+        # Effect claims cascade with their instance.
+        $dbh->do(qq{
+            WITH eviction_clock AS (
+                SELECT clock_timestamp() AS ts
+            ), others AS (
+                SELECT instances.instance_id,
+                       instances.expires_at <= eviction_clock.ts AS expired,
+                       row_number() OVER (
+                           PARTITION BY instances.expires_at <= eviction_clock.ts
+                           ORDER BY instances.created_at DESC,
+                                    instances.instance_id DESC
+                       ) AS live_rank
+                  FROM $self->{table} AS instances, eviction_clock
+                 WHERE instances.owner_scope_digest = ?
+                   AND instances.instance_id <> ?
+            )
+            DELETE FROM $self->{table} AS instances
+             USING others
+             WHERE instances.instance_id = others.instance_id
+               AND instances.owner_scope_digest = ?
+               AND (others.expired OR others.live_rank > ?)
+        }, undef, $scope_digest, "$instance_id", $scope_digest,
+            $max_instances - 1);
+    });
     return "$instance_id";
+}
+
+sub _in_transaction {
+    my ($self, $dbh, $work) = @_;
+    # A host that already manages a transaction (AutoCommit off) keeps control
+    # of commit/rollback; the statements simply join that transaction.
+    return $work->() unless $dbh->{AutoCommit};
+    $dbh->begin_work;
+    my @result;
+    my $ok = eval { @result = $work->(); $dbh->commit; 1 };
+    unless ($ok) {
+        my $error = $@ || 'instance_store_unavailable: transaction failed';
+        eval { $dbh->rollback };
+        die $error;
+    }
+    return wantarray ? @result : $result[0];
 }
 
 sub load {
@@ -281,6 +348,72 @@ sub claim_effect {
         status => 'busy',
         lease_expires_at => 0 + $current->{lease_expires_at},
     } if $current;
+    return {status => 'busy'};
+}
+
+sub claim_page_effect {
+    my ($self, %args) = @_;
+    my $validated = $self->_claim_args(\%args);
+    return $validated unless $validated->{status} eq 'ok';
+    return {status => 'invalid_effect'}
+        unless _valid_scalar($args{page_source}, 256)
+        && defined($args{page}) && !ref($args{page})
+        && "$args{page}" =~ /\A[1-9][0-9]*\z/
+        && "$args{source}" eq "$args{page_source}:page:$args{page}";
+
+    my $scope_digest = $self->_scope_digest($args{owner_scope});
+    my $claim_token = $self->{claim_token_generator}->();
+    die "claim_token_unavailable: could not allocate a template effect claim token\n"
+        unless _valid_scalar($claim_token, 256);
+
+    my $claimed = $self->_dbh->selectrow_hashref(qq{
+        INSERT INTO $self->{claims_table} AS claims
+            (instance_id, source_id, generation, effect_id, claim_token,
+             lease_expires_at)
+        SELECT instances.instance_id, ?, ?, ?, ?,
+               LEAST(
+                   instances.expires_at,
+                   clock_timestamp() + (? * interval '1 second')
+               )
+          FROM $self->{table} AS instances
+         WHERE instances.instance_id = ?
+           AND instances.owner_scope_digest = ?
+           AND instances.expires_at > clock_timestamp()
+           AND jsonb_extract_path_text(
+                   instances.snapshot, 'sources', ?, 'generation'
+               ) = ?
+           AND jsonb_extract_path_text(
+                   instances.snapshot, 'sources', ?, 'page'
+               ) = ?
+           AND jsonb_extract_path_text(
+                   instances.snapshot, 'sources', ?, 'status'
+               ) = 'ready'
+        ON CONFLICT (instance_id, source_id, generation) DO UPDATE
+                SET effect_id = EXCLUDED.effect_id,
+                    claim_token = EXCLUDED.claim_token,
+                    lease_expires_at = EXCLUDED.lease_expires_at,
+                    updated_at = clock_timestamp()
+              WHERE claims.lease_expires_at <= clock_timestamp()
+        RETURNING claim_token,
+                  extract(epoch FROM lease_expires_at) AS lease_expires_at
+    }, undef,
+        "$args{source}", 0 + $args{generation}, "$args{effect_id}", "$claim_token",
+        $validated->{lease_seconds}, "$args{instance_id}", $scope_digest,
+        "$args{page_source}", "$args{generation}",
+        "$args{page_source}", "$args{page}", "$args{page_source}");
+    return {
+        status => 'claimed',
+        claim_token => "$claimed->{claim_token}",
+        lease_expires_at => 0 + $claimed->{lease_expires_at},
+    } if $claimed;
+
+    my $loaded = $self->load(
+        owner_scope => $args{owner_scope},
+        instance_id => $args{instance_id},
+    );
+    return $loaded unless $loaded->{status} eq 'ok';
+    return {status => 'stale'}
+        unless _page_is_current($loaded->{snapshot}, \%args);
     return {status => 'busy'};
 }
 
@@ -524,6 +657,18 @@ sub _effect_is_current {
         && defined($source->{generation}) && !ref($source->{generation})
         && $source->{generation} == $args->{generation}
         && ($source->{status} // '') eq 'loading';
+}
+
+sub _page_is_current {
+    my ($snapshot, $args) = @_;
+    my $source = ref($snapshot->{sources}) eq 'HASH'
+        ? $snapshot->{sources}{$args->{page_source}} : undef;
+    return ref($source) eq 'HASH'
+        && defined($source->{generation}) && !ref($source->{generation})
+        && $source->{generation} == $args->{generation}
+        && defined($source->{page}) && !ref($source->{page})
+        && "$source->{page}" eq "$args->{page}"
+        && ($source->{status} // '') eq 'ready';
 }
 
 sub _qualified_identifier {

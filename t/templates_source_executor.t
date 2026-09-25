@@ -941,6 +941,41 @@ is_deeply $root_count->{result}{totals},
 is_deeply [map { $_->{id} } @{$root_count->{result}{rows}}], [1, 2],
     'lookahead does not leak through source totals';
 
+# A handle marked as created in another process (e.g. inherited across the
+# source-worker fork) is refused before any statement is prepared.
+for my $case (
+    [inherited => $$ + 1, 'error'],
+    [fresh => $$, 'ok'],
+    [unmarked => undef, 'ok'],
+) {
+    my ($name, $pid, $expected) = @$case;
+    my $marked_dbh = TemplateSourceDBH->new(
+        rows => [[1, 'PO-100', '2026-09-21T12:00:00Z', 'open', 44]],
+        pg_type => [qw(int4 text timestamptz text int4)],
+    );
+    $marked_dbh->{private_selecto_pid} = $pid if defined $pid;
+    my $marked = Selecto::Components::Templates::SourceExecutor->execute(
+        manifest => $manifest, effect => $effect,
+        authorize => sub {
+            my $domain = Selecto::Domain->parse($catalog->{domains}{orders}, strict => 1)
+                ->with_required_predicate(Selecto::Expression->eq('tenant_id', 7));
+            my $engine = Selecto::Engine->new(
+                domain => $domain,
+                adapter => Selecto::PostgreSQL->new(dbh => $marked_dbh),
+            );
+            return {status => 'ok', engine => $engine, query => $engine->query->limit(10)};
+        },
+    );
+    is $marked->{status}, $expected, "$name database handle: $expected";
+    if ($expected eq 'error') {
+        is $marked->{code}, 'source_connection_inherited',
+            'an inherited handle is reported with a stable code';
+        like $marked->{message}, qr/open a fresh connection inside the source worker/,
+            'the inherited-handle error tells the host what to do';
+        is scalar(@{$marked_dbh->prepared}), 0, 'no statement reaches an inherited handle';
+    }
+}
+
 done_testing;
 
 package TemplateSourceDBH;

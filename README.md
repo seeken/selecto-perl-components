@@ -365,10 +365,28 @@ my $store = Selecto::Components::Templates::InstanceStore::PostgreSQL->new(
     table => 'app_runtime.selecto_template_instances',
     max_snapshot_bytes => 1_048_576,
     max_ttl_seconds => 86_400,
+    max_instances_per_owner => 32,
     cleanup_limit => 1_000,
 );
 my $dispatcher = Selecto::Components::Templates::Dispatcher->new(store => $store);
 ```
+
+Every `GET /templates/:id` mounts and persists a new instance, so both bundled
+stores cap the live instances one owner scope may hold. `max_instances_per_owner`
+defaults to 32 (at most 10,000). Mounting beyond the cap evicts that owner's
+oldest live instances, together with their effect claims, and deletes the
+owner's expired rows. The PostgreSQL store does this in the same transaction as
+the insert, restricted by `owner_scope_digest`, under a per-owner transaction
+advisory lock (`pg_advisory_xact_lock(hashtextextended(...))`, PostgreSQL 11 or
+newer). A host that calls the store with `AutoCommit` off keeps control of
+commit and rollback. The plugin option of the same name overrides the store
+default for every mount.
+
+`schema_sql` now also returns an `(owner_scope_digest, created_at)` index used by
+that eviction. Existing deployments should add it through their migration
+system, for example
+`CREATE INDEX IF NOT EXISTS selecto_template_instances_owner_created_idx ON
+selecto_template_instances (owner_scope_digest, created_at)`.
 
 `Dispatcher` is the stable host facade. `InstanceService` owns scoped instance
 lifecycle and compare-and-set persistence, `EventDispatcher` owns typed browser
@@ -420,7 +438,19 @@ and are updated by an atomic revision-checked statement. Stale writers receive a
 conflict with the current storage revision. Expiry uses PostgreSQL's clock, and
 `cleanup_expired` deletes no more than the configured row limit per call. Database
 exceptions are returned by the dispatcher as the bounded
-`instance_store_unavailable` error.
+`instance_store_unavailable` error. A write that would exceed
+`max_snapshot_bytes` is a client error instead: HTTP 422 with code
+`snapshot_too_large` and the fixed message `Template state is too large.` When a
+source result is what overflowed, the source is completed with a bounded
+`source_result_too_large` error so it does not stay loading until its lease
+expires.
+
+The template plugin schedules `cleanup_expired` and `cleanup_expired_claims` on
+the Mojolicious event loop every `cleanup_interval_seconds` (default 300) in each
+web worker process. Each sweep is bounded by the store's `cleanup_limit` and
+never runs inside a forked source worker. Set `cleanup_interval_seconds => 0` to
+disable the timer when the host runs the sweeps from its own scheduler. Both
+bundled stores implement the two methods.
 
 The store is ephemeral recovery infrastructure rather than business persistence.
 It does not make business writes idempotent. Effect leases prevent duplicate source
@@ -466,6 +496,9 @@ owner scope for every request, and supplies fresh source authority:
 plugin 'Selecto::Components::Templates' => {
     store => $template_instance_store,
     source_max_workers => 4,
+    source_max_workers_per_owner => 2,
+    max_instances_per_owner => 32,
+    cleanup_interval_seconds => 300,
     source_timeout_seconds => 15,
     websocket_inactivity_timeout => 3600,
     websocket_heartbeat_interval => 30,
@@ -503,6 +536,7 @@ plugin 'Selecto::Components::Templates' => {
                     actor_id => $owner_scope->{actor_id},
                 };
             },
+            # Runs in a forked child: open a NEW database connection here.
             source_authorizer => sub ($source_context, $source, $effect) {
                 my $engine = fresh_tenant_scoped_engine(
                     $source_context->{tenant_id},
@@ -606,13 +640,44 @@ For a source POST, the controller loads the owner-bound snapshot, reconstructs t
 current effect, obtains a generation lease, reduces request authority to a bounded
 JSON-safe source context, and schedules `SourceExecutor`; the template can only narrow
 the fresh host query. `resolve_source_context` runs in the web process and must return
-data rather than a controller, cookie, handle, or service object. `source_authorizer`
-runs in the source child and must create its engine and DBI handle there. The default
+data rather than a controller, cookie, handle, or service object. The default
 context contains only `owner_scope` when no resolver is configured.
+
+### Template sources run in a forked child: open a fresh connection
+
+**`source_authorizer` (and `source_runner`) run in a child process forked by
+`SourceScheduler`. The authorizer must open a fresh database connection inside
+that child. It must never return an engine whose adapter wraps a DBI handle
+created in the parent web process**, whether that handle is captured in a
+closure, kept in a global or request stash, or returned by a `connect_cached`
+cache populated before the fork. A forked child shares the parent's socket, so
+reusing the handle interleaves both processes' traffic on one server session,
+can hand one request's rows to another, and lets the child's exit tear down the
+parent's session.
+
+Enforcement is opt-in: mark handles when connecting with
+`$dbh->{private_selecto_pid} = $$`. `SourceExecutor` then rejects an engine
+whose adapter handle was created in another process with
+`source_connection_inherited` before running any query. Unmarked handles are not
+second-guessed, so the rule above still applies to them.
 
 The built-in `SourceScheduler` uses Mojolicious subprocesses with a per-web-process
 concurrency bound. `source_max_workers` defaults to 4, and excess work returns a
-bounded 503 after releasing its effect claim. `source_timeout_seconds` defaults to 15
+bounded 409 (`source_workers_busy`) after releasing its effect claim. So that one
+user cannot hold every worker, `source_max_workers_per_owner` bounds the children
+one owner scope may hold at once. It defaults to `max(1, int(source_max_workers / 2))`
+(2 with the default pool) and cannot exceed `source_max_workers`; excess work for
+that owner returns 409 `source_owner_workers_busy`. Owners are keyed by a SHA-256
+digest of the canonical owner scope from `resolve_owner`, so the scope should name
+the principal to limit. Both bounds are per web process; under a preforking server
+multiply them by the worker count when sizing the database pool.
+
+Page and root-page continuations claim `(source, generation, page)` in the
+instance store with the template's `lease_seconds` before spawning a child, the
+same way source loads claim their generation. A duplicate request for a page that
+is already loading receives 409 `page_request_in_progress` without running the
+query; the claim is released when the page commits or fails. Custom stores must
+implement `claim_page_effect` and `release_effect_claim` to serve pages. `source_timeout_seconds` defaults to 15
 and must be lower than every source template's lease; a template can select a lower
 timeout. Timed-out children receive `TERM`, then `KILL` after a short grace period,
 and their typed timeout completion is applied by the parent only while the claim is
@@ -1384,8 +1449,16 @@ message and tests.
 - Raw database exceptions are not rendered. Known `Selecto::Error` messages
   remain visible; unexpected failures become a generic error.
 - Raw SQL is hidden unless the host explicitly enables `show_sql`. Enabling it
-  renders the Query Debug panel and should remain limited to trusted development
-  environments.
+  renders the Query Debug panel, which shows the generated SQL **with its bound
+  parameters, including tenant IDs and other scope-predicate values**.
+  `show_sql` must be off in production. The plugin logs a warning at
+  registration when an explorer enables it while the application runs in
+  `production` mode.
+- Native-template element nodes reject runtime-bound values for event-handler
+  attributes (any name starting with `on`), `srcdoc`, and `style`, both when the
+  plugin registers a template and at render time
+  (`unsafe_attribute_binding`). Literal values authored in the template remain
+  allowed.
 
 A host Content Security Policy can remain self-contained:
 

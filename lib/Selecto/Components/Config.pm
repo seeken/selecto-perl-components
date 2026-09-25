@@ -1047,3 +1047,32 @@ sub _default_measure_function ($type) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::Config - Validated explorer configuration
+
+=head1 DESCRIPTION
+
+Holds one explorer's validated options. The host supplies these through the
+C<explorers> entry of the L<Selecto::Components> plugin configuration.
+
+=head1 SECURITY-RELEVANT OPTIONS
+
+=over 4
+
+=item show_sql
+
+Defaults to false. When true, every explorer response renders the Query Debug
+panel with the generated SQL B<and its bound parameters>. Bound parameters
+include the values of required predicates and scope filters, such as tenant
+IDs, owner IDs, and other row-level security inputs, as well as every filter
+value a user typed. B<show_sql must be off in production.> Enable it only in
+trusted development environments. The plugin logs a warning at registration
+when an explorer enables it while the application runs in C<production> mode.
+
+=back
+
+=cut
