@@ -90,6 +90,7 @@ WriteMakefile(
         'Time::HiRes' => 0,
     },
     TEST_REQUIRES => {
+        'DBD::SQLite' => '1.64',
         'Test::More' => 0,
     },
     META_MERGE => {

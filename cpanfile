@@ -8,4 +8,6 @@ requires 'Selecto::Templates', '0.001000';
 
 on test => sub {
     requires 'Test::More';
+    # Canned page HTTP tests run against in-memory SQLite and skip without it.
+    requires 'DBD::SQLite', '1.64';
 };
