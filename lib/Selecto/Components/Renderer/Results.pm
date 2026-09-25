@@ -236,6 +236,8 @@ sub _row_inline_action ($model, $action, $target, $row_number) {
 }
 
 sub _table ($class, $result, $model) {
+    my $detail = $result->{detail}
+        || ($model->{state} && $model->{state}->view eq 'detail');
     my %actions = map { $_->{id} => $_ } @{$model->{bulk_actions} // []};
     my @columns = grep { !$_->{action_id} || $actions{$_->{action_id}} } @{$result->{columns}};
     my $head = join '', map {
@@ -387,7 +389,9 @@ sub _table ($class, $result, $model) {
             if ($result->{rollup} && $level == 0) {
                 $content = $group_index == 0 ? '<span class="sc-rollup-total-label">Total</span>' : '';
             } elsif (!$result->{rollup} || $group_index == $level - 1) {
-                my $label_html = _html_display($column, $record->{$column->{key}}, 1);
+                my $value = $record->{$column->{key}};
+                my $label_html = $detail && !defined($value)
+                    ? '' : _html_display($column, $value, 1);
                 my $pairs = $result->{drilldowns}[$index][$group_index];
                 if ($continued) {
                     my $continued_label = '<span class="sc-rollup-continued-label">' .
@@ -632,7 +636,8 @@ sub _nested_table ($column, $value, $row_number = undef) {
         my $record = ref($_) eq 'HASH' ? $_ : {};
         '<tr>' . join('', map {
             my $cell = $record->{$_->{field}};
-            my $display = ref($cell) ? encode_json($cell) : _display($cell);
+            my $display = ref($cell) ? encode_json($cell)
+                : defined($cell) ? "$cell" : '';
             my $content = _html_display($_, $display);
             if (my $link = $_->{link}) {
                 my $prefix = $link->{url_prefix};
