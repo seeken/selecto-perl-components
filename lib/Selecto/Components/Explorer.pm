@@ -35,6 +35,14 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     my $model_started = time;
     $options //= {};
     die "explorer model options must be an object\n" unless ref($options) eq 'HASH';
+    # Optional result cache keyed by the exact compiled SQL and bound values
+    # (see result_cache_key). Hosts such as dashboards use it to reuse results
+    # across requests; Explorer itself runs uncached.
+    my $result_cache = $options->{result_cache};
+    die "explorer result_cache must provide fetch and store\n"
+        if defined($result_cache)
+            && !(blessed($result_cache) && $result_cache->can('fetch') && $result_cache->can('store'));
+    my %cache_info = (hits => 0, misses => 0);
     my $input_supplied = defined $input;
     my $config = $self->config->for_request($controller);
     my $engine;
@@ -77,7 +85,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         my $statement = $engine->compile($built->{query});
         my $compile_ms = _elapsed_ms($compile_started);
         my $data_started = time;
-        my $raw = $engine->adapter->execute_query($statement);
+        my $raw = _execute($engine, $statement, $result_cache, \%cache_info);
         my $data_query_ms = _elapsed_ms($data_started);
         _validate_result($raw);
         my $grid_limit_exceeded = $grid_all_rows
@@ -102,7 +110,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
                 $count_query_ms = 0;
             } else {
                 my $count_started = time;
-                my $count_raw = $engine->adapter->execute_query($count_statement);
+                my $count_raw = _execute($engine, $count_statement, $result_cache, \%cache_info);
                 $count_query_ms = _elapsed_ms($count_started);
                 _validate_result($count_raw);
                 $total_count = _total_count($count_raw);
@@ -155,6 +163,10 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             grid_all_rows => $grid_all_rows,
             elapsed_ms => $elapsed_ms,
             adapter_name => $engine->adapter->name,
+            ($result_cache ? (cache => {
+                hit => $cache_info{misses} ? 0 : 1,
+                (defined($cache_info{created_at}) ? (created_at => $cache_info{created_at}) : ()),
+            }) : ()),
             ($config->show_sql ? (
                 sql => $statement->sql,
                 params => $statement->params,
@@ -207,6 +219,40 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         }
     }
     return $model;
+}
+
+# The cache key for a compiled statement: adapter, SQL text and bound values,
+# so any difference in the query (including visibility scoping) is a different entry.
+sub result_cache_key ($class, $statement) {
+    return sha256_hex(encode_json([
+        'selecto-result-v1',
+        $statement->adapter_name,
+        $statement->sql,
+        @{$statement->params},
+    ]));
+}
+
+# Run a statement, through the result cache when one is supplied. fetch($key)
+# returns {result => {columns, rows}, created_at => epoch} or undef;
+# store($key, {columns, rows}) saves a fresh result.
+sub _execute ($engine, $statement, $cache, $info) {
+    return $engine->adapter->execute_query($statement) unless $cache;
+    my $key = __PACKAGE__->result_cache_key($statement);
+    my $entry = $cache->fetch($key);
+    if (ref($entry) eq 'HASH' && ref($entry->{result}) eq 'HASH'
+        && eval { _validate_result($entry->{result}); 1 }) {
+        $info->{hits}++;
+        my $created = $entry->{created_at};
+        $info->{created_at} = $created
+            if defined($created) && (!defined($info->{created_at}) || $created < $info->{created_at});
+        return $entry->{result};
+    }
+    my $raw = $engine->adapter->execute_query($statement);
+    _validate_result($raw);
+    $info->{misses}++;
+    $info->{created_at} //= time;  # the oldest part of the result decides its age
+    $cache->store($key, {columns => $raw->{columns}, rows => $raw->{rows}});
+    return $raw;
 }
 
 sub _elapsed_ms ($started) {

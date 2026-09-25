@@ -32,6 +32,9 @@ has co_domain_engines => sub { return {} };
 has co_domain_scopes  => sub { return {} };
 has action_eligibility_resolvers => sub { return {} };
 has 'action_authorizer';
+# Optional coderef ($controller, $config) returning true when the request may
+# export results (Excel/CSV/TSV/JSON). Without one, exports are allowed.
+has 'export_authorizer';
 has 'record_editor_handler';
 has 'saved_query_store';
 has 'localizer';
@@ -102,6 +105,8 @@ sub new ($class, @args) {
                 && $self->default_row_click_action !~ /\A[a-z][a-z0-9_-]*\z/;
     die "action_authorizer must be a coderef\n"
         if defined($self->action_authorizer) && ref($self->action_authorizer) ne 'CODE';
+    die "export_authorizer must be a coderef\n"
+        if defined($self->export_authorizer) && ref($self->export_authorizer) ne 'CODE';
     die "record_editor_handler must be a coderef\n"
         if defined($self->record_editor_handler)
             && ref($self->record_editor_handler) ne 'CODE';
@@ -239,11 +244,20 @@ sub for_request ($self, $controller) {
     $copy->{_localization_controller} = $controller;
     delete $copy->{_resolved_theme};
     delete $copy->{_resolved_page_shell};
+    delete $copy->{_export_allowed};
     # Catalog construction walks the complete domain and localizes every label.
     # A single model/render cycle asks for the same catalogs through several
     # convenience methods, so keep those immutable results on the request copy.
     $copy->{_catalog_cache} = {};
     return $copy;
+}
+
+# Whether this request may export results (see export_authorizer).
+sub export_allowed ($self, $controller = undef) {
+    my $authorizer = $self->export_authorizer or return 1;
+    $controller //= $self->{_localization_controller};
+    return exists($self->{_export_allowed}) ? $self->{_export_allowed}
+        : ($self->{_export_allowed} = $authorizer->($controller, $self) ? 1 : 0);
 }
 
 sub api_console_url ($self, $model = undef) {
