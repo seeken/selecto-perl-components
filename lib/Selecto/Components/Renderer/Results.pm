@@ -633,7 +633,23 @@ sub _nested_table ($column, $value, $row_number = undef) {
         '<tr>' . join('', map {
             my $cell = $record->{$_->{field}};
             my $display = ref($cell) ? encode_json($cell) : _display($cell);
-            '<td>' . _html_display($_, $display) . '</td>'
+            my $content = _html_display($_, $display);
+            if (my $link = $_->{link}) {
+                my $prefix = $link->{url_prefix};
+                if (defined(my $parent_field = $link->{parent_field})) {
+                    my $parent_id = $record->{'__selecto_parent_' . $parent_field};
+                    $prefix = defined($parent_id) && !ref($parent_id)
+                        && "$parent_id" =~ /\A[1-9]\d*\z/
+                        ? $prefix . $parent_id . '/' : undef;
+                }
+                $content = _object_link({
+                    link => {url_template => $prefix . '{{id}}',
+                        numeric_id => 1, target => '_top'},
+                    link_key => $_->{field},
+                }, $record, defined($link->{text}) ? _h($link->{text}) : $content)
+                    if defined $prefix;
+            }
+            '<td>' . $content . '</td>'
         } @fields) . '</tr>'
     } @$value) : '<tr><td class="sc-nested-empty" colspan="' . scalar(@fields) . '">No data</td></tr>';
     return '<table class="sc-nested-table"><caption class="sc-visually-hidden">' .

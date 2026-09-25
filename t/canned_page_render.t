@@ -8,6 +8,7 @@ use Mojolicious;
 use Encode qw(decode);
 use Selecto::CannedPage ();
 use Selecto::Components::CannedPage ();
+use Selecto::Components::Renderer::Results ();
 use Selecto::Domain ();
 use Selecto::Query ();
 
@@ -48,6 +49,59 @@ like $html, qr{method="get"}, 'GET-only canned page keeps normal form navigation
 like $html, qr{<strong>1</strong> row matched .+? <strong>1</strong> page},
     'result summary uses the same count and page hint as Explorer';
 like $html, qr{Page 1 of 1}, 'pagination shows the total page count';
+
+my $nested_photos = Selecto::Components::Renderer::Results::_nested_table(
+    {label => 'Photos', nested_fields => [{
+        field => 'id', label => 'Photo',
+        link => {url_prefix => '/portal-views/photos/'},
+    }]},
+    [{id => 123}], 1,
+);
+like $nested_photos,
+    qr{href="/portal-views/photos/123" target="_top">123</a>},
+    'nested IDs can link to a host-authorized local route';
+my $named_photo_link = Selecto::Components::Renderer::Results::_nested_table(
+    {label => 'Photos', nested_fields => [{field => 'id', label => 'Photo',
+        link => {url_prefix => '/portal-views/photos/', text => 'View photo'}}]},
+    [{id => 123}], 1,
+);
+like $named_photo_link,
+    qr{href="/portal-views/photos/123" target="_top">View photo</a>},
+    'nested photo links can use an accessible action label';
+my $context_photo_link = Selecto::Components::Renderer::Results::_nested_table(
+    {label => 'Photos', nested_fields => [{field => 'id', label => 'Photo',
+        link => {url_prefix => '/portal-views/photos/',
+            parent_field => 'id', text => 'View photo'}}]},
+    [{id => 123, __selecto_parent_id => 42}], 1,
+);
+like $context_photo_link,
+    qr{href="/portal-views/photos/42/123" target="_top">View photo</a>},
+    'nested links can carry the selected parent context';
+my $invalid_parent = Selecto::Components::Renderer::Results::_nested_table(
+    {label => 'Photos', nested_fields => [{field => 'id', label => 'Photo',
+        link => {url_prefix => '/portal-views/photos/', parent_field => 'id'}}]},
+    [{id => 123, __selecto_parent_id => '../other'}], 1,
+);
+unlike $invalid_parent, qr{<a },
+    'invalid parent identifiers cannot become nested URLs';
+
+my $layout_component = Selecto::Components::CannedPage->new(
+    page => $page, path => '/rows', title => 'Rows',
+    engine_factory => sub { die 'not needed' },
+    column_layout => [
+        {kind => 'field', field => 'id', label => 'ID'},
+        {kind => 'link', field => 'id', label => 'Photos',
+            text => 'View photos', url_prefix => '/portal-views/photos/'},
+    ],
+);
+like $layout_component->_table($result),
+    qr{href="/portal-views/photos/42" target="_top">View photos</a>},
+    'canned layouts can show a local action link instead of an ID';
+ok !eval { Selecto::Components::CannedPage->new(
+    page => $page, path => '/rows', engine_factory => sub { die 'not needed' },
+    column_layout => [{kind => 'link', field => 'id', label => 'Photos',
+        text => 'View photos', url_prefix => '//external.example/'}],
+); 1 }, 'canned layout links reject external URL prefixes';
 
 my $paged_result = {
     %$result,

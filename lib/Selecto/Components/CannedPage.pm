@@ -66,13 +66,24 @@ sub _validate_column_layout ($self) {
                 unless ref($column) eq 'HASH';
             my $kind = $column->{kind} // '';
             die "canned page column_layout kind is invalid\n"
-                unless $kind =~ /\A(?:field|join|nested|collection_values|row_number)\z/;
+                unless $kind =~ /\A(?:field|link|collection_link|join|nested|collection_values|row_number)\z/;
             die "canned page column_layout label is invalid\n"
                 unless defined($column->{label}) && !ref($column->{label})
                     && length($column->{label});
             if ($kind eq 'field') {
                 die "canned page column_layout field is not selected\n"
                     unless $fields{$column->{field} // ''};
+            } elsif ($kind eq 'link' || $kind eq 'collection_link') {
+                die "canned page link must use a selected field, local URL, and text\n"
+                    unless $fields{$column->{field} // ''}
+                        && ($kind ne 'collection_link'
+                            || $collections{$column->{collection} // ''})
+                        && defined($column->{url_prefix}) && !ref($column->{url_prefix})
+                        && $column->{url_prefix} =~ m{\A/(?!/)[A-Za-z0-9_/-]*/\z}
+                        && defined($column->{text}) && !ref($column->{text})
+                        && length($column->{text})
+                        && (!defined($column->{target})
+                            || $column->{target} =~ /\A_(?:self|parent|top)\z/);
             } elsif ($kind eq 'join') {
                 die "canned page column_layout join fields are not selected\n"
                     unless ref($column->{fields}) eq 'ARRAY' && @{$column->{fields}}
@@ -89,6 +100,24 @@ sub _validate_column_layout ($self) {
                             && !grep { ref($_) ne 'HASH'
                                 || !$available->{$_->{field} // ''}
                                 || !defined($_->{label}) || ref($_->{label}) } @{$column->{fields}};
+                    for my $nested_field (@{$column->{fields}}) {
+                        next unless exists $nested_field->{link};
+                        my $link = $nested_field->{link};
+                        die "canned page nested link must use a local URL prefix\n"
+                            unless ref($link) eq 'HASH'
+                                && !grep({ $_ ne 'url_prefix' && $_ ne 'text'
+                                    && $_ ne 'parent_field' } keys %$link)
+                                && defined($link->{url_prefix})
+                                && !ref($link->{url_prefix})
+                                && $link->{url_prefix} =~ m{\A/(?!/)[A-Za-z0-9_/-]*/\z}
+                                && (!exists($link->{text})
+                                    || (defined($link->{text}) && !ref($link->{text})
+                                        && length($link->{text})))
+                                && (!exists($link->{parent_field})
+                                    || (defined($link->{parent_field})
+                                        && !ref($link->{parent_field})
+                                        && $fields{$link->{parent_field}}));
+                    }
                 } else {
                     die "canned page column_layout collection field is not selected\n"
                         unless $available->{$column->{field} // ''};
@@ -449,6 +478,17 @@ sub _layout_table ($self, $source_columns, $source_records, $state) {
                 $record{$key} = $source->{$column->{key}};
                 push @columns, {%$column, key => $key, label => $spec->{label}}
                     if $index == 0;
+            } elsif ($kind eq 'link' || $kind eq 'collection_link') {
+                my $column = $field{$spec->{field}};
+                my $enabled = $kind eq 'link'
+                    || @{$source->{$collection{$spec->{collection}}{key}} // []};
+                $record{$key} = $enabled ? $spec->{text} : '';
+                $record{$key . '_id'} = $enabled
+                    ? $source->{$column->{key}} : undef;
+                push @columns, {key => $key, label => $spec->{label},
+                    link => {url_template => $spec->{url_prefix} . '{{id}}',
+                        numeric_id => 1, target => $spec->{target} // '_top'},
+                    link_key => $key . '_id'} if $index == 0;
             } elsif ($kind eq 'join') {
                 $record{$key} = join($spec->{separator} // ' ',
                     grep { defined($_) && !ref($_) && length("$_") }
@@ -459,7 +499,17 @@ sub _layout_table ($self, $source_columns, $source_records, $state) {
                 my $column = $collection{$spec->{collection}};
                 my $items = $source->{$column->{key}} // [];
                 if ($kind eq 'nested') {
-                    $record{$key} = $items;
+                    my @parent_fields = map { $_->{link}{parent_field} }
+                        grep { ref($_->{link}) eq 'HASH'
+                            && defined($_->{link}{parent_field}) } @{$spec->{fields}};
+                    $record{$key} = @parent_fields
+                        ? [map {
+                            my %item = %$_;
+                            $item{'__selecto_parent_' . $_} =
+                                $source->{$field{$_}{key}} for @parent_fields;
+                            \%item;
+                        } @$items]
+                        : $items;
                     push @columns, {key => $key, label => $spec->{label},
                         nested => 1, nested_fields => $spec->{fields}}
                         if $index == 0;
