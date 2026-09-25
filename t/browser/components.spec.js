@@ -1233,6 +1233,43 @@ test("switching to graph mode raises the point limit and removes page selection"
   await expect(page.locator('[data-sc-page-control] input')).toHaveValue("1");
 });
 
+test("switching views keeps the other view's current selections for running and saving", async ({page}) => {
+  await load(page, `
+    <form data-sc-builder method="get" action="http://selecto.test/explorer/load">
+      <input type="radio" name="view" value="detail" checked>
+      <input type="radio" name="view" value="aggregate">
+      <fieldset data-sc-result-view-panel="detail">
+        <input name="field" value="id"><input name="field_alias" value=""><input name="field_format" value="">
+        <input name="field" value="status"><input name="field_alias" value="State"><input name="field_format" value="">
+        <select name="order"><option value="id" selected>id</option></select>
+        <select name="direction"><option value="desc" selected>desc</option></select>
+        <input type="hidden" name="group" value="status"><input type="hidden" name="measure" value="count">
+      </fieldset>
+      <fieldset data-sc-result-view-panel="summary" hidden disabled>
+        <input name="group" value="status"><input name="measure" value="count">
+        <input type="hidden" name="field" value="id"><input type="hidden" name="field_alias" value="">
+        <input type="hidden" name="field_format" value="">
+        <input type="hidden" name="order" value="id"><input type="hidden" name="direction" value="desc">
+      </fieldset>
+    </form>
+  `);
+  // Edit the detail columns (as the column picker does), then switch to aggregate and run.
+  await page.evaluate(() => {
+    const panel = document.querySelector('[data-sc-result-view-panel="detail"]');
+    panel.insertAdjacentHTML("afterbegin",
+      '<input name="field" value="carrier.co_name"><input name="field_alias" value="Carrier"><input name="field_format" value="">');
+  });
+  await page.locator('input[name="view"][value="aggregate"]').check();
+  // What the form now submits (only the active panel's controls are sent).
+  const submitted = new URLSearchParams(await page.evaluate(() =>
+    new URLSearchParams(new FormData(document.querySelector("form"))).toString()));
+  expect(submitted.getAll("field")).toEqual(["carrier.co_name", "id", "status"]);
+  expect(submitted.getAll("field_alias")).toEqual(["Carrier", "", "State"]);
+  expect(submitted.getAll("order")).toEqual(["id"]);
+  expect(submitted.getAll("group")).toEqual(["status"]);
+  expect(submitted.getAll("measure")).toEqual(["count"]);
+});
+
 test("an export uses the columns currently selected in the builder", async ({page}) => {
   await load(page, `
     <section id="selecto-surface-truck">

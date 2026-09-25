@@ -5,7 +5,7 @@ use warnings;
 use Exporter qw(import);
 
 our @EXPORT_OK = qw(asset_revision);
-my $ASSET_REVISION = '0.1.0-e2e2cdc96737';
+my $ASSET_REVISION = '0.1.0-384ee02810cc';
 
 sub asset_revision { return $ASSET_REVISION; }
 
