@@ -299,6 +299,30 @@ like $table, qr/&lt;script&gt;cell\(\)&lt;\/script&gt;/,
 like $table, qr/&lt;b&gt;Name&lt;\/b&gt;/,
     'column labels are HTML-escaped';
 
+my $null_columns = [{key => 'value', label => 'Value'}];
+my $null_records = [{value => undef}, {value => ''}, {value => 0}];
+my $detail_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => 'product_name',
+});
+my $detail_null_table = Selecto::Components::Renderer->_table(
+    {columns => $null_columns, records => $null_records, drilldowns => []},
+    {bulk_actions => [], state => $detail_state},
+);
+like $detail_null_table, qr{<tbody><tr><td></td></tr><tr><td></td></tr><tr><td>0</td></tr></tbody>},
+    'detail results leave NULL and empty values blank while retaining zero';
+my $aggregate_null_table = Selecto::Components::Renderer->_table(
+    {columns => $null_columns, records => $null_records, drilldowns => []},
+    {bulk_actions => []},
+);
+like $aggregate_null_table, qr{<tbody><tr><td>\[NULL\]</td></tr><tr><td></td></tr><tr><td>0</td></tr></tbody>},
+    'aggregate group results continue to identify NULL explicitly';
+my $nested_null_table = Selecto::Components::Renderer::_nested_table(
+    {label => 'Items', nested_fields => [{field => 'value', label => 'Value'}]},
+    [{value => undef}, {value => 0}], 1,
+);
+like $nested_null_table, qr{<tbody><tr><td></td></tr><tr><td>0</td></tr></tbody>},
+    'nested detail cells leave NULL blank without hiding zero';
+
 my $measure_table = Selecto::Components::Renderer->_table(
     {
         columns => [

@@ -436,7 +436,8 @@ sub _table ($self, $result) {
         @columns = @$columns;
         @records = @$records;
     }
-    my $table = {columns => \@columns, records => \@records};
+    my $table = {columns => \@columns, records => \@records,
+        detail => $view->{kind} eq 'detail' ? 1 : 0};
     if ($view->{kind} eq 'aggregate') {
         my $group_count = @{$view->{query}->groups};
         $table->{extra_column} = {label => 'Details', cell => sub ($record, $index) {
