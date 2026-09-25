@@ -42,6 +42,15 @@ like $html, qr{<td><a class="sc-object-link" href="/portal/quote\?quoteId=42" ta
     'the ID itself is the record link';
 unlike $html, qr{<th scope="col">Open</th>},
     'the record link does not add a redundant Open column';
+my $legacy_component = Selecto::Components::CannedPage->new(
+    page => $page, path => '/rows', title => 'Rows',
+    engine_factory => sub { die 'not needed' },
+    record_link => {field => 'id',
+        url_prefix => '/backoffice/loadmaint.mcgi?load_id=', target => '_top'},
+);
+like $legacy_component->_table($result),
+    qr{href="/backoffice/loadmaint\.mcgi\?load_id=42" target="_top"},
+    'a local legacy CGI can be a canned record link';
 like $html, qr{target="_top"}, 'embedded canned list opens the record in the portal window';
 unlike $html, qr{hx-ws:connect|hx-ws:send},
     'GET-only canned page does not try to reconnect a WebSocket';
@@ -149,6 +158,7 @@ like decode('UTF-8', $http->tx->res->body), qr/Caf\x{e9}/,
 
 for my $bad (
     {field => 'id', url_prefix => '//external.example/'},
+    {field => 'id', url_prefix => '/../external/'},
     {field => 'id', url_prefix => '/rows/', target => '_blank'},
 ) {
     my $ok = eval {
