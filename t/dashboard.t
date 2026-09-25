@@ -141,6 +141,17 @@ subtest 'export authorizer' => sub {
     );
     ok !$denied->for_request($controller)->export_allowed, 'the host can deny exports';
     ok $config->for_request($controller)->export_allowed, 'allowed without an authorizer';
+    my $answer = 1;
+    my $shared = Selecto::Components::Config->new(
+        %{TestSelectoComponents::config()}, id => 'shared', export_authorizer => sub { $answer },
+    );
+    ok $shared->export_allowed($controller), 'the shared configuration asks the authorizer';
+    $answer = 0;
+    ok !$shared->export_allowed($controller), 'and does not remember an earlier request\'s answer';
+    my $copy = $shared->for_request($controller);
+    ok !$copy->export_allowed, 'a request copy asks once';
+    $answer = 1;
+    ok !$copy->export_allowed, 'and keeps its answer for the request';
     my $page = Selecto::Components::Renderer->surface(
         Selecto::Components::Explorer->new(config => $denied)->model($controller, {q => 1, view => 'detail', field => 'product_name'}),
     );
