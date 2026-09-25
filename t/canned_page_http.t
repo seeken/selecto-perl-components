@@ -155,7 +155,7 @@ $scoped_app->plugin('Selecto::Components' => {pages => {products => $scoped_spec
 my $s = Test::Mojo->new($scoped_app);
 $s->get_ok('/products?submitted=1&view=list&f_brand=Acme'
     => {'X-Test-Brand' => 'North'})
-    ->status_is(200)->content_like(qr/0 matching items/)
+    ->status_is(200)->content_like(qr{0</strong> rows matched})
     ->content_unlike(qr/Alpha shoe/)
     ->content_like(qr/North/);
 $s->get_ok('/products' => {'X-Test-Brand' => 'broken'})
