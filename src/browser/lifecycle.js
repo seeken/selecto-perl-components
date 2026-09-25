@@ -725,3 +725,22 @@
       clearRowDialog(event.target);
     }
   }, true);
+
+  // Public hooks for pages that insert Selecto results themselves, such as
+  // dashboards showing several views: mount(node) starts the charts in newly
+  // inserted results, unmount(node) releases the charts in results about to be
+  // replaced or removed. The page must give inserted charts an ancestor with
+  // data-sc-chart-src.
+  window.SelectoComponents = Object.assign(window.SelectoComponents || {}, {
+    mount: function (node) {
+      var roots = node && node.querySelectorAll
+        ? Array.from(node.querySelectorAll("[data-sc-chart]")) : [];
+      if (node && node.matches && node.matches("[data-sc-chart]")) roots.unshift(node);
+      roots = roots.filter(function (root) { return !chartInstances.get(root); });
+      roots.forEach(setChartLoading);
+      loadChartsForRoots(roots, 0);
+    },
+    unmount: function (node) {
+      destroyChartsWithin(node);
+    }
+  });
