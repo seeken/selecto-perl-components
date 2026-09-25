@@ -51,6 +51,20 @@ my $legacy_component = Selecto::Components::CannedPage->new(
 like $legacy_component->_table($result),
     qr{href="/backoffice/loadmaint\.mcgi\?load_id=42" target="_top"},
     'a local legacy CGI can be a canned record link';
+my $modal_component = Selecto::Components::CannedPage->new(
+    page => $page, path => '/rows', title => 'Rows',
+    engine_factory => sub { die 'not needed' }, websocket_enabled => 0,
+    record_link => {field => 'id', url_prefix => '/portal-views/order-display/',
+        modal_title => 'Order ID Display'},
+);
+my $modal_html = $modal_component->_html($result, 1);
+like $modal_html,
+    qr{href="/portal-views/order-display/42" data-sc-canned-modal-link data-sc-canned-modal-title="Order ID Display"},
+    'a selected ID can open a same-origin modal with a usable URL fallback';
+unlike $modal_html, qr{href="/portal-views/order-display/42" target="_top"},
+    'a modal ID does not navigate out of the canned view';
+like $modal_html, qr{src="/selecto-components/canned-page\.js\?v=[^"]+"},
+    'the modal behavior is loaded on canned pages without WebSockets';
 like $html, qr{target="_top"}, 'embedded canned list opens the record in the portal window';
 unlike $html, qr{hx-ws:connect|hx-ws:send},
     'GET-only canned page does not try to reconnect a WebSocket';
@@ -160,6 +174,8 @@ for my $bad (
     {field => 'id', url_prefix => '//external.example/'},
     {field => 'id', url_prefix => '/../external/'},
     {field => 'id', url_prefix => '/rows/', target => '_blank'},
+    {field => 'id', url_prefix => '/rows/', modal_title => []},
+    {field => 'id', url_prefix => '/rows/', modal_title => 'Details', target => '_top'},
 ) {
     my $ok = eval {
         Selecto::Components::CannedPage->new(

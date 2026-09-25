@@ -47,6 +47,8 @@ async function assetManifest(bundle) {
   const assetNames = [
     "selecto-components.css",
     "selecto-components.js",
+    "canned-page.css",
+    "canned-page.js",
     "htmx.min.js",
     "hx-ws.min.js",
     "chart.umd.min.js",

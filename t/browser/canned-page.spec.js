@@ -5,6 +5,30 @@ import {fileURLToPath} from "node:url";
 const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)),
   "../../public/selecto-components/canned-page.js");
 
+test("a canned record link opens its local summary in an accessible dialog", async ({page}) => {
+  await page.route("http://canned.test/orders", (route) => route.fulfill({
+    contentType: "text/html",
+    body: `<main class="selecto-canned-page">
+      <a href="/portal-views/order-display/42" data-sc-canned-modal-link
+         data-sc-canned-modal-title="Order ID Display">42</a>
+    </main>`,
+  }));
+  await page.route("http://canned.test/portal-views/order-display/42", (route) => route.fulfill({
+    contentType: "text/html", body: "<main>Order 42 summary</main>",
+  }));
+  await page.goto("http://canned.test/orders");
+  await page.addScriptTag({path: script});
+
+  const link = page.getByRole("link", {name: "42"});
+  await link.click();
+  const dialog = page.getByRole("dialog", {name: "Order ID Display"});
+  await expect(dialog).toBeVisible();
+  await expect(page.frameLocator("dialog iframe").getByText("Order 42 summary")).toBeVisible();
+  await dialog.getByRole("button", {name: "Close"}).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(link).toBeFocused();
+});
+
 test("canned page ignores a stale WebSocket result", async ({page}) => {
   await page.setContent(`
     <section id="selecto-page-channel-products" hx-ws:connect="/products/ws">
