@@ -72,4 +72,35 @@ my $other_session = $app->build_controller($other_tx);
 Selecto::Components::_csrf_token($other_session);
 $other_session->req->params->param(csrf_token => $first_token);
 ok !Selecto::Components::_csrf_valid($other_session), 'CSRF token cannot cross sessions';
+
+# show_sql renders bound parameters (tenant IDs included): warn in production.
+{
+    require lib;
+    lib->import('t/lib');
+    require TestSelectoComponents;
+    my $show_sql_warnings = sub {
+        my ($mode, $show_sql) = @_;
+        my $show_app = Mojolicious->new(mode => $mode);
+        $show_app->secrets(['show-sql-test']);
+        my @messages;
+        $show_app->log->level('trace');
+        $show_app->log->unsubscribe('message');
+        $show_app->log->on(message => sub {
+            my ($log, $level, @lines) = @_;
+            push @messages, [$level, join(' ', @lines)];
+        });
+        my $config = TestSelectoComponents::config();
+        $config->{show_sql} = $show_sql;
+        $show_app->plugin('Selecto::Components' => {explorers => {products => $config}});
+        return [grep { $_->[0] eq 'warn' && $_->[1] =~ /show_sql/ } @messages];
+    };
+    my $production = $show_sql_warnings->('production', 1);
+    is scalar(@$production), 1, 'show_sql in production logs one warning';
+    like $production->[0][1], qr/bound parameters, including tenant and scope values/,
+        'the warning explains that bound tenant values are disclosed';
+    is scalar(@{$show_sql_warnings->('development', 1)}), 0,
+        'show_sql in development does not warn';
+    is scalar(@{$show_sql_warnings->('production', 0)}), 0,
+        'production without show_sql does not warn';
+}
 done_testing;

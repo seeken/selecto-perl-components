@@ -181,4 +181,29 @@ $g->get_ok('/secured/products' => {'X-Test-Authorized' => 'yes'})
     ->status_is(200)->content_like(qr/Alpha shoe/);
 $g->get_ok('/products')->status_is(404);
 
+# limit and page are always attribute/text escaped, even if a future state
+# normalizer lets a non-numeric value through.
+{
+    no warnings qw(redefine numeric);
+    my $original_run = \&Selecto::CannedPage::run;
+    local *Selecto::CannedPage::run = sub {
+        my $result = $original_run->(@_);
+        $result->{state}{limit} = '25"><script>alert("limit")</script>';
+        $result->{state}{page} = '2"><img src=x onerror=alert("page")>';
+        $result->{has_more} = 1;
+        return $result;
+    };
+    my $escaped_app = Mojolicious->new;
+    $escaped_app->secrets(['canned-escaping-test']);
+    $escaped_app->plugin('Selecto::Components' => {pages => {products => page_spec(0)}});
+    my $e = Test::Mojo->new($escaped_app);
+    $e->get_ok('/products?submitted=1&view=list')->status_is(200);
+    my $body = $e->tx->res->body;
+    unlike $body, qr/<script>alert\("limit"\)/, 'limit is escaped in the controls form';
+    unlike $body, qr/<img src=x/, 'page is escaped in pagination text and buttons';
+    like $body, qr/name="limit" value="25&quot;&gt;&lt;script&gt;/,
+        'limit hidden input carries the escaped value';
+    like $body, qr/<span>Page 2&quot;&gt;&lt;img/, 'current page label is escaped';
+}
+
 done_testing;

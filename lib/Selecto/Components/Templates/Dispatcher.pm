@@ -24,6 +24,8 @@ sub new {
     my ($class, %args) = @_;
     my $instances = Selecto::Components::Templates::InstanceService->new(
         store => $args{store},
+        (defined($args{max_instances_per_owner})
+            ? (max_instances_per_owner => $args{max_instances_per_owner}) : ()),
     );
     return bless {
         instances => $instances,
@@ -102,6 +104,16 @@ sub complete_claimed_effect {
 sub release_effect_claim {
     my ($self, %args) = @_;
     return $self->{effects}->release_effect_claim(%args);
+}
+
+sub claim_page_effect {
+    my ($self, %args) = @_;
+    return $self->{instances}->claim_page_effect(%args);
+}
+
+sub release_page_claim {
+    my ($self, %args) = @_;
+    return $self->{instances}->release_page_claim(%args);
 }
 
 sub dispose {

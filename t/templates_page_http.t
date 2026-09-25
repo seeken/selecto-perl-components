@@ -229,6 +229,42 @@ $t->get_ok('/test/page-ready' => $headers)->status_is(200);
 is $t->tx->res->dom->find('form.selecto-template-page')->size, 0,
     'no further page controls are rendered after both parents finish';
 
+# A duplicate POST for a page that is still loading is claimed, not re-executed.
+$scheduler->{make_result} = undef;
+my $before_duplicate = $store->load(owner_scope => $owner, instance_id => 'page-http-1');
+my $duplicate_ready = dclone($before_duplicate->{snapshot});
+$duplicate_ready->{sources}{orders} = dclone($ready->{sources}{orders});
+is $store->compare_and_set(
+    owner_scope => $owner, instance_id => 'page-http-1',
+    revision => $before_duplicate->{revision}, next_snapshot => $duplicate_ready,
+)->{status}, 'ok', 'a fresh single-parent page snapshot was stored';
+$t->get_ok('/test/page-ready' => $headers)->status_is(200);
+my $duplicate_form = $t->tx->res->dom->at('form.selecto-template-page');
+my %duplicate_fields = (
+    csrf_token => $duplicate_form->at('input[name="csrf_token"]')->attr('value'),
+    page_cursor => $duplicate_form->at('input[name="page_cursor"]')->attr('value'),
+);
+$scheduler->{hold} = 1;
+$scheduler->{calls} = 0;
+my ($held_response, $duplicate_response);
+my $held_request = $t->ua->post_p($path => $headers => form => \%duplicate_fields)
+    ->then(sub { $held_response = $_[0]->res });
+Mojo::IOLoop->one_tick until $scheduler->{held};
+$t->ua->post_p($path => $headers => form => \%duplicate_fields)
+    ->then(sub { $duplicate_response = $_[0]->res })->wait;
+is $duplicate_response->code, 409, 'duplicate in-flight page POST is rejected';
+like $duplicate_response->body, qr/data-selecto-template-error="page_request_in_progress"/,
+    'duplicate page POST reports the in-progress claim';
+is $scheduler->{calls}, 1, 'duplicate page POST never reaches the source scheduler';
+$scheduler->{hold} = 0;
+Mojo::IOLoop->next_tick(delete $scheduler->{held});
+$held_request->wait;
+is $held_response->code, 200, 'the original page POST completes';
+is $store->load(owner_scope => $owner, instance_id => 'page-http-1')
+    ->{snapshot}{sources}{orders}{page}, 2, 'only the original page POST committed';
+my $claims_left = $store->{instances}{'page-http-1'}{effect_claims};
+is scalar(keys %$claims_left), 0, 'the page claim is released after the commit';
+
 done_testing;
 
 package PageHTTPScheduler;
@@ -237,7 +273,8 @@ sub new { return bless {}, $_[0] }
 
 sub execute {
     my ($self, %args) = @_;
-    Mojo::IOLoop->next_tick(sub {
+    $self->{calls}++;
+    my $finish = sub {
         my $result = $self->{make_result}
             ? $self->{make_result}->($args{payload})
             : Storable::dclone(
@@ -249,6 +286,12 @@ sub execute {
         }
         $self->{before_finish}->() if $self->{before_finish};
         $args{on_finish}->({status => 'ok', result => $result});
-    });
+    };
+    if ($self->{hold}) {
+        $self->{held} = $finish;
+    }
+    else {
+        Mojo::IOLoop->next_tick($finish);
+    }
     return {status => 'scheduled'};
 }

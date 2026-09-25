@@ -118,6 +118,11 @@ sub register ($self, $app, $plugin_config) {
             path => $specs->{$id}{path} // "/explore/$id",
             title => $specs->{$id}{title} // _humanize($id),
         );
+        $app->log->warn(
+            "Selecto explorer $id has show_sql enabled in production mode. "
+            . 'The Query Debug panel renders SQL with bound parameters, '
+            . 'including tenant and scope values; disable show_sql in production.'
+        ) if $config->show_sql && $app->mode eq 'production';
         my $explorer = Selecto::Components::Explorer->new(config => $config);
         $explorers{$id} = $explorer;
         _routes(

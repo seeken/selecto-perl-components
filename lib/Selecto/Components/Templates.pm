@@ -3,11 +3,13 @@ package Selecto::Components::Templates;
 use Mojolicious 9.49 ();
 use Mojo::Base 'Mojolicious::Plugin', -signatures;
 use Mojo::File qw(path);
+use Mojo::IOLoop ();
 use Time::HiRes qw(time);
 use Selecto::Components::Controller::Templates ();
 use Selecto::Components::Templates::Dispatcher ();
 use Selecto::Components::Templates::Native ();
 use Selecto::Components::Templates::PublicInputs ();
+use Selecto::Components::Templates::Renderer ();
 use Selecto::Components::Templates::SourceScheduler ();
 use Selecto::Components::Templates::Transport ();
 use Selecto::Components::Templates::WebSocket ();
@@ -23,6 +25,73 @@ This additive plugin mounts server-owned compiled templates. The host resolves
 the authenticated owner scope and supplies renderer and source-authority
 callbacks. Browser requests carry opaque instance references and declared event
 values; they never carry a manifest, query, adapter, or owner scope.
+
+=head1 SOURCE AUTHORIZERS RUN IN A FORKED CHILD
+
+B<Every template C<source_authorizer> (and C<source_runner>) runs in a child
+process forked by L<Selecto::Components::Templates::SourceScheduler>. The
+authorizer must open a fresh database connection inside that child and must
+never return an engine whose adapter wraps a DBI handle created in the parent
+(web worker) process.> A forked child shares the parent's socket; using an
+inherited handle interleaves protocol traffic between processes, can return one
+request's rows to another, and destroys the parent's session state when the
+child exits.
+
+Build the handle inside the callback, for example with C<< DBI->connect(...) >>
+(not C<connect_cached> on a parent-populated cache, and not a handle captured
+from the enclosing scope). If you mark handles with
+C<< $dbh->{private_selecto_pid} = $$ >> when connecting, the executor rejects an
+engine whose handle was created in another process with
+C<source_connection_inherited>. See
+L<Selecto::Components::Templates::SourceExecutor/"Database connections in the child">.
+
+=head1 CONFIGURATION
+
+Resource limits relevant to production:
+
+=over 4
+
+=item source_max_workers
+
+Concurrent source subprocesses per web worker process. Default 4, at most 64.
+
+=item source_max_workers_per_owner
+
+Concurrent source subprocesses one owner scope may hold in this process.
+Default C<max(1, int(source_max_workers / 2))>, i.e. 2 with the default pool;
+must not exceed C<source_max_workers>. Owners are identified by a SHA-256 digest
+of the canonical owner scope returned by C<resolve_owner>, so the scope should
+identify the principal you want to limit (tenant and actor, not a per-request
+value). A request over either limit receives HTTP 409 with
+C<source_workers_busy> or C<source_owner_workers_busy>.
+
+Page and root-page requests claim the C<(source, generation, page)> they
+continue through the instance store before any subprocess is spawned. A
+duplicate request for the same in-flight page receives HTTP 409
+C<page_request_in_progress> instead of running the query again.
+
+=item max_instances_per_owner
+
+Live template instances one owner scope may hold. Every C<GET> of a template
+mounts a new instance; when the owner is at the cap, mounting evicts that
+owner's oldest live instances (and their effect claims) and its expired ones.
+When omitted, the store default applies (32 for the bundled Memory and
+PostgreSQL stores). Custom stores receive the value as the
+C<max_instances_per_owner> argument of C<create>.
+
+=item cleanup_interval_seconds
+
+Interval for the periodic C<cleanup_expired> and C<cleanup_expired_claims>
+store sweeps. Default 300 seconds; C<0> disables the timer (for hosts that run
+the sweeps from their own scheduler). Each sweep is bounded by the store's
+C<cleanup_limit>. The timer runs in every web worker process and never in a
+forked source worker.
+
+=back
+
+Oversized state (an event value or source result that would make the stored
+snapshot exceed the store's C<max_snapshot_bytes>) returns HTTP 422 with
+C<snapshot_too_large> and the fixed message C<Template state is too large.>
 
 =cut
 
@@ -57,10 +126,16 @@ sub register ($self, $app, $plugin_config) {
             unless ref($source_scheduler) && $source_scheduler->can('execute');
     }
     else {
+        my $max_workers = _positive_integer(
+            $plugin_config->{source_max_workers} // 4, 64,
+            'source_max_workers',
+        );
+        my $default_per_owner = int($max_workers / 2) || 1;
         $source_scheduler = Selecto::Components::Templates::SourceScheduler->new(
-            max_workers => _positive_integer(
-                $plugin_config->{source_max_workers} // 4, 64,
-                'source_max_workers',
+            max_workers => $max_workers,
+            max_workers_per_owner => _positive_integer(
+                $plugin_config->{source_max_workers_per_owner} // $default_per_owner,
+                $max_workers, 'source_max_workers_per_owner',
             ),
             timeout_seconds => $source_timeout_seconds,
             max_payload_bytes => _positive_integer(
@@ -87,11 +162,25 @@ sub register ($self, $app, $plugin_config) {
     my $event_id_generator = $plugin_config->{event_id_generator} // \&_opaque_id;
     die "event_id_generator must be a coderef\n"
         unless ref($event_id_generator) eq 'CODE';
+    my $max_instances_per_owner = defined($plugin_config->{max_instances_per_owner})
+        ? _positive_integer(
+            $plugin_config->{max_instances_per_owner}, 10_000,
+            'max_instances_per_owner',
+        ) : undef;
+    my $cleanup_interval = _non_negative_integer(
+        $plugin_config->{cleanup_interval_seconds} // 300, 86_400,
+        'cleanup_interval_seconds',
+    );
 
     _install_assets($app) unless exists($plugin_config->{install_assets})
         && !$plugin_config->{install_assets};
 
-    my $dispatcher = Selecto::Components::Templates::Dispatcher->new(store => $store);
+    my $dispatcher = Selecto::Components::Templates::Dispatcher->new(
+        store => $store,
+        (defined($max_instances_per_owner)
+            ? (max_instances_per_owner => $max_instances_per_owner) : ()),
+    );
+    _schedule_cleanup($app, $store, $cleanup_interval) if $cleanup_interval;
     my $transport = Selecto::Components::Templates::Transport->new(
         template_path => $template_path,
         instance_path => $instance_path,
@@ -160,6 +249,28 @@ sub register ($self, $app, $plugin_config) {
         });
 }
 
+sub _schedule_cleanup ($app, $store, $interval) {
+    my @tasks = grep { $store->can($_) } qw(cleanup_expired cleanup_expired_claims);
+    return undef unless @tasks;
+    my $log = $app->log;
+    return Mojo::IOLoop->recurring($interval => sub {
+        # Forked source workers reset their event loop, but never run
+        # housekeeping from one even if a timer survives the fork.
+        return if Selecto::Components::Templates::SourceScheduler->in_worker;
+        for my $task (@tasks) {
+            my $removed = eval { $store->$task };
+            if (my $error = $@) {
+                $error = "$error";
+                $error =~ s/\s+\z//;
+                $log->warn("Selecto template $task failed: $error");
+                next;
+            }
+            $log->debug("Selecto template $task removed $removed rows")
+                if $removed;
+        }
+    });
+}
+
 sub _templates ($specs, $default_source_timeout_seconds) {
     die "Selecto::Components::Templates requires a templates object\n"
         unless ref($specs) eq 'HASH' && keys %$specs;
@@ -181,6 +292,8 @@ sub _templates ($specs, $default_source_timeout_seconds) {
             if $releases{$release}++;
         die "template $id requires a renderer registry\n"
             unless ref($registry) eq 'HASH';
+        eval { Selecto::Components::Templates::Renderer->validate_manifest($manifest); 1 }
+            or die "template $id manifest is unsafe: $@";
         for my $callback (qw(resolve_inputs resolve_source_context resolve_page_scope source_authorizer source_runner)) {
             die "template $id $callback must be a coderef\n"
                 if defined($spec->{$callback}) && ref($spec->{$callback}) ne 'CODE';
@@ -307,6 +420,13 @@ sub _positive_integer ($value, $max, $name) {
     die "$name must be an integer between 1 and $max\n"
         unless defined($value) && !ref($value)
         && "$value" =~ /\A[1-9][0-9]*\z/ && $value <= $max;
+    return 0 + $value;
+}
+
+sub _non_negative_integer ($value, $max, $name) {
+    die "$name must be an integer between 0 and $max\n"
+        unless defined($value) && !ref($value)
+        && "$value" =~ /\A[0-9]+\z/ && $value <= $max;
     return 0 + $value;
 }
 

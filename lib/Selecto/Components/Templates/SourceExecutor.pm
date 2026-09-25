@@ -45,7 +45,36 @@ or an opaque token. Continuations also require the server-held C<root_snapshot>
 and C<root_secret>; the executor reauthorizes before resolving the token.
 These options must be assembled by the host, not copied from request data.
 
+=head2 Database connections in the child
+
+When used through L<Selecto::Components::Templates>, C<execute> and therefore
+the host's C<source_authorizer> run in a child process forked by
+L<Selecto::Components::Templates::SourceScheduler>. B<The authorizer must open
+a fresh database connection in the child. It must not reuse a DBI handle
+created in the parent process>, whether captured in a closure, held in a
+global, or returned from a parent-populated C<connect_cached> cache. A forked
+child shares the parent's socket: queries from both processes interleave on one
+server session, rows can be delivered to the wrong request, and the child's
+exit can tear down the parent's session.
+
+Enforcement is opt-in and exact: if the returned engine's adapter exposes a
+C<dbh> carrying C<private_selecto_pid> (set it with
+C<< $dbh->{private_selecto_pid} = $$ >> right after connecting) and that pid is
+not the current process, execution fails with C<source_connection_inherited>
+before any query runs. Handles without the marker are not second-guessed.
+
 =cut
+
+sub _inherited_database_handle {
+    my ($engine) = @_;
+    my $adapter = eval { $engine->adapter };
+    return 0 unless blessed($adapter) && $adapter->can('dbh');
+    my $dbh = eval { $adapter->dbh };
+    return 0 unless blessed($dbh) && Scalar::Util::reftype($dbh) eq 'HASH';
+    my $pid = eval { $dbh->{private_selecto_pid} };
+    return defined($pid) && !ref($pid) && "$pid" =~ /\A[0-9]+\z/
+        && $pid != $$ ? 1 : 0;
+}
 
 sub execute {
     my ($class, %args) = @_;
@@ -90,6 +119,11 @@ sub execute {
         || !$authority->{engine}->isa('Selecto::Engine')
         || !blessed($authority->{query})
         || !$authority->{query}->isa('Selecto::Query');
+    return _error(
+        'source_connection_inherited',
+        'template source authorizer returned a database handle created in another process; '
+            . 'open a fresh connection inside the source worker',
+    ) if _inherited_database_handle($authority->{engine});
 
     return _error('invalid_root_cursor', 'root page cursor is invalid')
         if exists($args{root_cursor}) && exists($args{page_cursor});

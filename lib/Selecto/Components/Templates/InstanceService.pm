@@ -14,7 +14,13 @@ Selecto::Components::Templates::InstanceService - Persist template runtime trans
 
 Owns template instance allocation, scoped loading, revisioned persistence, and
 disposal. Event parsing and source-effect coordination remain outside this
-module. Store exceptions are converted to one bounded public error.
+module. Store exceptions are converted to one bounded public error, except
+C<snapshot_too_large>, which becomes a fixed client error (HTTP 422) because the
+request asked for more state than the store accepts.
+
+C<max_instances_per_owner>, when given, is passed to the store's C<create> so the
+store can evict that owner's oldest live instances. The bundled Memory and
+PostgreSQL stores apply their own default (32) when it is omitted.
 
 =cut
 
@@ -24,7 +30,15 @@ sub new {
         unless ref($args{store})
         && !grep { !$args{store}->can($_) }
             qw(new_instance_id create load compare_and_set dispose);
-    return bless {store => $args{store}}, $class;
+    my $max_instances = $args{max_instances_per_owner};
+    die "invalid_limit: max_instances_per_owner must be an integer between 1 and 10000\n"
+        if defined($max_instances)
+        && (ref($max_instances) || "$max_instances" !~ /\A[1-9][0-9]*\z/
+            || $max_instances > 10_000);
+    return bless {
+        store => $args{store},
+        max_instances_per_owner => defined($max_instances) ? 0 + $max_instances : undef,
+    }, $class;
 }
 
 sub mount {
@@ -49,6 +63,9 @@ sub mount {
             initial_snapshot => $runtime->{observation}{snapshot},
             expires_at => $args{expires_at},
             instance_id => $instance_id,
+            (defined($self->{max_instances_per_owner})
+                ? (max_instances_per_owner => $self->{max_instances_per_owner})
+                : ()),
         );
     });
     return $stored unless $stored->{status} eq 'ok';
@@ -90,6 +107,65 @@ sub claim_effect {
         unless $self->{store}->can('claim_effect');
     my $claimed = _store(sub { $self->{store}->claim_effect(%args) });
     return $claimed->{status} eq 'ok' ? $claimed->{value} : $claimed;
+}
+
+sub claim_page_effect {
+    my ($self, %args) = @_;
+    return _unsupported_claims()
+        unless $self->{store}->can('claim_page_effect')
+        && $self->{store}->can('release_effect_claim');
+    my $identity = _page_claim_identity(\%args);
+    return _invalid_page_claim() unless $identity;
+    my $claimed = _store(sub {
+        $self->{store}->claim_page_effect(
+            owner_scope => $args{owner_scope},
+            lease_seconds => $args{lease_seconds},
+            %$identity,
+        );
+    });
+    return $claimed->{status} eq 'ok' ? $claimed->{value} : $claimed;
+}
+
+sub release_page_claim {
+    my ($self, %args) = @_;
+    return _unsupported_claims()
+        unless $self->{store}->can('release_effect_claim');
+    my $identity = _page_claim_identity(\%args);
+    return _invalid_page_claim() unless $identity;
+    delete @{$identity}{qw(page_source page)};
+    return $self->release_effect_claim(
+        owner_scope => $args{owner_scope},
+        claim_token => $args{claim_token},
+        %$identity,
+    );
+}
+
+sub _page_claim_identity {
+    my ($args) = @_;
+    my ($instance_id, $source, $generation, $page) =
+        @{$args}{qw(instance_id source generation page)};
+    return undef unless defined($instance_id) && !ref($instance_id)
+        && length("$instance_id") && length("$instance_id") <= 256
+        && defined($source) && !ref($source) && "$source" =~ /\A[A-Za-z_][A-Za-z0-9_]{0,127}\z/
+        && defined($generation) && !ref($generation) && "$generation" =~ /\A[1-9][0-9]*\z/
+        && defined($page) && !ref($page) && "$page" =~ /\A[1-9][0-9]*\z/;
+    my $claim_source = "$source:page:$page";
+    return {
+        instance_id => "$instance_id",
+        source => $claim_source,
+        page_source => "$source",
+        page => 0 + $page,
+        generation => 0 + $generation,
+        effect_id => "$instance_id:source:$claim_source:$generation",
+    };
+}
+
+sub _invalid_page_claim {
+    return {
+        status => 'error',
+        code => 'invalid_page_cursor',
+        message => 'Collection page cursor is invalid.',
+    };
 }
 
 sub claimed_transition {
@@ -196,11 +272,18 @@ sub _runtime {
 sub _store {
     my ($operation) = @_;
     my $value = eval { $operation->() };
-    return {
-        status => 'error',
-        code => 'instance_store_unavailable',
-        message => 'template instance store is unavailable',
-    } if $@;
+    if (my $error = $@) {
+        return {
+            status => 'error',
+            code => 'snapshot_too_large',
+            message => 'Template state is too large.',
+        } if "$error" =~ /\Asnapshot_too_large:/;
+        return {
+            status => 'error',
+            code => 'instance_store_unavailable',
+            message => 'template instance store is unavailable',
+        };
+    }
     return {status => 'ok', value => $value};
 }
 

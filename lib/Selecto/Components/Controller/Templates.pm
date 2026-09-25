@@ -1,6 +1,8 @@
 package Selecto::Components::Controller::Templates;
 
 use Mojo::Base -base, -signatures;
+use Digest::SHA qw(sha256_hex);
+use JSON::PP ();
 use Selecto::Components::Templates::ComponentIdentity ();
 use Selecto::Components::Templates::PublicInputs ();
 use Selecto::Components::Templates::Regions ();
@@ -272,8 +274,18 @@ sub dispatch_page_request ($class, $controller, $runtime, %args) {
         generation => 0 + $source->{generation},
         bindings => {input => $snapshot->{inputs}, state => $snapshot->{state}},
     };
+    my $claim = _claim_page($runtime, $context, $source_id, $source, {
+        status => 'conflict', code => 'stale_page_commit',
+        message => 'The collection changed. Reload and try again.',
+    });
+    return $claim unless $claim->{status} eq 'claimed';
+    my $release = sub ($result) {
+        return _release_page(
+            $runtime, $context, $source_id, $source, $claim->{claim_token}, $result,
+        );
+    };
     my $source_context = _source_context($controller, $context, $effect);
-    return $source_context unless $source_context->{status} eq 'ok';
+    return $release->($source_context) unless $source_context->{status} eq 'ok';
     my $source_authorizer = $template->{source_authorizer};
     my $source_runner = $template->{source_runner};
     my $scheduled = $runtime->{source_scheduler}->execute(
@@ -282,6 +294,7 @@ sub dispatch_page_request ($class, $controller, $runtime, %args) {
             source_context => $source_context->{source_context},
             page_snapshot => $snapshot, page_cursor => $params->{page_cursor},
         },
+        owner_key => owner_key($context->{owner_scope}),
         timeout_seconds => $template->{source_timeout_seconds},
         work => sub ($payload) {
             return Selecto::Components::Templates::SourceExecutor->execute(
@@ -301,7 +314,7 @@ sub dispatch_page_request ($class, $controller, $runtime, %args) {
             );
         },
         on_finish => sub ($execution) {
-            return $on_finish->($execution)
+            return $on_finish->($release->($execution))
                 unless ($execution->{status} // '') eq 'ok';
             my $commit = {
                 schema => 'selecto.template.runtime-page-commit.v1',
@@ -318,6 +331,7 @@ sub dispatch_page_request ($class, $controller, $runtime, %args) {
                 instance_id => $context->{instance_id},
                 manifest => $template->{manifest}, commit => $commit,
             );
+            $release->($committed);
             return $on_finish->($committed)
                 unless ($committed->{status} // '') eq 'ok';
             return $on_finish->({
@@ -336,6 +350,8 @@ sub dispatch_page_request ($class, $controller, $runtime, %args) {
             });
         },
     );
+    return $release->($scheduled)
+        unless ($scheduled->{status} // '') eq 'scheduled';
     return $scheduled;
 }
 
@@ -383,16 +399,27 @@ sub dispatch_root_page_request ($class, $controller, $runtime, %args) {
         generation => 0 + $source->{generation},
         bindings => {input => $snapshot->{inputs}, state => $snapshot->{state}},
     };
+    my $claim = _claim_page($runtime, $context, $source_id, $source, {
+        status => 'conflict', code => 'stale_root_page_commit',
+        message => 'The root page changed. Reload and try again.',
+    });
+    return $claim unless $claim->{status} eq 'claimed';
+    my $release = sub ($result) {
+        return _release_page(
+            $runtime, $context, $source_id, $source, $claim->{claim_token}, $result,
+        );
+    };
     my $source_context = _source_context($controller, $context, $effect);
-    return $source_context unless $source_context->{status} eq 'ok';
+    return $release->($source_context) unless $source_context->{status} eq 'ok';
     my $source_authorizer = $template->{source_authorizer};
     my $source_runner = $template->{source_runner};
-    return $runtime->{source_scheduler}->execute(
+    my $scheduled = $runtime->{source_scheduler}->execute(
         payload => {
             manifest => $template->{manifest}, effect => $effect,
             source_context => $source_context->{source_context},
             root_snapshot => $snapshot, root_cursor => $params->{root_cursor},
         },
+        owner_key => owner_key($context->{owner_scope}),
         timeout_seconds => $template->{source_timeout_seconds},
         work => sub ($payload) {
             return Selecto::Components::Templates::SourceExecutor->execute(
@@ -412,7 +439,7 @@ sub dispatch_root_page_request ($class, $controller, $runtime, %args) {
             );
         },
         on_finish => sub ($execution) {
-            return $on_finish->($execution)
+            return $on_finish->($release->($execution))
                 unless ($execution->{status} // '') eq 'ok';
             my $commit = {
                 schema => 'selecto.template.runtime-root-page-commit.v1',
@@ -430,6 +457,7 @@ sub dispatch_root_page_request ($class, $controller, $runtime, %args) {
                 instance_id => $context->{instance_id},
                 manifest => $template->{manifest}, commit => $commit,
             );
+            $release->($committed);
             return $on_finish->($committed)
                 unless ($committed->{status} // '') eq 'ok';
             return $on_finish->({
@@ -448,6 +476,9 @@ sub dispatch_root_page_request ($class, $controller, $runtime, %args) {
             });
         },
     );
+    return $release->($scheduled)
+        unless ($scheduled->{status} // '') eq 'scheduled';
+    return $scheduled;
 }
 
 sub dispatch_source_request ($class, $controller, $runtime, %args) {
@@ -506,6 +537,7 @@ sub dispatch_source_request ($class, $controller, $runtime, %args) {
             source_context => $source_context->{source_context},
             root_first => $root_first ? 1 : 0,
         },
+        owner_key => owner_key($context->{owner_scope}),
         timeout_seconds => $context->{template}{source_timeout_seconds},
         work => sub ($payload) {
             return Selecto::Components::Templates::SourceExecutor->execute(
@@ -538,6 +570,41 @@ sub dispatch_source_request ($class, $controller, $runtime, %args) {
         );
     }
     return {status => 'scheduled'};
+}
+
+sub owner_key ($owner_scope) {
+    state $json = JSON::PP->new->canonical(1)->ascii(1)->allow_nonref(1);
+    return sha256_hex($json->encode($owner_scope));
+}
+
+sub _claim_page ($runtime, $context, $source_id, $source, $stale) {
+    my $claim = $runtime->{dispatcher}->claim_page_effect(
+        owner_scope => $context->{owner_scope},
+        instance_id => $context->{instance_id},
+        source => $source_id,
+        generation => $source->{generation},
+        page => $source->{page},
+        lease_seconds => $context->{template}{lease_seconds},
+    );
+    return $claim if ($claim->{status} // '') eq 'claimed';
+    return {
+        status => 'busy', code => 'page_request_in_progress',
+        message => 'This page is already loading. Try again.',
+    } if ($claim->{status} // '') eq 'busy';
+    return $stale if ($claim->{status} // '') eq 'stale';
+    return $claim;
+}
+
+sub _release_page ($runtime, $context, $source_id, $source, $claim_token, $result) {
+    $runtime->{dispatcher}->release_page_claim(
+        owner_scope => $context->{owner_scope},
+        instance_id => $context->{instance_id},
+        source => $source_id,
+        generation => $source->{generation},
+        page => $source->{page},
+        claim_token => $claim_token,
+    );
+    return $result;
 }
 
 sub _release_and_result ($runtime, $context, $effect, $claim_token, $error) {
@@ -573,6 +640,26 @@ sub _finish_source_result ($runtime, $context, $effect, $claim_token, $execution
         claim_token => $claim_token,
         completion => $completion,
     );
+    if (($completed->{code} // '') eq 'snapshot_too_large'
+        && ($completion->{outcome} // '') eq 'ok') {
+        # The result would not fit in the stored snapshot. Record a bounded
+        # source error with the same claim so the source does not stay
+        # "loading" until its lease expires, then report the client error.
+        delete $completion->{result};
+        $completion->{outcome} = 'error';
+        $completion->{error} = {
+            code => 'source_result_too_large',
+            message => 'Template source result is too large.',
+        };
+        $runtime->{dispatcher}->complete_claimed_effect(
+            owner_scope => $context->{owner_scope},
+            instance_id => $context->{instance_id},
+            manifest => $context->{template}{manifest},
+            claim_token => $claim_token,
+            completion => $completion,
+        );
+        return $completed;
+    }
     return $completed unless $completed->{status} eq 'ok';
     return {
         status => 'ok', template => $context->{template},

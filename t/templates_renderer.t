@@ -10,6 +10,9 @@ use lib "$FindBin::Bin/lib";
 use Storable qw(dclone);
 use Test::More;
 use TestSelectoComponents ();
+use Mojolicious ();
+use Selecto::Components::Templates ();
+use Selecto::Components::Templates::InstanceStore::Memory ();
 use Selecto::Components::Templates::Renderer ();
 use Selecto::Components::Util qw(html_escape);
 use Selecto::Templates ();
@@ -610,6 +613,104 @@ for my $case (@{$url_cases->{cases}}) {
             "$case->{name}: unsafe URL is rejected";
         is $called, 0, "$case->{name}: host renderer is not called";
     }
+}
+
+# Event handlers, srcdoc, and style accept only literal template values.
+for my $attribute (qw(onclick ONMOUSEOVER onfocus srcdoc style Style xlink:onload)) {
+    my $called = 0;
+    my $bound_manifest = {
+        sources => [],
+        view => {
+            schema => 'selecto.template.view.v1',
+            nodes => [{
+                kind => 'condition', node_id => 'root.children.0',
+                test => {kind => 'literal', type => 'boolean', value => JSON::PP::true},
+                then => [{
+                    kind => 'element', node_id => 'root.children.0.then.0', name => 'div',
+                    attributes => {$attribute => {
+                        kind => 'binding', type => 'string', expression => 'state.payload',
+                    }},
+                    children => [],
+                }],
+                else => [],
+            }],
+        },
+    };
+    my $registry = {elements => {div => sub { $called++; _safe('<div></div>') }}};
+    my $error;
+    eval {
+        Selecto::Components::Templates::Renderer->render(
+            manifest => $bound_manifest,
+            snapshot => {instance_id => 'bound-attribute', inputs => {},
+                state => {payload => 'alert(1)'}, sources => {}},
+            registry => $registry,
+        );
+        1;
+    } or $error = $@;
+    like $error, qr/\Aunsafe_attribute_binding: element attribute \Q$attribute\E only accepts a literal template value at view\.root\.children\.0\.then\.0/,
+        "bound $attribute is rejected at render time";
+    is $called, 0, "bound $attribute never reaches the host renderer";
+    my $validation_error;
+    eval {
+        Selecto::Components::Templates::Renderer->validate_manifest($bound_manifest);
+        1;
+    } or $validation_error = $@;
+    like $validation_error, qr/\Aunsafe_attribute_binding:/,
+        "nested bound $attribute is rejected by manifest validation";
+}
+
+my $literal_manifest = {
+    sources => [],
+    view => {
+        schema => 'selecto.template.view.v1',
+        nodes => [{
+            kind => 'element', node_id => 'root.children.0', name => 'div',
+            attributes => {
+                style => {kind => 'literal', type => 'string', value => 'color: red'},
+                onclick => {kind => 'literal', type => 'string', value => 'return false'},
+                title => {kind => 'binding', type => 'string', expression => 'state.payload'},
+                'data-onboarding' => {kind => 'binding', type => 'string',
+                    expression => 'state.payload'},
+            },
+            children => [],
+        }],
+    },
+};
+ok eval { Selecto::Components::Templates::Renderer->validate_manifest($literal_manifest) },
+    'literal style/onclick and other bound attributes pass manifest validation';
+my $literal_html = Selecto::Components::Templates::Renderer->render(
+    manifest => $literal_manifest,
+    snapshot => {instance_id => 'literal-attribute', inputs => {},
+        state => {payload => 'hello'}, sources => {}},
+    registry => {elements => {div => sub {
+        my ($node) = @_;
+        return _safe('<div style="' . html_escape($node->{attributes}{style}) .
+            '" title="' . html_escape($node->{attributes}{title}) . '"></div>');
+    }}},
+);
+like $literal_html, qr/style="color: red" title="hello"/,
+    'literal authored style still renders';
+
+{
+    my $bound_style = dclone($literal_manifest);
+    $bound_style->{view}{nodes}[0]{attributes}{style} = {
+        kind => 'binding', type => 'string', expression => 'state.payload',
+    };
+    my $app = Mojolicious->new;
+    ok !eval {
+        $app->plugin('Selecto::Components::Templates' => {
+            store => Selecto::Components::Templates::InstanceStore::Memory->new,
+            resolve_owner => sub { return {status => 'ok', owner_scope => {id => 1}} },
+            install_assets => 0,
+            templates => {styled => {
+                release_id => 'styled-v1', manifest => $bound_style,
+                registry => {components => {}, elements => {}},
+            }},
+        });
+        1;
+    }, 'the plugin refuses to register a template with a bound style attribute';
+    like $@, qr/\Atemplate styled manifest is unsafe: unsafe_attribute_binding: element attribute style/,
+        'registration error names the template and attribute';
 }
 
 done_testing;
