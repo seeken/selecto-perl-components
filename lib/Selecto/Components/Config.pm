@@ -252,12 +252,18 @@ sub for_request ($self, $controller) {
     return $copy;
 }
 
-# Whether this request may export results (see export_authorizer).
+# Whether this request may export results (see export_authorizer). Only a
+# request copy (for_request) remembers the answer; the shared configuration
+# asks the authorizer every time.
 sub export_allowed ($self, $controller = undef) {
     my $authorizer = $self->export_authorizer or return 1;
+    my $request_copy = defined $self->{_localization_controller};
+    return $self->{_export_allowed}
+        if $request_copy && exists $self->{_export_allowed};
     $controller //= $self->{_localization_controller};
-    return exists($self->{_export_allowed}) ? $self->{_export_allowed}
-        : ($self->{_export_allowed} = $authorizer->($controller, $self) ? 1 : 0);
+    my $allowed = $authorizer->($controller, $self) ? 1 : 0;
+    $self->{_export_allowed} = $allowed if $request_copy;
+    return $allowed;
 }
 
 sub api_console_url ($self, $model = undef) {
