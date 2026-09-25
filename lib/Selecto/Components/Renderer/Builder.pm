@@ -3,6 +3,7 @@ package Selecto::Components::Renderer::Builder;
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(encode_json);
 use Mojo::URL ();
+use Selecto::Components::DateShortcut ();
 use Selecto::Components::QueryLibrary ();
 use Selecto::Components::RowActions ();
 use Selecto::Components::Renderer::Markup;
@@ -558,6 +559,7 @@ sub _filter_value_text ($filter, $field = undef) {
         if $operator eq 'is_null' || $operator eq 'not_null';
     return 'between ' . ($filter->{value} // '') . ' and ' . ($filter->{value_end} // '')
         if $operator eq 'between';
+    return date_shortcut_label($filter->{value}) if $operator eq 'date_shortcut';
     my %symbols = (eq => '=', ne => '!=', gt => '>', gte => '>=', lt => '<', lte => '<=');
     my $display_operator = $symbols{$operator} // _humanize($operator);
     if (ref($field) eq 'HASH' && ref($field->{filter_choices}) eq 'ARRAY'
@@ -571,6 +573,13 @@ sub _filter_value_text ($filter, $field = undef) {
         return "$display_operator " . join(', ', @values);
     }
     return "$display_operator " . ($filter->{value} // '');
+}
+
+# "Today", "Month to Date" … for a date shortcut id (the id itself if unknown).
+sub date_shortcut_label ($id) {
+    $id //= '';
+    my ($choice) = grep { $_->{id} eq $id } @{Selecto::Components::DateShortcut->choices};
+    return $choice ? $choice->{label} : $id;
 }
 
 sub _chart_type_picker ($class, $state, $catalog) {

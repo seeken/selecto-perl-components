@@ -95,11 +95,13 @@ sub surface ($class, $model) {
             _h($label) . '</a>'
     } ([xlsx => 'Excel'], [csv => 'CSV'], [tsv => 'TSV'], [json => 'JSON']);
     my $api_link = $class->_api_console_control($model);
+    my $export_options = $config->export_allowed
+        ? '<div class="sc-export-options" role="group" aria-label="Export all matched rows">' .
+          '<span>Export all</span>' . $export_links . '</div>'
+        : '';
     my $hero_actions = $query_params
         ? '<div class="sc-hero-actions"><a class="sc-button sc-secondary" href="' .
-          _h($model->{canonical_url}) . '">Permalink</a><div class="sc-export-options" role="group" ' .
-          'aria-label="Export all matched rows"><span>Export all</span>' . $export_links .
-          '</div>' . $api_link . '</div>'
+          _h($model->{canonical_url}) . '">Permalink</a>' . $export_options . $api_link . '</div>'
         : '<div class="sc-hero-actions"><span class="sc-private-mode">Private URL mode</span></div>';
     my $builder_collapsed = _builder_collapsed($model);
     my $page_title = $class->_page_title($model);

@@ -188,6 +188,8 @@ sub _routes (
         );
         return $expanded if $expanded;
         my $format = normalize_export_format($controller->param('format'));
+        return $controller->render(text => 'Export is not allowed.', status => 403)
+            if length($format) && !$config->export_allowed($controller);
         if ($format eq 'xlsx') {
             my ($file_export, $error);
             eval { $file_export = $explorer->xlsx_file_export($controller); 1 }
