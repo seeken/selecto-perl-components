@@ -31,7 +31,7 @@ sub new ($class, @args) {
                 && defined($link->{field}) && !ref($link->{field})
                 && $link->{field} =~ /\A[A-Za-z][A-Za-z0-9_.]*\z/
                 && defined($link->{url_prefix}) && !ref($link->{url_prefix})
-                && $link->{url_prefix} =~ m{\A/(?!/)[A-Za-z0-9/_?=&%-]*\z}
+                && $link->{url_prefix} =~ m{\A/(?!/)[A-Za-z0-9/_-]+(?:\.[A-Za-z0-9]+)?(?:\?[A-Za-z0-9_=&%-]*)?\z}
                 && (!defined($link->{target}) || $link->{target} =~ /\A_(?:self|parent|top)\z/);
         for my $view (@{$self->page->views}) {
             next unless $view->{kind} eq 'detail';
