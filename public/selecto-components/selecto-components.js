@@ -141,8 +141,76 @@
     showWorkspaceResultsLoading(form && form.closest("[data-sc-workspace]"));
   }
 
+  // Each result-view panel (detail; summary = aggregate/graph) carries hidden
+  // copies of the other panel's selections, because only the active panel is
+  // submitted. The copies come from the last server render, so refresh them
+  // from the other panel's live controls before switching or submitting;
+  // otherwise edits made in one view are lost when the query runs or is saved
+  // from the other.
+  var VIEW_PANEL_NAMES = {
+    detail: ["field", "field_alias", "field_format", "row_click_action", "order", "direction"],
+    summary: ["group", "group_alias", "group_format", "group_bucket_ranges", "group_prefix_length",
+      "group_exclude_articles", "measure", "measure_alias", "measure_function", "measure_bucket_ranges",
+      "measure_ignore_nulls", "measure_series_id", "measure_chart_type", "measure_axis", "measure_stack",
+      "measure_color", "measure_transform", "measure_transform_window"]
+  };
+
+  function viewPanelValues(panel, names) {
+    var values = [];
+    Array.from(panel.querySelectorAll("input[name], select[name], textarea[name]")).forEach(function (control) {
+      if (names.indexOf(control.name) < 0) return;
+      if ((control.type === "checkbox" || control.type === "radio") && !control.checked) return;
+      if (control.tagName === "SELECT" && control.multiple) {
+        Array.from(control.selectedOptions).forEach(function (option) { values.push([control.name, option.value]); });
+        return;
+      }
+      values.push([control.name, control.value]);
+    });
+    return values;
+  }
+
+  function syncViewPanelCopies(root) {
+    if (!root) return;
+    var panels = {};
+    root.querySelectorAll("[data-sc-result-view-panel]").forEach(function (panel) {
+      panels[panel.dataset.scResultViewPanel] = panel;
+    });
+    ["detail", "summary"].forEach(function (owner) {
+      var source = panels[owner];
+      var target = panels[owner === "detail" ? "summary" : "detail"];
+      if (!source || !target) return;
+      var names = VIEW_PANEL_NAMES[owner];
+      var copies = Array.from(target.querySelectorAll('input[type="hidden"][name]')).filter(function (input) {
+        return names.indexOf(input.name) >= 0;
+      });
+      // A panel that was never shown has no live controls of its own; keep its copies.
+      var values = viewPanelValues(source, names);
+      if (!values.length && copies.length) return;
+      var anchor = copies.length ? copies[0] : null;
+      var fragment = document.createDocumentFragment();
+      values.forEach(function (pair) {
+        var input = document.createElement("input");
+        input.type = "hidden";
+        input.name = pair[0];
+        input.value = pair[1];
+        input.setAttribute("data-sc-view-copy", owner);
+        fragment.appendChild(input);
+      });
+      if (anchor) anchor.before(fragment); else target.appendChild(fragment);
+      copies.forEach(function (input) { input.remove(); });
+    });
+  }
+
+  document.addEventListener("submit", function (event) {
+    var form = event.target;
+    if (form && form.querySelector && form.querySelector("[data-sc-result-view-panel]")) {
+      syncViewPanelCopies(form);
+    }
+  }, true);
+
   function stageResultView(root, view) {
     if (!root) return;
+    syncViewPanelCopies(root);
     var mode = view === "detail" ? "detail" : "summary";
     root.querySelectorAll("[data-sc-result-view-panel]").forEach(function (panel) {
       var active = panel.dataset.scResultViewPanel === mode;
