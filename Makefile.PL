@@ -10,7 +10,10 @@ WriteMakefile(
     AUTHOR           => 'Chris Rohlfs',
     LICENSE          => 'artistic_1',
     MIN_PERL_VERSION => '5.034',
+    EXE_FILES => ['bin/selecto-template-preview-host'],
     PM => {
+        'lib/Selecto/Components/Templates/AuthoringPreview.pm' => '$(INST_LIB)/Selecto/Components/Templates/AuthoringPreview.pm',
+        'lib/Selecto/Components/Templates/AuthoringPreviewHost.pm' => '$(INST_LIB)/Selecto/Components/Templates/AuthoringPreviewHost.pm',
         'lib/Selecto/Components.pm' => '$(INST_LIB)/Selecto/Components.pm',
         'lib/Selecto/Components/APIConsole.pm' => '$(INST_LIB)/Selecto/Components/APIConsole.pm',
         'lib/Selecto/Components/Actions.pm' => '$(INST_LIB)/Selecto/Components/Actions.pm',

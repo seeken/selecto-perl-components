@@ -1,5 +1,9 @@
 .gitignore
 AGENTS.md
+bin/selecto-template-preview-host
+lib/Selecto/Components/Templates/AuthoringPreview.pm
+lib/Selecto/Components/Templates/AuthoringPreviewHost.pm
+t/templates_authoring_preview.t
 cpanfile
 examples/northwind.pl
 lib/Selecto/Components.pm
