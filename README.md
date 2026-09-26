@@ -1535,3 +1535,49 @@ security, or performance.
 - emailed and scheduled exports;
 - dashboards, extension view packages, maps, and custom visual encodings;
 - push broadcasts from external data changes.
+
+## Independent Studio authoring preview
+
+`bin/selecto-template-preview-host` starts a synthetic-only preview service on
+`127.0.0.1:4142` (override with `SELECTO_TEMPLATE_PREVIEW_PORT`). Supply a private
+`SELECTO_TEMPLATE_PREVIEW_TOKEN` of at least 32 characters to both this service
+and Selecto Studio. Start locally with:
+
+```sh
+mise exec -- script/with-local-sibling perl bin/selecto-template-preview-host
+```
+
+`POST /observe` requires that token in `X-Selecto-Preview-Token`, JSON content,
+and a loopback request with no Origin header. The service accepts the
+protocol's `selecto.template.authoring-request.v1`: exact source, public Domain
+contracts, capability contracts, reusable sources, synthetic fixtures, inputs,
+and optional exact native registration locks. Studio always sends locks.
+It invokes the actual Perl compiler, include composer, runtime, and renderer.
+There is no application query executor, database configuration, or operation
+submission path. Synthetic rows do not simulate filters, ordering, or paging.
+
+The returned `selecto.template.authoring-observation.v1` includes AST,
+fingerprints, composed manifests, runtime snapshot, installed typed/versioned
+renderer metadata, and actual Perl HTML. Studio compares these artifacts with
+its independent Elixir implementation and isolates the HTML in a sandboxed
+iframe. Do not expose this development service publicly or place its token in
+browser code/source control.
+
+Hosts can inject `AuthoringPreview->new(registrations => $registry)` into
+`AuthoringPreviewHost->new(preview => $preview)`. Registries are keyed by
+`components`/`elements`, then name. A name may have a single
+`{version, contract, render, targets}` entry or a
+`{default, versions => {$version => {contract, render, targets}}}` entry. Render
+callbacks are trusted installed Perl code, never supplied by template text.
+Exact locks select the requested callback version; unavailable versions reject.
+`targets` declares `elixir` and/or `perl`; a native-only registration cannot be
+published as portable. Retain old implementations for pinned releases, and never
+replace an existing version's code. Matching metadata is supplemented by shared
+behavior/security tests; it does not prove arbitrary callback behavior.
+
+`t/templates_authoring_preview.t` exercises native compilation/rendering,
+composition, escaping, request budgets, HTTP identity/origin checks, simultaneous
+callback versions, and native-only rejection. Run `mise run verify` for the
+package's source, installed-module, shared-asset, and browser gates. The complete
+Studio authoring/publication workflow is documented in the sibling
+`selecto_studio/docs/native_template_authoring.md`.

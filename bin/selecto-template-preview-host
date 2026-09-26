@@ -1,0 +1,14 @@
+#!/usr/bin/env perl
+use 5.034;
+use strict;
+use warnings;
+use Mojo::Server::Daemon ();
+use Selecto::Components::Templates::AuthoringPreviewHost ();
+
+my $port = $ENV{SELECTO_TEMPLATE_PREVIEW_PORT} // 4142;
+die "SELECTO_TEMPLATE_PREVIEW_PORT must be between 1024 and 65535\n"
+    unless $port =~ /\A\d+\z/ && $port >= 1024 && $port <= 65535;
+Mojo::Server::Daemon->new(
+    app => Selecto::Components::Templates::AuthoringPreviewHost->new,
+    listen => ["http://127.0.0.1:$port"], max_requests => 100, inactivity_timeout => 10,
+)->run;
