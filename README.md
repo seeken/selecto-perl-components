@@ -1400,6 +1400,11 @@ memory mode and split at Excel's worksheet row limit before Mojolicious serves
 the completed file. Aggregate grids retain their bounded materialized export
 because their output depends on the complete two-dimensional matrix.
 
+An explorer may set `max_export_rows` (a positive integer up to 10,000,000) to
+cap every all-rows export query: CSV, TSV, JSON, Excel and the all-rows page
+render. Paginated pages keep their own page size. Without it, exports return
+every matched row.
+
 `max_orders` defaults to 10 and may be configured from 1 through 20. Date/time
 formats are selected from a closed catalog; Aggregate formatting is part of the
 group expression itself, so choosing Month produces month buckets rather than
