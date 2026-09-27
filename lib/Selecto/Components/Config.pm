@@ -35,6 +35,9 @@ has 'action_authorizer';
 # Optional coderef ($controller, $config) returning true when the request may
 # export results (Excel/CSV/TSV/JSON). Without one, exports are allowed.
 has 'export_authorizer';
+# Optional positive integer: the most rows any export (CSV/TSV/JSON/XLSX or an
+# all-rows page render) may return. Without one, exports are unbounded.
+has 'max_export_rows';
 has 'record_editor_handler';
 has 'saved_query_store';
 has 'localizer';
@@ -107,6 +110,9 @@ sub new ($class, @args) {
         if defined($self->action_authorizer) && ref($self->action_authorizer) ne 'CODE';
     die "export_authorizer must be a coderef\n"
         if defined($self->export_authorizer) && ref($self->export_authorizer) ne 'CODE';
+    die "max_export_rows must be a positive integer up to 10000000\n"
+        if defined($self->max_export_rows)
+            && ($self->max_export_rows !~ /\A[1-9]\d{0,7}\z/ || $self->max_export_rows > 10_000_000);
     die "record_editor_handler must be a coderef\n"
         if defined($self->record_editor_handler)
             && ref($self->record_editor_handler) ne 'CODE';

@@ -78,6 +78,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         my $built = Selecto::Components::QueryBuilder->build(
             $config, $engine->domain, $state, {paginate => !$all_rows}
         );
+        _cap_export($config, $built) if $all_rows;
         my $build_ms = _elapsed_ms($build_started);
         $grid_all_rows = $built->{aggregate_grid} ? 1 : 0;
         my $started = time;
@@ -611,6 +612,15 @@ sub canonical_url ($self, $state, $domain = undef) {
     return $url->to_string;
 }
 
+# Applies the host's max_export_rows to an unpaginated export query.
+sub _cap_export ($config, $built) {
+    my $max = $config->max_export_rows or return;
+    my $query = $built->{query};
+    my $current = $query->limit_value;
+    $built->{query} = $query->limit($max) if !defined($current) || $current > $max;
+    return;
+}
+
 sub stream_export ($self, $controller, $format) {
     return undef unless $format eq 'csv' || $format eq 'tsv' || $format eq 'json';
     my $config = $self->config->for_request($controller);
@@ -629,6 +639,7 @@ sub stream_export ($self, $controller, $format) {
     # Grids need the bounded matrix transformation; their fallback export is
     # deliberately capped by max_grid_result_cells.
     return undef if $built->{aggregate_grid};
+    _cap_export($config, $built);
     my $stream = $engine->stream($built->{query}, fetch_size => 500);
     my @result_columns = @{$stream->columns};
     my @columns = grep { !$_->{action_id} } @{$built->{columns}};
@@ -714,6 +725,7 @@ sub xlsx_file_export ($self, $controller) {
         $config, $engine->domain, $state, {paginate => 0},
     );
     return undef if $built->{aggregate_grid};
+    _cap_export($config, $built);
     my ($output_handle, $output_path) = tempfile(SUFFIX => '.xlsx', UNLINK => 0);
     close $output_handle or die "could not prepare Excel export file\n";
     my ($stream, $workbook);
