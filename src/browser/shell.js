@@ -177,17 +177,105 @@
     });
   }
 
-  document.addEventListener("submit", function (event) {
+  window.addEventListener("submit", function (event) {
     var form = event.target;
+    if (form && form.hasAttribute("data-sc-controls-loading")) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     if (form && form.querySelector && form.querySelector("[data-sc-result-view-panel]")) {
       syncViewPanelCopies(form);
     }
   }, true);
 
+  var viewControlsRequests = new WeakMap();
+
+  function viewControlsBody(root) {
+    var body = new URLSearchParams(new FormData(root));
+    body.set("csrf_token", root.dataset.scControlsCsrf || "");
+    return body;
+  }
+
+  function controlsStatus(root, message) {
+    var status = root.querySelector("[data-sc-controls-status]");
+    if (!status) return;
+    status.textContent = message;
+    status.hidden = !message;
+  }
+
+  function cancelViewControls(root) {
+    var pending = viewControlsRequests.get(root);
+    if (pending) {
+      window.clearTimeout(pending.timer);
+      pending.abort.abort();
+    }
+    viewControlsRequests.delete(root);
+    root.removeAttribute("data-sc-controls-loading");
+    root.removeAttribute("aria-busy");
+  }
+
+  function loadViewControls(root, panel, view) {
+    cancelViewControls(root);
+    var request = {abort: new AbortController()};
+    request.timer = window.setTimeout(function () {
+      request.timedOut = true;
+      request.abort.abort();
+    }, 30000);
+    viewControlsRequests.set(root, request);
+    var body = viewControlsBody(root);
+    root.setAttribute("data-sc-controls-loading", "");
+    root.setAttribute("aria-busy", "true");
+    controlsStatus(root, "Loading view controls…");
+    fetch(root.dataset.scControlsUrl, {
+      method: "POST", credentials: "same-origin", signal: request.abort.signal,
+      headers: {Accept: "application/json"}, body: body
+    }).then(async function (response) {
+      var data = await response.json();
+      if (!response.ok || typeof data.html !== "string") {
+        throw new Error(data.error || "View controls could not be loaded.");
+      }
+      if (viewControlsRequests.get(root) !== request) return;
+      if (!root.isConnected) { cancelViewControls(root); return; }
+      // Editing filters/columns during the request must not restore an older
+      // draft. Fetch again using the current successful form controls.
+      if (viewControlsBody(root).toString() !== body.toString()) {
+        loadViewControls(root, panel, view);
+        return;
+      }
+      var template = document.createElement("template");
+      template.innerHTML = data.html;
+      panel.replaceChildren(template.content);
+      panel.removeAttribute("data-sc-view-lazy");
+      cancelViewControls(root);
+      controlsStatus(root, "");
+      stageResultView(root, view);
+    }).catch(function (error) {
+      if (viewControlsRequests.get(root) !== request) return;
+      if (!root.isConnected) { cancelViewControls(root); return; }
+      cancelViewControls(root);
+      // Keep the existing controls and all their edits usable on failure.
+      root.querySelectorAll('input[name="view"]').forEach(function (radio) {
+        radio.checked = radio.value === root.dataset.scControlsView;
+      });
+      controlsStatus(root, (request.timedOut ? "View controls took too long to load."
+        : error.message || "View controls could not be loaded.") +
+        " Select the view again to retry.");
+    });
+  }
+
   function stageResultView(root, view) {
     if (!root) return;
     syncViewPanelCopies(root);
     var mode = view === "detail" ? "detail" : "summary";
+    var target = root.querySelector('[data-sc-result-view-panel="' + mode + '"]');
+    if (target && target.hasAttribute("data-sc-view-lazy") && root.dataset.scControlsUrl) {
+      loadViewControls(root, target, view);
+      return;
+    }
+    cancelViewControls(root);
+    controlsStatus(root, "");
+    root.dataset.scControlsView = view;
     root.querySelectorAll("[data-sc-result-view-panel]").forEach(function (panel) {
       var active = panel.dataset.scResultViewPanel === mode;
       panel.hidden = !active;

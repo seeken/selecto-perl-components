@@ -131,6 +131,28 @@ ok scalar(grep { $_->{context}{semantic} eq 'fields.product_name.label' } @looku
 ok scalar(grep { $_->{context}{controller} == $controller } @lookups),
     'request-local config supplies the current controller to the host localizer';
 
+{
+    my $plain = TestSelectoComponents::domain();
+    no warnings 'redefine';
+    my $original = Selecto::Domain->can('contract');
+    my $copies = 0;
+    local *Selecto::Domain::contract = sub { $copies++; $original->(@_) };
+    my $request = $base_config->for_request($controller);
+    $request->localize($domain, 'fields.product_name.label', 'Product Name');
+    $request->localize($domain, 'fields.unit_price.label', 'Unit Price');
+    is $copies, 1, 'all labels in one request share a single metadata snapshot';
+    local $translations{'selecto.products.fields.product_name.label'} = 'New label';
+    is $request->localize($domain, 'fields.product_name.label', 'Product Name'), 'New label',
+        'metadata reuse does not cache translated text or dictionary decisions';
+    $base_config->for_request($controller)->localize($domain, 'domain.title', 'Title');
+    is $copies, 2, 'a new request reads fresh metadata';
+    $request->localize($plain, 'domain.title', 'Title');
+    is $copies, 3, 'a different domain does not share another domain metadata';
+    my $before = $copies;
+    $request->localize($plain, 'domain.title', 'Title');
+    is $copies, $before, 'domains without i18n metadata are also memoized';
+}
+
 done_testing;
 
 sub _before {

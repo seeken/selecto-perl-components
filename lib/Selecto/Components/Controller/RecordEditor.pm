@@ -373,11 +373,9 @@ sub _actions ($controller, $context, $return_to) {
             next;
         }
         next if defined($eligible) && !$eligible->{"$context->{target}"};
-        my $inputs = join '', map {
-            Selecto::Components::Renderer::Results::_action_input(
-                $_, $action_id, 'record-editor',
-            )
-        } @{$action->{inputs} // []};
+        my $inputs = Selecto::Components::Renderer::Results::_action_inputs(
+            $action, 'record-editor',
+        );
         my $description = length($action->{description} // '')
             ? '<p>' . _h($action->{description}) . '</p>' : '';
         my $panel_id = 'sc-record-editor-action-' . $action_id;

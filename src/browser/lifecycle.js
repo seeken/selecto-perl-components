@@ -232,6 +232,7 @@
     restoreCharts();
     restoreGridSelections();
     restoreBulkActions();
+    restoreResultTableHeaders();
   }
 
   function recoverClosedWebSocketChannels() {

@@ -91,7 +91,8 @@ sub _bulk_actions ($class, $model) {
 sub _action_dialog ($model, $action, $dialog_id, $dialog_title_id, $single_row = 0) {
     my $config = $model->{config};
     my $id = $action->{id};
-    my $inputs = join '', map { _action_input($_, $id) } @{$action->{inputs}};
+    my $target_form = $single_row && $config->action_form_resolvers->{$id};
+    my $inputs = $target_form ? '' : _action_inputs($action);
     my $description = length($action->{description} // '')
         ? '<p class="sc-action-description">' . _h($action->{description}) . '</p>' : '';
     my $summary = $single_row
@@ -100,7 +101,9 @@ sub _action_dialog ($model, $action, $dialog_id, $dialog_title_id, $single_row =
     return '<dialog class="sc-action-dialog" id="' . _h($dialog_id) .
         '" aria-labelledby="' . _h($dialog_title_id) . '" data-sc-action-dialog>' .
         '<form method="post" action="' . _h($config->path . '/actions/' . $id) .
-        '" data-sc-action-form><header><div><p class="sc-eyebrow">' .
+        '" data-sc-action-form' . ($target_form ? ' data-sc-action-form-url="' .
+            _h($config->path . '/actions/' . $id . '/form') . '" data-sc-action-form-ready="0"' : '') .
+        '><header><div><p class="sc-eyebrow">' .
         ($single_row ? 'Row action' : 'Selected-row action') . '</p><h3 id="' .
         _h($dialog_title_id) . '">' . _h($action->{label}) .
         '</h3></div><button type="button" class="sc-action-close" ' .
@@ -108,7 +111,7 @@ sub _action_dialog ($model, $action, $dialog_id, $dialog_title_id, $single_row =
         $description . $summary . '<input type="hidden" name="csrf_token" value="' .
         _h($model->{csrf_token} // '') . '"><input type="hidden" name="return_to" value="' .
         _h($model->{canonical_url}) . '"><div data-sc-action-targets></div>' .
-        '<div class="sc-action-inputs">' . $inputs . '</div>' .
+        '<div class="sc-action-inputs" data-sc-action-fields>' . $inputs . '</div>' .
         '<div class="sc-action-result" data-sc-action-result role="status" hidden></div>' .
         '<footer><button type="button" class="sc-button sc-secondary" data-sc-action-close>Cancel</button>' .
         '<button type="submit" class="sc-button sc-primary">' .
@@ -140,7 +143,8 @@ sub _grouped_action_panel ($model, $action) {
         '<input type="hidden" name="csrf_token" value="' . _h($model->{csrf_token} // '') . '">' .
         '<input type="hidden" name="return_to" value="' . _h($model->{canonical_url}) . '">' .
         '<input type="hidden" name="action_groups" value="[]" data-sc-action-groups>' .
-        '<div data-sc-action-targets></div><div class="sc-group-action-groups" ' .
+        '<div data-sc-action-targets></div><div class="sc-action-inputs">' .
+        _action_inputs($action) . '</div><div class="sc-group-action-groups" ' .
         'data-sc-group-action-groups></div>' .
         '<div class="sc-action-result" data-sc-action-result role="status" hidden></div>' .
         '<footer><button type="button" class="sc-button sc-secondary" data-sc-action-close>Cancel</button>' .
@@ -158,12 +162,43 @@ sub _grouped_action_panel ($model, $action) {
         $button . $dialog . '</section>';
 }
 
+sub _action_inputs ($action, $instance = '') {
+    my $base = join '', map { _action_input($_, $action->{id}, $instance) } @{$action->{inputs}};
+    return $base unless exists $action->{variants};
+    my $metadata = {inputs => $action->{inputs}, variants => [map { +{
+        id => $_->{id}, label => $_->{label}, when => $_->{when},
+        fields => [map { $_->{id} } @{$_->{inputs}}],
+    } } @{$action->{variants}}]};
+    return '<div class="sc-action-inputs" data-sc-action-variants="' . _h(encode_json($metadata)) . '">' .
+        '<div class="sc-action-inputs" data-sc-action-base>' . $base . '</div>' .
+        '<p data-sc-action-variant-status role="status" aria-live="polite">Choose the action options to show the appropriate fields.</p>' .
+        '<noscript>JavaScript is required to choose an action form.</noscript>' .
+        join('', map {
+            my $variant = $_;
+            '<fieldset hidden disabled data-sc-action-variant="' . _h($variant->{id}) . '"><legend>' .
+            _h($variant->{label}) . '</legend>' .
+            (length($variant->{description} // '') ? '<p>' . _h($variant->{description}) . '</p>' : '') .
+            '<div class="sc-action-inputs">' . join('', map {
+                _action_input($_, $action->{id}, $instance . '-variant-' . $variant->{id})
+            } @{$variant->{inputs}}) . '</div></fieldset>'
+        } @{$action->{variants}}) . '</div>';
+}
+
 sub _action_input ($input, $action_id = 'action', $instance_id = '') {
     my $name = 'action_input_' . $input->{id};
-    my $required = $input->{required} ? ' required aria-required="true"' : '';
-    my $marker = $input->{required} ? ' <span aria-hidden="true">*</span>' : '';
+    my $required = $input->{required} && !$input->{server_default} ? ' required aria-required="true"' : '';
+    my $marker = $required ? ' <span aria-hidden="true">*</span>' : '';
+    my $default = $input->{default};
+    $default = "$default" =~ /\A(?:true|1)\z/i ? 'true' : 'false'
+        if $input->{type} eq 'boolean' && defined($default);
+    $default = encode_json($default) if $input->{type} eq 'collection' && ref($default) eq 'ARRAY';
+    $default = '' if !defined($default) || ref($default);
     my $control;
-    if ($input->{type} eq 'lookup') {
+    if ($input->{fixed}) {
+        my ($option) = @{$input->{options}};
+        $control = '<strong>' . _h($option->{label}) . '</strong><input type="hidden" name="' .
+            _h($name) . '" value="' . _h($default) . '">';
+    } elsif ($input->{type} eq 'lookup') {
         my $results_id = 'sc-action-lookup-' . $action_id . '-' . $input->{id} .
             (length($instance_id) ? '-' . $instance_id : '');
         my $placeholder = $input->{placeholder}
@@ -185,38 +220,47 @@ sub _action_input ($input, $action_id = 'action', $instance_id = '') {
             $required . '><div class="sc-action-lookup-results" data-sc-lookup-results id="' .
             _h($results_id) . '" role="listbox" hidden></div>' .
             '<small class="sc-action-lookup-hint">' . _h($hint) . '</small></div>';
-    } elsif ($input->{type} eq 'select') {
+    } elsif ($input->{type} eq 'select' || $input->{type} eq 'boolean') {
+        my $choices = $input->{type} eq 'boolean'
+            ? [{value => 'true', label => 'Yes'}, {value => 'false', label => 'No'}]
+            : $input->{options} // [];
         my $options = '<option value="">Choose ' . _h(lc($input->{label})) . '</option>' .
             join('', map {
-                '<option value="' . _h($_->{value}) . '">' . _h($_->{label}) . '</option>'
-            } @{$input->{options} // []});
+                '<option value="' . _h($_->{value}) . '"' .
+                    ("$_->{value}" eq "$default" ? ' selected' : '') . '>' . _h($_->{label}) . '</option>'
+            } @$choices);
         $control = '<select name="' . _h($name) . '"' . $required . '>' . $options . '</select>';
-    } elsif ($input->{type} eq 'textarea') {
+    } elsif ($input->{type} eq 'textarea' || $input->{type} eq 'collection') {
         my $rows = $input->{rows} // 4;
         my $maxlength = defined($input->{max_length})
             ? ' maxlength="' . _h($input->{max_length}) . '"' : '';
         my $minlength = defined($input->{min_length})
             ? ' minlength="' . _h($input->{min_length}) . '"' : '';
         $control = '<textarea name="' . _h($name) . '" rows="' . _h($rows) . '"' .
-            $maxlength . $minlength . $required . '></textarea>';
+            $maxlength . $minlength . $required . '>' . _h($default) . '</textarea>' .
+            ($input->{type} eq 'collection' ? '<small>Enter a JSON array of items.</small>' : '');
     } else {
-        my $type = $input->{type} eq 'string' ? 'text' : $input->{type};
+        my $type = $input->{type} =~ /\A(?:string|utc_datetime)\z/ ? 'text'
+            : $input->{type} eq 'integer' ? 'number' : $input->{type};
         my $maxlength = defined($input->{max_length})
             ? ' maxlength="' . _h($input->{max_length}) . '"' : '';
         my $minlength = defined($input->{min_length})
             ? ' minlength="' . _h($input->{min_length}) . '"' : '';
         $control = '<input type="' . _h($type) . '" name="' . _h($name) . '"' .
+            ' value="' . _h($default) . '"' .
+            ($type eq 'number' ? ' step="' . ($input->{type} eq 'integer' ? '1' : 'any') . '"' : '') .
             $maxlength . $minlength . $required . '>';
     }
-    my $element = $input->{type} eq 'lookup' ? 'div' : 'label';
-    return '<' . $element . ' class="sc-action-input"><span>' . _h($input->{label}) . $marker .
+    my $element = $input->{fixed} || $input->{type} eq 'lookup' ? 'div' : 'label';
+    $control .= '<small>Leave blank to use the server default.</small>' if $input->{server_default};
+    return '<' . $element . ' class="sc-action-input" data-sc-action-input-id="' . _h($input->{id}) . '"><span>' . _h($input->{label}) . $marker .
         '</span>' . $control . '</' . $element . '>';
 }
 
 sub _row_inline_action ($model, $action, $target, $row_number) {
     my $id = $action->{id};
     my $instance = 'row-' . $row_number;
-    my $inputs = join '', map { _action_input($_, $id, $instance) } @{$action->{inputs}};
+    my $inputs = _action_inputs($action, $instance);
     my $enabled = ($action->{status} // 'enabled') eq 'enabled';
     my $disabled = $enabled ? '' : ' disabled';
     my $title = $enabled ? ''

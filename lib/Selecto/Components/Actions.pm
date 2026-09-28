@@ -5,6 +5,8 @@ use strict;
 use warnings;
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(decode_json);
+use JSON::PP ();
+use Selecto::Action ();
 use Selecto::Components::Util qw(humanize);
 use Selecto::CoDomain ();
 use Selecto::DateShortcut ();
@@ -44,6 +46,8 @@ sub available ($class, $config, $domain, $controller, $phase = 'preview', $targe
         next unless $action && $class->_bulk_enabled($action);
         my $decision = $class->_authorize($config, $controller, $action, $phase, $target);
         next if $decision->{status} eq 'hidden';
+        $class->_target_form($config, $controller, $action, $target)
+            if $decision->{status} eq 'enabled';
         $action->{status} = $decision->{status};
         $action->{status_reason} = $decision->{reason} if defined $decision->{reason};
         push @available, $action;
@@ -61,7 +65,32 @@ sub find ($class, $config, $domain, $controller, $id, $phase = 'preview', $targe
     );
     return undef unless $action && $class->_bulk_enabled($action);
     my $decision = $class->_authorize($config, $controller, $action, $phase, $target);
+    $class->_target_form($config, $controller, $action, $target)
+        if $decision->{status} eq 'enabled';
     return { action => $action, decision => $decision };
+}
+
+# Host-owned row state may narrow an existing select input to one choice.
+# Resolve only after target authorization, never from submitted form inputs.
+# Normalizing anew for every request prevents one row's form leaking to another.
+sub _target_form ($class, $config, $controller, $action, $target) {
+    my $resolver = $config->action_form_resolvers->{$action->{id}} or return;
+    return unless ref($target) eq 'HASH' && ref($target->{ids}) eq 'ARRAY'
+        && @{$target->{ids}} == 1;
+    my $form = $resolver->($controller, {action => dclone($action), ids => [@{$target->{ids}}]});
+    die "Action form resolver must return fixed_inputs\n"
+        unless ref($form) eq 'HASH' && ref($form->{fixed_inputs}) eq 'HASH';
+    for my $id (keys %{$form->{fixed_inputs}}) {
+        my $value = $form->{fixed_inputs}{$id};
+        my ($input) = grep { $_->{id} eq $id } @{$action->{inputs}};
+        die "Action form resolver can only fix declared select inputs\n"
+            unless $input && $input->{type} eq 'select' && defined($value) && !ref($value);
+        my @options = grep { "$_->{value}" eq "$value" } @{$input->{options} // []};
+        die "Action form resolver selected an unavailable value\n" unless @options == 1;
+        $input->{options} = \@options;
+        $input->{default} = "$value";
+        $input->{fixed} = 1;
+    }
 }
 
 # Resolve the public form contract without making a target authorization
@@ -130,8 +159,15 @@ sub request ($class, $config, $action, $selected_ids, $raw_inputs, $options = un
             ? 'Select exactly one row.'
             : "Select no more than $maximum rows.";
     }
-    my ($inputs, $input_errors) = _request_inputs($action->{inputs}, $raw_inputs);
+    my $form = $class->input_form($action, $raw_inputs);
+    push @errors, @{$form->{errors}};
+    my ($inputs, $input_errors) = _request_inputs($form->{inputs}, $raw_inputs, $options);
     push @errors, @$input_errors;
+    unless (@{$form->{errors}}) {
+        my %allowed = map { $_->{id} => 1 } @{$form->{inputs}};
+        push @errors, map { "Action input $_ is not available for this form." }
+            sort grep { !$allowed{$_} } keys %{$raw_inputs // {}};
+    }
 
     my $groups = [];
     if (($action->{selection}{mode} // 'rows') eq 'groups') {
@@ -149,7 +185,45 @@ sub request ($class, $config, $action, $selected_ids, $raw_inputs, $options = un
         selected_ids => \@ids,
         inputs => $inputs,
         groups => $groups,
+        (defined($form->{variant}) ? (variant => $form->{variant}) : ()),
     };
+}
+
+# Select the effective form using the same conditions as the core planner.
+# No submitted variant id is accepted; the base input values decide it.
+sub input_form ($class, $action, $raw) {
+    return {inputs => $action->{inputs}, errors => []} unless exists $action->{variants};
+    my %selectors;
+    $selectors{$_} = 1 for map { keys %{$_->{when}} } @{$action->{variants}};
+    my @selector_specs = grep { $selectors{$_->{id}} } @{$action->{inputs}};
+    my ($values, $errors) = _request_inputs(\@selector_specs, $raw);
+    return {inputs => [], errors => $errors} if @$errors;
+    my $form = eval { Selecto::Action->input_form($action, $values) };
+    unless ($form) {
+        my $error = $@;
+        my $code = ref($error) && eval { $error->can('code') } ? $error->code : '';
+        return {inputs => [], errors => [$code eq 'ambiguous_action_variant'
+            ? 'These choices match more than one action form. Contact the administrator.'
+            : 'Choose values that select an available action form.']};
+    }
+    my ($variant) = grep { $_->{id} eq $form->{variant} } @{$action->{variants}};
+    my %override = map { $_->{id} => $_ } @{$variant->{inputs}};
+    my %base = map { $_->{id} => 1 } @{$action->{inputs}};
+    return {variant => $form->{variant}, errors => [], inputs => [
+        (map { $override{$_->{id}} // $_ } @{$action->{inputs}}),
+        (grep { !$base{$_->{id}} } @{$variant->{inputs}}),
+    ]};
+}
+
+sub submitted_inputs ($class, $controller) {
+    my %inputs;
+    for my $name (@{$controller->req->params->names}) {
+        next unless $name =~ /\Aaction_input_(.+)\z/;
+        my $id = $1;
+        my $values = $controller->every_param($name);
+        $inputs{$id} = @$values == 1 ? $values->[0] : {invalid => 'duplicate input'};
+    }
+    return \%inputs;
 }
 
 sub _normalize_action ($class, $id, $spec, $config, $controller, $domain) {
@@ -170,6 +244,24 @@ sub _normalize_action ($class, $id, $spec, $config, $controller, $domain) {
         $action->{inputs}, $config, $controller, $action, $domain,
         "actions.$id.inputs",
     );
+    if (exists $action->{variants}) {
+        die "action $id variants must be a non-empty list\n"
+            unless ref($action->{variants}) eq 'ARRAY' && @{$action->{variants}};
+        my %seen;
+        for my $variant (@{$action->{variants}}) {
+            die "action $id has an invalid variant\n"
+                unless ref($variant) eq 'HASH' && _text($variant->{id}) =~ /\A[a-z][a-z0-9_-]*\z/
+                    && !$seen{$variant->{id}}++ && ref($variant->{when}) eq 'HASH';
+            my $prefix = "actions.$id.variants.$variant->{id}";
+            $variant->{label} = $config->localize($domain, "$prefix.label",
+                _text($variant->{label}) || _humanize($variant->{id}), {kind => 'action_variant'});
+            $variant->{description} = $config->localize($domain, "$prefix.description",
+                _text($variant->{description}), {kind => 'action_variant'});
+            $variant->{inputs} = $class->_normalize_inputs(
+                $variant->{inputs}, $config, $controller, $action, $domain, "$prefix.inputs",
+            );
+        }
+    }
     $action->{selection} = $class->_normalize_selection(
         $action->{selection}, $config, $controller, $action, $domain,
     );
@@ -282,7 +374,8 @@ sub _normalize_inputs ($class, $specs, $config, $controller, $action, $domain, $
         $type = 'textarea' if $type eq 'text';
         $type = 'select' if $type eq 'choice';
         $type = 'lookup' if $type =~ /\A(?:autocomplete|entity_lookup)\z/;
-        $type = 'string' unless $type =~ /\A(?:string|textarea|select|lookup|number|date|datetime-local)\z/;
+        $type = 'number' if $type eq 'decimal' || $type eq 'float';
+        $type = 'string' unless $type =~ /\A(?:string|textarea|select|lookup|number|integer|boolean|collection|date|utc_datetime|datetime-local)\z/;
         my $input = {
             id => $id,
             label => $config->localize(
@@ -296,12 +389,21 @@ sub _normalize_inputs ($class, $specs, $config, $controller, $action, $domain, $
             type => $type,
             required => $spec->{required} ? 1 : 0,
             trim => exists($spec->{trim}) ? ($spec->{trim} ? 1 : 0) : 1,
+            (exists($spec->{default}) ? (default => ref($spec->{default}) ? dclone($spec->{default}) : $spec->{default}) : ()),
+            ($spec->{discriminator} ? (discriminator => 1) : ()),
+            (defined($spec->{min_items}) ? (min_items => 0 + $spec->{min_items}) : ()),
+            (defined($spec->{max_items}) ? (max_items => 0 + $spec->{max_items}) : ()),
             (defined($spec->{min_length}) ? (min_length => 0 + $spec->{min_length}) : ()),
             (defined($spec->{max_length}) ? (max_length => 0 + $spec->{max_length}) : ()),
             (defined($spec->{rows}) ? (rows => 0 + $spec->{rows}) : ()),
             (defined($spec->{minimum}) ? (minimum => 0 + $spec->{minimum}) : ()),
             (defined($spec->{maximum}) ? (maximum => 0 + $spec->{maximum}) : ()),
         };
+        my $default = $spec->{default};
+        $input->{server_default} = 1 if $type ne 'collection'
+            && ref($default) eq 'ARRAY' && @$default == 2
+            && !ref($default->[0]) && !ref($default->[1])
+            && ($default->[0] // '') eq 'system' && ($default->[1] // '') eq 'now';
         if ($type eq 'lookup') {
             my $source = _text($spec->{lookup_source});
             my $co_domain = _text($spec->{co_domain});
@@ -357,13 +459,46 @@ sub _normalize_inputs ($class, $specs, $config, $controller, $action, $domain, $
 }
 
 sub _request_inputs {
-    my ($specs, $raw) = @_;
+    my ($specs, $raw, $options) = @_;
     $specs = [] unless ref($specs) eq 'ARRAY';
     $raw = {} unless ref($raw) eq 'HASH';
     my (%inputs, @errors);
     for my $input (@$specs) {
         my $id = $input->{id};
-        my $value = exists($raw->{$id}) && defined($raw->{$id}) ? "$raw->{$id}" : '';
+        # System expressions are resolved by the governed executor, never by
+        # the browser clock or by stringifying an expression into a form value.
+        next if $input->{server_default} && (!exists($raw->{$id})
+            || !defined($raw->{$id}) || (!ref($raw->{$id}) && $raw->{$id} =~ /\A\s*\z/));
+        my $value = exists($raw->{$id}) ? $raw->{$id} : $input->{default};
+        if ($input->{type} eq 'collection') {
+            if ($options && $options->{form_encoded} && defined($value) && !ref($value) && length($value) <= 131_072) {
+                if (length($value)) {
+                    my $parsed = eval { decode_json($value) };
+                    if ($@ || ref($parsed) ne 'ARRAY') {
+                        push @errors, "$input->{label} must be a JSON array.";
+                        next;
+                    }
+                    $value = $parsed;
+                }
+            }
+            next if !$input->{required} && (!defined($value) || (!ref($value) && $value eq ''));
+            if (ref($value) ne 'ARRAY') {
+                push @errors, "$input->{label} must be a JSON array.";
+            } elsif (@$value < ($input->{min_items} // 0) || (defined($input->{max_items}) && @$value > $input->{max_items})) {
+                push @errors, "$input->{label} has an invalid number of items.";
+            } else {
+                $inputs{$id} = dclone($value);
+            }
+            next;
+        }
+        if ($input->{type} eq 'boolean' && JSON::PP::is_bool($value)) {
+            $value = $value ? 'true' : 'false';
+        }
+        if (ref($value)) {
+            push @errors, "$input->{label} must be a scalar value.";
+            next;
+        }
+        $value = defined($value) ? "$value" : '';
         $value =~ s/\r\n?/\n/g;
         $value =~ s/\A\s+|\s+\z//g if $input->{trim};
         if ($input->{required} && $value eq '') {
@@ -371,13 +506,23 @@ sub _request_inputs {
             next;
         }
         next if $value eq '' && !$input->{required};
+        if ($input->{type} eq 'boolean') {
+            if ($value =~ /\A(?:true|1|false|0)\z/i) {
+                $inputs{$id} = $value =~ /\A(?:true|1)\z/i ? JSON::PP::true : JSON::PP::false;
+            } else {
+                push @errors, "$input->{label} must be Yes or No.";
+            }
+            next;
+        }
         if ($input->{type} eq 'select') {
             my %allowed = map { ($_->{value} . '') => 1 } @{$input->{options}};
             push @errors, "$input->{label} is not an available choice." unless $allowed{$value};
         }
-        if ($input->{type} eq 'number' && $value !~ /\A-?(?:\d+(?:\.\d*)?|\.\d+)\z/) {
+        if ($input->{type} =~ /\A(?:number|integer)\z/ && $value !~ /\A-?(?:\d+(?:\.\d*)?|\.\d+)\z/) {
             push @errors, "$input->{label} must be a number.";
-        } elsif ($input->{type} eq 'number') {
+        } elsif ($input->{type} =~ /\A(?:number|integer)\z/) {
+            push @errors, "$input->{label} must be an integer."
+                if $input->{type} eq 'integer' && $value !~ /\A-?\d+\z/;
             push @errors, "$input->{label} is below its minimum."
                 if defined($input->{minimum}) && $value < $input->{minimum};
             push @errors, "$input->{label} is above its maximum."
@@ -385,6 +530,11 @@ sub _request_inputs {
         }
         if ($input->{type} eq 'date' && !Selecto::DateShortcut->valid_date($value)) {
             push @errors, "$input->{label} must be an ISO date (YYYY-MM-DD).";
+        }
+        if ($input->{type} eq 'utc_datetime') {
+            my ($day) = $value =~ /\A(\d{4}-\d\d-\d\d)T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)\z/;
+            push @errors, "$input->{label} must include an ISO date, time, and timezone."
+                unless defined($day) && Selecto::DateShortcut->valid_date($day);
         }
         if ($input->{type} eq 'lookup' && ($input->{value_type} // '') eq 'integer') {
             push @errors, "$input->{label} must be a valid selection."
@@ -402,7 +552,7 @@ sub _request_inputs {
         if (defined($input->{max_length}) && length($value) > $input->{max_length}) {
             push @errors, "$input->{label} is too long.";
         }
-        $inputs{$id} = $value;
+        $inputs{$id} = $input->{type} =~ /\A(?:number|integer)\z/ && !@errors ? 0 + $value : $value;
     }
     return (\%inputs, \@errors);
 }

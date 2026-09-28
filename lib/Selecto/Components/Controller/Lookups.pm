@@ -46,8 +46,20 @@ sub _run_action_lookup ($controller, $explorer) {
         error => 'That lookup is not available.', results => [],
     }) unless $resolved && ($resolved->{decision}{status} // '') eq 'enabled';
 
+    my $form = Selecto::Components::Actions->input_form($resolved->{action},
+        Selecto::Components::Actions->submitted_inputs($controller));
+    # A selector lookup must work before the user has selected a variant.
+    # Other inputs still require an unambiguous effective form.
+    my %selectors;
+    $selectors{$_} = 1 for map { keys %{$_->{when}} } @{$resolved->{action}{variants} // []};
+    my ($selector) = grep { $_->{id} eq $input_id && $selectors{$input_id} }
+        @{$resolved->{action}{inputs}};
+    return _lookup_response($controller, 422, {
+        error => join(' ', @{$form->{errors}}), results => [],
+    }) if @{$form->{errors}} && !$selector;
     my @inputs = (
-        @{$resolved->{action}{inputs} // []},
+        ($selector ? ($selector) : ()),
+        @{$form->{inputs}},
         @{$resolved->{action}{selection}{group_inputs} // []},
     );
     my ($input) = grep {

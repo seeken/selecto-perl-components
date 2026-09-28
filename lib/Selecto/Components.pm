@@ -116,6 +116,7 @@ sub register ($self, $app, $plugin_config) {
         my $config = Selecto::Components::Config->new(
             websocket_context => $plugin_config->{websocket_context},
             websocket_session_options => $plugin_config->{websocket_session_options} // {},
+            lazy_view_controls => $plugin_config->{lazy_view_controls} // 0,
             %{$specs->{$id}},
             id => $id,
             path => $specs->{$id}{path} // "/explore/$id",
@@ -230,6 +231,15 @@ sub _routes (
         return _render_page($controller, $model);
     });
 
+    $routes->post($route_path . '/controls')->to(cb => sub ($controller) {
+        return $controller->render(text => 'Forbidden', status => 403)
+            unless $origin_check->($controller) && _csrf_valid($controller);
+        return Selecto::Components::Controller::Explorer::view_controls($controller, $explorer);
+    });
+
+    $routes->get($route_path . '/actions/:selecto_action_id/form')->to(cb => sub ($controller) {
+        return Selecto::Components::Controller::Actions::form($controller, $explorer);
+    });
     $routes->post($route_path . '/actions/:selecto_action_id')->to(cb => sub ($controller) {
         return Selecto::Components::Controller::Actions::_run_action($controller, $explorer);
     });

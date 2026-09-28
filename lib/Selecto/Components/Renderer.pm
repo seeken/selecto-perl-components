@@ -95,9 +95,12 @@ sub surface ($class, $model) {
             _h($label) . '</a>'
     } ([xlsx => 'Excel'], [csv => 'CSV'], [tsv => 'TSV'], [json => 'JSON']);
     my $api_link = $class->_api_console_control($model);
+    my $export_label = $config->max_export_rows
+        ? 'Export (up to ' . $config->max_export_rows . ' rows)' : 'Export all';
+    my $export_aria_label = $config->max_export_rows ? $export_label : 'Export all matched rows';
     my $export_options = $config->export_allowed
-        ? '<div class="sc-export-options" role="group" aria-label="Export all matched rows">' .
-          '<span>Export all</span>' . $export_links . '</div>'
+        ? '<div class="sc-export-options" role="group" aria-label="' . _h($export_aria_label) . '">' .
+          '<span>' . _h($export_label) . '</span>' . $export_links . '</div>'
         : '';
     my $hero_actions = $query_params
         ? '<div class="sc-hero-actions"><a class="sc-button sc-secondary" href="' .

@@ -48,10 +48,20 @@
         ["is_null", "is empty"], ["not_null", "is not empty"]
       ];
     }
+    var textOperators = /^(?:string|text)$/.test(type || "") ? [
+      ["text_contains_ci", "contains (ignore case)"],
+      ["starts_with_ci", "starts with (ignore case)"],
+      ["ends_with_ci", "ends with (ignore case)"],
+      ["text_contains", "contains (match case)"],
+      ["starts_with", "starts with (match case)"],
+      ["ends_with", "ends with (match case)"]
+    ] : [];
     return [
       ["eq", "equals"], ["ne", "does not equal"], ["in", "one of"],
+      ["not_in", "not one of"]
+    ].concat(textOperators, [
       ["is_null", "is empty"], ["not_null", "is not empty"]
-    ];
+    ]);
   }
 
   function hiddenFilterValue(name, value) {

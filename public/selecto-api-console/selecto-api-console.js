@@ -366,6 +366,10 @@
       return ["eq", "ne", "gt", "gte", "lt", "lte", "between", "in", "is_null", "not_null"];
     }
     if (type === "boolean") return ["eq", "ne", "is_null", "not_null"];
+    if (["string", "text"].includes(type)) return [
+      ...common, "not_in", "text_contains_ci", "starts_with_ci", "ends_with_ci",
+      "text_contains", "starts_with", "ends_with",
+    ];
     return common;
   }
 
@@ -394,6 +398,12 @@
     return ({
       eq: "equals",
       ne: "does not equal",
+      text_contains_ci: "contains (ignore case)",
+      starts_with_ci: "starts with (ignore case)",
+      ends_with_ci: "ends with (ignore case)",
+      text_contains: "contains (match case)",
+      starts_with: "starts with (match case)",
+      ends_with: "ends with (match case)",
       gt: "greater than / after",
       gte: "at least / on or after",
       lt: "less than / before",

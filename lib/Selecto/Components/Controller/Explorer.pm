@@ -4,7 +4,37 @@ use Mojo::Base -base, -signatures;
 use Mojo::URL ();
 use Selecto::Components::Actions ();
 use Selecto::Components::Controller::SavedQueries ();
+use Selecto::Components::State ();
+use Selecto::Components::Renderer::Builder ();
 use Time::HiRes qw(time);
+
+sub view_controls ($controller, $explorer) {
+    $controller->res->headers->cache_control('no-store');
+    my ($html, $error);
+    my $ok = eval {
+        my $config = $explorer->config->for_request($controller);
+        my $engine = $config->engine($controller);
+        my $input = $explorer->input_from_controller($controller);
+        my $state = Selecto::Components::State->from_input($config, $engine->domain, $input);
+        if (!$state->valid) {
+            $error = join ' ', @{$state->errors};
+        } else {
+            my $model = {config => $config, domain => $engine->domain, state => $state};
+            my $mode = $state->view eq 'detail' ? 'detail' : 'summary';
+            $model->{available_actions} = Selecto::Components::Actions->available(
+                $config, $engine->domain, $controller,
+            ) if $mode eq 'detail';
+            $html = Selecto::Components::Renderer::Builder->view_controls($model, $mode);
+        }
+        1;
+    };
+    unless ($ok) {
+        $controller->app->log->error("Selecto view controls failed: $@");
+        $error = 'View controls could not be loaded.';
+    }
+    return $controller->render(json => {error => $error}, status => 422) if $error;
+    return $controller->render(json => {html => $html});
+}
 
 sub _decorate_model ($controller, $model) {
     my $started = time;

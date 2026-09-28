@@ -166,6 +166,7 @@
     query.value = label + (label.indexOf("(" + value + ")") === -1 ? " (" + value + ")" : "");
     query.dataset.scLookupSelectedValue = value;
     query.setCustomValidity("");
+    elements.selected.dispatchEvent(new Event("change", {bubbles: true}));
 
     var form = query.closest("[data-sc-action-form]");
     var root = form && form.closest("[data-sc-bulk-action]");
@@ -220,6 +221,7 @@
   }
 
   function searchLookup(query) {
+    if (query.matches(":disabled")) return;
     var term = query.value.trim();
     var minimum = Number(query.dataset.scLookupMinimumLength || 2);
     var elements = lookupElements(query);
@@ -240,6 +242,12 @@
     var form = query.closest("[data-sc-action-form]");
     var root = form && form.closest("[data-sc-bulk-action]");
     var rawIndex = query.dataset.scLookupGroupIndex;
+    var variants = form && form.querySelector("[data-sc-action-variants]");
+    var variantState = variants && actionVariantState(variants);
+    if (variantState) Object.keys(variantState.values).forEach(function (id) {
+      var value = variantState.values[id];
+      url.searchParams.set("action_input_" + id, typeof value === "object" ? JSON.stringify(value) : String(value));
+    });
     var index = Number(rawIndex);
     if (root && rawIndex !== undefined) {
       var group = activeActionGroups(root).find(function (item) { return item.index === index; });
@@ -281,6 +289,7 @@
     elements.selected.value = directValue ? term : "";
     query.dataset.scLookupSelectedValue = elements.selected.value;
     query.setCustomValidity(term && !directValue ? "Choose a result from the list." : "");
+    elements.selected.dispatchEvent(new Event("change", {bubbles: true}));
 
     var form = query.closest("[data-sc-action-form]");
     var root = form && form.closest("[data-sc-bulk-action]");
@@ -502,6 +511,7 @@
       var ids = selectedRowIds(root);
       if (!form || ids.length === 0) return;
       form.reset();
+      restoreActionVariants(form);
       form.querySelectorAll("[data-sc-lookup-query]").forEach(function (query) {
         query.dataset.scLookupSelectedValue = "";
         query.setCustomValidity("");
@@ -525,6 +535,7 @@
       if (footerClose) footerClose.textContent = "Cancel";
       if (typeof dialog.showModal === "function") dialog.showModal();
       else dialog.setAttribute("open", "");
+      loadTargetActionForm(form, ids);
       return;
     }
 

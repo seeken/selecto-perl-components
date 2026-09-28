@@ -898,6 +898,34 @@ test("date-only values remain stable for datetime filters", async ({page}) => {
   await expect(page.locator('[name="filter_value"]')).toHaveValue("2024-10-01");
 });
 
+test("new text filters expose literal prefix, contains and suffix operators without losing input", async ({page}) => {
+  await load(page, `<form data-sc-builder="quote">
+    <div data-sc-filter-root data-sc-filter-max="10">
+      <div data-sc-filter-available>
+        <button type="button" data-sc-filter-action="add" data-sc-filter-available-item
+          data-field="customer_display_name" data-label="Customer Name" data-type="string">Add Name</button>
+      </div>
+      <span data-sc-filter-available-count></span><span data-sc-filter-set-count></span>
+      <div data-sc-filter-set></div>
+    </div>
+  </form>`);
+  await page.locator('[data-sc-filter-action="add"]').click();
+  const item = page.locator('[data-sc-filter-set-item]');
+  await item.locator('[name="filter_value"]').fill('Acme%_!');
+  for (const op of ["starts_with", "starts_with_ci", "text_contains", "text_contains_ci", "ends_with", "ends_with_ci"]) {
+    await item.locator('[name="filter_op"]').selectOption(op);
+    await expect(item.locator('[name="filter_value"]')).toHaveValue('Acme%_!');
+    await expect(item.locator('[name="filter_value"]')).toHaveAttribute('type', 'text');
+    await expect(item.locator('[name="filter_op"] option:checked')).toContainText(op.endsWith('_ci') ? 'ignore case' : 'match case');
+    await expect(item).not.toHaveClass(/is-draft/);
+  }
+  await item.locator('[name="filter_promote_index"]').check();
+  const submitted = await page.locator('form').evaluate((form) => Object.fromEntries(new FormData(form)));
+  expect(submitted.filter_op).toBe('ends_with_ci');
+  expect(submitted.filter_value).toBe('Acme%_!');
+  expect(submitted.filter_promote_index).toBe('1');
+});
+
 test("CustomOption filters offer named multi-select choices and retain IDs", async ({page}) => {
   await load(page, `<form data-sc-builder="quote">
     <div data-sc-filter-root data-sc-filter-max="10">
