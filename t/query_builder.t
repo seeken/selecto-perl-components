@@ -318,6 +318,42 @@ is_deeply $aggregate_statement->params, ['12.50'],
     'aggregate filter values remain bound parameters';
 ok $aggregate->{graph}, 'graph uses aggregate query with graph rendering metadata';
 
+my $rollup_state = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'aggregate', field => 'product_name', group => 'category.category_name', measure => 'count',
+});
+ok $rollup_state->valid, 'aggregate state is valid' or diag explain $rollup_state->errors;
+my $rolled = Selecto::Components::QueryBuilder->build($config, $domain, $rollup_state);
+is $rolled->{query}->grouping_mode, 'rollup', 'aggregate views subtotal with ROLLUP by default';
+ok $rolled->{rollup} && $rolled->{rollup_key}, 'rollup results carry their grouping marker';
+my $plain = Selecto::Components::QueryBuilder->build($config, $domain, $rollup_state, {rollup => 0});
+is $plain->{query}->grouping_mode, 'plain', 'adapters without ROLLUP get plain grouping';
+ok !$plain->{rollup} && !defined($plain->{rollup_key}), 'plain aggregates carry no rollup marker';
+unlike $postgresql->compile($domain, $plain->{query})->sql, qr/ROLLUP|GROUPING\(/,
+    'plain aggregates compile without ROLLUP or GROUPING()';
+{
+    # An explorer over an adapter without ROLLUP (SQLite, MySQL and SQL Server
+    # in selecto-perl) runs the aggregate plainly instead of failing.
+    package TestSelectoComponents::PlainAdapter;
+    use parent -norequire, 'TestSelectoComponents::Adapter';
+    sub supports { return $_[1] eq 'stream' ? 1 : 0; }
+}
+my $plain_config = Selecto::Components::Config->new(
+    %{TestSelectoComponents::config()}, id => 'plain-products', path => '/explore/plain-products',
+    engine_factory => sub {
+        return Selecto::Engine->new(domain => TestSelectoComponents::domain(),
+            adapter => TestSelectoComponents::PlainAdapter->new(dbh => bless({}, 'TestSelectoComponents::DBH')));
+    },
+);
+my $plain_model = Selecto::Components::Explorer->new(config => $plain_config)->model(
+    TestSelectoComponents::Controller->new(params => {
+        q => 1, view => 'aggregate', field => 'product_name', group => 'category.category_name', measure => 'count',
+    }),
+);
+ok !$plain_model->{runtime_error}, 'an aggregate over an adapter without ROLLUP runs'
+    or diag explain $plain_model->{runtime_error};
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->grouping_mode, 'plain',
+    'the explorer asks the adapter whether it supports ROLLUP';
+
 my $star_contract = $domain->contract;
 $star_contract->{source}{columns}{category_id}{label} = 'Category Code';
 $star_contract->{joins}{category} = {

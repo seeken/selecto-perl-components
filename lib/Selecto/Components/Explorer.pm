@@ -76,7 +76,8 @@ sub model ($self, $controller, $input = undef, $options = undef) {
 
         my $build_started = time;
         my $built = Selecto::Components::QueryBuilder->build(
-            $config, $engine->domain, $state, {paginate => !$all_rows}
+            $config, $engine->domain, $state,
+            {paginate => !$all_rows, rollup => _rollup_supported($engine)}
         );
         _cap_export($config, $built) if $all_rows;
         my $build_ms = _elapsed_ms($build_started);
@@ -330,6 +331,12 @@ sub _prepare_nested_records ($built, $records) {
             }
         }
     }
+}
+
+# Aggregate subtotals use GROUP BY ROLLUP. Adapters without it (SQLite,
+# MySQL and SQL Server in selecto-perl) get plainly grouped aggregates.
+sub _rollup_supported ($engine) {
+    return $engine->adapter->supports('rollup') ? 1 : 0;
 }
 
 sub _prepare_rollup_records ($built, $records) {
@@ -634,7 +641,8 @@ sub stream_export ($self, $controller, $format) {
     );
     die join('; ', @{$state->errors}) . "\n" unless $state->valid;
     my $built = Selecto::Components::QueryBuilder->build(
-        $config, $engine->domain, $state, {paginate => 0},
+        $config, $engine->domain, $state,
+        {paginate => 0, rollup => _rollup_supported($engine)},
     );
     # Grids need the bounded matrix transformation; their fallback export is
     # deliberately capped by max_grid_result_cells.
@@ -722,7 +730,8 @@ sub xlsx_file_export ($self, $controller) {
     );
     die join('; ', @{$state->errors}) . "\n" unless $state->valid;
     my $built = Selecto::Components::QueryBuilder->build(
-        $config, $engine->domain, $state, {paginate => 0},
+        $config, $engine->domain, $state,
+        {paginate => 0, rollup => _rollup_supported($engine)},
     );
     return undef if $built->{aggregate_grid};
     _cap_export($config, $built);
