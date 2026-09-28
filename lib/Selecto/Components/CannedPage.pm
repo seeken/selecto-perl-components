@@ -14,7 +14,10 @@ use Selecto::Components::AssetManifest qw(asset_revision);
 use Selecto::Components::Config ();
 use Selecto::Components::Util qw(humanize);
 
-has [qw(page engine_factory scope_factory path title record_link websocket_enabled column_layout)];
+# theme (optional): {scheme => 'light'|'dark', primary, secondary, on_primary} as #RRGGBB,
+# the same shape as Selecto::Components::Config's theme resolver returns. Without it the
+# page uses the stylesheet's own (dark) palette.
+has [qw(page engine_factory scope_factory path title record_link websocket_enabled column_layout theme)];
 
 sub new ($class, @args) {
     my $self = $class->SUPER::new(@args);
@@ -25,6 +28,17 @@ sub new ($class, @args) {
         if defined($self->scope_factory) && ref($self->scope_factory) ne 'CODE';
     die "canned page path is invalid\n"
         unless defined($self->path) && $self->path =~ m{\A/(?!/)[A-Za-z0-9/_-]+\z};
+    if (defined(my $theme = $self->theme)) {
+        die "canned page theme must be an object\n" unless ref($theme) eq 'HASH';
+        die "canned page theme scheme must be light or dark\n"
+            if defined($theme->{scheme})
+                && (ref($theme->{scheme}) || $theme->{scheme} !~ /\A(?:light|dark)\z/);
+        for my $key (qw(primary secondary on_primary)) {
+            die "canned page theme $key must be a hexadecimal color\n"
+                if defined($theme->{$key})
+                    && (ref($theme->{$key}) || $theme->{$key} !~ /\A#[0-9A-Fa-f]{6}\z/);
+        }
+    }
     if (my $link = $self->record_link) {
         die "canned page record_link must contain a selected field and local URL prefix\n"
             unless ref($link) eq 'HASH'
@@ -248,8 +262,16 @@ sub _input ($self, $controller, $payload = undef) {
 
 sub _html ($self, $result, $public) {
     my $title = _escape($self->title // $self->page->id);
+    my $theme = $self->theme // {};
+    my @style = map {
+        my ($key, $property) = @$_;
+        defined($theme->{$key}) ? "$property:" . uc($theme->{$key}) : ();
+    } ([primary => '--sc-brand'], [secondary => '--sc-accent'], [on_primary => '--sc-on-brand']);
     return Selecto::Components::Renderer->page_document(
         title => $title, channel_id => 'selecto-page-channel-' . $self->page->id,
+        (defined($theme->{scheme})
+            ? (scheme_attribute => ' data-sc-color-scheme="' . $theme->{scheme} . '"') : ()),
+        (@style ? (theme_attribute => ' style="' . _escape(join ';', @style) . '"') : ()),
         (($self->websocket_enabled // 1) ? (ws_path => $self->path . '/ws') : ()),
         surface => $self->_surface($result, $public),
         include_explorer_script => 0,
