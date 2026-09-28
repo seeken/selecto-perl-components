@@ -76,7 +76,10 @@ Chromium with Playwright.
 - hierarchical Aggregate rollups with clickable group values, subtotals, and a
   grand total, plus clickable Graph group values; drilldowns retain existing
   filters and auto-promote the selected group path as editable governed Detail
-  predicates, including formatted dates, numeric/date buckets, and text prefixes;
+  predicates, including formatted dates, numeric/date buckets, and text prefixes.
+  Subtotals and the grand total need the adapter's `GROUP BY ROLLUP`; on an
+  adapter without it (SQLite, MySQL and SQL Server in `selecto-perl`) the
+  Aggregate view groups plainly instead of failing;
 - an Aggregate Grid presentation for exactly two Group By fields and one
   Aggregate, with sticky axes, independently toggleable cells, row/column/all
   selection controls, direct cell highlighting instead of visible per-cell

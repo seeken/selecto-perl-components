@@ -265,7 +265,10 @@ sub _detail ($class, $config, $domain, $state, $options) {
 
 sub _aggregate ($class, $config, $domain, $state, $options) {
     my $field_map = $config->field_map($domain);
-    my $rollup = $state->view eq 'aggregate' && @{$state->groups} ? 1 : 0;
+    # Subtotal rows need the adapter's GROUP BY ROLLUP; callers pass
+    # rollup => 0 for adapters without it, which then group plainly.
+    my $rollup = $state->view eq 'aggregate' && @{$state->groups}
+        && ($options->{rollup} // 1) ? 1 : 0;
     my @group_columns = map {
         my $field = $_;
         my $column_config = $state->group_configs->{$field} // {};

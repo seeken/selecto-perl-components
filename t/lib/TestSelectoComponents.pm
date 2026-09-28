@@ -770,7 +770,7 @@ our $RECORD_PRODUCT_NAME = 'Test Widget';
 
 sub name { return 'test'; }
 sub dialect { return __PACKAGE__; }
-sub supports ($self, $feature) { return $feature eq 'stream' ? 1 : 0; }
+sub supports ($self, $feature) { return $feature eq 'stream' || $feature eq 'rollup' ? 1 : 0; }
 sub compile ($self, $domain, $query) {
     $LAST_COMPILED_QUERY = $query;
     if (defined $query->limit_value) {
