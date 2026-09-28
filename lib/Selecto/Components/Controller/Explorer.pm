@@ -1,6 +1,7 @@
 package Selecto::Components::Controller::Explorer;
 
 use Mojo::Base -base, -signatures;
+use Mojo::URL ();
 use Selecto::Components::Actions ();
 use Selecto::Components::Controller::SavedQueries ();
 use Time::HiRes qw(time);
@@ -74,11 +75,12 @@ sub _decorate_model ($controller, $model) {
 }
 
 sub _apply_saved_query_title ($controller, $model) {
-    my $requested_id = $controller->param('saved_query_id');
-    my $requested_name = $controller->param('saved_query_name');
+    my $requested_id = $model->{input}{saved_query_id} // $controller->param('saved_query_id');
+    my $requested_name = $model->{input}{saved_query_name} // $controller->param('saved_query_name');
     return unless (defined($requested_id) && !ref($requested_id) && length("$requested_id"))
         || (defined($requested_name) && !ref($requested_name) && length("$requested_name"));
-    my $legacy_url = $controller->req->url->clone;
+    my $legacy_url = $controller->tx->is_websocket && $model->{canonical_url}
+        ? Mojo::URL->new($model->{canonical_url}) : $controller->req->url->clone;
     $legacy_url->query->remove('saved_query_name');
     my $current_url = $legacy_url->clone;
     $current_url->query->remove('saved_query_id');

@@ -5,6 +5,7 @@ use Scalar::Util qw(blessed);
 use Selecto::DateFormat ();
 use Selecto::Components::DateShortcut ();
 use Selecto::Components::I18N ();
+use Selecto::Components::ExplorerSession ();
 use Selecto::Components::Util qw(humanize);
 use Selecto::Analytics::UnitRegistry ();
 
@@ -45,6 +46,8 @@ has 'theme_resolver';
 has 'page_shell_resolver';
 has 'api_console_resolver';
 has 'websocket_message_cleanup';
+has 'websocket_context';
+has websocket_session_options => sub { {} };
 
 my @DATE_FORMATS = @{Selecto::DateFormat->choices};
 
@@ -101,6 +104,9 @@ sub new ($class, @args) {
     die "websocket_message_cleanup must be a coderef\n"
         if defined($self->websocket_message_cleanup)
             && ref($self->websocket_message_cleanup) ne 'CODE';
+    die "websocket_context must be a coderef\n"
+        if defined($self->websocket_context) && ref($self->websocket_context) ne 'CODE';
+    Selecto::Components::ExplorerSession->validate_options($self->websocket_session_options);
     die "default_row_click_action must be empty or a lowercase identifier\n"
         if !defined($self->default_row_click_action)
             || ref($self->default_row_click_action)

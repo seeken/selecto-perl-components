@@ -17,6 +17,7 @@ const modules = [
   "charts.js",
   "row-dialog.js",
   "grid.js",
+  "explorer-session.js",
   "lifecycle.js",
   "picker.js",
   "filters.js",

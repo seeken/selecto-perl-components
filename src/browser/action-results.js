@@ -181,6 +181,7 @@
         renderActionResult(result, outcome.payload, succeeded, root);
       }
       if (succeeded) {
+        document.dispatchEvent(new CustomEvent("selecto:records-changed"));
         if (actionMode(root) === "groups") {
           resetGroupedAction(root);
         } else {
