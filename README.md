@@ -918,7 +918,10 @@ render a selected `related_collection` as a nested table or comma-separated
 list. The collection keeps one parent row per result, as in Explorer's detail
 subtables; the underlying query still governs every field. Set
 `websocket_enabled => 0` for a GET-only page that uses ordinary form navigation
-without a WebSocket connection.
+without a WebSocket connection. A `theme` of `{scheme => 'light'}` (or `dark`),
+optionally with `primary`, `secondary` and `on_primary` as `#RRGGBB`, sets the
+page's colour scheme and colours as a theme resolver does for Explorer; without
+one the page uses the stylesheet's own dark palette.
 htmx WebSocket submissions replace the page surface; the request ID prevents
 stale responses from overwriting newer selections. With query parameters
 enabled, accepted updates refresh the shareable URL, and ordinary GET forms

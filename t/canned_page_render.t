@@ -51,6 +51,21 @@ my $legacy_component = Selecto::Components::CannedPage->new(
 like $legacy_component->_table($result),
     qr{href="/backoffice/loadmaint\.mcgi\?load_id=42" target="_top"},
     'a local legacy CGI can be a canned record link';
+unlike $html, qr{data-sc-color-scheme}, 'without a theme the page keeps the stylesheet palette';
+my $themed_html = Selecto::Components::CannedPage->new(
+    page => $page, path => '/rows', title => 'Rows',
+    engine_factory => sub { die 'not needed' }, websocket_enabled => 0,
+    theme => {scheme => 'light', primary => '#c04040', secondary => '#571414',
+        on_primary => '#ffffff'},
+)->_html($result, 1);
+like $themed_html, qr{<html lang="en" data-sc-color-scheme="light" style="--sc-brand:#C04040;--sc-accent:#571414;--sc-on-brand:#FFFFFF">},
+    'a theme sets the colour scheme and tenant colours on the document';
+ok !eval { Selecto::Components::CannedPage->new(
+    page => $page, path => '/rows', engine_factory => sub {}, theme => {scheme => 'sepia'},
+) }, 'an unknown colour scheme is refused';
+ok !eval { Selecto::Components::CannedPage->new(
+    page => $page, path => '/rows', engine_factory => sub {}, theme => {primary => 'red;x'},
+) }, 'a theme colour must be hexadecimal';
 my $modal_component = Selecto::Components::CannedPage->new(
     page => $page, path => '/rows', title => 'Rows',
     engine_factory => sub { die 'not needed' }, websocket_enabled => 0,
