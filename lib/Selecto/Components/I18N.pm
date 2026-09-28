@@ -5,12 +5,13 @@ use strict;
 use warnings;
 
 use Mojo::Base -base, -signatures;
+use Scalar::Util qw(refaddr);
 use Selecto::Components::Util qw(humanize);
 
-sub localize ($class, $localizer, $domain, $semantic, $default, $context = undef) {
+sub localize ($class, $localizer, $domain, $semantic, $default, $context = undef, $cache = undef) {
     $default = _text($default);
     return $default unless ref($localizer) eq 'CODE' && length($default);
-    my $spec = $class->term($domain, $semantic, $default);
+    my $spec = $class->term($domain, $semantic, $default, $cache);
     return $default unless $spec;
 
     my $localized;
@@ -31,8 +32,26 @@ sub localize ($class, $localizer, $domain, $semantic, $default, $context = undef
     return $localized;
 }
 
-sub term ($class, $domain, $semantic, $default = undef) {
-    my $metadata = _metadata($domain) or return undef;
+sub term ($class, $domain, $semantic, $default = undef, $cache = undef) {
+    return undef unless ref($domain) && eval { $domain->can('contract') };
+    my $metadata;
+    if (ref($cache) eq 'HASH') {
+        my $key = refaddr($domain) // '';
+        my $fingerprint = $domain->can('fingerprint') ? $domain->fingerprint : '';
+        my $entry = $cache->{$key};
+        unless ($entry && $entry->{fingerprint} eq $fingerprint) {
+            # The caller owns this request-local cache. Retain the domain to
+            # prevent address reuse; cache only metadata, never translations.
+            $entry = $cache->{$key} = {
+                domain => $domain, fingerprint => $fingerprint,
+                metadata => _metadata($domain),
+            };
+        }
+        $metadata = $entry->{metadata};
+    } else {
+        $metadata = _metadata($domain);
+    }
+    return undef unless $metadata;
     $semantic = _semantic($semantic);
     my $entry = $metadata->{terms}{$semantic};
     my ($key, $entry_default);

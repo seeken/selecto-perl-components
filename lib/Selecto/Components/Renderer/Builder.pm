@@ -18,7 +18,6 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         '<label class="sc-view-tab"><input type="radio" name="view" value="' . _h($_) . '"' .
         ($_ eq $state->view ? ' checked' : '') . '><span>' . _h(_humanize($_)) . '</span></label>'
     } @{$config->views};
-    my $measure_catalog = $config->measure_catalog($model->{domain});
     my $filter_catalog = $config->filter_catalog($model->{domain});
     my $root_label = $model->{domain}->name;
     my $filter_picker = $class->_filter_picker($state, $filter_catalog, $config, $root_label);
@@ -37,26 +36,14 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
     my $applied_filter_count = _logical_filter_count($state->filters)
         + scalar(@$governed_segments);
     my $query_summary = $class->_query_summary($state, $filter_catalog, $governed_segments);
-    my $detail_controls = $class->_row_click_picker($state, $model->{domain}, $config) .
-        $class->_field_picker($state, $detail_catalog // $catalog, $config, $root_label) .
-        $class->_order_picker($state, $catalog, $config->max_orders, $root_label) .
-        _measure_selection_hidden($state) .
-        _selection_hidden('group', $state->groups, $state->group_configs);
-    my $summary_controls = $class->_aggregate_grid_picker($state) .
-        $class->_chart_type_picker($state, $catalog) .
-        $class->_group_picker($state, $catalog, $config, $root_label) .
-        $class->_measure_picker($state, $measure_catalog, $config, $root_label) .
-        _selection_hidden(
-            'field', $state->fields, $state->field_configs, $state->field_config_list
-        ) .
-        _hidden('row_click_action', $state->row_click_action // '') .
-        join('', map {
-            _hidden('order', $_->{field}) . _hidden('direction', $_->{direction})
-        } @{$state->orders});
-    my $view_controls = '<fieldset class="sc-result-view-controls" data-sc-result-view-panel="detail"' .
-        ($detail_active ? '' : ' hidden disabled') . '>' . $detail_controls . '</fieldset>' .
-        '<fieldset class="sc-result-view-controls" data-sc-result-view-panel="summary"' .
-        ($detail_active ? ' hidden disabled' : '') . '>' . $summary_controls . '</fieldset>';
+    my $view_controls = join '', map {
+        my $mode = $_;
+        my $active = ($mode eq 'detail') == $detail_active;
+        my $lazy = !$active && $config->lazy_view_controls;
+        '<fieldset class="sc-result-view-controls" data-sc-result-view-panel="' . $mode . '"' .
+            ($active ? '' : ' hidden disabled') . ($lazy ? ' data-sc-view-lazy' : '') . '>' .
+            ($lazy ? '' : $class->view_controls($model, $mode, $catalog, $detail_catalog)) . '</fieldset>';
+    } qw(detail summary);
     my $builder_id = _h($config->id);
     my $view_tab_id = 'selecto-builder-view-tab-' . $builder_id;
     my $filter_tab_id = 'selecto-builder-filters-tab-' . $builder_id;
@@ -81,6 +68,7 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         '" aria-labelledby="' . $view_tab_id . '" data-sc-builder-panel="view">' .
         $query_library_views .
         '<div class="sc-view-tabs" role="radiogroup" aria-label="Result view">' . $views . '</div>' .
+        '<p class="sc-note" data-sc-controls-status role="status" aria-live="polite" hidden></p>' .
         $view_controls . '</section>';
     my $filter_panel = '<section class="sc-builder-panel" role="tabpanel" id="' . $filter_panel_id .
         '" aria-labelledby="' . $filter_tab_id . '" data-sc-builder-panel="filters" hidden>' .
@@ -95,7 +83,9 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $builder_tabs . '<form id="selecto-query-' . _h($config->id) . '" action="' .
         _h($config->path) . '" method="' . $method . '" hx-ws:send hx-trigger="submit" data-sc-builder="' .
         $builder_id . '" data-sc-builder-query data-sc-date-shortcuts="' .
-        _h(encode_json([map { [$_->{group}, $_->{id}, $_->{label}] } @{$config->date_shortcuts}])) . '">' .
+        _h(encode_json([map { [$_->{group}, $_->{id}, $_->{label}] } @{$config->date_shortcuts}])) . '"' .
+        ($config->lazy_view_controls ? ' data-sc-controls-url="' . _h($config->path . '/controls') .
+            '" data-sc-controls-csrf="' . _h($model->{csrf_token} // '') . '"' : '') . '>' .
         _hidden('q', 1) .
         _hidden('query_signature', $state->query_signature) .
         ($model->{loaded_saved_query} && $model->{loaded_saved_query}{id}
@@ -110,8 +100,31 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         '>Page<input name="page" inputmode="numeric" value="' . _h($state->page) . '"' .
         ($state->view eq 'graph' ? ' disabled' : '') . '></label></div>' .
         '<button class="sc-button sc-primary" type="submit">Run query</button>' .
-        '<noscript><p class="sc-note">JavaScript is off; this form still runs as a normal GET.</p></noscript></form>' .
+        '<noscript><p class="sc-note">JavaScript is off; Run query submits this form normally. After changing views, run it to display the new controls.</p></noscript></form>' .
         $saved_queries . '</div></aside>';
+}
+
+sub view_controls ($class, $model, $mode, $catalog = undef, $detail_catalog = undef) {
+    my ($config, $state, $domain) = @$model{qw(config state domain)};
+    $catalog //= $config->field_catalog($domain);
+    my $root_label = $domain->name;
+    if ($mode eq 'detail') {
+        $detail_catalog //= $config->detail_column_catalog($domain, $model->{available_actions} // []);
+        return $class->_row_click_picker($state, $domain, $config) .
+            $class->_field_picker($state, $detail_catalog, $config, $root_label) .
+            $class->_order_picker($state, $catalog, $config->max_orders, $root_label) .
+            _measure_selection_hidden($state) .
+            _selection_hidden('group', $state->groups, $state->group_configs);
+    }
+    die "Unknown view control panel\n" unless $mode eq 'summary';
+    return $class->_aggregate_grid_picker($state) .
+        $class->_chart_type_picker($state, $catalog) .
+        $class->_group_picker($state, $catalog, $config, $root_label) .
+        $class->_measure_picker($state, $config->measure_catalog($domain), $config, $root_label) .
+        _selection_hidden('field', $state->fields, $state->field_configs, $state->field_config_list) .
+        _hidden('row_click_action', $state->row_click_action // '') .
+        join('', map { _hidden('order', $_->{field}) . _hidden('direction', $_->{direction}) }
+            @{$state->orders});
 }
 
 sub _query_summary_for_model ($class, $model, $catalog) {
@@ -561,6 +574,11 @@ sub _filter_value_text ($filter, $field = undef) {
         if $operator eq 'between';
     return date_shortcut_label($filter->{value}) if $operator eq 'date_shortcut';
     my %symbols = (eq => '=', ne => '!=', gt => '>', gte => '>=', lt => '<', lte => '<=');
+    for my $op (qw(text_contains starts_with ends_with)) {
+        my $label = $op eq 'text_contains' ? 'contains' : $op =~ s/_/ /gr;
+        $symbols{$op} = "$label (match case)";
+        $symbols{"${op}_ci"} = "$label (ignore case)";
+    }
     my $display_operator = $symbols{$operator} // _humanize($operator);
     if (ref($field) eq 'HASH' && ref($field->{filter_choices}) eq 'ARRAY'
         && $operator =~ /\A(?:eq|ne|in|not_in)\z/) {

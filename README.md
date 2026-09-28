@@ -22,6 +22,14 @@ hosts. `npm run build:check` verifies that the committed distribution matches
 those sources, and `npm run test:browser` exercises the compiled asset in
 Chromium with Playwright.
 
+Hosts with a fixed top toolbar can set `--sc-sticky-top` on the Explorer's
+ancestor to its measured height in pixels (for example,
+`--sc-sticky-top: var(--toolbar-bar-height, 0px)`). Result headers follow the
+page scroll below that toolbar, while retaining horizontal table scrolling
+and keeping multi-row grid headers together. The offset defaults to zero;
+dialog tables keep their own scroll behavior. Toolbar height changes and
+replacement results are handled without cloning headers or rerunning queries.
+
 ## Current surface
 
 - a reusable `Selecto::Components` Mojolicious plugin;
@@ -1144,6 +1152,73 @@ signed editor state. A record-editor handler or action handler may return
 
 ## Selected-row actions
 
+### Conditional action forms
+
+Action `variants` use the core domain contract. Toolbar dialogs, inline row
+forms, and record-editor action forms show only the selected variant's fields:
+
+```perl
+inputs => {
+    complete => {type => 'boolean', label => 'Documents complete',
+        required => 1, discriminator => 1},
+},
+variants => [
+    {id => 'ready', label => 'Ready', when => {complete => JSON::PP::true}},
+    {id => 'follow_up', label => 'Follow up',
+        description => 'Explain which documents are missing.',
+        when => {complete => JSON::PP::false}, inputs => {
+            reason => {type => 'textarea', label => 'Reason', required => 1},
+        }},
+],
+```
+
+Conditions refer to base input values, not a separate submitted variant ID.
+Use a boolean Yes/No control or a `select` with explicit choices for selectors.
+Variants can add inputs or replace non-selector base inputs. Inactive controls
+are hidden and disabled; switching variants preserves drafts. Required markers
+and an accessible status reflect the active form. These interactive forms
+require JavaScript; no-JavaScript users see an explanation.
+
+The server resolves the variant again with `Selecto::Action->input_form`,
+validates only the effective fields, and rejects undeclared or inactive inputs.
+Missing/ambiguous choices fail closed. Normal capability, row-eligibility,
+CSRF, target, and tenant-scope checks still apply. Handlers receive the selected
+`variant` alongside normalized `inputs`. Lookup discovery uses the same
+selectors and cannot request an inactive variant's lookup.
+
+Boolean inputs retain JSON booleans; integers and numbers have numeric
+controls. Literal defaults are supported; a blank `['system', 'now']` default
+is left to the governed executor instead of evaluated on the browser clock.
+`utc_datetime` uses an explicit ISO
+date/time with timezone, not an assumed browser timezone. Collection inputs
+use a JSON-array editor (with `min_items`/`max_items` checks); a nested collection
+row builder and item-schema validation remain host responsibilities. API
+callers send native JSON arrays, not strings containing JSON. These changes
+provide the Perl form renderer and public normalized metadata; the separate
+JavaScript API Console/importer builders must also support variants before
+offering their own guided variant forms.
+
+### Row-dependent action forms
+
+A host may register `action_form_resolvers => {action_id => sub { ... }}` on
+the Components configuration. The callback receives `($controller, {action =>
+$normalized_action, ids => [$authorized_row_id]})` and returns
+`{fixed_inputs => {operation => 'release'}}`. It runs only after target
+authorization, and may fix declared base `select` inputs to one of their
+existing choices. The fixed choice is displayed as text and submitted as a
+hidden input; it can select the matching action variant. Other choices remain
+invalid on the server. Do not use this presentation hook instead of execution
+authorization or transactional state checks.
+
+Row dialogs fetch these forms on open from `GET /actions/:action/form?selected_id=...`
+under the Explorer's route prefix. Responses are private/no-store, and loading
+or failed requests cannot be submitted. There are no per-row form lookups while
+rendering the results table. `Actions->find` (including the Mojo API host) also
+applies the restrictions to submissions, so a stale or modified hidden input
+is rejected. Hosts must wire the same resolver into their other action surfaces.
+
+### Registering actions
+
 Selected-row actions come from the canonical domain contract. The Components
 host only renders actions that are bulk-scoped (or explicitly bulk-enabled)
 and have a registered host handler. Required action fields are normalized and
@@ -1359,6 +1434,22 @@ The plugin adds its packaged `public/` directory to Mojolicious static paths.
 The htmx runtime and WebSocket extension are served locally; the browser does
 not depend on a CDN.
 
+Hosts can enable `lazy_view_controls => 1` on the Components plugin or an
+individual explorer to omit the inactive Detail or Aggregate/Graph controls
+from the initial document. Switching views fetches the missing controls from
+`POST <explorer-path>/controls`; it does **not** execute the data or count query.
+The route uses the same host route bridge, freshly governed engine/domain,
+same-origin policy, and a session CSRF token. Hosts with a per-path read-only
+allowlist must allow this POST as a read operation. Responses are `no-store`.
+Loaded panels are reused within the current page, preserving draft columns,
+aliases, filters and measures. Failed loads leave the existing draft usable;
+without JavaScript, selecting a view and submitting normally renders its
+controls. The default is off for existing integrations.
+
+Localization metadata is memoized on the request-local configuration, avoiding
+a full domain-contract copy for each label. Translations and authorization
+decisions are not cached across requests.
+
 Aggregate and Graph Available lists are derived from the domain field catalog,
 including relationship columns. A user selects a column and configures its
 allowlisted aggregate function, alias, NULL handling, or buckets. No `measures`
@@ -1406,7 +1497,16 @@ because their output depends on the complete two-dimensional matrix.
 An explorer may set `max_export_rows` (a positive integer up to 10,000,000) to
 cap every all-rows export query: CSV, TSV, JSON, Excel and the all-rows page
 render. Paginated pages keep their own page size. Without it, exports return
-every matched row.
+every matched row. When configured, the download controls display the cap;
+downloads contain the first rows in the selected ordering, not an uncapped
+result or just the current page.
+
+Text fields offer literal substring, prefix, and suffix filters in Explorer
+and API Console: `text_contains`, `starts_with`, and `ends_with`. Their `_ci`
+variants ignore case using the database's case-folding rules. `%`, `_`, and
+the escape character are literal text, not user-entered SQL wildcards. These
+operators round-trip through saved URLs, promoted filters, and API handoff;
+numeric, temporal, boolean, and choice-list controls retain their own operators.
 
 `max_orders` defaults to 10 and may be configured from 1 through 20. Date/time
 formats are selected from a closed catalog; Aggregate formatting is part of the

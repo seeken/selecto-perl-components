@@ -2,6 +2,33 @@ package Selecto::Components::Controller::Actions;
 
 use Mojo::Base -base, -signatures;
 use Selecto::Components::Actions ();
+use Selecto::Components::Renderer::Results ();
+
+sub form ($controller, $explorer) {
+    $controller->res->headers->cache_control('private, no-store');
+    my $ids = $controller->every_param('selected_id');
+    return $controller->render(status => 422, json => {ok => 0, message => 'Select exactly one row.'})
+        unless @$ids == 1 && defined($ids->[0]) && length($ids->[0]) && length($ids->[0]) <= 200;
+    my $config = $explorer->config->for_request($controller);
+    my $id = $controller->stash('selecto_action_id') // '';
+    return $controller->render(status => 404, json => {ok => 0, message => 'That action form is not available.'})
+        unless $config->action_form_resolvers->{$id};
+    my $resolved;
+    my $ok = eval {
+        $resolved = Selecto::Components::Actions->find($config,
+            $config->engine($controller)->domain, $controller, $id, 'preview', {ids => $ids});
+        1;
+    };
+    unless ($ok) {
+        $controller->app->log->error("Selecto action form failed: $@");
+        return $controller->render(status => 500, json => {ok => 0, message => 'The action form could not be loaded.'});
+    }
+    return $controller->render(status => 403, json => {ok => 0,
+        message => $resolved ? ($resolved->{decision}{reason} || 'That action is not permitted.') : 'That action is not available.'})
+        unless $resolved && $resolved->{decision}{status} eq 'enabled';
+    return $controller->render(json => {ok => 1,
+        html => Selecto::Components::Renderer::Results::_action_inputs($resolved->{action})});
+}
 
 sub _run_action ($controller, $explorer) {
     my $config = $explorer->config->for_request($controller);
@@ -36,12 +63,10 @@ sub _run_action ($controller, $explorer) {
         message => $resolved->{decision}{reason} || 'That action is not permitted.',
     }) unless $resolved->{decision}{status} eq 'enabled';
 
-    my %raw_inputs = map {
-        $_->{id} => scalar $controller->param('action_input_' . $_->{id})
-    } @{$resolved->{action}{inputs}};
+    my $raw_inputs = Selecto::Components::Actions->submitted_inputs($controller);
     my $request = Selecto::Components::Actions->request(
-        $config, $resolved->{action}, \@selected_ids, \%raw_inputs,
-        {group_payload => scalar $controller->param('action_groups')},
+        $config, $resolved->{action}, \@selected_ids, $raw_inputs,
+        {group_payload => scalar $controller->param('action_groups'), form_encoded => 1},
     );
     return Selecto::Components::_action_response($controller, $return_to, {
         ok => 0, status => 422, message => join(' ', @{$request->{errors}}),

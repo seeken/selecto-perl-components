@@ -342,12 +342,16 @@ a { color: inherit; }
 .sc-grid-selection-actions .sc-button { min-height: 32px; padding: 5px 10px; }
 .sc-grid-selection-help { color: var(--sc-hint); font-size: .7rem; margin: -3px 18px 9px; }
 .sc-grid-selection-help.is-error { color: var(--sc-danger); font-weight: 750; }
-.sc-table-wrap { border-top: 1px solid var(--sc-border); max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; position: relative; }
+.sc-table-wrap { --sc-table-header-offset: 0px; border-top: 1px solid var(--sc-border); max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; position: relative; }
 .sc-table-wrap > table { border-collapse: collapse; min-width: 100%; white-space: nowrap; width: max-content; }
+/* Keep multi-row headers together. The browser bridge supplies the page-scroll
+   offset inside this horizontal scrollport; vertically scrolling grids also
+   retain native sticky behavior. Hosts can publish --sc-sticky-top in pixels. */
+.sc-table-wrap > table > thead { position: sticky; top: var(--sc-table-header-offset); z-index: 4; }
 .sc-table-wrap th, .sc-table-wrap td { border-bottom: 1px solid var(--sc-table-line); padding: 11px 14px; text-align: left; }
 .sc-table-wrap td { font-size: .9rem; }
 .sc-table-wrap .sc-numeric-measure { font-variant-numeric: tabular-nums; text-align: right; }
-.sc-table-wrap th { background: var(--sc-table-fixed-bg); color: var(--sc-muted); font-size: .72rem; letter-spacing: .05em; position: sticky; text-transform: uppercase; top: 0; }
+.sc-table-wrap th { background: var(--sc-table-fixed-bg); color: var(--sc-muted); font-size: .72rem; letter-spacing: .05em; position: sticky; text-transform: uppercase; }
 .sc-table-wrap > table > thead > tr > th { z-index: 4; }
 .sc-table-wrap > table > thead > tr > th:first-child { box-shadow: 7px 0 10px -10px var(--sc-shadow); left: 0; z-index: 6; }
 .sc-table-wrap > table > tbody > tr > td:first-child { background: var(--sc-table-fixed-bg); box-shadow: 7px 0 10px -10px var(--sc-shadow); left: 0; position: sticky; z-index: 2; }

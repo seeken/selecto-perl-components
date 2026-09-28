@@ -201,17 +201,105 @@
     });
   }
 
-  document.addEventListener("submit", function (event) {
+  window.addEventListener("submit", function (event) {
     var form = event.target;
+    if (form && form.hasAttribute("data-sc-controls-loading")) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     if (form && form.querySelector && form.querySelector("[data-sc-result-view-panel]")) {
       syncViewPanelCopies(form);
     }
   }, true);
 
+  var viewControlsRequests = new WeakMap();
+
+  function viewControlsBody(root) {
+    var body = new URLSearchParams(new FormData(root));
+    body.set("csrf_token", root.dataset.scControlsCsrf || "");
+    return body;
+  }
+
+  function controlsStatus(root, message) {
+    var status = root.querySelector("[data-sc-controls-status]");
+    if (!status) return;
+    status.textContent = message;
+    status.hidden = !message;
+  }
+
+  function cancelViewControls(root) {
+    var pending = viewControlsRequests.get(root);
+    if (pending) {
+      window.clearTimeout(pending.timer);
+      pending.abort.abort();
+    }
+    viewControlsRequests.delete(root);
+    root.removeAttribute("data-sc-controls-loading");
+    root.removeAttribute("aria-busy");
+  }
+
+  function loadViewControls(root, panel, view) {
+    cancelViewControls(root);
+    var request = {abort: new AbortController()};
+    request.timer = window.setTimeout(function () {
+      request.timedOut = true;
+      request.abort.abort();
+    }, 30000);
+    viewControlsRequests.set(root, request);
+    var body = viewControlsBody(root);
+    root.setAttribute("data-sc-controls-loading", "");
+    root.setAttribute("aria-busy", "true");
+    controlsStatus(root, "Loading view controls…");
+    fetch(root.dataset.scControlsUrl, {
+      method: "POST", credentials: "same-origin", signal: request.abort.signal,
+      headers: {Accept: "application/json"}, body: body
+    }).then(async function (response) {
+      var data = await response.json();
+      if (!response.ok || typeof data.html !== "string") {
+        throw new Error(data.error || "View controls could not be loaded.");
+      }
+      if (viewControlsRequests.get(root) !== request) return;
+      if (!root.isConnected) { cancelViewControls(root); return; }
+      // Editing filters/columns during the request must not restore an older
+      // draft. Fetch again using the current successful form controls.
+      if (viewControlsBody(root).toString() !== body.toString()) {
+        loadViewControls(root, panel, view);
+        return;
+      }
+      var template = document.createElement("template");
+      template.innerHTML = data.html;
+      panel.replaceChildren(template.content);
+      panel.removeAttribute("data-sc-view-lazy");
+      cancelViewControls(root);
+      controlsStatus(root, "");
+      stageResultView(root, view);
+    }).catch(function (error) {
+      if (viewControlsRequests.get(root) !== request) return;
+      if (!root.isConnected) { cancelViewControls(root); return; }
+      cancelViewControls(root);
+      // Keep the existing controls and all their edits usable on failure.
+      root.querySelectorAll('input[name="view"]').forEach(function (radio) {
+        radio.checked = radio.value === root.dataset.scControlsView;
+      });
+      controlsStatus(root, (request.timedOut ? "View controls took too long to load."
+        : error.message || "View controls could not be loaded.") +
+        " Select the view again to retry.");
+    });
+  }
+
   function stageResultView(root, view) {
     if (!root) return;
     syncViewPanelCopies(root);
     var mode = view === "detail" ? "detail" : "summary";
+    var target = root.querySelector('[data-sc-result-view-panel="' + mode + '"]');
+    if (target && target.hasAttribute("data-sc-view-lazy") && root.dataset.scControlsUrl) {
+      loadViewControls(root, target, view);
+      return;
+    }
+    cancelViewControls(root);
+    controlsStatus(root, "");
+    root.dataset.scControlsView = view;
     root.querySelectorAll("[data-sc-result-view-panel]").forEach(function (panel) {
       var active = panel.dataset.scResultViewPanel === mode;
       panel.hidden = !active;
@@ -838,6 +926,7 @@
     }).then(function (html) {
       if (dialog._scEditorAbort !== abort) return;
       replaceEditorBody(body, html);
+      restoreActionVariants(body);
       initializeRecordEditor(body.querySelector("[data-sc-record-editor-form]"));
       if (notice) {
         var result = body.querySelector("[data-sc-record-editor-result]");
@@ -1444,6 +1533,75 @@
     }, 0);
   }, true);
 
+  // Source: table-headers.js
+  // Horizontal table scrolling establishes a sticky containing block even
+  // when the document owns vertical scrolling. Move the native header within
+  // that block, below any host toolbar, without cloning interactive controls.
+  var stickyResultTables = [];
+  var stickyResultFrame = null;
+  var stickyResultResize = typeof ResizeObserver === "function"
+    ? new ResizeObserver(scheduleResultTableHeaders) : null;
+
+  function scheduleResultTableHeaders() {
+    if (stickyResultFrame !== null) return;
+    stickyResultFrame = window.requestAnimationFrame(positionResultTableHeaders);
+  }
+
+  function positionResultTableHeaders() {
+    stickyResultFrame = null;
+    // Read before writing, and do not traverse table cells on scroll.
+    var positions = stickyResultTables.filter(function (entry) {
+      return entry.wrap.isConnected && entry.head.isConnected;
+    }).map(function (entry) {
+      var bounds = entry.wrap.getBoundingClientRect();
+      var hostTop = parseFloat(window.getComputedStyle(entry.wrap).getPropertyValue("--sc-sticky-top")) || 0;
+      var limit = Math.max(0, entry.wrap.clientHeight - entry.head.offsetHeight);
+      return {entry: entry, offset: Math.max(0, Math.min(limit, hostTop - bounds.top - entry.wrap.clientTop))};
+    });
+    positions.forEach(function (position) {
+      var value = position.offset + "px";
+      if (position.entry.offset === value) return;
+      position.entry.offset = value;
+      position.entry.wrap.style.setProperty("--sc-table-header-offset", value);
+    });
+  }
+
+  function restoreResultTableHeaders() {
+    if (stickyResultResize) stickyResultResize.disconnect();
+    stickyResultTables = Array.from(document.querySelectorAll(".sc-table-wrap > table > thead"))
+      .filter(function (head) { return !head.closest("dialog, [role=dialog]"); })
+      .map(function (head) {
+        var wrap = head.parentElement.parentElement;
+        if (stickyResultResize) {
+          stickyResultResize.observe(wrap);
+          stickyResultResize.observe(head);
+        }
+        return {head: head, wrap: wrap};
+      });
+    if (stickyResultResize && document.body) stickyResultResize.observe(document.body);
+    scheduleResultTableHeaders();
+  }
+
+  function initResultTableHeaders() {
+    restoreResultTableHeaders();
+    // Toolbar sizes and host menu classes can change without a window resize.
+    if (document.body && typeof MutationObserver === "function") {
+      new MutationObserver(scheduleResultTableHeaders).observe(document.body, {
+        attributes: true, attributeFilter: ["style", "class"],
+      });
+    }
+  }
+
+  document.addEventListener("scroll", scheduleResultTableHeaders, {capture: true, passive: true});
+  window.addEventListener("resize", scheduleResultTableHeaders);
+  window.addEventListener("pageshow", restoreResultTableHeaders);
+  document.addEventListener("htmx:after:swap", restoreResultTableHeaders);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initResultTableHeaders);
+  } else {
+    initResultTableHeaders();
+  }
+
   // Source: explorer-session.js
   // Keep only the last acknowledged form snapshot. A new connection starts
   // with a full form; subsequent messages may send revisioned differences.
@@ -1779,6 +1937,7 @@
     restoreCharts();
     restoreGridSelections();
     restoreBulkActions();
+    restoreResultTableHeaders();
   }
 
   function recoverClosedWebSocketChannels() {
@@ -2959,10 +3118,20 @@
         ["is_null", "is empty"], ["not_null", "is not empty"]
       ];
     }
+    var textOperators = /^(?:string|text)$/.test(type || "") ? [
+      ["text_contains_ci", "contains (ignore case)"],
+      ["starts_with_ci", "starts with (ignore case)"],
+      ["ends_with_ci", "ends with (ignore case)"],
+      ["text_contains", "contains (match case)"],
+      ["starts_with", "starts with (match case)"],
+      ["ends_with", "ends with (match case)"]
+    ] : [];
     return [
       ["eq", "equals"], ["ne", "does not equal"], ["in", "one of"],
+      ["not_in", "not one of"]
+    ].concat(textOperators, [
       ["is_null", "is empty"], ["not_null", "is not empty"]
-    ];
+    ]);
   }
 
   function hiddenFilterValue(name, value) {
@@ -3980,6 +4149,7 @@
   }
 
   function restoreBulkActions() {
+    restoreActionVariants(document);
     document.querySelectorAll("[data-sc-bulk-action]").forEach(function (root) {
       if (actionMode(root) === "groups") restoreGroupedAction(root);
       refreshBulkAction(root);
@@ -3990,6 +4160,155 @@
   document.addEventListener("htmx:after:swap", restoreBulkActions);
   document.addEventListener("htmx:ws:after:message:incoming", function () {
     window.requestAnimationFrame(restoreBulkActions);
+  });
+
+  // Source: action-variants.js
+  function actionVariantState(root) {
+    var spec;
+    try { spec = JSON.parse(root.dataset.scActionVariants); } catch (_) { return null; }
+    var selectors = new Set();
+    spec.variants.forEach(function (variant) {
+      Object.keys(variant.when).forEach(function (id) { selectors.add(id); });
+    });
+    var values = Object.create(null);
+    var base = root.querySelector("[data-sc-action-base]");
+    spec.inputs.forEach(function (input) {
+      if (!selectors.has(input.id)) return;
+      var control = Array.from(base.querySelectorAll("[name]")).find(function (item) {
+        return item.name === "action_input_" + input.id;
+      });
+      if (!control) return;
+      var value = input.trim ? control.value.trim() : control.value;
+      if (value === "") return;
+      if (input.type === "boolean") {
+        if (!/^(true|false|1|0)$/i.test(value)) return;
+        value = /^(true|1)$/i.test(value);
+      } else if (input.type === "number" || input.type === "integer") {
+        if (!/^-?(\d+(\.\d*)?|\.\d+)$/.test(value)) return;
+        value = Number(value);
+        if (input.type === "integer" && !Number.isInteger(value)) return;
+      } else if (input.type === "collection") {
+        try { value = JSON.parse(value); } catch (_) { return; }
+        if (!Array.isArray(value)) return;
+      }
+      values[input.id] = value;
+    });
+    function same(left, right) {
+      if (left === right) return true;
+      if (!left || !right || typeof left !== "object" || typeof right !== "object"
+          || Array.isArray(left) !== Array.isArray(right)) return false;
+      var keys = Object.keys(left);
+      return keys.length === Object.keys(right).length && keys.every(function (key) {
+        return Object.prototype.hasOwnProperty.call(right, key) && same(left[key], right[key]);
+      });
+    }
+    var matches = spec.variants.filter(function (variant) {
+      return Object.keys(variant.when).every(function (id) {
+        return Object.prototype.hasOwnProperty.call(values, id) && same(values[id], variant.when[id]);
+      });
+    });
+    return {values: values, matches: matches};
+  }
+
+  function updateActionVariant(root) {
+    var state = actionVariantState(root);
+    var selected = state && state.matches.length === 1 ? state.matches[0] : null;
+    var changed = root.dataset.scActiveVariant !== (selected ? selected.id : "");
+    root.dataset.scActiveVariant = selected ? selected.id : "";
+    root.querySelectorAll("[data-sc-action-variant]").forEach(function (panel) {
+      var active = !!selected && panel.dataset.scActionVariant === selected.id;
+      panel.hidden = !active;
+      panel.disabled = !active;
+    });
+    root.querySelectorAll("[data-sc-action-base] [data-sc-action-input-id]").forEach(function (field) {
+      var overridden = !!selected && selected.fields.includes(field.dataset.scActionInputId);
+      field.hidden = overridden;
+      field.querySelectorAll("input,select,textarea,button").forEach(function (control) {
+        control.disabled = overridden;
+      });
+    });
+    if (changed) root.querySelectorAll("[data-sc-lookup-query]").forEach(function (query) {
+      if (query._scLookupTimer) window.clearTimeout(query._scLookupTimer);
+      if (query._scLookupAbort) query._scLookupAbort.abort();
+      query._scLookupAbort = null;
+      closeLookup(query);
+    });
+    var message = selected ? selected.label + " form. Required fields are marked *."
+      : state && state.matches.length > 1
+        ? "These choices match more than one action form. Contact the administrator."
+        : "Choose values that select an available action form.";
+    var status = root.querySelector("[data-sc-action-variant-status]");
+    if (status && status.textContent !== message) status.textContent = message;
+    var first = root.querySelector('[data-sc-action-base] input:not([type="hidden"]), [data-sc-action-base] select, [data-sc-action-base] textarea');
+    if (first) {
+      if (first._scVariantValidity && first.validationMessage === first._scVariantValidity) first.setCustomValidity("");
+      first._scVariantValidity = selected ? "" : message;
+      if (!selected) first.setCustomValidity(message);
+    }
+  }
+
+  function restoreActionVariants(scope) {
+    (scope || document).querySelectorAll("[data-sc-action-variants]").forEach(updateActionVariant);
+  }
+
+  function loadTargetActionForm(form, ids) {
+    if (!form.dataset.scActionFormUrl) return;
+    if (form._scFormAbort) form._scFormAbort.abort();
+    var abort = new AbortController();
+    form._scFormAbort = abort;
+    var fields = form.querySelector("[data-sc-action-fields]");
+    var submit = form.querySelector('button[type="submit"]');
+    var result = form.querySelector("[data-sc-action-result]");
+    form.dataset.scActionFormReady = "0";
+    form.setAttribute("aria-busy", "true");
+    if (submit) submit.disabled = true;
+    fields.replaceChildren();
+    fields.textContent = "Loading action form…";
+    var url = new URL(form.dataset.scActionFormUrl, window.location.href);
+    ids.forEach(function (id) { url.searchParams.append("selected_id", id); });
+    window.fetch(url, {credentials: "same-origin", cache: "no-store", signal: abort.signal,
+      headers: {"Accept": "application/json"}}).then(async function (response) {
+      var body = await response.json();
+      if (!response.ok || !body.ok || typeof body.html !== "string") {
+        throw new Error(body.message || "The action form could not be loaded.");
+      }
+      if (abort.signal.aborted || form._scFormAbort !== abort) return;
+      // Same-origin, authorized, server-rendered fragment; all field content is escaped.
+      fields.innerHTML = body.html;
+      restoreActionVariants(fields);
+      form.dataset.scActionFormReady = "1";
+      if (submit) submit.disabled = false;
+      var focus = fields.querySelector('input:not([type="hidden"]),select,textarea');
+      if (focus) focus.focus();
+    }).catch(function (error) {
+      if (abort.signal.aborted || form._scFormAbort !== abort) return;
+      fields.replaceChildren();
+      if (result) {
+        result.hidden = false;
+        result.classList.add("is-error");
+        result.textContent = error.message || "The action form could not be loaded. Close and try again.";
+      }
+    }).finally(function () {
+      if (form._scFormAbort === abort) form.removeAttribute("aria-busy");
+    });
+  }
+
+  document.addEventListener("close", function (event) {
+    if (!event.target.matches("[data-sc-action-dialog]")) return;
+    var form = event.target.querySelector("[data-sc-action-form]");
+    if (form && form._scFormAbort) form._scFormAbort.abort();
+  }, true);
+
+  ["input", "change"].forEach(function (name) {
+    document.addEventListener(name, function (event) {
+      var root = event.target.closest && event.target.closest("[data-sc-action-variants]");
+      if (root) updateActionVariant(root);
+    });
+  });
+  document.addEventListener("reset", function (event) {
+    if (event.target.matches("[data-sc-action-form]")) {
+      window.setTimeout(function () { restoreActionVariants(event.target); }, 0);
+    }
   });
 
   // Source: lookups.js
@@ -4161,6 +4480,7 @@
     query.value = label + (label.indexOf("(" + value + ")") === -1 ? " (" + value + ")" : "");
     query.dataset.scLookupSelectedValue = value;
     query.setCustomValidity("");
+    elements.selected.dispatchEvent(new Event("change", {bubbles: true}));
 
     var form = query.closest("[data-sc-action-form]");
     var root = form && form.closest("[data-sc-bulk-action]");
@@ -4215,6 +4535,7 @@
   }
 
   function searchLookup(query) {
+    if (query.matches(":disabled")) return;
     var term = query.value.trim();
     var minimum = Number(query.dataset.scLookupMinimumLength || 2);
     var elements = lookupElements(query);
@@ -4235,6 +4556,12 @@
     var form = query.closest("[data-sc-action-form]");
     var root = form && form.closest("[data-sc-bulk-action]");
     var rawIndex = query.dataset.scLookupGroupIndex;
+    var variants = form && form.querySelector("[data-sc-action-variants]");
+    var variantState = variants && actionVariantState(variants);
+    if (variantState) Object.keys(variantState.values).forEach(function (id) {
+      var value = variantState.values[id];
+      url.searchParams.set("action_input_" + id, typeof value === "object" ? JSON.stringify(value) : String(value));
+    });
     var index = Number(rawIndex);
     if (root && rawIndex !== undefined) {
       var group = activeActionGroups(root).find(function (item) { return item.index === index; });
@@ -4276,6 +4603,7 @@
     elements.selected.value = directValue ? term : "";
     query.dataset.scLookupSelectedValue = elements.selected.value;
     query.setCustomValidity(term && !directValue ? "Choose a result from the list." : "");
+    elements.selected.dispatchEvent(new Event("change", {bubbles: true}));
 
     var form = query.closest("[data-sc-action-form]");
     var root = form && form.closest("[data-sc-bulk-action]");
@@ -4497,6 +4825,7 @@
       var ids = selectedRowIds(root);
       if (!form || ids.length === 0) return;
       form.reset();
+      restoreActionVariants(form);
       form.querySelectorAll("[data-sc-lookup-query]").forEach(function (query) {
         query.dataset.scLookupSelectedValue = "";
         query.setCustomValidity("");
@@ -4520,6 +4849,7 @@
       if (footerClose) footerClose.textContent = "Cancel";
       if (typeof dialog.showModal === "function") dialog.showModal();
       else dialog.setAttribute("open", "");
+      loadTargetActionForm(form, ids);
       return;
     }
 
@@ -4679,6 +5009,7 @@
     if (!form || typeof window.fetch !== "function") return;
     if (form.matches("[data-sc-record-editor-action-form]")) return;
     event.preventDefault();
+    if (form.dataset.scActionFormUrl && form.dataset.scActionFormReady !== "1") return;
     var root = form.closest("[data-sc-bulk-action]");
     var ids = selectedRowIds(root);
     populateActionTargets(form, ids);

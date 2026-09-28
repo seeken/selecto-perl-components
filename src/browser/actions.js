@@ -386,6 +386,7 @@
   }
 
   function restoreBulkActions() {
+    restoreActionVariants(document);
     document.querySelectorAll("[data-sc-bulk-action]").forEach(function (root) {
       if (actionMode(root) === "groups") restoreGroupedAction(root);
       refreshBulkAction(root);

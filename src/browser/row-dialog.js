@@ -138,6 +138,7 @@
     }).then(function (html) {
       if (dialog._scEditorAbort !== abort) return;
       replaceEditorBody(body, html);
+      restoreActionVariants(body);
       initializeRecordEditor(body.querySelector("[data-sc-record-editor-form]"));
       if (notice) {
         var result = body.querySelector("[data-sc-record-editor-result]");

@@ -25,6 +25,8 @@ has max_orders     => 10;
 has max_measures   => 10;
 has max_action_rows => 1000;
 has show_sql       => 0;
+# Hosts can opt in to fetching inactive detail/summary controls on demand.
+has lazy_view_controls => 0;
 has action_handlers => sub { return {} };
 has choice_sources  => sub { return {} };
 has filter_fields   => sub { return [] };
@@ -32,6 +34,7 @@ has lookup_sources  => sub { return {} };
 has co_domain_engines => sub { return {} };
 has co_domain_scopes  => sub { return {} };
 has action_eligibility_resolvers => sub { return {} };
+has action_form_resolvers => sub { return {} };
 has 'action_authorizer';
 # Optional coderef ($controller, $config) returning true when the request may
 # export results (Excel/CSV/TSV/JSON). Without one, exports are allowed.
@@ -93,6 +96,12 @@ sub new ($class, @args) {
         unless ref($self->co_domain_scopes) eq 'HASH';
     die "action_eligibility_resolvers must be an object\n"
         unless ref($self->action_eligibility_resolvers) eq 'HASH';
+    die "action_form_resolvers must be an object\n"
+        unless ref($self->action_form_resolvers) eq 'HASH';
+    for my $id (keys %{$self->action_form_resolvers}) {
+        die "Invalid action form resolver\n" unless $id =~ /\A[a-z][a-z0-9_-]*\z/
+            && ref($self->action_form_resolvers->{$id}) eq 'CODE';
+    }
     die "localizer must be a coderef\n"
         if defined($self->localizer) && ref($self->localizer) ne 'CODE';
     die "theme_resolver must be a coderef\n"
@@ -248,6 +257,7 @@ sub localize ($self, $domain, $semantic, $default, $context = undef) {
         if defined($self->{_localization_controller}) && !exists($context->{controller});
     return Selecto::Components::I18N->localize(
         $self->localizer, $domain, $semantic, $default, $context,
+        $self->{_i18n_metadata_cache},
     );
 }
 
@@ -261,6 +271,7 @@ sub for_request ($self, $controller) {
     # A single model/render cycle asks for the same catalogs through several
     # convenience methods, so keep those immutable results on the request copy.
     $copy->{_catalog_cache} = {};
+    $copy->{_i18n_metadata_cache} = {};
     return $copy;
 }
 
@@ -1013,6 +1024,14 @@ sub filter_operators ($self, $type) {
     return [
         [eq => 'equals'], [ne => 'does not equal'], [in => 'one of'],
         [not_in => 'not one of'],
+        (($type // '') =~ /\A(?:string|text)\z/ ? (
+            [text_contains_ci => 'contains (ignore case)'],
+            [starts_with_ci => 'starts with (ignore case)'],
+            [ends_with_ci => 'ends with (ignore case)'],
+            [text_contains => 'contains (match case)'],
+            [starts_with => 'starts with (match case)'],
+            [ends_with => 'ends with (match case)'],
+        ) : ()),
         [is_null => 'is empty'], [not_null => 'is not empty'],
     ];
 }

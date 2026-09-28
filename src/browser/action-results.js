@@ -144,6 +144,7 @@
     if (!form || typeof window.fetch !== "function") return;
     if (form.matches("[data-sc-record-editor-action-form]")) return;
     event.preventDefault();
+    if (form.dataset.scActionFormUrl && form.dataset.scActionFormReady !== "1") return;
     var root = form.closest("[data-sc-bulk-action]");
     var ids = selectedRowIds(root);
     populateActionTargets(form, ids);

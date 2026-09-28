@@ -25,6 +25,8 @@ for my $format (qw(csv tsv json xlsx)) {
         "$format export is capped at max_export_rows";
 }
 $t->get_ok($url)->status_is(200);
+$t->text_is('.sc-export-options > span' => 'Export (up to 5 rows)')
+    ->element_exists('.sc-export-options[aria-label="Export (up to 5 rows)"]');
 is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, 10,
     'a paginated page keeps its own page size';
 
