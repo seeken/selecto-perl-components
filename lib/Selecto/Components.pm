@@ -17,6 +17,7 @@ use Selecto::Components::Controller::Lookups ();
 use Selecto::Components::Controller::RecordEditor ();
 use Selecto::Components::Controller::SavedQueries ();
 use Selecto::Components::Explorer ();
+use Selecto::Components::ExplorerSession ();
 use Selecto::Components::Renderer ();
 use Selecto::Components::Util qw(humanize);
 use Selecto::Components::WebSocketPolicy ();
@@ -113,6 +114,8 @@ sub register ($self, $app, $plugin_config) {
     for my $id (sort keys %$specs) {
         die "explorer $id configuration must be an object\n" unless ref($specs->{$id}) eq 'HASH';
         my $config = Selecto::Components::Config->new(
+            websocket_context => $plugin_config->{websocket_context},
+            websocket_session_options => $plugin_config->{websocket_session_options} // {},
             %{$specs->{$id}},
             id => $id,
             path => $specs->{$id}{path} // "/explore/$id",
@@ -258,6 +261,8 @@ sub _routes (
             return $controller->finish(1008 => 'WebSocket origin is not allowed');
         }
         $controller->inactivity_timeout($websocket_inactivity_timeout);
+        my $session = Selecto::Components::ExplorerSession->new(%{$config->websocket_session_options});
+        $controller->on(finish => sub { $session->clear_results; $session->input(undef) });
         if ($websocket_heartbeat_interval) {
             my $heartbeat_id;
             $heartbeat_id = Mojo::IOLoop->recurring(
@@ -279,7 +284,7 @@ sub _routes (
             my $ok = eval { $envelope = decode_json($message); 1 };
             return $socket->finish(1003 => 'Expected a JSON message')
                 unless $ok && ref($envelope) eq 'HASH' && ref($envelope->{headers}) eq 'HASH';
-            my ($response, $processing_error);
+            my ($response, $processing_error, $denied);
             my $processed = eval {
                 my %input = %$envelope;
                 delete $input{headers};
@@ -287,11 +292,35 @@ sub _routes (
                 $request_id = undef
                     unless defined($request_id) && !ref($request_id)
                         && $request_id =~ /\A[a-zA-Z0-9_.:-]{1,128}\z/;
-                my $model = Selecto::Components::Controller::Explorer::_decorate_model(
-                    $socket, $explorer->model($socket, \%input),
-                );
-                $model->{selecto_request_id} = $request_id if defined $request_id;
-                $response = Selecto::Components::Renderer->websocket_message($model);
+                my $patch = delete $input{selecto_session};
+                my $refresh = delete $input{selecto_refresh};
+                my $context = $config->websocket_context;
+                my $scope = $context ? $context->($socket, $config) : 'connection';
+                if (!defined($scope)) {
+                    $denied = 1;
+                    $session->clear_results;
+                } else {
+                    $session->bind_scope($scope);
+                    my $state_input = $session->prepare(\%input, $patch, $refresh);
+                    if (!defined($state_input)) {
+                        $response = {selecto => {
+                            request_id => $request_id, session => {resync => 1},
+                        }};
+                    } else {
+                        my $model = Selecto::Components::Controller::Explorer::_decorate_model(
+                            $socket, $explorer->model($socket, $state_input, {result_cache => $session}),
+                        );
+                        $model->{selecto_request_id} = $request_id if defined $request_id;
+                        $response = Selecto::Components::Renderer->websocket_message($model);
+                        my $accepted = $model->{state} && $model->{state}->valid
+                            && !$model->{runtime_error} && $model->{result};
+                        $session->commit($state_input) if $accepted;
+                        $response->{selecto}{session} = {
+                            revision => $session->revision, accepted => $accepted ? 1 : 0,
+                            cache_hit => $model->{result}{cache}{hit} ? 1 : 0,
+                        };
+                    }
+                }
                 1;
             };
             $processing_error = $@ unless $processed;
@@ -308,6 +337,7 @@ sub _routes (
                 $socket->app->log->error("Selecto WebSocket message failed: $error");
                 return $socket->finish(1011 => 'Explorer request could not be completed');
             }
+            return $socket->finish(1008 => 'Explorer access is no longer allowed') if $denied;
             return $socket->send({text => encode_json($response)});
         });
     });

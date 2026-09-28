@@ -5,6 +5,7 @@ lib/Selecto/Components/Templates/AuthoringPreview.pm
 lib/Selecto/Components/Templates/AuthoringPreviewHost.pm
 t/templates_authoring_preview.t
 cpanfile
+docs/explorer-sessions.md
 examples/northwind.pl
 lib/Selecto/Components.pm
 lib/Selecto/Components/Actions.pm
@@ -23,6 +24,7 @@ lib/Selecto/Components/Controller/SavedQueries.pm
 lib/Selecto/Components/Controller/Templates.pm
 lib/Selecto/Components/DateShortcut.pm
 lib/Selecto/Components/Explorer.pm
+lib/Selecto/Components/ExplorerSession.pm
 lib/Selecto/Components/Graph/AxisPlanner.pm
 lib/Selecto/Components/Importer.pm
 lib/Selecto/Components/I18N.pm
@@ -98,6 +100,7 @@ src/browser/picker.js
 src/browser/row-dialog.js
 src/browser/shared.js
 src/browser/shell.js
+src/browser/explorer-session.js
 src/browser/templates.js
 t/00-load.t
 t/api_console.t
@@ -119,6 +122,8 @@ t/route_bridge.t
 t/row_actions.t
 t/security_boundaries.t
 t/state.t
+t/explorer_session.t
+t/browser/explorer-session.spec.js
 t/templates_form_http.t
 t/templates_form_postgresql.t
 t/templates_form_receipts.t

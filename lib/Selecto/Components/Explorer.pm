@@ -37,7 +37,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     die "explorer model options must be an object\n" unless ref($options) eq 'HASH';
     # Optional result cache keyed by the exact compiled SQL and bound values
     # (see result_cache_key). Hosts such as dashboards use it to reuse results
-    # across requests; Explorer itself runs uncached.
+    # across requests. WebSocket sessions supply a bounded connection-local cache.
     my $result_cache = $options->{result_cache};
     die "explorer result_cache must provide fetch and store\n"
         if defined($result_cache)
@@ -58,6 +58,8 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     my $ok = eval {
         my $setup_started = time;
         $engine = $config->engine($controller);
+        $result_cache->bind_domain($engine->domain->fingerprint)
+            if $result_cache && $result_cache->can('bind_domain');
         $all_rows = $options->{all_rows}
             && $config->query_params_enabled($engine->domain) ? 1 : 0;
         $input = $input_supplied || $config->query_params_enabled($engine->domain)
@@ -72,7 +74,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         $model->{state} = $state;
         $model->{canonical_url} = $self->canonical_url($state, $engine->domain);
         my $setup_ms = _elapsed_ms($setup_started);
-        return 1 unless $state->valid;
+        return $model unless $state->valid;
 
         my $build_started = time;
         my $built = Selecto::Components::QueryBuilder->build(
@@ -105,19 +107,20 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             $count_statement = _count_statement($count_source);
             $count_compile_ms = _elapsed_ms($count_compile_started);
             my $count_key = _count_cache_key($count_statement);
-            $total_count = _wants_cached_count($input)
+            $total_count = !$result_cache && _wants_cached_count($input)
                 ? _cached_count($controller, $count_key) : undef;
             if (defined($total_count)) {
                 $count_cache_hit = 1;
                 $count_query_ms = 0;
             } else {
                 my $count_started = time;
+                my $hits_before_count = $cache_info{hits};
                 my $count_raw = _execute($engine, $count_statement, $result_cache, \%cache_info);
                 $count_query_ms = _elapsed_ms($count_started);
                 _validate_result($count_raw);
                 $total_count = _total_count($count_raw);
-                _store_count($controller, $count_key, $total_count);
-                $count_cache_hit = 0;
+                _store_count($controller, $count_key, $total_count) unless $result_cache;
+                $count_cache_hit = $cache_info{hits} > $hits_before_count ? 1 : 0;
             }
         }
         my $elapsed_ms = _elapsed_ms($started);
@@ -227,9 +230,10 @@ sub model ($self, $controller, $input = undef, $options = undef) {
 # so any difference in the query (including visibility scoping) is a different entry.
 sub result_cache_key ($class, $statement) {
     return sha256_hex(encode_json([
-        'selecto-result-v1',
+        'selecto-result-v2',
         $statement->adapter_name,
         $statement->sql,
+        $statement->columns,
         @{$statement->params},
     ]));
 }

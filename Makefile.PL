@@ -30,6 +30,7 @@ WriteMakefile(
         'lib/Selecto/Components/Controller/SavedQueries.pm' => '$(INST_LIB)/Selecto/Components/Controller/SavedQueries.pm',
         'lib/Selecto/Components/DateShortcut.pm' => '$(INST_LIB)/Selecto/Components/DateShortcut.pm',
         'lib/Selecto/Components/Explorer.pm' => '$(INST_LIB)/Selecto/Components/Explorer.pm',
+        'lib/Selecto/Components/ExplorerSession.pm' => '$(INST_LIB)/Selecto/Components/ExplorerSession.pm',
         'lib/Selecto/Components/Graph/AxisPlanner.pm' => '$(INST_LIB)/Selecto/Components/Graph/AxisPlanner.pm',
         'lib/Selecto/Components/I18N.pm' => '$(INST_LIB)/Selecto/Components/I18N.pm',
         'lib/Selecto/Components/Importer.pm' => '$(INST_LIB)/Selecto/Components/Importer.pm',

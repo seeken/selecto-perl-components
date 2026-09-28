@@ -363,6 +363,7 @@
   }
 
   function finishEditorMutation(dialog, payload, message) {
+    document.dispatchEvent(new CustomEvent("selecto:records-changed"));
     return synchronizeEditedRow(dialog, payload).then(function (outcome) {
       if (!outcome || outcome.navigating) return;
       if (payload.close_dialog || outcome.retired) {
