@@ -213,6 +213,8 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     };
     unless ($ok) {
         my $error = $@;
+        $controller->app->log->error("Selecto explorer model failed: $error")
+            if $controller->can('app');
         $model->{runtime_error} = _public_error($error);
         if (!$state && $engine) {
             $state = Selecto::Components::State->from_input(
