@@ -2,6 +2,21 @@ use 5.034;
 use strict;
 use warnings;
 use ExtUtils::MakeMaker;
+use File::Find ();
+
+# Every module under lib/ and every asset under public/ is installed, public/
+# into the dist share directory. The map is built from disk rather than listed
+# by hand so a new file cannot be left out; t/manifest.t keeps MANIFEST, and
+# with it the release tarball, in step.
+my %pm;
+File::Find::find({no_chdir => 1, wanted => sub {
+    return unless -f $_ && !m{(?:\A|/)\.};
+    if (m{\Alib/(.+\.pm)\z}) {
+        $pm{$_} = "\$(INST_LIB)/$1";
+    } elsif (m{\Apublic/}) {
+        $pm{$_} = "\$(INST_LIB)/auto/share/dist/Selecto-Components/$_";
+    }
+}}, 'lib', 'public');
 
 WriteMakefile(
     NAME             => 'Selecto::Components',
@@ -11,79 +26,7 @@ WriteMakefile(
     LICENSE          => 'artistic_1',
     MIN_PERL_VERSION => '5.034',
     EXE_FILES => ['bin/selecto-template-preview-host'],
-    PM => {
-        'lib/Selecto/Components/Templates/AuthoringPreview.pm' => '$(INST_LIB)/Selecto/Components/Templates/AuthoringPreview.pm',
-        'lib/Selecto/Components/Templates/AuthoringPreviewHost.pm' => '$(INST_LIB)/Selecto/Components/Templates/AuthoringPreviewHost.pm',
-        'lib/Selecto/Components.pm' => '$(INST_LIB)/Selecto/Components.pm',
-        'lib/Selecto/Components/APIConsole.pm' => '$(INST_LIB)/Selecto/Components/APIConsole.pm',
-        'lib/Selecto/Components/Actions.pm' => '$(INST_LIB)/Selecto/Components/Actions.pm',
-        'lib/Selecto/Components/AssetManifest.pm' => '$(INST_LIB)/Selecto/Components/AssetManifest.pm',
-        'lib/Selecto/Components/BucketParser.pm' => '$(INST_LIB)/Selecto/Components/BucketParser.pm',
-        'lib/Selecto/Components/CannedPage.pm' => '$(INST_LIB)/Selecto/Components/CannedPage.pm',
-        'public/selecto-components/canned-page.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/canned-page.js',
-        'public/selecto-components/canned-page.css' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/canned-page.css',
-        'lib/Selecto/Components/Config.pm' => '$(INST_LIB)/Selecto/Components/Config.pm',
-        'lib/Selecto/Components/Controller/Actions.pm' => '$(INST_LIB)/Selecto/Components/Controller/Actions.pm',
-        'lib/Selecto/Components/Controller/Explorer.pm' => '$(INST_LIB)/Selecto/Components/Controller/Explorer.pm',
-        'lib/Selecto/Components/Controller/Lookups.pm' => '$(INST_LIB)/Selecto/Components/Controller/Lookups.pm',
-        'lib/Selecto/Components/Controller/RecordEditor.pm' => '$(INST_LIB)/Selecto/Components/Controller/RecordEditor.pm',
-        'lib/Selecto/Components/Controller/SavedQueries.pm' => '$(INST_LIB)/Selecto/Components/Controller/SavedQueries.pm',
-        'lib/Selecto/Components/DateShortcut.pm' => '$(INST_LIB)/Selecto/Components/DateShortcut.pm',
-        'lib/Selecto/Components/Explorer.pm' => '$(INST_LIB)/Selecto/Components/Explorer.pm',
-        'lib/Selecto/Components/ExplorerSession.pm' => '$(INST_LIB)/Selecto/Components/ExplorerSession.pm',
-        'lib/Selecto/Components/Graph/AxisPlanner.pm' => '$(INST_LIB)/Selecto/Components/Graph/AxisPlanner.pm',
-        'lib/Selecto/Components/I18N.pm' => '$(INST_LIB)/Selecto/Components/I18N.pm',
-        'lib/Selecto/Components/Importer.pm' => '$(INST_LIB)/Selecto/Components/Importer.pm',
-        'lib/Selecto/Components/QueryBuilder.pm' => '$(INST_LIB)/Selecto/Components/QueryBuilder.pm',
-        'lib/Selecto/Components/QueryLibrary.pm' => '$(INST_LIB)/Selecto/Components/QueryLibrary.pm',
-        'lib/Selecto/Components/RecordEditor.pm' => '$(INST_LIB)/Selecto/Components/RecordEditor.pm',
-        'lib/Selecto/Components/Resource/Composer.pm' => '$(INST_LIB)/Selecto/Components/Resource/Composer.pm',
-        'lib/Selecto/Components/Resource/Registry.pm' => '$(INST_LIB)/Selecto/Components/Resource/Registry.pm',
-        'lib/Selecto/Components/Renderer.pm' => '$(INST_LIB)/Selecto/Components/Renderer.pm',
-        'lib/Selecto/Components/Renderer/Builder.pm' => '$(INST_LIB)/Selecto/Components/Renderer/Builder.pm',
-        'lib/Selecto/Components/Renderer/Debug.pm' => '$(INST_LIB)/Selecto/Components/Renderer/Debug.pm',
-        'lib/Selecto/Components/Renderer/Markup.pm' => '$(INST_LIB)/Selecto/Components/Renderer/Markup.pm',
-        'lib/Selecto/Components/Renderer/Results.pm' => '$(INST_LIB)/Selecto/Components/Renderer/Results.pm',
-        'lib/Selecto/Components/RowActions.pm' => '$(INST_LIB)/Selecto/Components/RowActions.pm',
-        'lib/Selecto/Components/State.pm' => '$(INST_LIB)/Selecto/Components/State.pm',
-        'lib/Selecto/Components/Templates.pm' => '$(INST_LIB)/Selecto/Components/Templates.pm',
-        'lib/Selecto/Components/Controller/Templates.pm' => '$(INST_LIB)/Selecto/Components/Controller/Templates.pm',
-        'lib/Selecto/Components/Templates/ComponentIdentity.pm' => '$(INST_LIB)/Selecto/Components/Templates/ComponentIdentity.pm',
-        'lib/Selecto/Components/Templates/Dispatcher.pm' => '$(INST_LIB)/Selecto/Components/Templates/Dispatcher.pm',
-        'lib/Selecto/Components/Templates/EffectCoordinator.pm' => '$(INST_LIB)/Selecto/Components/Templates/EffectCoordinator.pm',
-        'lib/Selecto/Components/Templates/Event.pm' => '$(INST_LIB)/Selecto/Components/Templates/Event.pm',
-        'lib/Selecto/Components/Templates/EventDispatcher.pm' => '$(INST_LIB)/Selecto/Components/Templates/EventDispatcher.pm',
-        'lib/Selecto/Components/Templates/Form.pm' => '$(INST_LIB)/Selecto/Components/Templates/Form.pm',
-        'lib/Selecto/Components/Templates/InstanceStore/Memory.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceStore/Memory.pm',
-        'lib/Selecto/Components/Templates/InstanceStore/PostgreSQL.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceStore/PostgreSQL.pm',
-        'lib/Selecto/Components/Templates/InstanceService.pm' => '$(INST_LIB)/Selecto/Components/Templates/InstanceService.pm',
-        'lib/Selecto/Components/Templates/Native.pm' => '$(INST_LIB)/Selecto/Components/Templates/Native.pm',
-        'lib/Selecto/Components/Templates/PageCursor.pm' => '$(INST_LIB)/Selecto/Components/Templates/PageCursor.pm',
-        'lib/Selecto/Components/Templates/PublicInputs.pm' => '$(INST_LIB)/Selecto/Components/Templates/PublicInputs.pm',
-        'lib/Selecto/Components/Templates/Renderer.pm' => '$(INST_LIB)/Selecto/Components/Templates/Renderer.pm',
-        'lib/Selecto/Components/Templates/Regions.pm' => '$(INST_LIB)/Selecto/Components/Templates/Regions.pm',
-        'lib/Selecto/Components/Templates/RootCursor.pm' => '$(INST_LIB)/Selecto/Components/Templates/RootCursor.pm',
-        'lib/Selecto/Components/Templates/SourceExecutor.pm' => '$(INST_LIB)/Selecto/Components/Templates/SourceExecutor.pm',
-        'lib/Selecto/Components/Templates/SourceScheduler.pm' => '$(INST_LIB)/Selecto/Components/Templates/SourceScheduler.pm',
-        'lib/Selecto/Components/Templates/Transport.pm' => '$(INST_LIB)/Selecto/Components/Templates/Transport.pm',
-        'lib/Selecto/Components/Templates/WebSocket.pm' => '$(INST_LIB)/Selecto/Components/Templates/WebSocket.pm',
-        'lib/Selecto/Components/Util.pm' => '$(INST_LIB)/Selecto/Components/Util.pm',
-        'lib/Selecto/Components/WebSocketPolicy.pm' => '$(INST_LIB)/Selecto/Components/WebSocketPolicy.pm',
-        'public/selecto-components/chart.umd.min.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/chart.umd.min.js',
-        'public/selecto-api-console/index.html' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-api-console/index.html',
-        'public/selecto-api-console/compatibility.json' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-api-console/compatibility.json',
-        'public/selecto-api-console/LICENSE' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-api-console/LICENSE',
-        'public/selecto-api-console/manifest.json' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-api-console/manifest.json',
-        'public/selecto-api-console/selecto-api-console.css' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-api-console/selecto-api-console.css',
-        'public/selecto-api-console/selecto-api-console.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-api-console/selecto-api-console.js',
-        'public/selecto-api-console/selecto-importer.css' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-api-console/selecto-importer.css',
-        'public/selecto-api-console/selecto-importer.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-api-console/selecto-importer.js',
-        'public/selecto-components/htmx.min.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/htmx.min.js',
-        'public/selecto-components/hx-ws.min.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/hx-ws.min.js',
-        'public/selecto-components/manifest.json' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/manifest.json',
-        'public/selecto-components/selecto-components.css' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/selecto-components.css',
-        'public/selecto-components/selecto-components.js' => '$(INST_LIB)/auto/share/dist/Selecto-Components/public/selecto-components/selecto-components.js',
-    },
+    PM => \%pm,
     PREREQ_PM        => {
         'Excel::Writer::XLSX' => '1.10',
         'Digest::SHA' => 0,
