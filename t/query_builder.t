@@ -420,6 +420,19 @@ my $star_state = Selecto::Components::State->from_input($config, $star_domain, {
     page => 1,
 });
 ok $star_state->valid, 'a fact key backed by a star dimension is a valid group';
+my $star_group_picker = Selecto::Components::Renderer::Builder->_group_picker(
+    $star_state, $config->field_catalog($star_domain), $config,
+);
+my ($star_group_item) = $star_group_picker
+    =~ m{(<article class="sc-picker-set-item"[^>]*data-field="category_id".*?</article>)}s;
+ok $star_group_item, 'the star-dimension key renders as a group set item';
+like $star_group_item,
+    qr{<details class="sc-column-config"><summary>Configure</summary><div class="sc-column-config-grid"><label>Column label<input name="group_alias"}s,
+    'a star-dimension group keeps its column label behind the collapsed Configure section';
+unlike $star_group_item, qr{</span><label>Column label}s,
+    'no label control sits inline beside the star-dimension group name';
+unlike $star_group_item, qr{<select name="group_format"}s,
+    'a star-dimension group offers no bucket or format choices';
 my $star_aggregate = Selecto::Components::QueryBuilder->build(
     $config, $star_domain, $star_state,
 );
