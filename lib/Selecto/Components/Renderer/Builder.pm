@@ -890,36 +890,39 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
     } elsif ($kind eq 'group') {
         my $format = $item_config->{format} // '';
         if ($field->{dimension}) {
+            # A star dimension groups by its stable key and shows its display
+            # value, so only the label is configurable. Keep the same
+            # collapsed Configure section as every other set item.
             $controls .= _hidden('group_format', '') .
                 _hidden('group_bucket_ranges', '') .
                 _hidden('group_prefix_length', '2') .
                 _hidden('group_exclude_articles', '1');
-            return $controls;
+        } else {
+            my $format_options = join '', map {
+                my ($value, $text) = @$_;
+                $value = '' if $value eq 'default';
+                '<option value="' . _h($value) . '"' . ($value eq $format ? ' selected' : '') . '>' .
+                    _h($text) . '</option>'
+            } @{$config->group_formats($field->{type})};
+            my $bucket_visible = $format =~ /\A(?:buckets|age_buckets|custom_buckets|year_buckets)\z/;
+            my $prefix_visible = $format eq 'text_prefix';
+            $controls .= '<label>Format<select name="group_format" data-sc-group-format aria-label="Group format for ' .
+                _h($field->{label}) . '">' . $format_options . '</select></label>' .
+                '<label data-sc-group-buckets' . ($bucket_visible ? '' : ' hidden') . '>Bucket ranges' .
+                '<input name="group_bucket_ranges" value="' . _h($item_config->{bucket_ranges} // '') .
+                '" placeholder="1, 2-5, 6-14, 15+ or */10" aria-label="Bucket ranges for ' .
+                _h($field->{label}) . '"></label>' .
+                '<label data-sc-group-prefix' . ($prefix_visible ? '' : ' hidden') . '>Prefix length' .
+                '<input type="number" min="1" max="10" name="group_prefix_length" value="' .
+                _h($item_config->{prefix_length} // 2) . '" aria-label="Prefix length for ' .
+                _h($field->{label}) . '"></label>' .
+                '<label data-sc-group-prefix' . ($prefix_visible ? '' : ' hidden') . '>Leading articles' .
+                '<select name="group_exclude_articles" aria-label="Leading articles for ' .
+                _h($field->{label}) . '"><option value="1"' .
+                ($item_config->{exclude_articles} ? ' selected' : '') . '>Exclude a, an, the</option>' .
+                '<option value="0"' . ($item_config->{exclude_articles} ? '' : ' selected') .
+                '>Keep articles</option></select></label>';
         }
-        my $format_options = join '', map {
-            my ($value, $text) = @$_;
-            $value = '' if $value eq 'default';
-            '<option value="' . _h($value) . '"' . ($value eq $format ? ' selected' : '') . '>' .
-                _h($text) . '</option>'
-        } @{$config->group_formats($field->{type})};
-        my $bucket_visible = $format =~ /\A(?:buckets|age_buckets|custom_buckets|year_buckets)\z/;
-        my $prefix_visible = $format eq 'text_prefix';
-        $controls .= '<label>Format<select name="group_format" data-sc-group-format aria-label="Group format for ' .
-            _h($field->{label}) . '">' . $format_options . '</select></label>' .
-            '<label data-sc-group-buckets' . ($bucket_visible ? '' : ' hidden') . '>Bucket ranges' .
-            '<input name="group_bucket_ranges" value="' . _h($item_config->{bucket_ranges} // '') .
-            '" placeholder="1, 2-5, 6-14, 15+ or */10" aria-label="Bucket ranges for ' .
-            _h($field->{label}) . '"></label>' .
-            '<label data-sc-group-prefix' . ($prefix_visible ? '' : ' hidden') . '>Prefix length' .
-            '<input type="number" min="1" max="10" name="group_prefix_length" value="' .
-            _h($item_config->{prefix_length} // 2) . '" aria-label="Prefix length for ' .
-            _h($field->{label}) . '"></label>' .
-            '<label data-sc-group-prefix' . ($prefix_visible ? '' : ' hidden') . '>Leading articles' .
-            '<select name="group_exclude_articles" aria-label="Leading articles for ' .
-            _h($field->{label}) . '"><option value="1"' .
-            ($item_config->{exclude_articles} ? ' selected' : '') . '>Exclude a, an, the</option>' .
-            '<option value="0"' . ($item_config->{exclude_articles} ? '' : ' selected') .
-            '>Keep articles</option></select></label>';
     } elsif ($kind eq 'measure') {
         my $function = $item_config->{function} // $field->{default_function} // 'count';
         my $functions = join '', map {
