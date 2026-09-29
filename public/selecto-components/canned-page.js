@@ -28,16 +28,55 @@
     frame.title = title;
     frame.referrerPolicy = "same-origin";
     dialog.append(header, frame);
+    const host = embeddingHost();
+    const place = () => placeInVisibleBand(dialog, host);
     dialog.addEventListener("close", () => {
+      if (host) {
+        host.window.removeEventListener("scroll", place, true);
+        host.window.removeEventListener("resize", place);
+      }
       frame.removeAttribute("src");
       dialog.remove();
-      if (link.isConnected) link.focus();
+      if (link.isConnected) link.focus({ preventScroll: true });
     }, { once: true });
     document.body.append(dialog);
+    place();
+    if (host) {
+      host.window.addEventListener("scroll", place, { capture: true, passive: true });
+      host.window.addEventListener("resize", place);
+    }
     dialog.showModal();
     frame.src = link.href;
-    close.focus();
+    close.focus({ preventScroll: true });
   });
+
+  // A host page may grow this document's frame to its full content height, so
+  // centering in this viewport can put the dialog below the fold. When the host
+  // is same-origin, center the dialog in the part of the frame the user sees.
+  function embeddingHost() {
+    try {
+      const element = window.frameElement;
+      if (!element || !window.parent) return null;
+      return { element, window: window.parent };
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function placeInVisibleBand(dialog, host) {
+    if (!host) return;
+    const rect = host.element.getBoundingClientRect();
+    const top = Math.max(0, -rect.top);
+    const bottom = Math.min(window.innerHeight, host.window.innerHeight - rect.top);
+    const visible = bottom - top;
+    if (visible <= 0) return;
+    const height = Math.min(540, visible - 24);
+    dialog.style.boxSizing = "border-box";
+    dialog.style.height = `${Math.max(height, 240)}px`;
+    dialog.style.margin = "0 auto";
+    dialog.style.top = `${top + Math.max((visible - height) / 2, 12)}px`;
+    dialog.style.bottom = "auto";
+  }
 
   document.addEventListener("submit", (event) => {
     const form = event.target;

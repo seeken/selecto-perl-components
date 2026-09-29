@@ -29,6 +29,40 @@ test("a canned record link opens its local summary in an accessible dialog", asy
   await expect(link).toBeFocused();
 });
 
+test("a record dialog in a full-height host frame opens where the user can see it", async ({page}) => {
+  await page.setViewportSize({width: 1000, height: 700});
+  await page.route("http://canned.test/host", (route) => route.fulfill({
+    contentType: "text/html",
+    body: `<body style="margin:0"><header style="height:150px">Portal</header>
+      <iframe src="/orders" style="display:block;border:0;width:100%;height:3000px"></iframe></body>`,
+  }));
+  await page.route("http://canned.test/orders", (route) => route.fulfill({
+    contentType: "text/html",
+    body: `<main class="selecto-canned-page" style="height:2900px">
+      <a href="/portal-views/order-display/42" data-sc-canned-modal-link
+         data-sc-canned-modal-title="Order ID Display">42</a>
+    </main>`,
+  }));
+  await page.route("http://canned.test/portal-views/order-display/42", (route) => route.fulfill({
+    contentType: "text/html", body: "<main>Order 42 summary</main>",
+  }));
+  await page.goto("http://canned.test/host");
+  const frame = page.frame({url: "http://canned.test/orders"});
+  await frame.addScriptTag({path: script});
+
+  await frame.getByRole("link", {name: "42"}).click();
+  await expect(frame.getByRole("dialog", {name: "Order ID Display"})).toBeVisible();
+  const placement = await page.evaluate(() => ({
+    scrollY: window.scrollY,
+    box: document.querySelector("iframe").contentDocument
+      .querySelector("dialog").getBoundingClientRect().toJSON(),
+    frameTop: document.querySelector("iframe").getBoundingClientRect().top,
+  }));
+  expect(placement.scrollY).toBe(0);
+  expect(placement.frameTop + placement.box.top).toBeGreaterThanOrEqual(150);
+  expect(placement.frameTop + placement.box.bottom).toBeLessThanOrEqual(700);
+});
+
 test("canned page ignores a stale WebSocket result", async ({page}) => {
   await page.setContent(`
     <section id="selecto-page-channel-products" hx-ws:connect="/products/ws">
