@@ -23,6 +23,7 @@ lib/Selecto/Components/Controller/RecordEditor.pm
 lib/Selecto/Components/Controller/SavedQueries.pm
 lib/Selecto/Components/Controller/Templates.pm
 lib/Selecto/Components/DateShortcut.pm
+lib/Selecto/Components/Dashboard.pm
 lib/Selecto/Components/Explorer.pm
 lib/Selecto/Components/ExplorerSession.pm
 lib/Selecto/Components/Graph/AxisPlanner.pm
@@ -112,12 +113,15 @@ t/browser/action-variants.spec.js
 t/browser/templates.spec.js
 t/browser/table-headers.spec.js
 t/bucket_parser.t
+t/canned_page_render.t
 t/canned_page_http.t
+t/dashboard.t
 t/date_shortcut.t
 t/graph_axis_planner.t
 t/i18n.t
 t/lazy_view_controls.t
 t/lib/TestSelectoComponents.pm
+t/manifest.t
 t/plugin.t
 t/query_builder.t
 t/query_library.t
@@ -137,6 +141,7 @@ t/browser/lazy-controls.spec.js
 t/templates_form_http.t
 t/templates_form_postgresql.t
 t/templates_form_receipts.t
+t/templates_composed_scale_postgresql.t
 t/templates_http.t
 t/templates_instance_store_postgresql.t
 t/templates_named_root_page_http.t
@@ -155,5 +160,6 @@ t/templates_root_page_postgresql.t
 t/templates_source_executor.t
 t/templates_source_snapshot_postgresql.t
 t/templates_source_scheduler.t
+t/templates_url_http.t
 THIRD_PARTY_NOTICES.md
 SECURITY_REVIEW_2026-09-21.md
