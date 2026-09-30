@@ -280,14 +280,13 @@
       "", 0, [], output
     );
     const source = domain && domain.source || {};
-    const schemas = domain && domain.schemas || {};
+    // Identifiers users know (client or account numbers) stay visible only
+    // when the domain lists them in components.picker_visible_id_paths.
     const visible = new Set((domain && domain.components && domain.components.picker_visible_id_paths) || []);
-    const clientKeys = new Set();
     const referenceKeys = new Set();
     Object.values(source.associations || {}).forEach((association) => {
       if (!association || !association.owner_key || association.owner_key === (source.primary_key || "id")) return;
-      const schema = schemas[association.queryable] || {};
-      (schema.source_table === "client_profile" ? clientKeys : referenceKeys).add(association.owner_key);
+      referenceKeys.add(association.owner_key);
     });
     const starKeys = new Set();
     Object.entries(domain && domain.joins || {}).forEach(([path, join]) => {
@@ -299,15 +298,11 @@
       const segments = field.path.split(".");
       const name = segments.at(-1);
       const root = segments.length === 1;
-      const relation = root ? source : schemas[(source.associations || {})[segments[0]]?.queryable] || {};
-      const isClientProfile = relation.source_table === "client_profile";
       field.pickerHidden = !visible.has(field.path) && (
         starKeys.has(field.path)
-        || (root && referenceKeys.has(name) && !clientKeys.has(name))
+        || (root && referenceKeys.has(name))
         || ((name === "id" || name.endsWith("_id"))
-          && !(root && name === (source.primary_key || "id"))
-          && !(root && clientKeys.has(name))
-          && !(isClientProfile && name === "id"))
+          && !(root && name === (source.primary_key || "id")))
       );
     });
     return output.sort(compareSemanticFields);

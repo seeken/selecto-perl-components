@@ -103,6 +103,18 @@ $explicit_id_contract->{components}{picker_visible_id_paths} = ['category.id'];
 my $explicit_id_domain = Selecto::Domain->parse($explicit_id_contract, strict => 1);
 ok !$config->field_map($explicit_id_domain)->{'category.id'}{picker_hidden},
     'domain may explicitly expose a related ID in pickers';
+my $client_contract = $domain->contract;
+$client_contract->{schemas}{categories}{source_table} = 'client_profile';
+my $client_domain = Selecto::Domain->parse($client_contract, strict => 1);
+my $client_map = $config->field_map($client_domain);
+ok $client_map->{'category.id'}{picker_hidden},
+    'no table name keeps its IDs visible; only the domain can';
+ok $client_map->{category_id}{picker_hidden},
+    'a root owner key is hidden whatever table it references';
+$client_contract->{components}{picker_visible_id_paths} = ['category_id', 'category.id'];
+my $client_visible_map = $config->field_map(Selecto::Domain->parse($client_contract, strict => 1));
+ok !$client_visible_map->{$_}{picker_hidden}, "domain lists $_ as a visible identifier"
+    for qw(category_id category.id);
 ok !exists($config->filter_map($domain)->{'category.id'}{picker_hidden}),
     'column-picker defaults do not remove ID filters';
 ok $config->measure_catalog($domain)->[0], 'measure catalog remains available';

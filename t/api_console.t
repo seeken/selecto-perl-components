@@ -18,9 +18,9 @@ like $page, qr{data-curl-auth="cookie"}, 'page defaults generated cURL to cookie
 like $page, qr{data-csrf-token="test-csrf-token"}, 'page supplies the host CSRF token';
 like $page, qr{<html lang="en" data-sac-color-scheme="light">},
     'console pages use the shared light operational palette by default';
-like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.5\.4},
+like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.5\.5},
     'page loads the versioned shared stylesheet';
-like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.5\.4},
+like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.5\.5},
     'page loads the versioned shared JavaScript';
 
 $page = Selecto::Components::APIConsole->page(
