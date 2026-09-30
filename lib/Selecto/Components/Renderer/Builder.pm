@@ -1267,3 +1267,33 @@ sub _temporal_filter_input_type ($config, $type, @values) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::Renderer::Builder - HTML for the Explorer query-builder controls
+
+=head1 DESCRIPTION
+
+This module is an internal part of L<Selecto::Components>. Its interface may
+change without notice; use the plugin and its documented host modules
+instead.
+
+=head1 SEE ALSO
+
+L<Selecto::Components>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

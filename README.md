@@ -1,905 +1,334 @@
-# Selecto Components Perl
+# Selecto::Components
 
-`selecto-perl-components` is a server-rendered Mojolicious workalike for the
-core exploration flow in Elixir's `selecto_components`. It sits directly on
-native [`selecto-perl`](https://github.com/seeken/selecto-perl): Selecto owns the
-domain, immutable query, adapter compilation, bound values, and execution;
-this package owns validated browser state, HTML, WebSockets, and assets.
+Selecto::Components is a [Mojolicious](https://mojolicious.org) plugin that
+adds a browser UI for exploring data to your application. It is built on
+[Selecto](https://github.com/seeken/selecto-perl), the Perl query library for
+governed domains. You describe the tables, columns and relationships users may
+reach as a `Selecto::Domain`. The plugin then renders pages where users build
+their own queries, and every query goes through Selecto's validation and SQL
+compilation. The browser never sends SQL.
 
-This is alpha software. Its browser transport is pinned to htmx `4.0.0`.
+What you get:
 
-The Perl explorer remains the visual reference, while the shared CSS source
-now lives in the sibling `selecto-api-console` JavaScript workspace as
-`@selecto/web-assets`. `mise run assets` regenerates this distribution's CSS,
-htmx files, and API Console from local siblings; the same resolver can consume
-installed npm packages later.
+- **Explorer**: a query builder with Detail, Aggregate (including a two-axis
+  grid) and Graph views. Users can choose columns, filters, groupings,
+  measures, sorting and pagination, and drill down from aggregates to rows.
+- **Exports** of every matching row as CSV, TSV, JSON or Excel, streamed where
+  the database adapter supports it.
+- **Canned search pages**: author-defined views with promoted facet, range and
+  text controls, and no free-form builder.
+- **Row actions** (open a link, an iframe dialog or a record editor) and
+  **selected-row actions** (host handlers with typed input forms, lookups,
+  per-row eligibility and grouped selections).
+- **Record editor**: an inline edit dialog for a single row, with optimistic
+  concurrency.
+- **Saved queries** kept in a store you provide, **dashboard** helpers for
+  showing saved views as tiles, and **localization** hooks.
+- **API Console** and **Importer** pages for a canonical Selecto HTTP API.
 
-The Components-specific browser behavior lives in focused modules under
-`src/browser/` (shell, charts, row dialog, grid, picker, filters, actions,
-lookups, and action results). `npm run build` produces the single dependency-
-free `public/selecto-components/selecto-components.js` file shipped to Perl
-hosts. `npm run build:check` verifies that the committed distribution matches
-those sources, and `npm run test:browser` exercises the compiled asset in
-Chromium with Playwright.
+The UI is rendered on the server. [htmx 4](https://htmx.org) WebSockets send
+incremental updates, and plain GET/POST forms still work without JavaScript.
 
-Hosts with a fixed top toolbar can set `--sc-sticky-top` on the Explorer's
-ancestor to its measured height in pixels (for example,
-`--sc-sticky-top: var(--toolbar-bar-height, 0px)`). Result headers follow the
-page scroll below that toolbar, while retaining horizontal table scrolling
-and keeping multi-row grid headers together. The offset defaults to zero;
-dialog tables keep their own scroll behavior. Toolbar height changes and
-replacement results are handled without cloning headers or rerunning queries.
+This is an early release (0.1.0). Expect the interface to change.
 
-## Current surface
+## Installation
 
-- a reusable `Selecto::Components` Mojolicious plugin;
-- an immutable resource contribution registry and request-time composer for
-  host-owned workspaces, including named provider slots, deterministic panel
-  ordering, fact-based applicability, and capability pruning without imposing
-  shared-package branding or page styling;
-- an optional Mojolicious route bridge that mounts every explorer endpoint
-  beneath a host-owned `under(...)` route, so authentication and request setup
-  are applied by normal route dispatch rather than application-wide path hooks;
-- a dependency-free Selecto API Console that discovers a canonical API's
-  manifest, domain, OpenAPI document, public fields, types, query-library
-  views/projections/segments, and orderings at runtime, then builds, runs, and
-  displays bounded queries without domain-specific JavaScript;
-- named query-library views integrated into View and reusable governed
-  segments and typed parameters integrated into Filters, with active-tab
-  continuity across WebSocket fragment replacements;
-- optional request-time localization of domain titles, fields, measures,
-  query-library entries, and action forms through portable domain i18n metadata;
-- locally staged builder edits with an explicit Run boundary, so unfinished
-  view, column, filter, sort, and pagination changes do not execute queries;
-- a left-side view tray that participates in normal page scrolling, collapses
-  to a chevron rail, and automatically collapses when a query is applied;
-- domain-derived Available/Set field picker with filtering, add/remove controls,
-  drag ordering, and accessible move-up/move-down controls; Available fields,
-  groups, measures, sorts, and filters are arranged in collapsible source
-  sections (with governed actions under Actions). Searching opens sections
-  whose heading or fields match and restores their prior state when cleared;
-- per-column presentation aliases and governed date/time formats for Detail
-  columns and Aggregate grouping buckets;
-- an ordered Available/Set sort picker with independent ascending/descending
-  direction for each selected field;
-- domain-derived Available/Set filter picker with search, multiple AND filters,
-  and removable filter editors;
-- type-aware filter controls: native date and date-time inputs, numeric inputs,
-  boolean choices, two-value ranges, and allowlisted calendar shortcuts such
-  as Today, This Month, This Quarter, and This Year;
-- Detail, Aggregate, and Graph result views, with Bar, Horizontal Bar, Stacked
-  Bar, Line, Area, Pie, Doughnut, and Scatter dashboard charts;
-- automatic Detail denormalization prevention for to-many relationships:
-  selected child fields share an inline nested table backed by a correlated
-  JSON collection, so each root object remains one result row;
-- domain-declared selected-row actions exposed as optional Detail columns; each
-  chosen action owns its selection UI, button, and typed dialog. Ordinary
-  actions use independent checkbox sets, while grouped actions can assign rows
-  to trusted colored-shape markers and collect inputs for each group. Both use
-  hidden primary-key selection, dynamic host choices, preview/execute
-  authorization callbacks, CSRF protection, and server-side input revalidation;
-- total matched-row and page counts plus full data-and-count query timing, with
-  changed query intent resetting to page one while page-only Run and
-  Previous/Next retain explicit pagination;
-- hierarchical Aggregate rollups with clickable group values, subtotals, and a
-  grand total, plus clickable Graph group values; drilldowns retain existing
-  filters and auto-promote the selected group path as editable governed Detail
-  predicates, including formatted dates, numeric/date buckets, and text prefixes.
-  Subtotals and the grand total need the adapter's `GROUP BY ROLLUP`; on an
-  adapter without it (SQLite, MySQL and SQL Server in `selecto-perl`) the
-  Aggregate view groups plainly instead of failing;
-- an Aggregate Grid presentation for exactly two Group By fields and one
-  Aggregate, with sticky axes, independently toggleable cells, row/column/all
-  selection controls, direct cell highlighting instead of visible per-cell
-  checkbox clutter, selectable empty intersections for defining future views,
-  and one explicit Detail submission. Header selections are
-  atomic and never silently stop at the configured limit. A complete row or
-  column becomes one axis condition; uncovered cells remain paired
-  `(row AND column)` alternatives. Selections are ORed without creating a
-  row/column Cartesian product. Submitted selections appear as compact,
-  read-only Quick Filter cards with one remove control per selection. The grid also provides
-  optional tenant-colored linear or logarithmic heat-map shading, full-matrix
-  rendering, and grid-shaped Excel, CSV, TSV, and JSON exports;
-- star-dimension Aggregate and Graph groups that display the referenced name,
-  group by the stable fact key, and use that hidden key for Detail drilldowns;
-- `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `in`, `is_null`, and
-  `not_null` filters supported by the current native Perl query contract;
-- a domain-derived Available/Set aggregate picker where every governed column
-  can be configured with type-aware `count`, distinct-count, average, sum,
-  min/max, boolean-count, and buckets, alongside optional curated presets;
-- relationship fields, sorting, bounded limits, and offset pagination;
-- domain-declared object links for Detail HTML cells, with related IDs selected
-  as hidden governed columns and no extra ID columns in exports;
-- optional domain-declared row-click actions for Detail results, with a compact
-  action selector, permalink/saved-query state, automatically selected hidden
-  dependencies, safe URL substitution, and keyboard access;
-- htmx 4 `hx-ws` updates using server-rendered HTML fragments;
-- ordinary HTTP GET fallback, permalinks, and browser-refresh recovery;
-- an optional dedicated Saved queries tab backed by a host-provided store;
-  saved URLs are validated, canonicalized, and reset to page one while the
-  host owns user, tenant, destination, and privilege scoping;
-- a domain-selected private URL mode with WebSocket/POST body state and no
-  query-state history, permalink, or query-string export link;
-- Excel, CSV, TSV, and JSON exports for every row matched by the active query,
-  independent of the current page, with incremental database/HTTP streaming
-  for flat CSV, TSV, and JSON exports, disk-backed Excel generation, and
-  spreadsheet-formula neutralization for delimited formats;
-- an optional collapsible Query Debug panel with generated data/count SQL,
-  bound parameters, execution timings, pagination, adapter, and row statistics;
-  and
-- a real PostgreSQL-backed Northwind example using the existing independently
-  authored `selecto-perl-northwind` fixture.
-
-The package is a behavioral workalike, not a source or API port of Phoenix
-LiveView. It preserves the recognizable Explorer flow while using
-Mojolicious-native transport and lifecycle boundaries.
-
-The plugin entry point is intentionally small. Request behavior is separated
-under `Selecto::Components::Controller` into explorer presentation, actions,
-lookups, and saved queries. Hosts may mount routes beneath an authenticated
-bridge while retaining canonical public paths:
-
-```perl
-my $protected = $app->routes->under('/reports')->to(cb => \&authenticate);
-$app->plugin('Selecto::Components' => {
-    route_bridge => {routes => $protected, prefix => '/reports'},
-    explorers => {
-        orders => {path => '/reports/orders', %order_explorer_config},
-    },
-});
+```sh
+cpanm Selecto::Components
 ```
 
-The bridge owns authorization; Components only registers relative child routes
-under it. The configured explorer path remains the public canonical URL used
-by forms, WebSockets, exports, actions, and saved queries.
+This installs `Selecto`, `Mojolicious` (9.49 or later) and the other Perl
+dependencies. You also need the DBI driver for your database, for example
+`DBD::Pg`, `DBD::SQLite` or `DBD::mysql`. See the `Selecto` documentation for
+the adapters it supports. Perl 5.34 or later is required.
 
-## API Console contract
+The browser assets (CSS, JavaScript, and vendored copies of htmx and Chart.js)
+are installed into the distribution's share directory. The plugin serves them
+itself. There is nothing to build, and pages load nothing from a CDN.
 
-The API Console browser code is owned by the sibling `selecto-api-console`
-repository and packaged as `@selecto/api-console`. This Perl distribution
-ships generated `0.5.0` assets so Mojolicious applications remain
-self-contained; it does not fork the JavaScript or CSS source. The console is
-host-neutral. It does not receive a serialized
-field catalog from Perl and does not contain application domain names. A host
-serves the two packaged assets and provides a mount point containing the
-canonical API base path:
+## Quick start
 
-```html
-<link rel="stylesheet" href="/selecto-api-console/selecto-api-console.css">
-<script defer src="/selecto-api-console/selecto-api-console.js"></script>
-<main data-selecto-api-console
-      data-api-base="/api2/orders/v1"
-      data-curl-auth="basic"
-      data-title="Orders API Console"></main>
-```
-
-An Explorer can expose a capability-aware `API` control beside its exports by
-supplying an `api_console_resolver`. Return the same-origin console path when
-the current request may read that API domain, or an empty string to hide it.
+Save this as `app.pl`:
 
 ```perl
-api_console_resolver => sub ($controller, $config, $model) {
-    return '' unless MyApp::Authorization->can_read_orders_api($controller);
-    return '/api2/orders/v1/console';
-},
-```
+#!/usr/bin/env perl
+use Mojolicious::Lite -signatures;
+use DBI;
+use Selecto;
 
-For detail views, Components translates the normalized columns, aliases,
-formats, filters, named segments, ordering, and current page into a canonical
-API request. The request travels in the URL fragment, so it is not included in
-the HTTP request or server logs, and the API Console loads it into its chooser.
-Aggregate queries and grouped/grid drilldown predicates remain visible as a
-disabled API control because the canonical API does not yet represent those
-semantics.
+# A small SQLite database. A real application would connect to its own database.
+my $dbh = DBI->connect('dbi:SQLite:dbname=:memory:', '', '',
+    {RaiseError => 1, AutoCommit => 1});
+$dbh->do('CREATE TABLE categories (id INTEGER PRIMARY KEY, category_name TEXT)');
+$dbh->do('CREATE TABLE products (id INTEGER PRIMARY KEY, product_name TEXT,
+    category_id INTEGER, unit_price NUMERIC, units_in_stock INTEGER)');
+$dbh->do(q{INSERT INTO categories VALUES (1, 'Beverages'), (2, 'Condiments')});
+$dbh->do(q{INSERT INTO products VALUES
+    (1, 'Chai', 1, 18.00, 39), (2, 'Chang', 1, 19.00, 17),
+    (3, 'Aniseed Syrup', 2, 10.00, 13), (4, 'Cajun Seasoning', 2, 22.00, 53)});
 
-On startup it reads the base manifest, `domain`, and `openapi.json` resources
-with same-origin credentials. It derives public field and type controls from
-the canonical domain and query-library controls from the domain's named views,
-projections, segments, parameters, and orderings. Query execution uses the
-advertised versioned `query` route. No adapter, table name, raw SQL, or
-unpublished identifier can be selected by the UI.
-
-`Selecto::Components::APIConsole->page` also accepts semantic `theme` and
-validated `page_shell` objects. These let a host apply tenant colors and inject
-its established navigation dependencies and markup without coupling the shared
-console package to an application framework or menu implementation.
-
-Mojolicious hosts may render the complete shell and install its static path
-with `Selecto::Components::APIConsole->page(...)` and
-`Selecto::Components::APIConsole->install_assets($app)`. Other Selecto hosts
-can serve the same JavaScript and CSS unchanged using the HTML contract above.
-Hosts configure generated cURL authentication with `curl_auth`/`data-curl-auth`:
-`basic` emits username/password placeholders, `cookie` (the default) emits a
-session-cookie placeholder, and `none` omits authentication arguments.
-The packaged standalone page is also available at
-`/selecto-api-console/index.html?api=/api2/orders/v1`.
-
-Maintainers refresh the vendored distribution with
-`script/sync-api-console`. It builds the sibling `selecto-api-console` checkout
-when present, accepts `SELECTO_API_CONSOLE_DIST` for another checkout, and
-falls back to an installed `@selecto/api-console` package. Every copied file is
-verified against the shared asset manifest before changing the Perl package.
-
-## State and transport contract
-
-The URL query string is canonical by default. A WebSocket is only a faster
-transport for the same state:
-
-1. A direct `GET /explore/products?...` normalizes and validates query params.
-2. The form sends the same named fields over htmx 4 as top-level JSON values,
-   alongside the reserved `headers` object.
-3. The server runs the same state parser and Selecto query builder.
-4. It returns a JSON message containing server-rendered HTML and a canonical
-   URL.
-5. htmx swaps only the Explorer surface; a tiny local script calls
-   `history.replaceState` with the canonical URL.
-
-Refresh, copy/paste, bookmarks, and ordinary form submission therefore resolve
-to the same governed query as a WebSocket interaction. The server keeps no
-hidden query-builder state.
-
-### Saved-view host interface
-
-`saved_query_store` is an application-owned object. The minimal legacy
-contract remains `list($controller, $config)`, `save($controller, $config,
-{name, url})`, and `delete($controller, $config, {name})`. Hosts that support
-multiple destinations and guarded edits can additionally implement:
-
-- `targets($controller, $config)` → `[{id, label}, ...]` for destinations the
-  current user may write. Recheck permissions in the write methods; options
-  in HTML are not an authorization boundary.
-- `list(...)` → `[{id, name, url, scope, folder?, readonly?, revision}, ...]`.
-  `id` identifies the stored record across scopes; `revision` is an opaque
-  optimistic-concurrency token. Only return items readable by this user and
-  whose URL belongs to this Explorer endpoint.
-- `save_new(..., {name, url, target})` → `{id}`. It must refuse an existing
-  name in that destination, even if the existing record belongs to another
-  endpoint; never silently replace it.
-- `update(..., {id, name, url, revision})` → `{id}`. It must reauthorize the
-  item and reject a stale revision. The browser presents an explicit overwrite
-  checkbox and keeps Save new separate from Update this view.
-- `delete(..., {id, name, revision})` reauthorizes and, when a revision is
-  supplied, rejects stale deletes.
-
-The generic UI knows nothing about storage tables, workgroups, folders, or
-email delivery. A host may implement those behind this interface. Scheduled
-exports can later reference a saved-view `id` and delegate recipient policy
-and delivery to a separate host service; no scheduling is implied by saving a
-view.
-
-For a domain whose filters may contain sensitive values, set
-`components.query_params` to false in the domain contract:
-
-```perl
-my $domain = Selecto::Domain->new(
-    name => 'Patients',
-    table => 'patients',
-    fields => { id => 'integer', diagnosis => 'string' },
-    components => { query_params => 0 },
-);
-```
-
-Private URL mode keeps generated URLs at the explorer path, ignores and
-redirects away inbound query state, removes permalink and query-string export
-controls, marks responses `Cache-Control: no-store`, and changes the ordinary
-fallback form to POST. Interactive state remains in the rendered form and
-WebSocket/POST body. Refresh starts again from domain defaults unless the host
-provides an explicit saved-view store; the package does not move sensitive
-state into a cookie or opaque client token.
-
-While editing, the browser stages controls locally and leaves the URL and
-result set at their last applied state. Only **Run query** submits the
-complete form over the WebSocket (or as an ordinary GET/POST, according to the
-domain policy, without JavaScript).
-
-In the default shareable mode, canonical parameters are:
-
-- `view`: `detail`, `aggregate`, or `graph`;
-- `aggregate_grid`, `aggregate_grid_colorize`, and
-  `aggregate_grid_color_scale` (`linear` or `log`) when Aggregate Grid is active;
-- `row_click_action`: the selected portable Detail action, when one is active;
-- repeated `field` and `group` values; `field` order is the selected result-column order;
-- aligned `field_alias`/`field_format` and group alias/format/bucket/prefix values,
-  so each selected column carries its own presentation configuration;
-- aligned, repeated `filter_field`, `filter_op`, `filter_value`, and
-  `filter_value_end` values; server-generated aggregate drilldowns also align
-  a `filter_group` marker so the governed grouping expression is reused as the
-  Detail predicate. Multi-cell grid drilldowns and ordinary alternative filters
-  align `filter_clause` markers: conditions in one numbered clause use AND,
-  while numbered clauses use OR. Ordinary filters without a clause apply to
-  every alternative. A host can expose a domain-internal key only in the
-  filter picker with `filter_fields => ['association.key']`; this does not add
-  it to selectable Detail columns. When the domain declares
-  `components.filter_choices` for a path, the filter picker shows named
-  options in a single- or multi-select (depending on the operator), submitting
-  stable values through the same canonical `filter_value` parameter. Such
-  internal filter fields are available without adding them to Detail columns.
-  A domain-defined conditional choice exposes one virtual filter backed by
-  separate physical fields; `filter_picker_hidden_paths` hides legacy fields
-  from Available while preserving their saved URLs and validation.
-  Column and generated aggregate pickers hide numeric IDs except the root ID
-  and `client_profile` IDs; the paths remain valid for saved views, and the
-  domain may explicitly expose another with `components.picker_visible_id_paths`.
-  The browser's repeated `grid_cell` JSON pairs are a bounded submission format
-  only and are replaced by these validated canonical filters;
-  newly added filters remain URL-visible drafts and do not constrain the query
-  until they have the required value or values (or a null operator). Date
-  shortcuts are stored as allowlisted identifiers and resolved to bound,
-  half-open date ranges on submission;
-- aligned repeated measure-or-column/function/alias/bucket/NULL-handling values, repeated
-  `order`/`direction` values, `limit`, and `page`; and
-- `q=1`, which distinguishes an authored empty selection from the initial
-  default state.
-
-When a domain declares `query_library`, canonical state also includes
-`query_library_view`, repeated `query_library_segment`, aligned
-`query_library_param_name`/`query_library_param_value` pairs, and an internal
-materialized-view marker. The marker lets a newly selected view seed Detail
-columns and ordering once while keeping those controls editable on subsequent
-requests. Named view segments and additional segments continue to constrain the
-query alongside visual filters. They are included in the applied-filter count
-and shown as non-removable segment summaries; remove them by changing the named
-view or segment controls. Query-library `capability` values are rendered as
-metadata only and are not an authorization decision.
-Hosts can set `picker_hidden => 1` on a segment retained for saved-link
-compatibility. It is omitted from new selections but remains visible and
-removable when an existing query selects it.
-`query_library.segment_picker_groups` renders domain-declared alternatives as
-radio groups with an Off default. The form submits the chosen segment through
-the same canonical `query_library_segment` state, so existing saved URLs and
-API requests do not change. An old URL selecting conflicting alternatives is
-shown as invalid until the user chooses one.
-
-Projection association shapes are adapted to the Perl component builder as
-validated dotted field paths. Parameter values are type-checked by
-`selecto-perl` and remain bound values in the compiled statement.
-
-For a canonical join with `type => 'star_dimension'`, grouping either its
-`dimension_key` or configured joined `display_field` shows the dimension name
-but groups on the key. The key is carried as a hidden result column, so clicking
-the displayed name creates an exact, direct predicate such as `status = 'D'`.
-Star dimensions intentionally do not offer bucketing or prefix formats because
-their name/key pair is the grouping unit.
-
-## Native-template instance storage
-
-`Selecto::Components::Templates::InstanceStore::Memory` supports tests and one
-worker. Hosts that may serve one private template instance from multiple workers
-use `Selecto::Components::Templates::InstanceStore::PostgreSQL`:
-
-```perl
-use Selecto::Components::Templates::Dispatcher;
-use Selecto::Components::Templates::InstanceStore::PostgreSQL;
-
-my $store = Selecto::Components::Templates::InstanceStore::PostgreSQL->new(
-    dbh_provider => sub { $request_worker->dbh },
-    table => 'app_runtime.selecto_template_instances',
-    max_snapshot_bytes => 1_048_576,
-    max_ttl_seconds => 86_400,
-    max_instances_per_owner => 32,
-    cleanup_limit => 1_000,
-);
-my $dispatcher = Selecto::Components::Templates::Dispatcher->new(store => $store);
-```
-
-Every `GET /templates/:id` mounts and persists a new instance, so both bundled
-stores cap the live instances one owner scope may hold. `max_instances_per_owner`
-defaults to 32 (at most 10,000). Mounting beyond the cap evicts that owner's
-oldest live instances, together with their effect claims, and deletes the
-owner's expired rows. The PostgreSQL store does this in the same transaction as
-the insert, restricted by `owner_scope_digest`, under a per-owner transaction
-advisory lock (`pg_advisory_xact_lock(hashtextextended(...))`, PostgreSQL 11 or
-newer). A host that calls the store with `AutoCommit` off keeps control of
-commit and rollback. The plugin option of the same name overrides the store
-default for every mount.
-
-`schema_sql` now also returns an `(owner_scope_digest, created_at)` index used by
-that eviction. Existing deployments should add it through their migration
-system, for example
-`CREATE INDEX IF NOT EXISTS selecto_template_instances_owner_created_idx ON
-selecto_template_instances (owner_scope_digest, created_at)`.
-
-`Dispatcher` is the stable host facade. `InstanceService` owns scoped instance
-lifecycle and compare-and-set persistence, `EventDispatcher` owns typed browser
-events, and `EffectCoordinator` applies source completions. `SourceExecutor`
-remains the separate boundary that attaches fresh host authority and performs a
-query. This keeps storage, event handling, query execution, and future effect
-leasing independently replaceable without changing route code.
-
-The provider supplies a DBI-compatible PostgreSQL handle already owned by the
-current request worker. The store neither retains nor disconnects it, and the host
-must not share one handle across workers. Apply the statements from
-`schema_sql` through the host migration system; `install_schema` is available for
-development and disposable tests. The schema includes a child effect-claim table;
-set `claims_table` when the host needs an explicit name alongside a custom instance
-table.
-
-Before executing a source effect, a worker obtains a short server-side lease:
-
-```perl
-my $claim = $dispatcher->claim_effect(
-    owner_scope => $owner_scope,
-    instance_id => $instance_id,
-    effect => $effect,
-    lease_seconds => 30,
-);
-
-if ($claim->{status} eq 'claimed') {
-    my $completion = execute_source_outside_the_store_transaction($effect);
-    my $result = $dispatcher->complete_claimed_effect(
-        owner_scope => $owner_scope,
-        instance_id => $instance_id,
-        manifest => $manifest,
-        claim_token => $claim->{claim_token},
-        completion => $completion,
-    );
-}
-```
-
-A `busy` result means another worker owns that source generation. An expired lease
-can be replaced with a new opaque token. The old token then receives `claim_lost`
-and cannot commit. Hosts should choose a lease longer than their enforced query
-timeout and keep tokens in server-owned request state.
-`cleanup_expired_claims` removes abandoned leases with the same configured hard
-row limit used for instance cleanup.
-
-Owner scope is canonicalized and stored only as a SHA-256 digest. Instance IDs are
-opaque references. Snapshots remain server-side, have a configurable byte limit,
-and are updated by an atomic revision-checked statement. Stale writers receive a
-conflict with the current storage revision. Expiry uses PostgreSQL's clock, and
-`cleanup_expired` deletes no more than the configured row limit per call. Database
-exceptions are returned by the dispatcher as the bounded
-`instance_store_unavailable` error. A write that would exceed
-`max_snapshot_bytes` is a client error instead: HTTP 422 with code
-`snapshot_too_large` and the fixed message `Template state is too large.` When a
-source result is what overflowed, the source is completed with a bounded
-`source_result_too_large` error so it does not stay loading until its lease
-expires.
-
-The template plugin schedules `cleanup_expired` and `cleanup_expired_claims` on
-the Mojolicious event loop every `cleanup_interval_seconds` (default 300) in each
-web worker process. Each sweep is bounded by the store's `cleanup_limit` and
-never runs inside a forked source worker. Set `cleanup_interval_seconds => 0` to
-disable the timer when the host runs the sweeps from its own scheduler. Both
-bundled stores implement the two methods.
-
-The store is ephemeral recovery infrastructure rather than business persistence.
-It does not make business writes idempotent. Effect leases prevent duplicate source
-query execution for one instance/source/generation when the host follows the
-claim/complete flow; operation-layer receipts and idempotency remain necessary for
-business writes.
-
-## Native-template HTTP plugin
-
-### Server-owned update forms
-
-`Selecto::Components::Templates::Form` connects a compiled native update form
-to the same owner-scoped instance stores used by native read templates. A host
-supplies `resolve_form`, `load_record`, and `write_record` callbacks. Resolve
-the form and record for the authenticated owner and tenant on every request;
-the browser supplies only an opaque instance, operation, path, field value,
-and expected revision. The service checks the current contract fingerprint,
-validates declared fields and exact nested row identities through
-`Selecto::Templates::FormState`, and uses store compare-and-set before returning
-the next draft. It generates new nested draft identities on the server.
-
-`write_record` receives `(owner_scope, record_id, form, baseline, draft)`. It
-must recheck tenant/record membership and the baseline within its own database
-transaction, apply explicit create/update/delete intents through the host's
-mutation engine, and return `{status => 'ok'}` only after commit. Failed writes
-leave the draft available at a new revision; successful writes seal that
-instance as `saved`. A fresh GET opens a new authorized draft. An abandoned
-`saving` reservation expires with the instance; hosts should use transactional
-idempotency receipts if they need automatic retry after a worker failure.
-
-The host owns Mojolicious routes, CSRF protection, validation display, and
-escaped HTML. Ordinary POST and HTMX fragment requests can use the same
-`change`/`save` operations and response model. The executable
-`t/templates_form_http.t` shows both paths with nested edits, owner isolation,
-stale revision rejection, host write conflict, and contract re-resolution.
-
-`Selecto::Components::Templates` is an additive Mojolicious plugin for private
-native-template pages. It does not require or alter the explorer plugin. The host
-installs pinned compiled manifests and renderer callbacks, resolves authenticated
-owner scope for every request, and supplies fresh source authority:
-
-```perl
-plugin 'Selecto::Components::Templates' => {
-    store => $template_instance_store,
-    source_max_workers => 4,
-    source_max_workers_per_owner => 2,
-    max_instances_per_owner => 32,
-    cleanup_interval_seconds => 300,
-    source_timeout_seconds => 15,
-    websocket_inactivity_timeout => 3600,
-    websocket_heartbeat_interval => 30,
-    resolve_owner => sub ($controller) {
-        my $actor = authenticated_actor($controller)
-            or return {status => 'unauthenticated'};
-        return {status => 'ok', owner_scope => {
-            tenant_id => $actor->tenant_id,
-            actor_id => $actor->id,
-            session_id => $controller->session('template_session_id'),
-        }};
-    },
-    templates => {
-        order_browser => {
-            release_id => 'order-browser-2026-09-22',
-            manifest => $compiled_order_browser,
-            registry => $template_renderer_registry,
-            public_inputs => [qw(status customer_id)],
-            ttl_seconds => 3600,
-            lease_seconds => 30,
-            source_timeout_seconds => 15,
-            source_resource_budget => {
-                max_root_rows => 100,
-                max_result_nodes => 10_000,
-                max_collection_depth => 3,
-                max_input_bytes => 1_048_576,
-                max_result_bytes => 1_048_576,
-            },
-            resolve_inputs => sub ($controller) {
-                return trusted_server_inputs($controller);
-            },
-            resolve_source_context => sub ($controller, $owner_scope, $effect) {
-                return {
-                    tenant_id => $owner_scope->{tenant_id},
-                    actor_id => $owner_scope->{actor_id},
-                };
-            },
-            # Runs in a forked child: open a NEW database connection here.
-            source_authorizer => sub ($source_context, $source, $effect) {
-                my $engine = fresh_tenant_scoped_engine(
-                    $source_context->{tenant_id},
-                    $source_context->{actor_id},
-                    $source,
-                );
-                return {status => 'ok', engine => $engine, query => $engine->query};
-            },
+# The Selecto domain is the allowlist: only these tables, columns and joins
+# can ever be queried from the browser.
+my $domain = Selecto::Domain->parse({
+    schema_version => 1,
+    name => 'Products',
+    source => {
+        source_table => 'products', primary_key => 'id',
+        fields => [qw(id product_name category_id unit_price units_in_stock)],
+        columns => {
+            id => {type => 'integer'},
+            product_name => {type => 'string', label => 'Product'},
+            category_id => {type => 'integer'},
+            unit_price => {type => 'decimal', label => 'Unit price'},
+            units_in_stock => {type => 'integer', label => 'In stock'},
+        },
+        associations => {
+            category => {queryable => 'categories',
+                owner_key => 'category_id', related_key => 'id'},
         },
     },
-};
-```
-
-The plugin adds these ordinary HTTP routes by default:
-
-| Route | Purpose |
-| --- | --- |
-| `GET /templates/:id` | Mount an opaque owner-bound instance and render the full page |
-| `GET /template-instances/:instance` | Reopen an existing owner-bound instance without rerunning sources |
-| `POST /template-instances/:instance/events` | Normalize and dispatch one declared event |
-| `POST /template-instances/:instance/sources/:source` | Claim and execute one current declared source generation |
-| `POST /template-instances/:instance/pages/:source` | Advance one nested collection with an opaque parent-bound cursor |
-| `POST /template-instances/:instance/root-pages/:source` | Replace the visible root page through a guarded keyset continuation |
-| `WS /template-instances/:instance/ws` | Dispatch typed events with the pinned HTMX 4 WebSocket envelope |
-
-`template_path` and `instance_path` can replace the two prefixes. Every response is
-private and `no-store`; state-changing requests require the session-bound Mojolicious
-CSRF token. POST responses return the same stable instance root as an HTML fragment
-when `HX-Request: true`, and a complete page otherwise. The root carries state and
-store revisions, disables HTMX history snapshots, and pending source forms use the
-packaged htmx runtime with an ordinary submit fallback. A pending portable source
-form carries the matching instance GET as its bounded lost-response recovery URL.
-The GET reloads the pinned release under fresh owner resolution and never creates
-a new instance or executes a source. HTMX 4 requests marked
-`HX-Request-Type: full` receive a complete document even when `HX-Request: true`;
-partial requests receive the instance root or affected regions. A template link
-can use `hx-get`, `hx-target="body"`, `hx-swap="outerHTML"`, and
-`hx-push-url="true"` to mount another template without a browser document reload,
-while its ordinary `href` handles JavaScript-disabled navigation. The new mount
-gets a new instance; revision guards continue to apply to updates of each
-existing instance. The root also declares the htmx 4
-status policy explicitly: bounded 4xx and 5xx fragments replace the stable root.
-Browser tests pin successful swaps plus 409 conflict and 422 validation behavior.
-
-To expose a root keyset control, list the compiled source in
-`root_cursor_sources`, give the template a server-only `page_secret` of at
-least 32 bytes, and provide `resolve_page_scope` with current tenant,
-principal, authorization revision, and membership revision. The source
-authorizer must return the same fresh scope as `page_scope` alongside its
-engine and query. The normal source route then executes its first read with
-`root_cursor => 'first'`; a ready result containing
-`root_page` then renders an opaque Next form. Its POST reauthorizes the source,
-resolves the token against the current owner-bound snapshot, and commits the
-visible root result through the store compare-and-set transition. The form
-submits no raw order tuple. The route supports HTMX replacement and ordinary
-POST fallback; `t/templates_root_page_http.t` exercises mount, first read,
-continuation, and stale-result rejection with a synthetic adapter.
-
-```perl
-root_cursor_sources => ['orders'],
-page_secret => $server_only_page_secret,
-resolve_page_scope => sub ($controller, $snapshot, $source_id) {
-    return current_page_scope($controller, $snapshot, $source_id);
-},
-# source_authorizer returns {status => 'ok', engine => $engine,
-#     query => $authorized_query, page_scope => $same_fresh_scope}
-```
-
-`public_inputs` is the host's explicit allowlist for bookmarkable GET filters. Each
-name must be an input declared by the compiled manifest with type `string`, `integer`,
-or `boolean` (including optional forms). Unknown, repeated, oversized, and incorrectly
-typed query values fail before an instance is allocated. Valid values are decoded to
-their manifest types, merged with non-overlapping trusted values from `resolve_inputs`,
-and then mounted; a compiled source can bind them as `input.status` or another declared
-input when constructing its query. The host still supplies tenant scope and fresh source
-authority independently. Query parameters are ordered by the manifest, noncanonical
-requests redirect before mount, and the successful page emits both `Content-Location`
-and a canonical link. Templates without an allowlist reject all query parameters.
-
-Component renderer callbacks receive their existing node data plus a server-built
-`transport.events` descriptor for each declared event. The descriptor contains the
-POST action, `hx_ws_send`, htmx target/swap values, and hidden fields
-(`template_action`, `csrf_token`, `event`, `event_id`, and `state_revision`). Render
-the form with `hx-ws:send`, render those fields as escaped values, and keep the
-editable browser value named `value`. Its action and method remain the ordinary POST
-fallback. The controller rejects missing, repeated, and extra fields before dispatch.
-
-The complete page keeps a stable `hx-ws:connect` channel outside the replaceable
-template root and loads the packaged `hx-ws` runtime. Typed event replies use the
-same `{content,target,swap}` envelope as the existing Explorer and carry state/store
-revision metadata under `selecto`. Handshake and every event re-resolve the opaque
-instance against authenticated owner scope. Each event also requires the masked
-session CSRF token. Same-origin validation, a 128 KiB frame ceiling, configurable
-inactivity timeout, and protocol heartbeat reuse the shared WebSocket policy. Policy
-failures close with 1008; malformed JSON closes with 1003; oversized frames close
-with 1009. The HTTP event route remains available to browsers without JavaScript or
-when the WebSocket extension falls back to the form action.
-
-The browser never supplies the manifest, source plan, owner scope, adapter, or query.
-For a source POST, the controller loads the owner-bound snapshot, reconstructs the
-current effect, obtains a generation lease, reduces request authority to a bounded
-JSON-safe source context, and schedules `SourceExecutor`; the template can only narrow
-the fresh host query. `resolve_source_context` runs in the web process and must return
-data rather than a controller, cookie, handle, or service object. The default
-context contains only `owner_scope` when no resolver is configured.
-
-### Template sources run in a forked child: open a fresh connection
-
-**`source_authorizer` (and `source_runner`) run in a child process forked by
-`SourceScheduler`. The authorizer must open a fresh database connection inside
-that child. It must never return an engine whose adapter wraps a DBI handle
-created in the parent web process**, whether that handle is captured in a
-closure, kept in a global or request stash, or returned by a `connect_cached`
-cache populated before the fork. A forked child shares the parent's socket, so
-reusing the handle interleaves both processes' traffic on one server session,
-can hand one request's rows to another, and lets the child's exit tear down the
-parent's session.
-
-Enforcement is opt-in: mark handles when connecting with
-`$dbh->{private_selecto_pid} = $$`. `SourceExecutor` then rejects an engine
-whose adapter handle was created in another process with
-`source_connection_inherited` before running any query. Unmarked handles are not
-second-guessed, so the rule above still applies to them.
-
-The built-in `SourceScheduler` uses Mojolicious subprocesses with a per-web-process
-concurrency bound. `source_max_workers` defaults to 4, and excess work returns a
-bounded 409 (`source_workers_busy`) after releasing its effect claim. So that one
-user cannot hold every worker, `source_max_workers_per_owner` bounds the children
-one owner scope may hold at once. It defaults to `max(1, int(source_max_workers / 2))`
-(2 with the default pool) and cannot exceed `source_max_workers`; excess work for
-that owner returns 409 `source_owner_workers_busy`. Owners are keyed by a SHA-256
-digest of the canonical owner scope from `resolve_owner`, so the scope should name
-the principal to limit. Both bounds are per web process; under a preforking server
-multiply them by the worker count when sizing the database pool.
-
-Page and root-page continuations claim `(source, generation, page)` in the
-instance store with the template's `lease_seconds` before spawning a child, the
-same way source loads claim their generation. A duplicate request for a page that
-is already loading receives 409 `page_request_in_progress` without running the
-query; the claim is released when the page commits or fails. Custom stores must
-implement `claim_page_effect` and `release_effect_claim` to serve pages. `source_timeout_seconds` defaults to 15
-and must be lower than every source template's lease; a template can select a lower
-timeout. Timed-out children receive `TERM`, then `KILL` after a short grace period,
-and their typed timeout completion is applied by the parent only while the claim is
-still current. Payloads and results cross a JSON boundary and default to a 1 MiB
-limit; `source_max_payload_bytes` and `source_max_result_bytes` can lower or raise
-that bound up to 16 MiB. A host can inject an object implementing `execute` as
-`source_scheduler` when it needs an existing supervised worker service.
-
-Every source is also checked before query execution against a host-owned
-cardinality budget. Defaults are 100 root rows, 10,000 projected root/child
-nodes, three collection levels, two source statements, and 1 MiB each for
-source-effect input and projected JSON. A collection must
-declare `max-items` to admit a finite bound. A template's
-`source_resource_budget` can change those limits, including
-`max_source_statements` for declared external totals; browser state and the
-compiled template cannot raise them. The check
-uses the effective root limit after the host query and template plan are
-combined. The scheduler's independent payload/result byte, time, and worker
-limits still apply to the full worker exchange.
-
-The route test starts a slow source and an unrelated HTTP request concurrently. The
-unrelated route completes first, while child-process audit evidence confirms that
-source authorization and DB-handle creation run outside the web process. Scheduler
-tests also cover capacity rejection, event-loop progress, JSON isolation, result
-limits, timeout, and forced termination of a child that ignores `TERM`.
-
-### Native EP helpers
-
-The same plugin installs four trusted server-side helpers for applications that
-want ordinary Mojolicious EP markup instead of the generic compiled renderer:
-
-```perl
-my $model = $controller->selecto_template_model(
-    template => 'order_browser',
-    expected_template_id => 'order_browser',
-    instance_path => '/native-template-instances',
-    target => '#native-order-browser',
-);
-
-my $next = $controller->selecto_template_dispatch_event(
-    instance => $controller->stash('instance'),
-    expected_template_id => 'order_browser',
-    instance_path => '/native-template-instances',
-    target => '#native-order-browser',
-);
-
-my $scheduled = $controller->selecto_template_dispatch_source(
-    instance => $controller->stash('instance'),
-    expected_template_id => 'order_browser',
-    source => $controller->stash('source'),
-    instance_path => '/native-template-instances',
-    target => '#native-order-browser',
-    on_finish => sub ($next_model) {
-        return $controller->render(template => 'orders/native', model => $next_model);
+    schemas => {
+        categories => {
+            source_table => 'categories', primary_key => 'id',
+            fields => [qw(id category_name)],
+            columns => {id => {type => 'integer'}, category_name => {type => 'string'}},
+            associations => {},
+        },
     },
-);
+    joins => {category => {type => 'inner'}},
+}, strict => 1);
 
-$controller->selecto_template_websocket(
-    instance => $controller->stash('instance'),
-    expected_template_id => 'order_browser',
-    instance_path => '/native-template-instances',
-    target => '#native-order-browser',
-    render => sub ($next_model) {
-        return $controller->render_to_string(
-            template => 'orders/native', model => $next_model,
-        );
-    },
-);
-```
+my $adapter = Selecto->adapter(sqlite => (dbh => $dbh));
 
-`selecto_template_model` accepts exactly one of `template` (mount a new instance)
-or `instance` (load an existing owner-bound instance). The returned
-`selecto.template.native-model.v1` object contains cloned input/state values,
-projected source rows or bounded source errors, and server-built event/source form
-descriptors. EP templates render the supplied actions, HTMX target/swap metadata,
-CSRF fields, component lifetime, and revisions as escaped values. Editable event
-values stay in the field named by `input_name`. The `transport` object supplies a
-stable channel ID and WebSocket path; event descriptors advertise `hx_ws_send` when
-the EP chooses the packaged HTMX WebSocket transport.
-Pass the host-owned `expected_template_id` on every instance-bound native route.
-It must identify the template that the EP file renders. A different stored
-template returns not found before an event or source runs, and a mismatched
-WebSocket is closed before accepting messages.
-Native event forms using that browser transport carry
-`data-selecto-template-event` with the descriptor's event name and live beneath
-the model's `data-selecto-template-instance` root. The shared browser code uses
-those values with the descriptor's component lifetime and form revision to reject
-stale replies; an EP form does not need a generic renderer node wrapper. Keep the
-ordinary form method and action so the same event works without JavaScript.
-For HTTP events, the browser retains the submitted event ID before HTMX swaps
-the root. Completion releases that event's queue even when HTMX reports the
-replacement root as the response source, so a second event can use the new
-server-issued form fields.
-An EP source form may opt into lost-response recovery with
-`data-selecto-template-resume-url="/native-template-instances/<instance>"`.
-The shared browser code accepts only a same-origin instance GET matching the
-form's source POST path and the enclosing instance ID. On a network failure it
-reopens that owner-checked instance once, allowing a committed source to render
-without rerunning its query. If the source request fails again, the form shows
-an alert and waits for an explicit page reload. HTTP error responses are not
-automatically retried. A ready reopened page clears that source's retry marker
-so a later source generation can recover independently. Install the component
-browser script before HTMX on pages with load-triggered source forms so its
-completion listener is ready.
-
-The dispatch helpers use the same owner resolution, CSRF validation, component
-identity, effect leases, source workers, reducer, and instance store as the generic
-routes. The model excludes the compiled manifest, owner scope, adapter, database
-handle, and source-authority callbacks. These are host helpers rather than public
-browser APIs: applications provide their own native routes, error rendering,
-private-cache headers, and full-page versus fragment layout. The source helper is
-asynchronous; render later when it returns `scheduled`, and complete the response in
-`on_finish`. The WebSocket helper installs the same handshake, owner, origin, CSRF,
-event-envelope, and revision checks as the generic route, but its `render` callback
-returns the host's EP fragment for the stable native target. A native WebSocket route
-therefore does not fall back to generic component markup.
-
-## Plugin usage
-
-```perl
-use Mojolicious::Lite -signatures;
-use Selecto;
-use Selecto::Components;
-use Selecto::Engine;
-
-my $domain = MyApp::Domains->products;
-my $adapter = Selecto->adapter(postgresql => (dbh => $dbh));
+app->secrets(['replace-this-secret']);    # sessions carry the CSRF token
 
 plugin 'Selecto::Components' => {
     explorers => {
         products => {
-            path => '/explore/products',
             title => 'Products',
-            engine_factory => sub ($controller) {
-                return Selecto::Engine->new(
-                    domain => $domain,
-                    adapter => $adapter,
-                );
+            engine_factory => sub ($c) {
+                Selecto::Engine->new(domain => $domain, adapter => $adapter);
             },
-            default_fields => [
-                'product_name',
-                'category.category_name',
-                'unit_price',
-            ],
-            default_group => ['category.category_name'],
-            default_limit => 25,
-            max_limit => 100,
-            max_filters => 20,
-            max_grid_cells => 50,
-            max_grid_result_cells => 10_000,
-            max_orders => 10,
-            show_sql => 0,
-            websocket_message_cleanup => sub ($controller, $config) {
-                MyApp::Database->release_request_resources($controller);
-            },
+            default_fields => [qw(product_name category.category_name unit_price)],
+            default_group  => ['category.category_name'],
         },
     },
-    websocket_inactivity_timeout => 3600,
-    websocket_heartbeat_interval => 30,
+};
+
+get '/' => sub ($c) { $c->redirect_to('/explore/products') };
+
+app->start;
+```
+
+Run it and open <http://127.0.0.1:3000/explore/products>:
+
+```sh
+morbo app.pl                       # development server with reload
+perl app.pl daemon                 # or a plain daemon
+perl app.pl get /explore/products  # or render one page on the command line
+```
+
+The in-memory database and the single `$dbh` are fine for `morbo` and
+`daemon`. Under `prefork` or hypnotoad, open database connections per worker,
+for example inside `engine_factory`.
+
+Each explorer registers these routes under its `path` (the default path is
+`/explore/<id>`):
+
+| Route | Purpose |
+| --- | --- |
+| `GET <path>` | Full page. Query state lives in the URL; add `?format=csv\|tsv\|json\|xlsx` to export |
+| `POST <path>` | No-JavaScript fallback for private URL mode |
+| `WS <path>/ws` | htmx 4 WebSocket for incremental updates |
+| `POST <path>/controls` | Lazily loaded view controls (`lazy_view_controls`) |
+| `GET/POST <path>/actions/:id…` | Selected-row action forms, submissions and lookups |
+| `GET/POST <path>/records/:id/edit` | Record editor |
+| `POST <path>/saved-queries[/delete]` | Saved-query store |
+
+## Configuration
+
+The plugin takes `explorers` and/or `pages`, which are hashes keyed by a
+lowercase ID, plus some options that apply to the whole plugin:
+
+```perl
+plugin 'Selecto::Components' => {
+    explorers => \%explorers,                  # query builders, see below
+    pages     => \%pages,                      # canned search pages
+    route_bridge => {routes => $reports, prefix => '/reports'},
+    origin_check => \&Selecto::Components::WebSocketPolicy::same_origin,  # the default
+    websocket_inactivity_timeout => 3600,      # 30..86400 seconds
+    websocket_heartbeat_interval => 30,        # 0 (off) or 15..300 seconds
+    websocket_context => \&security_context,   # see "Per-request engines"
+    websocket_session_options => {ttl => 30, max_bytes => 2_097_152, max_entries => 8},
+    lazy_view_controls => 0,
 };
 ```
 
-`websocket_message_cleanup` runs after each valid WebSocket message, including
-messages whose query or rendering fails. Hosts that lease database connections
-or other request-scoped resources through the controller should release them
-there; a WebSocket controller otherwise lives far longer than an ordinary HTTP
-controller. Cleanup failure closes the socket with a generic server-error
-message rather than leaving partially released resources attached to it.
+Every explorer needs an `engine_factory` that returns a `Selecto::Engine`. It
+is called for each request, and this is where your application decides which
+domain, database handle and tenant scope apply. The most common explorer
+options are:
 
-`websocket_inactivity_timeout` applies to every explorer registered by the
-plugin and defaults to one hour. It may be set from 30 seconds through 24 hours.
-Choose it together with the reverse proxy's WebSocket idle timeout and client
-reconnection policy.
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `path`, `title` | `/explore/<id>`, humanized ID | Public URL and page heading |
+| `views`, `default_view` | all three, `detail` | Any of `detail`, `aggregate`, `graph` |
+| `default_fields`, `default_group` | first fields | Initial Detail columns and Aggregate groups |
+| `measures` | row count | Curated presets such as `{id, label, aggregate, field}` |
+| `default_limit`, `max_limit` | 25, 100 | Page size and its upper bound |
+| `export_authorizer`, `max_export_rows` | allow, unbounded | Who may export, and a row cap |
+| `theme_resolver`, `page_shell_resolver` | none | Per-request colors, and host navigation markup |
+| `localizer` | none | Translation callback |
+| `action_handlers`, `action_authorizer`, … | none | Selected-row actions |
+| `saved_query_store` | none | Enables the Saved queries tab |
+| `show_sql` | 0 | Query Debug panel. **Never enable this in production** |
 
-`websocket_heartbeat_interval` defaults to 30 seconds and sends protocol-level
-ping frames so idle browser sessions remain visible to intervening proxies.
-Browsers answer with pong frames without exposing heartbeat messages to the
-application. Set it to `0` to disable it, or to 15–300 seconds to tune it.
+Some settings belong to the domain rather than the explorer. They go under the
+domain contract's `components` key: `query_params` (see *Private URL mode*
+below), `filter_choices`, `filter_picker_hidden_paths` and
+`picker_visible_id_paths`.
 
-This registers:
+The full option reference, with callback signatures and limits, is in
+`perldoc Selecto::Components`. Related modules have their own POD, for example
+`Selecto::Components::CannedPage`, `Selecto::Components::Actions`,
+`Selecto::Components::RecordEditor` and `Selecto::Components::Dashboard`.
 
-- `GET /explore/products` for a full page and no-JavaScript fallback;
-- `POST /explore/products` for the no-JavaScript private-state fallback;
-- `GET /explore/products?format=xlsx|csv|tsv|json` for the current result page; and
-- `WS /explore/products/ws` for htmx 4 incremental updates.
+## Integrating into an existing application
 
-## Canned search pages
+### Authentication with a route bridge
 
-The plugin accepts `pages` alongside `explorers`, or by itself. Each page
-definition is passed to `Selecto::CannedPage`; `engine_factory` supplies the
-authorized engine for the current request. For example:
+To mount every route beneath one of your own `under` routes, pass it as
+`route_bridge`. Normal Mojolicious dispatch then runs your authentication
+before any explorer, action, export or WebSocket request:
+
+```perl
+my $reports = app->routes->under('/reports')->to(cb => sub ($c) {
+    return 1 if $c->session('user_id');
+    $c->render(text => 'Please sign in', status => 401);
+    return undef;
+});
+
+plugin 'Selecto::Components' => {
+    route_bridge => {routes => $reports, prefix => '/reports'},
+    explorers => {
+        orders => {
+            path => '/reports/orders',
+            title => 'Orders',
+            engine_factory => \&orders_engine,
+        },
+    },
+};
+```
+
+Each explorer `path` must start with the bridge `prefix`.
+
+### Per-request engines and tenant scope
+
+`engine_factory` receives the controller. Build the tenant or row-level scope
+from trusted server-side state, never from request parameters. A required
+predicate is combined with every data, count, export and drilldown query the
+user can build:
+
+```perl
+sub orders_engine ($c) {
+    # Trusted, server-side tenant: never read it from the request.
+    my $tenant_id = $c->session('tenant_id');
+    my $domain = $orders_domain->with_required_predicate(
+        Selecto::Expression->eq('tenant_id', $tenant_id),
+    );
+    return Selecto::Engine->new(domain => $domain, adapter => $adapter);
+}
+```
+
+Mark the scoping column `internal => 1` in the domain. It stays usable in
+predicates but is never offered as a column or filter.
+
+A WebSocket stays open far longer than one HTTP request. `websocket_context`
+(set for the plugin or per explorer) runs for every message. Return `undef` to close the socket, or return a string
+that identifies the security context (tenant, user and policy version). When
+that string changes, the connection's cached results are discarded. See
+[docs/explorer-sessions.md](docs/explorer-sessions.md).
+
+```perl
+websocket_context => sub ($c, $config) {
+    my $user = $c->session('user_id') // return undef;    # undef closes the socket
+    return join ':', $c->session('tenant_id'), $user;
+},
+```
+
+If you lease database connections per request, release them in
+`websocket_message_cleanup => sub ($c, $config) {...}`. It runs after every
+WebSocket message.
+
+### Themes and page shells
+
+Explorer pages ship with their own stylesheet. You can brand them per request
+and wrap them in your own navigation without loading host CSS into the
+component:
+
+```perl
+theme_resolver => sub ($c, $config) {
+    return {scheme => 'light', primary => '#0B5FFF',
+        secondary => '#00A37A', on_primary => '#FFFFFF'};
+},
+page_shell_resolver => sub ($c, $config, $model) {
+    return {
+        head_start_html => '<link rel="stylesheet" href="/css/host-nav.css">',
+        body_start_html => '<nav class="host-nav"><a href="/">Home</a></nav>',
+        body_class => 'with-host-nav',
+    };
+},
+```
+
+Colors must be `#RRGGBB`. The shell's HTML strings are trusted markup, so never
+put user input in them. If your page has a fixed toolbar, set
+`--sc-sticky-top` on an ancestor of the explorer to the toolbar's height, and
+result headers will stick below it.
+
+### Localization
+
+Give the domain a stable `extensions => {i18n => {namespace => 'myapp.orders'}}`
+namespace and supply a `localizer`. It receives dictionary keys such as
+`myapp.orders.fields.customer.label`, plus a fallback string:
+
+```perl
+localizer => sub ($key, $default, $context) {
+    return $translations{$key} // $default;
+},
+```
+
+`Selecto::Components::I18N->terms($domain)` lists every key, which you can
+feed to a translation workflow.
+
+### Canned search pages
+
+A page presents fixed views with a few promoted controls, and users cannot edit
+its query. Define it under `pages`. The keys that `Selecto::CannedPage` defines
+(`domain`, `dataset`, `views`, `controls`, `initial_state`) are passed through
+to it:
 
 ```perl
 plugin 'Selecto::Components' => {
     pages => {
-        products => {
+        product_search => {
             path => '/products', title => 'Product Search',
             domain => $domain,
-            engine_factory => sub ($controller) { authorized_engine($controller) },
-            scope_factory => sub ($controller, $engine) {
-                return authorized_predicate($controller);
-            },
-            dataset => {query => $base_query, entity_key => ['id']},
+            engine_factory => sub ($c) { $engine },
+            dataset => {query => Selecto::Query->new, entity_key => ['id']},
             views => [
-                {id => 'list', kind => 'detail', query => $detail_query},
-                {id => 'categories', kind => 'aggregate', query => $aggregate_query},
+                {id => 'list', kind => 'detail', label => 'Products',
+                    query => Selecto::Query->new->select('id', 'name', 'brand', 'price')
+                        ->order_by('name')},
+                {id => 'by_category', kind => 'aggregate', label => 'By category',
+                    query => Selecto::Query->new->select('category',
+                        Selecto::Expression->count_distinct('id')->as('items'))
+                        ->group_by('category')->order_by('category')},
             ],
             controls => [
-                {id => 'brand', label => 'Brand', kind => 'facet', field => 'brand',
+                {id => 'brand', kind => 'facet', label => 'Brand', field => 'brand',
                     values => {source => 'dataset', limit => 30, searchable => 1}},
-                {id => 'price', label => 'Price', kind => 'range', field => 'price'},
+                {id => 'price', kind => 'range', label => 'Price', field => 'price'},
+                {id => 'name', kind => 'text', label => 'Name', field => 'name'},
             ],
             record_link => {field => 'id', url_prefix => '/products/view?id='},
             initial_state => {view => 'list', filters => {}},
@@ -908,787 +337,184 @@ plugin 'Selecto::Components' => {
 };
 ```
 
-The route renders a complete page with editable controls, exact facet counts,
-detail/aggregate views, aggregate-to-detail drilldowns, and bounded pagination.
-`record_link` optionally makes a selected detail field itself a link using a
-local URL prefix; `target => '_top'` opens out of an embedding frame. A
-`column_layout` can give a canned detail page fixed headings and ordering,
-join selected scalar fields for display, add a page-relative row number, or
-render a selected `related_collection` as a nested table or comma-separated
-list. The collection keeps one parent row per result, as in Explorer's detail
-subtables; the underlying query still governs every field. Set
-`websocket_enabled => 0` for a GET-only page that uses ordinary form navigation
-without a WebSocket connection. A `theme` of `{scheme => 'light'}` (or `dark`),
-optionally with `primary`, `secondary` and `on_primary` as `#RRGGBB`, sets the
-page's colour scheme and colours as a theme resolver does for Explorer; without
-one the page uses the stylesheet's own dark palette.
-htmx WebSocket submissions replace the page surface; the request ID prevents
-stale responses from overwriting newer selections. With query parameters
-enabled, accepted updates refresh the shareable URL, and ordinary GET forms
-remain a fallback. With Domain `components.query_params` set to false, the form
-uses POST, GET query state redirects to the plain path, and responses carry
-`Cache-Control: no-store`. These paths also work without JavaScript. The page
-does not expose the explorer's freeform builder or export actions. See
-`selecto-perl` for planner semantics and current query restrictions.
-`scope_factory` is optional, but hosts with request-specific row scope should
-use it. Its expression stays in every result and facet query, including
-aggregate drilldowns.
+To keep a request-specific row scope in every result and facet query, add
+`scope_factory => sub ($c, $engine) { $predicate }`. Set
+`websocket_enabled => 0` for a page that only uses ordinary GET navigation.
+See `Selecto::Components::CannedPage` for `column_layout`.
 
-## Host themes
+### Selected-row actions
 
-An application can adapt an Explorer to request-specific branding without
-loading a host stylesheet into the portable component UI. Supply a
-`theme_resolver` callback in an Explorer configuration. It receives the
-current Mojolicious controller and request-local configuration and returns a
-`scheme` of `light` or `dark`, plus any of `primary`, `secondary`, and
-`on_primary` as six-digit hexadecimal colors.
+Declare actions in the domain contract. Then register a handler for each one
+on the explorer. An action is offered only when the domain declares it and a
+handler is registered. It appears in the column picker as `Action: <label>`.
 
 ```perl
-theme_resolver => sub ($controller, $config) {
-    my $palette = MyApp::TenantTheme->for_request($controller);
-    return {
-        scheme     => 'light',
-        primary    => $palette->{brand_color},
-        secondary  => $palette->{accent_color},
-        on_primary => $palette->{brand_text_color},
-    };
-},
-```
-
-The values are validated before they become scoped CSS custom properties.
-Resolvers should return an empty object when no tenant palette is available;
-the shared dark palette remains the fallback.
-
-## Host page shells
-
-Applications can surround the full Explorer page with their existing
-navigation without coupling that navigation to the portable query surface.
-Supply a `page_shell_resolver` callback; it receives the current Mojolicious
-controller, request-local configuration, and page model.
-
-```perl
-page_shell_resolver => sub ($controller, $config, $model) {
-    return {
-        head_start_html => '<link rel="stylesheet" href="/host/navigation.css">',
-        head_html => '<style>.host-navigation { z-index: 1000 }</style>',
-        body_start_html => '<host-navigation></host-navigation>',
-        body_class => 'host-navigation-enabled',
-    };
-},
-```
-
-`head_start_html` loads before the Selecto component assets, while `head_html`
-loads after them and is suitable for small host compatibility overrides.
-`body_start_html` is emitted immediately inside `body`. These HTML values are
-trusted application markup and must never contain request or user input.
-`body_class` is separately validated as a space-delimited list of CSS class
-names. The shell is applied only to a full page; incremental result surfaces
-remain host-neutral.
-
-## Domain localization
-
-Canonical domains can opt into request-time presentation localization without
-changing field paths or saved-query state; language selection does not alter
-the domain fingerprint. Add a stable
-namespace under `extensions.i18n`; `terms` is optional and can override a
-generated dictionary key or provide defaults for presentation text that lives
-in host configuration, such as the Explorer title and curated measures.
-
-```perl
-extensions => {
-    i18n => {
-        namespace => 'selecto.products',
-        terms => {
-            'domain.title' => {default => 'Product Explorer'},
-            'measures.count.label' => {default => 'Product count'},
-        },
-    },
-},
-```
-
-The Explorer configuration supplies a `localizer` callback. It receives the
-generated dictionary key, portable fallback, and semantic context (including
-the current Mojolicious `controller`) and must return a plain scalar. Errors,
-references, empty strings, and control characters fall back to the portable
-text.
-
-```perl
-localizer => sub ($key, $default, $context) {
-    return MyApp::Dictionary->translate($key, $default);
-},
-```
-
-Generated keys include `fields.<path>.label`,
-`query_library.<registry>.<id>.label`, and nested action/input/option paths
-under `actions.<id>`. Localization happens before display-label sorting.
-`Selecto::Components::I18N->terms($domain, {...})` returns the complete term
-catalog for an application-controlled synchronization or translation workflow.
-The canonical contract is never translated or mutated.
-
-## Detail object links
-
-A canonical domain column may declare an internal object link. `id_field` is
-relative to that column's relation, so a link on `shipper.co_name` with
-`id_field => 'id'` automatically selects `shipper.id`. The ID remains hidden
-and the displayed company name becomes the link in Detail HTML results.
-Aggregate/Graph cells and exported data remain unchanged.
-
-```perl
-co_name => {
-    type => 'string',
-    link => {
-        url_template => '/backoffice/client.mcgi?id={{id}}',
-        id_field => 'id',
-    },
-},
-```
-
-Templates must be same-application paths beginning with one `/` and must
-contain `{{id}}`. Components URL-encodes the selected ID and HTML-escapes the
-completed link before rendering it.
-
-## HTML-only value formatting
-
-A canonical domain column may opt into a governed HTML formatter. The
-`vin_last_six` formatter leaves the first 11 characters of a valid
-17-character VIN at normal weight and wraps its final six characters in
-`<strong>`. Short or malformed values are displayed normally. Formatting is
-also applied inside to-many nested tables and to grouped HTML values.
-
-```perl
-vin => {
-    type => 'string',
-    html_format => 'vin_last_six',
-},
-```
-
-This is a presentation rule only. Excel, CSV, TSV, and JSON exports retain the
-original unformatted value.
-
-## Detail row-click actions
-
-Canonical domains can offer `external_link` and `iframe_modal` actions that
-make the unused surface of each Detail row open a governed application
-destination. Required fields are fetched as hidden query columns when they are
-not already selected; they remain absent from the displayed columns and
-exports.
-
-```perl
-detail_actions => {
-    open_product => {
-        name => 'Product maintenance',
-        type => 'external_link',
-        required_fields => ['id'],
-        payload => {
-            url_template => '/products/maint?id={{id}}',
-            target => '_self',
-        },
-    },
-},
-```
-
-Set `default_row_click_action => 'open_product'` in the Explorer configuration
-to enable it on the initial view. Users can choose another declared action or
-`No row action`; that choice participates in canonical URL and saved-query
-state. Clicking an existing link, button, checkbox, form control, or selected
-text does not trigger the row action. URL substitutions are percent encoded,
-and executable or protocol-relative URL schemes fail closed.
-
-Use `type => 'iframe_modal'` with the same URL template to keep the Explorer in
-place. The shared dialog lazily loads the selected row, offers Previous and Next
-controls in the rows' current displayed order, reports that navigation is for
-the current page, and includes an `Open full page` link. Its payload also accepts
-`title`, `size`, `referrer_policy`, `navigation_enabled`, and optional `allow`
-or `sandbox` iframe attributes.
-
-Use `type => 'record_editor'` to open a native, lazily loaded editor instead of
-an iframe. The action payload names an entry in the canonical domain's
-`editors` registry and the root field used as its stable target:
-
-```perl
-writes => {
-    operations => {update => {enabled => 1}},
-    fields => {
-        product_name => {updatable => 1},
-        unit_price   => {updatable => 1},
-    },
-},
-editors => {
-    product_profile => {
-        label => 'Edit product',
-        fields => [
-            {field => 'product_name', required => 1},
-            {field => 'unit_price', control => 'number', nullable => 1},
-        ],
-        actions => ['retire_product'],
-    },
-},
-detail_actions => {
-    edit_product => {
-        name => 'Edit product', type => 'record_editor',
-        required_fields => [qw(id product_name)],
-        payload => {
-            editor => 'product_profile', target_field => 'id',
-            title => 'Edit {{product_name}}', size => 'lg',
-        },
-    },
-},
-```
-
-The component fetches the record through the request-specific governed domain,
-signs its original editable values, validates CSRF and submitted field names,
-and updates with `expected_count => 1`. Those original values form the
-optimistic-concurrency predicate, so a competing edit returns HTTP 409. After
-success the browser re-fetches the same governed Explorer result before
-replacing the row. A row that leaves the result remains as a disabled visible
-tombstone until refresh; a row that leaves authorization is reduced to safe
-identity only. Dirty forms warn before Close or Previous/Next navigation.
-
-Published editor actions are rendered as explicitly separate operations. They
-are not silently chained to profile Save. A host that needs audit or a shared
-transaction coordinator can provide `record_editor_handler`; it receives the
-effective domain, editor, target, signed originals, normalized changed
-assignments, and a `default_save` callback. Successful profile saves and editor
-actions keep the dialog open by default, refresh the result row, and reload the
-signed editor state. A record-editor handler or action handler may return
-`close_dialog => 1` when completion should close the dialog instead.
-
-## Selected-row actions
-
-### Conditional action forms
-
-Action `variants` use the core domain contract. Toolbar dialogs, inline row
-forms, and record-editor action forms show only the selected variant's fields:
-
-```perl
-inputs => {
-    complete => {type => 'boolean', label => 'Documents complete',
-        required => 1, discriminator => 1},
-},
-variants => [
-    {id => 'ready', label => 'Ready', when => {complete => JSON::PP::true}},
-    {id => 'follow_up', label => 'Follow up',
-        description => 'Explain which documents are missing.',
-        when => {complete => JSON::PP::false}, inputs => {
-            reason => {type => 'textarea', label => 'Reason', required => 1},
-        }},
-],
-```
-
-Conditions refer to base input values, not a separate submitted variant ID.
-Use a boolean Yes/No control or a `select` with explicit choices for selectors.
-Variants can add inputs or replace non-selector base inputs. Inactive controls
-are hidden and disabled; switching variants preserves drafts. Required markers
-and an accessible status reflect the active form. These interactive forms
-require JavaScript; no-JavaScript users see an explanation.
-
-The server resolves the variant again with `Selecto::Action->input_form`,
-validates only the effective fields, and rejects undeclared or inactive inputs.
-Missing/ambiguous choices fail closed. Normal capability, row-eligibility,
-CSRF, target, and tenant-scope checks still apply. Handlers receive the selected
-`variant` alongside normalized `inputs`. Lookup discovery uses the same
-selectors and cannot request an inactive variant's lookup.
-
-Boolean inputs retain JSON booleans; integers and numbers have numeric
-controls. Literal defaults are supported; a blank `['system', 'now']` default
-is left to the governed executor instead of evaluated on the browser clock.
-`utc_datetime` uses an explicit ISO
-date/time with timezone, not an assumed browser timezone. Collection inputs
-use a JSON-array editor (with `min_items`/`max_items` checks); a nested collection
-row builder and item-schema validation remain host responsibilities. API
-callers send native JSON arrays, not strings containing JSON. These changes
-provide the Perl form renderer and public normalized metadata; the separate
-JavaScript API Console/importer builders must also support variants before
-offering their own guided variant forms.
-
-### Row-dependent action forms
-
-A host may register `action_form_resolvers => {action_id => sub { ... }}` on
-the Components configuration. The callback receives `($controller, {action =>
-$normalized_action, ids => [$authorized_row_id]})` and returns
-`{fixed_inputs => {operation => 'release'}}`. It runs only after target
-authorization, and may fix declared base `select` inputs to one of their
-existing choices. The fixed choice is displayed as text and submitted as a
-hidden input; it can select the matching action variant. Other choices remain
-invalid on the server. Do not use this presentation hook instead of execution
-authorization or transactional state checks.
-
-Row dialogs fetch these forms on open from `GET /actions/:action/form?selected_id=...`
-under the Explorer's route prefix. Responses are private/no-store, and loading
-or failed requests cannot be submitted. There are no per-row form lookups while
-rendering the results table. `Actions->find` (including the Mojo API host) also
-applies the restrictions to submissions, so a stale or modified hidden input
-is rejected. Hosts must wire the same resolver into their other action surfaces.
-
-### Registering actions
-
-Selected-row actions come from the canonical domain contract. The Components
-host only renders actions that are bulk-scoped (or explicitly bulk-enabled)
-and have a registered host handler. Required action fields are normalized and
-validated again on POST; select choices are resolved again for the current
-request so a stale browser cannot submit a choice that the user can no longer
-use.
-
-Authorized actions appear in the Detail column picker as `Action: <label>`.
-Adding one and running the query places its checkbox column in the requested
-column order and displays its action button. Multiple action columns may be
-selected at once; their selected rows, counts, buttons, and dialogs remain
-independent. Removing an action column removes that action UI from the result.
-
-```perl
+# In the domain contract:
 actions => {
-    add_note => {
-        label => 'Add Note',
+    mark_shipped => {
+        label => 'Mark shipped',
         scope => 'bulk',
         inputs => {
-            note_type => {
-                label => 'Note type', type => 'select',
-                choice_source => 'note_types', required => 1,
-            },
-            comment => {
-                label => 'Comment', type => 'textarea',
-                required => 1, max_length => 255,
-            },
+            note => {label => 'Note', type => 'textarea', required => 1, max_length => 200},
         },
-        execution => {kind => 'host', operation => 'add_note'},
+        execution => {kind => 'host', operation => 'mark_shipped'},
     },
 },
-```
 
-Register dynamic choices, authorization, and the application-owned execution
-boundary on the explorer:
-
-```perl
-choice_sources => {
-    note_types => sub ($controller, $action, $input) {
-        return [{value => 'internal', label => 'Internal'}];
-    },
-},
-lookup_sources => {
-    carriers => sub ($controller, $request) {
-        # Authenticate and tenant-scope this query in the host application.
-        # $request includes query, limit, action, input, and selected_ids.
-        return [{
-            value => 501,
-            label => 'Acme Transport',
-            description => 'ID 501 · Detroit, MI',
-        }];
-    },
-},
-action_authorizer => sub ($controller, $request) {
-    return {status => 'enabled'};
+# In the explorer configuration:
+action_authorizer => sub ($c, $request) {
+    return $c->session('user_id') ? 'enabled' : 'hidden';
 },
 action_handlers => {
-    add_note => sub ($controller, $request) {
-        # $request->{selected_ids} is unique and bounded.
-        # $request->{inputs} contains normalized, validated form values.
-        return {ok => 1, applied_count => scalar @{$request->{selected_ids}}};
-    },
-},
-```
-
-The action route is `POST /explore/products/actions/:action_id`. Browser forms
-carry a session-bound CSRF token. Hosts remain responsible for checking every
-target against the current tenant/user and for transaction, audit, and
-business-rule behavior inside the handler.
-
-Actions that must operate on one result row can declare cardinality and their
-placement in the domain. `row_dialog` renders an action button in every row and
-opens the governed input form in a dialog. `row_inline` renders the governed
-inputs and submit button directly in each row. Neither presentation renders
-bulk-selection checkboxes or the action toolbar.
-
-```perl
-assign_equipment => {
-    label => 'Assign driver and trailer',
-    scope => 'row',
-    selection => {
-        mode => 'rows',
-        min_rows => 1,
-        max_rows => 1,
-        presentation => 'row_dialog', # or row_inline
-    },
-    inputs => [...],
-    execution => {kind => 'host', operation => 'assign_equipment'},
-},
-```
-
-`presentation` defaults to `toolbar`. All presentations honor `min_rows` and
-`max_rows`; the server validates those limits even if a caller bypasses the
-browser. Row presentations require `mode => 'rows'` and `max_rows => 1`.
-
-An action can instead group rows before it runs. The built-in `lucky_charms`
-palette uses pink hearts, orange stars, yellow moons, green clovers, blue
-diamonds, and purple horseshoes in that order, exposing a new distinct shape as
-each group is created. A selected row displays only its filled marker;
-clicking it again unassigns the row and restores the available outlines. The
-result table keeps rows with the same marker adjacent, orders marker groups by
-palette order, and retains the original query order within each group and among
-unassigned rows. Reordering uses a short positional animation and honors the
-browser's reduced-motion preference.
-
-```perl
-load_build => {
-    label => 'Load Build',
-    scope => 'bulk',
-    selection => {
-        mode => 'groups',
-        palette => 'lucky_charms',
-        max_groups => 6,
-        eligibility_field => 'load_build_eligible',
-        row_details => [
-            {id => 'origin', label => 'Origin', field => 'origin.city'},
-            {id => 'destination', label => 'Destination', field => 'destination.city'},
-        ],
-        group_inputs => [{
-            id => 'carrier_id', label => 'Carrier', type => 'lookup',
-            lookup_source => 'carriers', value_type => 'integer',
-            direct_entry => 1, minimum_query_length => 2,
-            required => 1, minimum => 1,
-        }],
-    },
-    submit_label => 'Build loads',
-    execution => {kind => 'host', operation => 'load_build'},
-},
-```
-
-The handler receives normalized `selected_ids` plus `groups`, ordered by marker
-index. Each group has its trusted server-resolved `marker`, its own
-`selected_ids`, and normalized `inputs`. The browser cannot submit custom
-marker colors, shapes, or labels. `row_details` are governed hidden fields
-shown beside each selected row in the confirmation card; they are display-only
-and are not submitted to the handler. `eligibility_field` should normally name
-an internal boolean domain field. Selecto adds it to the data query as a hidden
-selection, so each row's selection control is governed without a second query
-or per-row host calls. The display hint does not replace authorization and
-business-rule checks during execution.
-
-Legacy hosts may name a synthetic `__field` and configure an
-`action_eligibility_resolvers` callback. This compatibility mode is slower and
-is intended only for rules that cannot be represented by a governed SQL-backed
-domain field.
-A `lookup` input uses the authenticated
-`GET /explore/products/actions/:action_id/lookups/:input_id` route and the
-corresponding host-owned `lookup_sources` callback. Results are normalized to
-`value`, `label`, and optional `description`; the chosen value, not its label,
-is submitted to the action handler. Lookup discovery reuses action
-authorization and includes the active group's selected row IDs so the host can
-apply tenant, eligibility, and row-level rules.
-
-```perl
-action_eligibility_resolvers => {
-    load_build => sub ($controller, $request) {
-        # $request->{row_ids} contains the governed result-page targets.
-        return {map { $_ => can_build_load($_) ? 1 : 0 } @{$request->{row_ids}}};
-    },
-},
-```
-
-For reusable object lookups, prefer a domain-declared co-domain over a
-host-rendered result query. The source domain names the target domain's
-governed query-library pieces and result mapping:
-
-```perl
-co_domains => {
-    carriers => {
-        domain => 'client',
-        segments => [qw(carriers available_for_dispatch)],
-        projection => 'carrier_lookup',
-        ordering => 'company_name',
-        search => {
-            fields => [qw(id co_name cl_key city state)],
-            mode => 'prefix', rank => 1,
-        },
-        result => {
-            value_field => 'id', label_field => 'co_name',
-            description_fields => [qw(id cl_key city state)],
-        },
-    },
-},
-
-# In the action input:
-{ id => 'carrier_id', type => 'lookup', co_domain => 'carriers' }
-```
-
-The Components host resolves only trusted server-side engines and any
-selection-derived narrowing predicate:
-
-```perl
-co_domain_engines => {
-    client => sub ($controller) {
-        return tenant_scoped_client_engine($controller);
-    },
-},
-co_domain_scopes => {
-    carriers => sub ($controller, $request, $engine) {
-        return Selecto::Expression->in(
-            'id', carrier_ids_allowed_for($request->{selected_ids}),
+    mark_shipped => sub ($c, $request) {
+        # selected_ids are unique and bounded; inputs are validated.
+        # Re-check every ID against the current tenant before writing.
+        my $count = MyApp::Orders->mark_shipped(
+            $c, $request->{selected_ids}, $request->{inputs}{note},
         );
+        return {ok => 1, message => "Marked $count orders."};
     },
 },
 ```
 
-The target engine's required tenant predicate remains in force, the callback
-predicate can only narrow the query, and the action handler remains responsible
-for revalidating the submitted object before executing a write. Host
-`lookup_sources` remain supported for inherently application-specific choices.
+Submissions need the session CSRF token that the rendered form carries. The
+same explorer can also define `choice_sources`, `lookup_sources`,
+co-domain lookups (`co_domain_engines` and `co_domain_scopes`),
+`action_eligibility_resolvers`, `action_form_resolvers` and a
+`record_editor_handler`. Row-click actions (`detail_actions`) and record
+editors (`editors`) are declared in the domain. See
+`Selecto::Components::Actions`, `Selecto::Components::RowActions` and
+`Selecto::Components::RecordEditor`.
 
-The plugin adds its packaged `public/` directory to Mojolicious static paths.
-The htmx runtime and WebSocket extension are served locally; the browser does
-not depend on a CDN.
+### Private URL mode
 
-Hosts can enable `lazy_view_controls => 1` on the Components plugin or an
-individual explorer to omit the inactive Detail or Aggregate/Graph controls
-from the initial document. Switching views fetches the missing controls from
-`POST <explorer-path>/controls`; it does **not** execute the data or count query.
-The route uses the same host route bridge, freshly governed engine/domain,
-same-origin policy, and a session CSRF token. Hosts with a per-path read-only
-allowlist must allow this POST as a read operation. Responses are `no-store`.
-Loaded panels are reused within the current page, preserving draft columns,
-aliases, filters and measures. Failed loads leave the existing draft usable;
-without JavaScript, selecting a view and submitting normally renders its
-controls. The default is off for existing integrations.
-
-Localization metadata is memoized on the request-local configuration, avoiding
-a full domain-contract copy for each label. Translations and authorization
-decisions are not cached across requests.
-
-Aggregate and Graph Available lists are derived from the domain field catalog,
-including relationship columns. A user selects a column and configures its
-allowlisted aggregate function, alias, NULL handling, or buckets. No `measures`
-configuration is required; a governed row-count choice is included automatically.
-
-An explorer may additionally publish curated presets. Presets appear beside the
-domain columns and remain fully configurable according to their underlying type:
+By default the URL query string holds the query-builder state, so pages can be
+refreshed, bookmarked and exported. If filter values are sensitive, turn this
+off in the domain:
 
 ```perl
-measures => [
-    { id => 'product_count', label => 'Product count', aggregate => 'count' },
-    { id => 'total_price', label => 'Total price', aggregate => 'sum', field => 'unit_price' },
-],
+my $patients = Selecto::Domain->new(
+    name => 'Patients', table => 'patients',
+    fields => {id => 'integer', diagnosis => 'string'},
+    components => {query_params => 0},
+);
 ```
 
-`max_filters` defaults to 20 and may be configured from 1 through 20. Because
-the Available/Set model permits each governed field once, the domain's field
-catalog can impose a lower practical maximum.
+In private URL mode, state travels only in WebSocket and POST bodies.
+Generated URLs stay path-only, and inbound query strings redirect to the bare
+path. Responses are sent with `Cache-Control: no-store`. Permalinks, query
+string exports and the Saved queries tab are unavailable.
 
-`max_grid_cells` defaults to 50 and may be configured from 1 through 100. It
-bounds the compact row, column, and cell alternatives produced by an
-interactive grid selection and accepted by server-side parsing.
+### Saved queries, dashboards and the API Console
 
-`max_grid_result_cells` defaults to 10,000 and may be configured from 100
-through 100,000. The aggregate query reads at most one sentinel row beyond
-that ceiling, and the renderer also checks the dense row-by-column matrix.
-Oversized grids are rejected with guidance to add filters or choose
-lower-cardinality groups instead of exhausting the application worker or
-browser.
+- `saved_query_store` takes an object with
+  `list($c, $config)`, `save($c, $config, {name, url})` and
+  `delete($c, $config, {name})`. Optional methods add multiple destinations
+  and guarded updates. Your application owns scoping, sharing and
+  persistence. See the `saved_query_store` section of
+  `perldoc Selecto::Components`.
+- `Selecto::Components::Dashboard` turns saved view URLs into tiles, and can
+  apply shared filter values to their promoted filters. Get the explorer
+  object with `$c->selecto_components_explorer($id)`.
+- `Selecto::Components::APIConsole->page(...)` renders the packaged API
+  Console for a canonical Selecto HTTP API, and `install_assets($app)` serves
+  its files. An explorer's `api_console_resolver` adds an **API** button that
+  hands the current Detail query to it.
 
-Aggregate tables and Grid axes retain the natural order of governed temporal
-formats. In particular, weekday names follow ISO weekday order (Monday through
-Sunday), numeric years and date parts sort numerically, and canonical ISO date,
-week, month, quarter, and time labels sort chronologically. Grid axes are sorted
-after all distinct values have been collected, so sparse matrices cannot inherit
-an incorrect first-seen order.
+## Optional add-ons
 
-Adapters that advertise `stream` support use `stream_query` for flat exports.
-CSV, TSV, and JSON are emitted incrementally with backpressure from the HTTP
-connection. Excel is written to a temporary file with the writer's optimized
-memory mode and split at Excel's worksheet row limit before Mojolicious serves
-the completed file. Aggregate grids retain their bounded materialized export
-because their output depends on the complete two-dimensional matrix.
+Native-template pages (`Selecto::Components::Templates`, the `/templates/:id`
+routes, instance stores and the Studio preview host) are provided by the
+separate
+[Selecto-Components-Templates](https://github.com/seeken/selecto-perl-components-templates)
+distribution. It is not yet on CPAN, because it depends on the unpublished
+`Selecto::Templates`. The browser code for those pages still ships in this
+distribution's bundle, so the add-on needs no assets of its own.
 
-An explorer may set `max_export_rows` (a positive integer up to 10,000,000) to
-cap every all-rows export query: CSV, TSV, JSON, Excel and the all-rows page
-render. Paginated pages keep their own page size. Without it, exports return
-every matched row. When configured, the download controls display the cap;
-downloads contain the first rows in the selected ordering, not an uncapped
-result or just the current page.
+## Security model
 
-Text fields offer literal substring, prefix, and suffix filters in Explorer
-and API Console: `text_contains`, `starts_with`, and `ends_with`. Their `_ci`
-variants ignore case using the database's case-folding rules. `%`, `_`, and
-the escape character are literal text, not user-entered SQL wildcards. These
-operators round-trip through saved URLs, promoted filters, and API handoff;
-numeric, temporal, boolean, and choice-list controls retain their own operators.
+- **No SQL from the browser.** Field paths, operators, aggregate functions,
+  sort directions, formats and limits come from the domain and closed
+  allowlists. Values are bound as parameters. Browser input can never pick
+  the adapter or the database.
+- **The domain is the boundary.** Identifiers outside the configured
+  `Selecto::Domain`, and internal fields, are rejected on every request,
+  including forged URLs and WebSocket frames.
+- **Scope comes from the host.** Tenant and row scope come from
+  `engine_factory` (a required predicate or `Selecto::Engine` scope) and from
+  `scope_factory` on canned pages. Authorization comes from your route
+  bridge, `action_authorizer`, `export_authorizer` and `websocket_context`.
+- **Actions** must be declared by the domain *and* registered by the host.
+  Targets are deduplicated and bounded. Inputs and choices are revalidated
+  on the server. Execution is authorized again. POSTs need the session CSRF
+  token.
+- **WebSockets**: when a handshake carries an `Origin` header, its scheme,
+  host and port must match the request. Supply `origin_check` if you run
+  behind unusual proxies or serve several origins. Frames are capped at
+  128 KiB.
+- **Errors**: raw database errors are logged, never rendered. `show_sql`
+  renders SQL *with bound parameters*, including tenant IDs. The plugin warns
+  at startup if `show_sql` is enabled in `production` mode.
 
-`max_orders` defaults to 10 and may be configured from 1 through 20. Date/time
-formats are selected from a closed catalog; Aggregate formatting is part of the
-group expression itself, so choosing Month produces month buckets rather than
-merely changing the display label.
+The pages work under a self-contained Content Security Policy:
 
-## htmx 4 boundary
+```text
+default-src 'self'; script-src 'self'; style-src 'self';
+connect-src 'self' ws: wss:; img-src 'self'; base-uri 'none'; frame-ancestors 'none'
+```
 
-The vendored assets are exactly `htmx.org@4.0.0`:
+## Browser and transport notes
+
+The vendored htmx runtime is exactly `htmx.org@4.0.0`:
 
 | Asset | SHA-256 |
 | --- | --- |
 | `htmx.min.js` | `e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f` |
 | `hx-ws.min.js` | `a7c11e4eca05417d6299bb40aaacca01572e44605389fc4d5ef12be408a4d03b` |
 
-The UI uses the htmx 4 names `hx-ws:connect` and `hx-ws:send`. Incoming server
-messages set `content`, `target`, and `swap` according to the
-[official htmx 4 WebSocket extension contract](https://htmx.org/extensions/hx-ws),
-with application metadata under `selecto`. Browser listeners use the final
-`htmx:ws:*` lifecycle events and the asynchronous message JSON API.
-Do not substitute the htmx 2 `ws-connect` protocol without changing the server
-message and tests.
+The UI uses htmx 4's `hx-ws:connect`/`hx-ws:send` and the `htmx:ws:*` events.
+Server messages carry `content`, `target` and `swap`, and application metadata
+travels under `selecto`. This is not the htmx 2 `ws-connect` protocol. Edits
+are staged locally until the user presses **Run query**. The same form works as
+an ordinary GET (or a POST, in private URL mode) without JavaScript. The
+WebSocket is only a faster transport for the same state, and the server keeps
+no query-builder state that the URL (or the POST body) does not also carry.
+Charts use a vendored Chart.js 4.5.1.
 
-## Security boundary
+## Example application
 
-- Every field and relationship path must resolve through the configured
-  `Selecto::Domain`.
-- View names, operators, aggregate functions, sort directions, limits, and
-  measure sources come from closed allowlists and the governed domain catalog.
-- Values remain separate from SQL and compile as adapter parameters.
-- Browser input cannot select an adapter or submit SQL.
-- Selected-row action IDs must be declared by the domain and registered by the
-  host. Action targets are deduplicated and bounded, action choices are
-  re-resolved, authorization is repeated for execute, and POSTs require the
-  session-bound, per-render masked Mojolicious CSRF token. Previously opened
-  forms must be reloaded after upgrading from the custom token implementation.
-  An action that declares a capability stays hidden
-  unless the explorer registers an `action_authorizer`.
-- WebSocket handshakes with an `Origin` header require matching scheme, host,
-  and effective port. Requests without an Origin remain supported for native clients. A host
-  behind unusual proxy or multi-origin routing can provide an explicit
-  `origin_check` callback to the plugin.
-- WebSocket frames are capped at 128 KiB and invalid envelopes close with a
-  policy/data error.
-- Private URL mode reduces disclosure through history, logs, referrers, and
-  copied links; hosts must still use TLS and avoid request-body logging when
-  filter values are sensitive.
-- Raw database exceptions are not rendered. Known `Selecto::Error` messages
-  remain visible; unexpected failures become a generic error.
-- Raw SQL is hidden unless the host explicitly enables `show_sql`. Enabling it
-  renders the Query Debug panel, which shows the generated SQL **with its bound
-  parameters, including tenant IDs and other scope-predicate values**.
-  `show_sql` must be off in production. The plugin logs a warning at
-  registration when an explorer enables it while the application runs in
-  `production` mode.
-- Native-template element nodes reject runtime-bound values for event-handler
-  attributes (any name starting with `on`), `srcdoc`, and `style`, both when the
-  plugin registers a template and at render time
-  (`unsafe_attribute_binding`). Literal values authored in the template remain
-  allowed.
-
-A host Content Security Policy can remain self-contained:
-
-```text
-default-src 'self'; script-src 'self'; style-src 'self';
-connect-src 'self' ws: wss:; img-src 'self';
-base-uri 'none'; frame-ancestors 'none'
-```
-
-## Development
-
-Perl 5.34+, Mojolicious 9.49+, and the native `selecto-perl` sibling are
-required. The workspace development toolchain pins Perl 5.40.2.
-
-```sh
-cpanm --installdeps .
-mise run verify
-```
-
-Local resolution defaults to `../selecto-perl`. Override it without editing
-repository files:
-
-```sh
-SELECTO_LIVE_SELECTO_PERL=/path/to/selecto-perl mise run verify
-```
-
-Set `SELECTO_ECOSYSTEM_USE_LOCAL=0` to use an installed `Selecto`
-distribution.
-
-## Northwind example
-
-The example uses the existing native Perl Northwind database, domains, and
-registered adapter. Prepare a disposable database in the sibling app first:
+[`examples/northwind.pl`](examples/northwind.pl) runs two explorers and a
+canned page over a real PostgreSQL Northwind database. It needs the separate
+`selecto-perl-northwind` fixture checked out next to this repository:
 
 ```sh
 cd ../selecto-perl-northwind
 export DATABASE_URL='postgres://localhost/selecto_perl_northwind'
 mise run setup
-
 cd ../selecto-perl-components
-export DATABASE_URL='postgres://localhost/selecto_perl_northwind'
-mise run server
+mise run server        # http://127.0.0.1:4128/explore/products and /pages/products
 ```
 
-Open [http://127.0.0.1:4128/explore/products](http://127.0.0.1:4128/explore/products).
-The authored faceted page is at
-[http://127.0.0.1:4128/pages/products](http://127.0.0.1:4128/pages/products).
-It uses the Explorer page shell, theme, field labels, and result table. Its
-controls expose only the programmer-defined views and promoted filters; users
-cannot edit the underlying query's fields, joins, groups, or measures. Its
-WebSocket script is separate from Explorer's query-builder transport so each
-page accepts only responses for its own request state.
-Set `PORT` or `PHX_DEV_HOSTNAME` to change the development endpoint.
-
-## Verification boundary
-
-`mise run verify` covers state normalization, rejected identifiers and
-capabilities, canonical repeated query params, real PostgreSQL SQL compilation,
-bound filter values, relationship joins, grouping and aggregates, ordered
-Available/Set field selection, multiple Available/Set filters and draft-filter
-semantics, configured date/time detail columns and aggregate buckets,
-multi-column ordering, shareable GET and private POST rendering, private URL
-redirection, static assets, all export formats, and real Mojolicious WebSocket message
-round trips.
-
-That is bounded evidence for the included domains, states, transport envelopes,
-and test adapter results. It is not proof of arbitrary schemas, adapters,
-databases, browser versions, proxy settings, accessibility, concurrency,
-security, or performance.
-
-## Explicitly deferred
-
-- persisted saved-view stores and sharing policy;
-- emailed and scheduled exports;
-- dashboards, extension view packages, maps, and custom visual encodings;
-- push broadcasts from external data changes.
-
-## Independent Studio authoring preview
-
-`bin/selecto-template-preview-host` starts a synthetic-only preview service on
-`127.0.0.1:4142` (override with `SELECTO_TEMPLATE_PREVIEW_PORT`). Supply a private
-`SELECTO_TEMPLATE_PREVIEW_TOKEN` of at least 32 characters to both this service
-and Selecto Studio. Start locally with:
+## Development
 
 ```sh
-mise exec -- script/with-local-sibling perl bin/selecto-template-preview-host
+cpanm --installdeps .
+script/with-local-sibling prove -lr t
+mise run verify        # asset checks, Playwright browser tests, prove and make test
 ```
 
-`POST /observe` requires that token in `X-Selecto-Preview-Token`, JSON content,
-and a loopback request with no Origin header. The service accepts the
-protocol's `selecto.template.authoring-request.v1`: exact source, public Domain
-contracts, capability contracts, reusable sources, synthetic fixtures, inputs,
-and optional exact native registration locks. Studio always sends locks.
-It invokes the actual Perl compiler, include composer, runtime, and renderer.
-There is no application query executor, database configuration, or operation
-submission path. Synthetic rows do not simulate filters, ordering, or paging.
+`script/with-local-sibling` uses the checkout of `selecto-perl` in
+`../selecto-perl`. Set `SELECTO_LIVE_SELECTO_PERL=/path/to/selecto-perl` to use
+another checkout, or `SELECTO_ECOSYSTEM_USE_LOCAL=0` to use the installed
+`Selecto`. The browser sources live in `src/browser/`. `npm run build`
+produces `public/selecto-components/selecto-components.js`, and
+`mise run assets` resyncs the shared CSS, htmx and API Console assets from the
+sibling `selecto-api-console` workspace.
 
-The returned `selecto.template.authoring-observation.v1` includes AST,
-fingerprints, composed manifests, runtime snapshot, installed typed/versioned
-renderer metadata, and actual Perl HTML. Studio compares these artifacts with
-its independent Elixir implementation and isolates the HTML in a sandboxed
-iframe. Do not expose this development service publicly or place its token in
-browser code/source control.
+## License
 
-Hosts can inject `AuthoringPreview->new(registrations => $registry)` into
-`AuthoringPreviewHost->new(preview => $preview)`. Registries are keyed by
-`components`/`elements`, then name. A name may have a single
-`{version, contract, render, targets}` entry or a
-`{default, versions => {$version => {contract, render, targets}}}` entry. Render
-callbacks are trusted installed Perl code, never supplied by template text.
-Exact locks select the requested callback version; unavailable versions reject.
-`targets` declares `elixir` and/or `perl`; a native-only registration cannot be
-published as portable. Retain old implementations for pinned releases, and never
-replace an existing version's code. Matching metadata is supplemented by shared
-behavior/security tests; it does not prove arbitrary callback behavior.
+Copyright (c) 2026 Chris Rohlfs. This is free software, licensed under the
+Artistic License 2.0 (GPL Compatible). See [LICENSE](LICENSE).
 
-`t/templates_authoring_preview.t` exercises native compilation/rendering,
-composition, escaping, request budgets, HTTP identity/origin checks, simultaneous
-callback versions, and native-only rejection. Run `mise run verify` for the
-package's source, installed-module, shared-asset, and browser gates. The complete
-Studio authoring/publication workflow is documented in the sibling
-`selecto_studio/docs/native_template_authoring.md`.
+The vendored browser assets have their own licenses (htmx: 0BSD, Chart.js:
+MIT). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

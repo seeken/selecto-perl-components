@@ -71,3 +71,74 @@ sub _copy ($value) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::Resource::Registry - Namespaced contributions for host-composed workspaces
+
+=head1 SYNOPSIS
+
+    use Selecto::Components::Resource::Registry;
+
+    my $registry = Selecto::Components::Resource::Registry->new;
+    $registry->register_provider('core.accounting',
+        {slot => 'accounting', title => 'Accounting', capability => 'loads.accounting'});
+    $registry->register_panel('metro.dispatch',
+        {title => 'Dispatch', when => {dispatch_enabled => 1}});
+    $registry->register_badge('core.rush',
+        {label => 'Rush', enabled_by_default => 1, when => {rush => 1}});
+    $registry->freeze;
+
+=head1 DESCRIPTION
+
+A host application that builds record workspaces (for example a load or
+order page made of panels) can collect the pieces that modules contribute in
+a registry. L<Selecto::Components::Resource::Composer> then chooses the
+effective set for each request. The registry imposes no branding, markup or
+page style: each contribution is a plain hash that the host renders.
+
+IDs must be namespaced, as in C<module.name>. Kinds are C<panel>,
+C<provider> (which requires a C<slot>), C<badge>, C<field_group>, C<action>,
+C<validator> and C<after_commit>. Specs are deep-copied on the way in and on
+the way out. Duplicates die, and a frozen registry rejects new
+contributions.
+
+=head1 METHODS
+
+=head2 register
+
+    $registry->register($kind, $id, \%spec);
+
+The C<register_panel>, C<register_provider>, C<register_badge>,
+C<register_field_group>, C<register_action>, C<register_validator> and
+C<register_after_commit> shortcuts call it with a fixed kind. They return
+the registry.
+
+=head2 get, all
+
+    my $spec  = $registry->get(panel => 'metro.dispatch');
+    my $specs = $registry->all('panel');    # sorted by ID
+
+=head2 freeze, frozen
+
+Stop accepting contributions, or test whether that has happened.
+
+=head1 SEE ALSO
+
+L<Selecto::Components::Resource::Composer>, L<Selecto::Components>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

@@ -22,10 +22,9 @@ WriteMakefile(
     NAME             => 'Selecto::Components',
     VERSION_FROM     => 'lib/Selecto/Components.pm',
     ABSTRACT_FROM    => 'lib/Selecto/Components.pm',
-    AUTHOR           => 'Chris Rohlfs',
-    LICENSE          => 'artistic_1',
+    AUTHOR           => 'Chris Rohlfs <seeken@gmail.com>',
+    LICENSE          => 'artistic_2',
     MIN_PERL_VERSION => '5.034',
-    EXE_FILES => ['bin/selecto-template-preview-host'],
     PM => \%pm,
     PREREQ_PM        => {
         'Excel::Writer::XLSX' => '1.10',
@@ -33,12 +32,15 @@ WriteMakefile(
         'JSON::PP'    => '4.06',
         'Mojolicious' => '9.49',
         'Selecto'     => '0.2.0',
-        'Selecto::Templates' => '0.001000',
         'Time::HiRes' => 0,
+    },
+    CONFIGURE_REQUIRES => {
+        'ExtUtils::MakeMaker' => '6.64',
     },
     TEST_REQUIRES => {
         'DBD::SQLite' => '1.64',
-        'Test::More' => 0,
+        'Test::More'  => 0,
+        'URI::Escape' => 0,
     },
     META_MERGE => {
         'meta-spec' => { version => 2 },
@@ -48,7 +50,12 @@ WriteMakefile(
                 url  => 'https://github.com/seeken/selecto-perl-components.git',
                 web  => 'https://github.com/seeken/selecto-perl-components',
             },
+            bugtracker => {
+                web => 'https://github.com/seeken/selecto-perl-components/issues',
+            },
         },
-        x_license => 'Artistic-1.0',
+        no_index => {
+            directory => [qw(t examples)],
+        },
     },
 );

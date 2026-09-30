@@ -193,3 +193,104 @@ sub _copy ($value) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::Resource::Composer - Compose the effective workspace for one request
+
+=head1 SYNOPSIS
+
+    use Selecto::Components::Resource::Composer;
+
+    my $composer = Selecto::Components::Resource::Composer->new(
+        registry  => $registry,
+        authorize => sub ($request) {    # {capability, phase, kind, contribution, facts, context}
+            return MyApp::Auth->can($request->{capability})
+                ? {status => 'enabled'} : {status => 'hidden', reason_code => 'missing_privilege'};
+        },
+    );
+
+    my $effective = $composer->compose(
+        blueprint => {
+            panels => [{id => 'core.overview', title => 'Overview'}, {slot => 'accounting'}],
+            slots  => {accounting => {default_provider => 'core.accounting'}},
+        },
+        profile => {
+            id => 'client.metro',
+            providers => {accounting => 'metro.accounting'},
+            enable    => ['metro.dispatch'],
+            order     => {panels => [qw(core.overview metro.dispatch metro.accounting)]},
+        },
+        facts => {dispatch_enabled => 1},
+    );
+    # {panels => [...], badges => [...], field_groups => [...], actions => [...],
+    #  validators => [...], after_commits => [...], trace => [...], profile_id => 'client.metro'}
+
+=head1 DESCRIPTION
+
+The composer turns a B<blueprint>, a B<profile> and request B<facts> into the
+effective list of contributions from a
+L<Selecto::Components::Resource::Registry>:
+
+=over 4
+
+=item * The blueprint lists base panels, and named C<slots> that are filled by
+a provider. The profile's C<providers> choose the provider, and otherwise the
+slot's C<default_provider> is used. An unknown or mismatched provider dies.
+
+=item * Registry contributions are included when they are
+C<enabled_by_default> or listed in the profile's C<enable>, and are not in its
+C<disable>.
+
+=item * A contribution applies only when its C<when> matches the facts (a
+hash of expected values, or a callback that receives the facts). A
+contribution with a C<capability> applies only when C<authorize> returns
+C<enabled>.
+
+=item * The profile's C<< order => {panels => [...]} >> fixes the panel order.
+Panels that are not listed keep their relative order after the listed ones.
+
+=back
+
+Pruned contributions are left out without saying why in the result. The
+C<trace> records each decision for diagnostics, so do not show it to end
+users.
+
+=head1 ATTRIBUTES
+
+=head2 registry
+
+Required. A L<Selecto::Components::Resource::Registry>.
+
+=head2 authorize
+
+A callback that returns C<< {status => 'enabled'|'disabled'|'hidden', reason_code} >>.
+The default enables everything.
+
+=head1 METHODS
+
+=head2 compose
+
+    my $effective = $composer->compose(blueprint => \%b, profile => \%p, facts => \%f, context => $any);
+
+C<context> is passed through to C<authorize>.
+
+=head1 SEE ALSO
+
+L<Selecto::Components::Resource::Registry>, L<Selecto::Components>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

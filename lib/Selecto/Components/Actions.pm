@@ -696,3 +696,269 @@ sub _text {
 }
 
 1;
+
+__END__
+
+=encoding utf8
+
+=head1 NAME
+
+Selecto::Components::Actions - Selected-row actions: discovery, forms, authorization and requests
+
+=head1 SYNOPSIS
+
+    # Domain contract: declare the action.
+    actions => {
+        add_note => {
+            label => 'Add Note',
+            scope => 'bulk',
+            inputs => {
+                note_type => {label => 'Note type', type => 'select',
+                    choice_source => 'note_types', required => 1},
+                comment => {label => 'Comment', type => 'textarea',
+                    required => 1, max_length => 255},
+            },
+            execution => {kind => 'host', operation => 'add_note'},
+        },
+    },
+
+    # Explorer configuration: register the host-owned pieces.
+    choice_sources => {
+        note_types => sub ($c, $action, $input) {
+            return [{value => 'internal', label => 'Internal'}];
+        },
+    },
+    action_authorizer => sub ($c, $request) {
+        return {status => 'enabled'};    # or 'disabled' / 'hidden', with a reason
+    },
+    action_handlers => {
+        add_note => sub ($c, $request) {
+            # $request->{selected_ids} is unique and bounded;
+            # $request->{inputs} holds normalized, validated values.
+            return {ok => 1, applied_count => scalar @{$request->{selected_ids}}};
+        },
+    },
+
+=head1 DESCRIPTION
+
+Selected-row actions come from the canonical domain contract's C<actions>. An
+explorer offers an action only when the domain declares it as bulk-scoped
+(C<< scope => 'bulk' >>, or C<< bulk => {enabled => 1} >>) B<and> the explorer
+registers an C<action_handlers> entry for it. Authorized actions appear in the
+Detail column picker as C<Action: E<lt>labelE<gt>>. Adding one and running the
+query places its selection column, button and typed dialog in the result.
+Several action columns can be active at once, and each keeps its own
+selection.
+
+The action route is C<POST E<lt>explorer-pathE<gt>/actions/:action_id>.
+Submissions must carry the session-bound CSRF token that the rendered form
+includes. On every POST, the server resolves the action again, re-runs
+C<choice_sources>, validates the inputs (rejecting undeclared or inactive
+ones), deduplicates and bounds the targets, and calls C<action_authorizer>
+with the C<execute> phase. Only then does it call the handler. The handler
+is still responsible for checking each target against the current tenant and
+user, and for transactions, auditing and business rules.
+
+The class methods below implement that pipeline. Hosts that expose the same
+actions through another surface, such as an HTTP API, should call them rather
+than reimplementing the checks.
+
+=head1 DOMAIN FEATURES
+
+=head2 Input types
+
+C<string>, C<textarea>, C<select> (C<options>, or a C<choice_source>),
+C<lookup>, C<number>, C<integer>, C<boolean>, C<date>, C<utc_datetime> (an
+explicit ISO date and time with a timezone), C<datetime-local> and
+C<collection>. A collection is a JSON array edited as text, with
+C<min_items> and C<max_items>. API callers send native JSON arrays. Literal
+defaults are supported. A C<['system', 'now']> default is left to the
+governed executor.
+
+=head2 Presentations and cardinality
+
+    selection => {mode => 'rows', min_rows => 1, max_rows => 1,
+                  presentation => 'row_dialog'}    # toolbar | row_dialog | row_inline
+
+C<toolbar> (the default) collects checkbox selections and opens a dialog.
+C<row_dialog> puts a button in every row, and C<row_inline> puts the inputs
+and submit button in every row. Both row presentations require
+C<< mode => 'rows' >> and C<< max_rows => 1 >>. The server enforces
+C<min_rows> and C<max_rows> whatever the presentation.
+
+=head2 Grouped selections
+
+    selection => {
+        mode => 'groups', palette => 'lucky_charms', max_groups => 6,
+        eligibility_field => 'load_build_eligible',
+        row_details => [{id => 'origin', label => 'Origin', field => 'origin.city'}],
+        group_inputs => [{id => 'carrier_id', label => 'Carrier', type => 'lookup',
+            lookup_source => 'carriers', value_type => 'integer', required => 1}],
+    },
+
+The user assigns rows to trusted markers (the C<lucky_charms> palette has
+pink hearts, orange stars, yellow moons, green clovers, blue diamonds and
+purple horseshoes). They then fill in C<group_inputs> for each group. The
+handler receives C<groups>, ordered by marker index, each with its
+server-resolved C<marker>, its own C<selected_ids> and its C<inputs>. The
+browser cannot submit marker colours, shapes or labels. C<row_details> are
+hidden governed fields that are shown only in the confirmation card.
+
+=head2 Row eligibility
+
+C<eligibility_field> names a boolean domain field, normally C<internal>. It
+is selected as a hidden column, so each row's selection control is governed
+by the same query. For rules that SQL cannot express, configure
+C<action_eligibility_resolvers> instead. That path is slower.
+
+=head2 Conditional forms (variants)
+
+    inputs => {
+        complete => {type => 'boolean', label => 'Documents complete',
+            required => 1, discriminator => 1},
+    },
+    variants => [
+        {id => 'ready', label => 'Ready', when => {complete => JSON::PP::true}},
+        {id => 'follow_up', label => 'Follow up', when => {complete => JSON::PP::false},
+            inputs => {reason => {type => 'textarea', label => 'Reason', required => 1}}},
+    ],
+
+The selected variant's fields are shown in toolbar dialogs, row forms and
+record-editor action forms. Conditions test base input values, never a
+submitted variant ID. On the server, L</input_form> resolves the variant
+again with L<Selecto::Action/input_form>. Only the effective fields are
+validated, and handlers receive the chosen C<variant>. Missing or ambiguous
+choices fail closed. Interactive variant forms need JavaScript.
+
+=head2 Row-dependent forms
+
+    action_form_resolvers => {
+        release => sub ($c, $request) {    # {action, ids => [$authorized_row_id]}
+            return {fixed_inputs => {operation => 'release'}};
+        },
+    },
+
+This runs after target authorization, for a single row. It may fix a
+declared C<select> input to one of its existing choices, which can select a
+variant. Row dialogs fetch such forms from
+C<GET E<lt>pathE<gt>/actions/:action/form?selected_id=...>. Submissions are
+checked against the same restriction. This is a presentation aid, not an
+authorization check.
+
+=head2 Lookups
+
+A C<lookup> input names exactly one source. The first kind is a
+C<lookup_source> callback, C<($controller, {query, limit, action, input, selected_ids})>,
+which returns C<< [{value, label, description}] >>. The second kind is a domain
+C<co_domains> entry that searches another governed domain through its query
+library:
+
+    co_domains => {
+        carriers => {
+            domain => 'client', view => 'carrier_lookup',
+            search => {fields => [qw(id co_name city)], mode => 'prefix', rank => 1},
+            result => {value_field => 'id', label_field => 'co_name',
+                       description_fields => [qw(id city)]},
+        },
+    },
+    # input: {id => 'carrier_id', type => 'lookup', co_domain => 'carriers'}
+
+For a co-domain, the explorer supplies C<co_domain_engines> (the target
+domain's engine for the request) and, optionally, C<co_domain_scopes>
+(a narrowing predicate). The target engine's required predicate always
+applies. The lookup route is
+C<GET E<lt>pathE<gt>/actions/:action_id/lookups/:input_id>. It reuses action
+authorization (the C<lookup> phase) and passes the active selection's row
+IDs. The submitted value, not its label, reaches the handler, and the handler
+must revalidate it.
+
+=head1 METHODS
+
+All methods are class methods. C<$config> is a request copy of
+L<Selecto::Components::Config> (C<< $config->for_request($c) >>).
+
+=head2 available
+
+    my $actions = Selecto::Components::Actions->available(
+        $config, $domain, $controller, $phase, $target);
+
+The normalized, authorized actions for a phase (C<preview> by default). Each
+carries C<status> (C<enabled> or C<disabled>) and possibly C<status_reason>.
+Hidden actions are left out.
+
+=head2 find
+
+    my $found = Selecto::Components::Actions->find(
+        $config, $domain, $controller, $id, $phase, $target);
+    # {action => $normalized, decision => {status, reason}}
+
+Resolves one action and its authorization decision, or returns C<undef>.
+C<$target> is C<< {ids => [...]} >> when the rows are known. Row-dependent
+form restrictions apply here.
+
+=head2 definition
+
+    my $action = Selecto::Components::Actions->definition($config, $domain, $controller, $id);
+
+The public form contract, without an authorization decision. Use it for
+discovery documents, such as OpenAPI. L</find> and L</authorize> remain
+mandatory before execution.
+
+=head2 authorize
+
+    my $decision = Selecto::Components::Actions->authorize(
+        $config, $controller, $action, $phase, $target);
+
+Calls C<action_authorizer> and normalizes the result to
+C<< {status, reason} >>. An action with a C<capability> and no authorizer is
+C<hidden>.
+
+=head2 row_eligibility
+
+    my $eligible = Selecto::Components::Actions->row_eligibility(
+        $config, $controller, $action, \@row_ids, $phase);
+
+Returns the C<action_eligibility_resolvers> result, C<< {$id => 0|1} >>, or
+C<undef> when none is configured.
+
+=head2 request
+
+    my $request = Selecto::Components::Actions->request(
+        $config, $action, \@selected_ids, \%raw_inputs, {group_payload => $json});
+
+Validates a submission. It returns
+C<< {valid, errors, action, selected_ids, inputs, groups, variant} >>. This
+is the hash action handlers receive.
+
+=head2 input_form
+
+    my $form = Selecto::Components::Actions->input_form($action, \%raw_inputs);
+
+Resolves the effective inputs of a conditional form, returning
+C<< {inputs, errors, variant} >>.
+
+=head2 submitted_inputs
+
+    my $raw = Selecto::Components::Actions->submitted_inputs($controller);
+
+Collects C<action_input_*> form parameters. A repeated parameter is marked
+invalid.
+
+=head1 SEE ALSO
+
+L<Selecto::Components>, L<Selecto::Action>, L<Selecto::CoDomain>,
+L<Selecto::Components::RowActions>, L<Selecto::Components::RecordEditor>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

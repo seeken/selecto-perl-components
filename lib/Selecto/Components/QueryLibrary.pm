@@ -138,3 +138,98 @@ sub _text ($value) {
 sub _humanize ($value) { return humanize($value); }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::QueryLibrary - Present a domain's query library in the Explorer
+
+=head1 SYNOPSIS
+
+    use Selecto::Components::QueryLibrary;
+
+    my $views    = Selecto::Components::QueryLibrary->entries($domain, 'views', $config);
+    my $segments = Selecto::Components::QueryLibrary->active_segment_entries(
+        $domain, 'low_stock_products', ['premium'], $config);
+    my $params   = Selecto::Components::QueryLibrary->parameter_entries(
+        $domain, 'low_stock_products', [], $config);
+
+=head1 DESCRIPTION
+
+A canonical domain may declare a C<query_library> of named C<views>,
+C<segments>, C<projections>, C<orderings> and typed C<parameters> (see
+L<Selecto::QueryLibrary>). The Explorer shows named views in its View tab,
+and segments and parameters in its Filters tab. They take part in canonical
+URL state as C<query_library_view>, repeated C<query_library_segment>, and
+C<query_library_param_name>/C<query_library_param_value> pairs.
+
+Selecting a named view seeds the Detail columns and ordering once, and they
+remain editable afterwards. Segments constrain the query alongside the visual
+filters. They count as applied filters and are shown as summaries that
+cannot be removed individually. C<< picker_hidden => 1 >> keeps an old
+segment valid for saved links while hiding it from new selections.
+C<segment_picker_groups> renders mutually exclusive segments as radio groups
+with an Off choice. A segment's C<capability> is shown as metadata only; it is
+not an authorization decision. Parameter values are type-checked by Selecto
+and compiled as bound values.
+
+This class turns that metadata into sorted, localized entries for the UI.
+
+=head1 METHODS
+
+All methods are class methods. C<$config> is optional. When it is given,
+labels and descriptions are localized through it.
+
+=head2 entries
+
+    my $entries = Selecto::Components::QueryLibrary->entries($domain, $registry, $config);
+
+Returns the C<$registry> (C<views>, C<segments>, ...) as
+C<< [{id, label, description, capability, picker_hidden}] >>, sorted by label.
+
+=head2 active_segment_entries
+
+    my $entries = Selecto::Components::QueryLibrary->active_segment_entries(
+        $domain, $view_id, \@segment_ids, $config);
+
+The segments that apply: the named view's own segments, followed by the
+extra segments.
+
+=head2 segment_picker_groups
+
+    my $groups = Selecto::Components::QueryLibrary->segment_picker_groups($domain, $config);
+
+=head2 view_segment_ids
+
+    my $ids = Selecto::Components::QueryLibrary->view_segment_ids($domain, $view_id);
+
+=head2 parameter_entries
+
+    my $params = Selecto::Components::QueryLibrary->parameter_entries(
+        $domain, $view_id, \@segment_ids, $config);
+
+The parameters that the view and segments need, as
+C<< [{id, label, type, required, default, description}] >>.
+
+=head2 input_type
+
+    my $html_type = Selecto::Components::QueryLibrary->input_type('integer');   # 'number'
+
+=head1 SEE ALSO
+
+L<Selecto::Components>, L<Selecto::QueryLibrary>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

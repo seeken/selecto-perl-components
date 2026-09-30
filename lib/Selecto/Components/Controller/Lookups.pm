@@ -160,3 +160,33 @@ sub _lookup_response ($controller, $status, $payload) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::Controller::Lookups - Request handler for action lookup inputs
+
+=head1 DESCRIPTION
+
+This module is an internal part of L<Selecto::Components>. Its interface may
+change without notice; use the plugin and its documented host modules
+instead.
+
+=head1 SEE ALSO
+
+L<Selecto::Components>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

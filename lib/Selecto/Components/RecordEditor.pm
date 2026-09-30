@@ -175,3 +175,123 @@ sub _control_for_type ($type) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::RecordEditor - Load, validate and save a single-record edit dialog
+
+=head1 SYNOPSIS
+
+    # Domain contract:
+    writes => {
+        operations => {update => {enabled => 1}},
+        fields => {product_name => {updatable => 1}, unit_price => {updatable => 1}},
+    },
+    editors => {
+        product_profile => {
+            label => 'Edit product',
+            fields => [
+                {field => 'id', readonly => 1},
+                {field => 'product_name', required => 1},
+                {field => 'unit_price', control => 'number', nullable => 1},
+            ],
+            actions => ['retire_product'],
+        },
+    },
+    detail_actions => {
+        edit_product => {
+            name => 'Edit product', type => 'record_editor',
+            required_fields => [qw(id product_name)],
+            payload => {editor => 'product_profile', target_field => 'id',
+                        title => 'Edit {{product_name}}', size => 'lg'},
+        },
+    },
+
+    # Optional explorer hook, for example to audit or wrap in a transaction:
+    record_editor_handler => sub ($c, $edit) {
+        my $result = $edit->{default_save}->();
+        MyApp::Audit->record($c, $edit->{target_id}, $edit->{assignments});
+        return $result;
+    },
+
+=head1 DESCRIPTION
+
+A C<record_editor> row action
+(L<Selecto::Components::RowActions>) opens a lazily loaded dialog for one
+row, served by C<GET/POST E<lt>explorer-pathE<gt>/records/:id/edit>.
+
+The editor loads the record through the request's governed engine, so a row
+outside the user's scope is not found. It signs the original editable values
+into the form. When a save arrives, it checks the CSRF token, the signature
+and the submitted field names, then validates each value against its domain
+type and control. It updates only the changed fields with
+C<< expected_count => 1 >>, using the original values as an
+optimistic-concurrency predicate. A competing edit therefore returns HTTP 409
+instead of being overwritten. After a save, the browser fetches the row again
+through the explorer's query. A row that no longer matches stays visible as a
+disabled placeholder. A row the user may no longer see is reduced to its
+identity.
+
+Editor C<actions> are shown as separate operations. They are never chained to
+the profile save. C<record_editor_handler>, when configured, receives
+C<< {engine, domain, editor, target_id, original, assignments, default_save} >>
+and must return a hash. Returning C<< close_dialog => 1 >> closes the dialog
+after success. By default the dialog stays open and reloads.
+
+=head2 Editor field options
+
+C<field> (required), C<label>, C<required>, C<nullable>, C<readonly>,
+C<control> (C<text>, C<textarea>, C<number>, C<date>, C<datetime-local>,
+C<checkbox> or C<select>; the default depends on the field type), C<options>,
+C<section> and C<help>. Editors may also declare read-only C<collections>.
+
+=head1 METHODS
+
+These class methods are the building blocks the controller uses. They are
+also available to hosts that edit through another surface.
+
+=head2 find
+
+    my $editor = Selecto::Components::RecordEditor->find($domain, $editor_id);
+
+=head2 load
+
+    my $record = Selecto::Components::RecordEditor->load($engine, $editor, $target_id);
+
+Returns the record, or C<undef> unless exactly one row matches.
+
+=head2 normalize
+
+    my $r = Selecto::Components::RecordEditor->normalize($domain, $editor, \%params, $original);
+    # {valid, values, errors => {field => message}}
+
+=head2 changed
+
+    my $assignments = Selecto::Components::RecordEditor->changed($editor, $original, $values);
+
+=head2 save
+
+    my $result = Selecto::Components::RecordEditor->save($engine, $target_id, $original, $assignments);
+
+Performs the guarded update. A C<Selecto::Error> with code
+C<cardinality_mismatch> means the record changed in the meantime.
+
+=head1 SEE ALSO
+
+L<Selecto::Components>, L<Selecto::Components::RowActions>, L<Selecto::Write>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

@@ -1103,12 +1103,96 @@ __END__
 
 =head1 NAME
 
-Selecto::Components::Config - Validated explorer configuration
+Selecto::Components::Config - Validated configuration for one Selecto explorer
+
+=head1 SYNOPSIS
+
+    use Selecto::Components::Config;
+
+    my $config = Selecto::Components::Config->new(
+        id             => 'products',
+        title          => 'Products',
+        path           => '/explore/products',
+        engine_factory => sub ($c) { $engine },
+        default_limit  => 50,
+    );
+
+    my $request_config = $config->for_request($c);
+    my $catalog = $request_config->field_catalog($engine->domain);
 
 =head1 DESCRIPTION
 
-Holds one explorer's validated options. The host supplies these through the
-C<explorers> entry of the L<Selecto::Components> plugin configuration.
+This class holds one explorer's options and validates them. Hosts normally
+never construct it themselves: the L<Selecto::Components> plugin builds one
+for each entry of its C<explorers> hash. It fills in C<id>, a default C<path>
+and a default C<title>, and copies the plugin-level C<websocket_context>,
+C<websocket_session_options> and C<lazy_view_controls> defaults.
+
+Every option, with its default, range and callback signature, is documented
+in L<Selecto::Components/EXPLORER OPTIONS>. C<new> dies with a
+one-line message for any invalid value.
+
+=head1 METHODS
+
+The methods most useful to hosts and to code that works with an explorer
+model (C<< $model->{config} >>) are listed here. Other methods serve the
+renderer and may change.
+
+=head2 new
+
+    my $config = Selecto::Components::Config->new(%options);
+
+Validates and returns the configuration. C<id>, C<title>, C<path> and
+C<engine_factory> are required.
+
+=head2 for_request
+
+    my $request_config = $config->for_request($controller);
+
+Returns a shallow copy bound to one request. The copy resolves the theme,
+page shell, export permission and localized catalogs once and caches them.
+L<Selecto::Components::Explorer/model> does this for you.
+
+=head2 engine
+
+    my $engine = $config->engine($controller);
+
+Calls C<engine_factory> and checks that it returned a L<Selecto::Engine>.
+
+=head2 export_allowed
+
+    my $ok = $request_config->export_allowed;
+
+Returns the C<export_authorizer> decision, or true without one. A request
+copy asks once and remembers the answer.
+
+=head2 query_params_enabled
+
+    my $shareable = $config->query_params_enabled($domain);
+
+False when the domain sets C<< components => {query_params => 0} >>.
+
+=head2 field_catalog, filter_catalog, measure_catalog
+
+    my $fields = $request_config->field_catalog($domain);
+
+These return the localized, sorted pickers the UI offers: each entry has a
+C<path>, a C<label> and a C<type>, plus presentation metadata.
+C<< field_catalog($domain, {include_internal => 1}) >> adds internal fields.
+
+=head2 localize
+
+    my $text = $request_config->localize($domain, 'fields.unit_price.label', 'Unit price');
+
+Runs the configured C<localizer> for one semantic term. See
+L<Selecto::Components::I18N>.
+
+=head2 localization_terms
+
+    my $terms = $config->localization_terms($domain);
+
+Lists every term this explorer can localize, including its title and curated
+measures.
 
 =head1 SECURITY-RELEVANT OPTIONS
 
@@ -1119,11 +1203,36 @@ C<explorers> entry of the L<Selecto::Components> plugin configuration.
 Defaults to false. When true, every explorer response renders the Query Debug
 panel with the generated SQL B<and its bound parameters>. Bound parameters
 include the values of required predicates and scope filters, such as tenant
-IDs, owner IDs, and other row-level security inputs, as well as every filter
+IDs, owner IDs and other row-level security inputs, as well as every filter
 value a user typed. B<show_sql must be off in production.> Enable it only in
 trusted development environments. The plugin logs a warning at registration
 when an explorer enables it while the application runs in C<production> mode.
 
+=item export_authorizer, max_export_rows
+
+Decide who may export, and cap the size of every all-rows query.
+
+=item action_authorizer
+
+Required for any action that declares a C<capability>. Without it, such
+actions stay hidden.
+
 =back
+
+=head1 SEE ALSO
+
+L<Selecto::Components>, L<Selecto::Components::Explorer>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
 
 =cut

@@ -291,3 +291,94 @@ sub _text ($value) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::I18N - Request-time localization of domain presentation text
+
+=head1 SYNOPSIS
+
+    # Domain contract:
+    extensions => {
+        i18n => {
+            namespace => 'selecto.products',
+            terms => {
+                'domain.title' => {default => 'Product Explorer'},
+                'measures.product_count.label' => {default => 'Product count'},
+            },
+        },
+    },
+
+    # Explorer configuration:
+    localizer => sub ($key, $default, $context) {
+        return MyApp::Dictionary->translate($key, $default, $context->{controller});
+    },
+
+    # Export every term for a translation workflow:
+    my $terms = Selecto::Components::I18N->terms($domain, {title => 'Products'});
+    # [{namespace, semantic, key, default}, ...]
+
+=head1 DESCRIPTION
+
+A canonical domain can opt into localized presentation without changing its
+field paths, query semantics or saved-query URLs. The domain fingerprint
+ignores language. The domain declares a stable C<extensions.i18n.namespace>.
+Each piece of presentation text then has a semantic path, for example
+C<fields.unit_price.label>, C<query_library.segments.low_stock.label>,
+C<actions.add_note.inputs.comment.label> or C<domain.title>. Its dictionary
+key is C<< <namespace>.<semantic> >>, unless the domain's C<terms> map the
+path to another key or give it a default.
+
+The explorer's C<localizer> is called with that key, the fallback text, and a
+context containing the C<controller>, C<namespace>, C<semantic>, C<domain>
+and details about the term. If the callback dies, returns a reference or an
+empty string, or returns text with control characters, the fallback is used.
+Localization happens before labels are sorted. Metadata is cached per
+request; translations are not.
+
+=head1 METHODS
+
+=head2 terms
+
+    my $terms = Selecto::Components::I18N->terms($domain, {title => $title, measures => \@measures});
+
+Every localizable term of the domain: its title, fields, associations,
+query-library entries, actions (with their inputs, options, group inputs
+and row details), curated measures and declared terms. Each term is
+C<< {namespace, semantic, key, default} >>. Returns an empty list for a
+domain without an C<i18n> namespace.
+L<Selecto::Components::Config/localization_terms> fills in an explorer's
+title and measures.
+
+=head2 term
+
+    my $term = Selecto::Components::I18N->term($domain, 'fields.unit_price.label', 'Unit price');
+
+One term, or C<undef> when the domain has no namespace or there is no
+default text.
+
+=head2 localize
+
+    my $text = Selecto::Components::I18N->localize($localizer, $domain, $semantic, $default, \%context);
+
+Runs C<$localizer> for one term with the fallbacks described above.
+
+=head1 SEE ALSO
+
+L<Selecto::Components>, L<Selecto::Components::Config>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

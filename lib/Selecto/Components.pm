@@ -54,19 +54,6 @@ sub normalize_export_format ($value) {
     return exists($EXPORT_FORMATS{$format}) ? $format : '';
 }
 
-=head1 NAME
-
-Selecto::Components - htmx WebSocket exploration UI for Selecto Perl
-
-=head1 DESCRIPTION
-
-This Mojolicious plugin provides server-rendered Detail, Aggregate, and Graph
-exploration surfaces. The normalized URL query string is canonical state;
-htmx 4 WebSockets are an incremental transport for the same governed query.
-Domains may disable query-parameter state for sensitive explorers.
-
-=cut
-
 sub register ($self, $app, $plugin_config) {
     $plugin_config //= {};
     die "Selecto::Components plugin configuration must be an object\n"
@@ -511,3 +498,737 @@ sub _same_origin ($controller) {
 sub _humanize ($value) { return humanize($value); }
 
 1;
+
+__END__
+
+=encoding utf8
+
+=head1 NAME
+
+Selecto::Components - Browser exploration UI for Selecto domains, as a Mojolicious plugin
+
+=head1 SYNOPSIS
+
+    use Mojolicious::Lite -signatures;
+    use Selecto;
+
+    my $domain  = Selecto::Domain->parse($contract, strict => 1);
+    my $adapter = Selecto->adapter(postgresql => (dbh => $dbh));
+
+    app->secrets(['a long random secret']);
+
+    plugin 'Selecto::Components' => {
+        explorers => {
+            products => {
+                title          => 'Products',
+                engine_factory => sub ($c) {
+                    Selecto::Engine->new(domain => $domain, adapter => $adapter);
+                },
+                default_fields => [qw(product_name category.category_name unit_price)],
+                default_group  => ['category.category_name'],
+            },
+        },
+    };
+
+    app->start;    # then open /explore/products
+
+=head1 DESCRIPTION
+
+Selecto::Components is a L<Mojolicious> plugin that adds a browser UI for
+exploring data to your application. It is built on L<Selecto>. The
+L<Selecto::Domain> you configure decides which tables, columns, relationships
+and operations a user can reach. The browser sends only validated
+query-builder state, never SQL, and Selecto compiles every query with bound
+parameters.
+
+The plugin registers two kinds of surface:
+
+=over 4
+
+=item Explorers
+
+A query builder with Detail, Aggregate (optionally a two-axis grid) and Graph
+views. Users choose columns, filters, groupings, measures, sorting and
+pagination, and can drill down from aggregates to rows. Explorers also
+provide exports, row-click actions, selected-row actions, a record editor,
+saved queries and an optional Query Debug panel.
+
+=item Canned pages
+
+Author-defined views with promoted facet, range and text controls, built from
+L<Selecto::CannedPage>. See L<Selecto::Components::CannedPage>.
+
+=back
+
+Pages are rendered on the server. In the default shareable mode the normalized
+URL query string is the canonical state. An htmx 4 WebSocket
+(C<hx-ws:connect>) is a faster transport for that same state, and ordinary GET
+forms (or POST forms in private URL mode) work without JavaScript. The plugin
+serves its own CSS, JavaScript, htmx 4.0.0 and Chart.js from the
+distribution's share directory.
+
+The README covers installation and integration with complete, runnable
+examples. This document is the reference for the plugin's options.
+
+=head1 PLUGIN OPTIONS
+
+    plugin 'Selecto::Components' => {
+        explorers => {...},
+        pages     => {...},
+        route_bridge => {routes => $under_route, prefix => '/reports'},
+        origin_check => sub ($c) { ... },
+        websocket_inactivity_timeout => 3600,
+        websocket_heartbeat_interval => 30,
+        websocket_context => sub ($c, $config) { ... },
+        websocket_session_options => {ttl => 30, max_bytes => 2_097_152, max_entries => 8},
+        lazy_view_controls => 0,
+    };
+
+At least one explorer or page is required. Invalid configuration dies when the
+plugin is registered.
+
+=over 4
+
+=item explorers
+
+A hash of explorer ID to explorer options (see L</EXPLORER OPTIONS>). IDs must
+match C</\A[a-z][a-z0-9_-]*\z/>.
+
+=item pages
+
+A hash of page ID to canned page options (see L</CANNED PAGE OPTIONS>).
+
+=item route_bridge
+
+    route_bridge => {routes => $app->routes->under('/reports')->to(cb => \&auth),
+                     prefix => '/reports'}
+
+Registers every route as a child of C<routes>, which is usually an C<under>
+route that authenticates the request. C<prefix> must be the bridge's path. It
+must be absolute and have no trailing slash, and every explorer and page
+C<path> must start with it. Paths keep their full public form in forms,
+WebSocket URLs, exports and saved queries.
+
+=item origin_check
+
+A coderef C<($controller)> that returns true when a WebSocket handshake (and
+the C<controls> POST) may proceed. The default is
+L<Selecto::Components::WebSocketPolicy/same_origin>. It allows requests with no
+C<Origin> header, and otherwise requires the same scheme, host and port as
+the request.
+
+=item websocket_inactivity_timeout
+
+Seconds before an idle WebSocket closes. Default 3600, range 30 to 86400.
+Choose it together with your reverse proxy's idle timeout.
+
+=item websocket_heartbeat_interval
+
+Seconds between protocol-level ping frames that keep idle connections visible
+to proxies. Default 30. It is either 0 (disabled) or 15 to 300, and must be
+less than C<websocket_inactivity_timeout>.
+
+=item websocket_context, websocket_session_options, lazy_view_controls
+
+Defaults for every explorer. An explorer can override each of them; see
+L</EXPLORER OPTIONS>.
+
+=back
+
+=head1 EXPLORER OPTIONS
+
+Each entry under C<explorers> is validated by L<Selecto::Components::Config>.
+
+=head2 Essentials
+
+=over 4
+
+=item engine_factory
+
+Required. A coderef C<($controller)> that returns a L<Selecto::Engine>. It is
+called for every request, WebSocket message, export, action and lookup. This
+is where the host decides the domain, database handle and trusted scope, for
+example by returning an engine over
+C<< $domain->with_required_predicate(...) >> for the current tenant.
+
+=item path
+
+The public path. Default C</explore/E<lt>idE<gt>>. It must match
+C<m{\A/[A-Za-z0-9/_-]*\z}>.
+
+=item title
+
+The page heading. Default: the humanized ID. It can be localized through the
+C<domain.title> term.
+
+=back
+
+=head2 Query defaults and limits
+
+=over 4
+
+=item views, default_view
+
+The enabled result views, from C<detail>, C<aggregate> and C<graph>. The
+default is all three, with C<detail> as the default view.
+
+=item default_fields
+
+The initial Detail columns, as domain field paths (or C<action:E<lt>idE<gt>>
+action columns). A path outside the domain makes every request fail with a
+configuration error. Default: the first six visible fields in label order.
+
+=item default_group
+
+The initial Aggregate and Graph groups. Default: the first visible
+non-numeric field.
+
+=item measures
+
+Optional curated measure presets, shown next to the columns the domain
+provides:
+
+    measures => [
+        {id => 'product_count', label => 'Product count', aggregate => 'count'},
+        {id => 'total_price', label => 'Total price', aggregate => 'sum', field => 'unit_price'},
+    ],
+
+C<aggregate> is one of C<count count_distinct avg sum min max true_count
+false_count true_percentage buckets age_buckets>. Every aggregate except
+C<count> needs a C<field>. You do not have to configure measures: every
+governed column can be aggregated with the functions its type allows, and a
+row count is always available.
+
+=item default_limit, max_limit
+
+The page size (default 25) and the largest page size a user may request
+(default 100, and at least C<default_limit>).
+
+=item max_filters
+
+1 to 20, default 20.
+
+=item max_orders
+
+1 to 20, default 10.
+
+=item max_measures
+
+1 to 20, default 10.
+
+=item max_grid_cells
+
+1 to 100, default 50. This bounds the row, column and cell alternatives that
+one Aggregate Grid selection may submit.
+
+=item max_grid_result_cells
+
+100 to 100000, default 10000. A larger grid is refused with advice to add
+filters or pick lower-cardinality groups.
+
+=item max_action_rows
+
+1 to 1000, default 1000. This is the most rows a selected-row action may
+target, unless the action declares its own C<max_rows>.
+
+=item filter_fields
+
+Extra domain paths, typically internal keys, that may be used as filters
+without becoming selectable columns.
+
+=item default_row_click_action
+
+The ID of a domain C<detail_actions> entry to enable on the initial view.
+Users may pick another one, or none.
+
+=item lazy_view_controls
+
+When true, the inactive view's controls are left out of the first page and
+fetched from C<POST E<lt>pathE<gt>/controls> when the user switches view. The
+fetch runs no data or count query. It requires the session CSRF token and
+passes C<origin_check>. Default false.
+
+=back
+
+=head2 Exports
+
+Every explorer serves C<GET E<lt>pathE<gt>?E<lt>stateE<gt>&format=csv|tsv|json|xlsx>
+(C<excel> is an alias for C<xlsx>). An export contains every row the current
+query matches, not just the current page. CSV, TSV and JSON are streamed when
+the adapter supports streaming. Excel is written to a temporary file first.
+Delimited formats neutralize spreadsheet formulas. Exports are not offered in
+private URL mode.
+
+=over 4
+
+=item export_authorizer
+
+A coderef C<($controller, $config)>. When it returns false, the export
+controls are hidden and export requests get a 403 response. Without an
+authorizer, exports are allowed.
+
+=item max_export_rows
+
+An optional positive integer, up to 10000000, that caps every all-rows export
+query. The download controls show the cap.
+
+=back
+
+=head2 Presentation
+
+=over 4
+
+=item theme_resolver
+
+A coderef C<($controller, $config)> that returns
+C<< {scheme => 'light'|'dark', primary => '#RRGGBB', secondary => '#RRGGBB', on_primary => '#RRGGBB'} >>.
+Every key is optional. An empty hash keeps the stylesheet's dark palette.
+The values are validated and become scoped CSS custom properties.
+
+=item page_shell_resolver
+
+A coderef C<($controller, $config, $model)> that returns any of:
+
+=over 4
+
+=item * C<head_start_html>: trusted markup placed before the component assets
+
+=item * C<head_html>: trusted markup placed after them, for small overrides
+
+=item * C<body_start_html>: trusted markup placed first inside C<body>
+
+=item * C<body_class> and C<content_class>: space-separated CSS class names,
+which are validated
+
+=back
+
+The shell applies only to full pages, not to incremental fragments. Never put
+request or user input in these strings.
+
+=item localizer
+
+A coderef C<($key, $default, $context)> that returns the translated string.
+C<$key> is a dictionary key under the domain's C<extensions.i18n.namespace>.
+C<$context> includes the C<controller> and the semantic path. A return value
+that is an error, a reference, an empty string or contains control characters
+falls back to C<$default>. See L<Selecto::Components::I18N>.
+
+=item api_console_resolver
+
+A coderef C<($controller, $config, $model)> that returns a same-origin path
+to an API Console, or an empty string. It adds an B<API> control that hands
+the current Detail query to the console in the URL fragment. See
+L<Selecto::Components::APIConsole>.
+
+=item show_sql
+
+Default false. When true, the Query Debug panel shows the generated data and
+count SQL B<with bound parameters>, which include tenant IDs and other scope
+values. B<Never enable it in production.> The plugin logs a warning at
+registration if it is enabled while the application runs in C<production>
+mode.
+
+=back
+
+=head2 Actions and editing
+
+The domain contract declares these features. The explorer supplies the
+host-owned callbacks. See L<Selecto::Components::Actions>,
+L<Selecto::Components::RowActions> and L<Selecto::Components::RecordEditor>
+for their contracts.
+
+=over 4
+
+=item action_handlers
+
+A hash of action ID to C<sub ($controller, $request)>. An action from the
+domain's C<actions> is offered only when it is bulk-enabled and has a
+handler. C<$request> contains C<selected_ids>, C<inputs>, C<groups> and
+(for conditional forms) C<variant>. The handler returns a hash such as
+C<< {ok => 1, message => '...'} >>.
+
+=item action_authorizer
+
+A coderef C<($controller, {phase, action, capability, target})> that returns
+C<enabled>, C<disabled> or C<hidden>, or C<< {status, reason} >>. It is
+called for preview, display, execute and lookup phases. An action that
+declares a C<capability> stays hidden unless an authorizer is configured.
+
+=item choice_sources
+
+A hash of source ID to C<sub ($controller, $action, $input)>. The callback
+returns C<< [{value, label}, ...] >> for C<select> inputs that name a
+C<choice_source>. Choices are resolved again when a submission arrives.
+
+=item lookup_sources
+
+A hash of source ID to C<sub ($controller, $request)>. The callback returns
+C<< [{value, label, description}, ...] >> for C<lookup> inputs. C<$request>
+holds C<query>, C<limit>, C<action>, C<input> and C<selected_ids>.
+
+=item co_domain_engines, co_domain_scopes
+
+For C<lookup> inputs that name a domain C<co_domains> entry.
+C<co_domain_engines> maps a target domain ID to C<sub ($controller)>, which
+returns that domain's L<Selecto::Engine>. C<co_domain_scopes> maps a co-domain
+ID to C<sub ($controller, $request, $engine)>, which returns a narrowing
+predicate (or C<< {predicate, parameters} >>).
+
+=item action_eligibility_resolvers
+
+A hash of action ID to C<sub ($controller, {phase, action, row_ids})>, which
+returns C<< {$row_id => 0|1} >>. Use this only for rules that cannot be
+expressed as a domain C<eligibility_field>.
+
+=item action_form_resolvers
+
+A hash of action ID to C<sub ($controller, {action, ids})>, which returns
+C<< {fixed_inputs => {$input_id => $value}} >>. It narrows a declared
+C<select> input to one existing choice for a single authorized row.
+
+=item record_editor_handler
+
+A coderef C<($controller, {engine, domain, editor, target_id, original, assignments, default_save})>
+that replaces the default record-editor save. For example, it can wrap the
+save in an audit or a transaction. Call C<< $request->{default_save}->() >>
+to perform the governed update. It returns a hash, and
+C<< close_dialog => 1 >> closes the dialog.
+
+=back
+
+=head2 Saved queries
+
+=over 4
+
+=item saved_query_store
+
+An application object that enables the B<Saved queries> tab. This is only
+possible in shareable URL mode. The minimal interface is:
+
+    list($controller, $config)             # [{name, url}, ...]
+    save($controller, $config, {name, url})
+    delete($controller, $config, {name})
+
+Stores that support several destinations and guarded edits can also
+implement the following:
+
+=over 4
+
+=item * C<targets($controller, $config)>: returns C<< [{id, label}, ...] >>
+for the destinations the user may write to.
+
+=item * C<save_new($controller, $config, {name, url, target})>: used instead
+of C<save>. It must refuse an existing name in that destination.
+
+=item * C<update($controller, $config, {id, name, url, revision})>: must
+reauthorize the item and reject a stale revision.
+
+=item * C<list>: may return
+C<< {id, name, url, scope, folder, readonly, revision} >> items.
+
+=item * C<delete>: receives C<id> and C<revision>, and should reject a stale
+delete.
+
+=back
+
+To reject a request with a message the user sees, die with
+C<"SAVED_QUERY_CONFLICT: ...">, C<"SAVED_QUERY_STALE: ..."> (both HTTP 409),
+C<"SAVED_QUERY_FORBIDDEN: ..."> or C<"SAVED_QUERY_UNSUPPORTED: ..."> (both
+403). Saved URLs are validated, canonicalized and reset to page 1 before they
+reach the store. New names are limited to 30 characters. The store owns user,
+tenant and sharing policy. Recheck permissions in the write methods, because
+destination options in HTML are not an authorization boundary.
+
+=back
+
+=head2 WebSocket sessions
+
+=over 4
+
+=item websocket_context
+
+A coderef C<($controller, $config)> that is called for every WebSocket
+message. Return C<undef> to close the socket with code 1008. Otherwise return
+a string that identifies the security context, such as tenant, principal and
+policy revision. A changed string discards the connection's saved form and
+cached results. Without a callback, the session is scoped to the connection.
+See F<docs/explorer-sessions.md> in the distribution.
+
+=item websocket_session_options
+
+    {ttl => 30, max_bytes => 2_097_152, max_entries => 8}
+
+These settings bound the per-connection result cache: C<ttl> 0 to 300
+seconds (0 disables caching), C<max_bytes> up to 8 MiB, and C<max_entries>
+1 to 32. See L<Selecto::Components::ExplorerSession>.
+
+=item websocket_message_cleanup
+
+A coderef C<($controller, $config)> that runs after every WebSocket message,
+including failures. Release request-scoped resources, such as leased database
+handles, here. If it dies, the socket closes.
+
+=back
+
+=head1 CANNED PAGE OPTIONS
+
+Each entry under C<pages> becomes a L<Selecto::Components::CannedPage> wrapping
+a L<Selecto::CannedPage>. These keys belong to the plugin:
+
+=over 4
+
+=item engine_factory
+
+Required. C<($controller)> returns the authorized L<Selecto::Engine>.
+
+=item scope_factory
+
+Optional. C<($controller, $engine)> returns a predicate that stays in every
+result and facet query, including drilldowns.
+
+=item path, title
+
+Default C</pages/E<lt>idE<gt>> and the humanized ID.
+
+=item record_link
+
+C<< {field, url_prefix, target, modal_title} >>. This makes a selected detail
+field link to a local record URL.
+
+=item column_layout
+
+Fixed detail headings, joined fields, row numbers and nested related
+collections. See L<Selecto::Components::CannedPage/column_layout>.
+
+=item websocket_enabled
+
+Default true. Set it to 0 for a GET-only page with no WebSocket route.
+
+=back
+
+Every other key (C<domain>, C<dataset>, C<views>, C<controls>,
+C<initial_state>, C<version>) is passed to L<Selecto::CannedPage/new>, which
+rejects keys it does not know.
+
+=head1 ROUTES
+
+For an explorer at C<path>, the plugin registers:
+
+    GET  path                                           page, GET fallback, exports
+    POST path                                           private URL mode fallback
+    WS   path/ws                                        htmx 4 incremental updates
+    POST path/controls                                  lazy view controls
+    GET  path/actions/:selecto_action_id/form           row-dependent action form
+    POST path/actions/:selecto_action_id                run a selected-row action
+    GET  path/actions/:selecto_action_id/lookups/:selecto_input_id
+    GET  path/records/:selecto_record_id/edit           record editor
+    POST path/records/:selecto_record_id/edit
+    POST path/saved-queries
+    POST path/saved-queries/delete
+
+A canned page registers C<GET path>, C<POST path>, and C<WS path/ws> unless
+C<websocket_enabled> is 0. The action, record-editor, saved-query and
+C<controls> POSTs require the session's Mojolicious CSRF token, which the
+rendered forms carry, so set C<< $app->secrets >>.
+
+=head1 HELPERS
+
+=head2 selecto_components_explorer
+
+    my $explorer = $c->selecto_components_explorer('products');
+
+Returns the L<Selecto::Components::Explorer> registered under that ID, for
+example to build dashboard tiles with L<Selecto::Components::Dashboard>. Dies
+for an unknown ID.
+
+=head2 selecto_components_page
+
+    my $page = $c->selecto_components_page('product_search');
+
+Returns the L<Selecto::Components::CannedPage> registered under that ID.
+
+=head1 FUNCTIONS
+
+=head2 normalize_export_format
+
+    my $format = Selecto::Components::normalize_export_format('Excel');   # 'xlsx'
+
+Returns C<csv>, C<tsv>, C<json> or C<xlsx> for a supported format name
+(case-insensitive, with C<excel> as an alias). Returns an empty string for
+anything else.
+
+=head1 URL STATE
+
+In shareable mode the canonical query string holds the complete explorer
+state. The main parameters are:
+
+=over 4
+
+=item * C<q=1>, which distinguishes an authored selection from the defaults,
+and C<view> (C<detail>, C<aggregate> or C<graph>)
+
+=item * repeated C<field> (in column order) with aligned C<field_alias> and
+C<field_format>
+
+=item * repeated C<group> with C<group_alias>, C<group_format>,
+C<group_bucket_ranges> and C<group_prefix_length>
+
+=item * repeated C<measure> with C<measure_function>, C<measure_alias>,
+bucket and NULL-handling values
+
+=item * aligned C<filter_field>, C<filter_op>, C<filter_value> and
+C<filter_value_end>. C<filter_clause> markers group conditions: conditions in
+one numbered clause are ANDed, and clauses are ORed.
+
+=item * C<order> and C<direction>, C<limit> and C<page>
+
+=item * C<aggregate_grid>, C<aggregate_grid_colorize>,
+C<aggregate_grid_color_scale> and C<row_click_action>
+
+=item * for domains with a query library: C<query_library_view>, repeated
+C<query_library_segment>, and C<query_library_param_name> /
+C<query_library_param_value> pairs
+
+=back
+
+The server parses every request, whether GET, POST or WebSocket, with the same
+validator (L<Selecto::Components::State>). A value outside the domain or the
+allowlists makes the state invalid (HTTP 422) rather than being silently
+dropped. The server keeps no hidden query-builder state.
+
+=head2 Private URL mode
+
+Set C<< components => {query_params => 0} >> in the domain contract for
+domains whose filter values are sensitive. Generated URLs then stay at the
+bare path, inbound query strings redirect to it, and permalinks, export links
+and saved queries are not offered. Responses are marked
+C<Cache-Control: no-store>, and the no-JavaScript fallback form uses POST.
+State travels only in WebSocket and POST bodies. Hosts should still use TLS
+and avoid logging request bodies.
+
+=head1 DOMAIN METADATA USED BY THE UI
+
+Beyond fields and relationships, the UI reads these parts of the canonical
+domain contract (see L<Selecto::Domain>):
+
+=over 4
+
+=item C<components>
+
+C<query_params> (see above); C<filter_choices> (named single or multi-select
+options for a filter path, including C<conditional> virtual filters);
+C<filter_picker_hidden_paths> (paths or dotted prefixes hidden from the
+filter picker but still valid in saved URLs); C<picker_visible_id_paths>
+(numeric ID columns to show, which pickers otherwise hide).
+
+=item column C<label>, C<unit>, C<behavior>
+
+Picker labels and unit-aware aggregates.
+
+=item column C<link>
+
+    co_name => {type => 'string',
+        link => {url_template => '/clients/view?id={{id}}', id_field => 'id'}},
+
+This renders the Detail cell as a link. The ID field is selected as a hidden
+column and left out of exports. Templates must be same-application paths
+containing C<{{id}}>, and the ID is URL-encoded.
+
+=item column C<< html_format => 'vin_last_six' >>
+
+This bolds the last six characters of a 17-character VIN in HTML results only.
+
+=item C<detail_actions>, C<actions>, C<editors>, C<co_domains>
+
+Row-click actions, selected-row actions, record editors and lookup
+co-domains. See L<Selecto::Components::RowActions>,
+L<Selecto::Components::Actions> and L<Selecto::Components::RecordEditor>.
+
+=item C<query_library>
+
+Named views, segments (including C<segment_picker_groups> and
+C<picker_hidden>), projections, orderings and typed parameters. They appear
+in the View and Filters tabs. See L<Selecto::Components::QueryLibrary>.
+
+=item C<joins> with C<< type => 'star_dimension' >>
+
+Groups on the dimension key while displaying its name. Drilldowns use the
+key.
+
+=item C<extensions.i18n>
+
+The localization namespace and terms. See L<Selecto::Components::I18N>.
+
+=back
+
+Filter operators depend on the field type. Text fields add
+C<text_contains>, C<starts_with> and C<ends_with>, plus C<_ci>
+(case-insensitive) variants; C<%> and C<_> are matched literally. Date fields
+add allowlisted shortcuts such as C<today>, C<this_month>, C<qtd> and
+C<last_30_days>, which resolve to bound, half-open ranges. Subtotals and
+grand totals need the adapter's C<GROUP BY ROLLUP>. On adapters without it,
+such as SQLite, MySQL and SQL Server, Aggregate views group plainly.
+
+=head1 SECURITY
+
+=over 4
+
+=item * Every field and relationship path must resolve through the configured
+domain. View names, operators, aggregate functions, formats, sort directions
+and limits come from closed allowlists. Values are bound parameters. Browser
+input can never select an adapter or submit SQL.
+
+=item * Tenant and row scope come only from the host: C<engine_factory>,
+C<scope_factory>, C<co_domain_engines> and C<co_domain_scopes>. Authorization
+comes from the route bridge and the authorizer callbacks.
+
+=item * Actions must be declared by the domain and registered by the host.
+Targets are deduplicated and bounded. Inputs and choices are revalidated,
+execution is authorized again, and POSTs require the session CSRF token.
+Handlers must still check each target against the current tenant.
+
+=item * WebSocket handshakes are subject to C<origin_check>. Frames are capped
+at 128 KiB, and invalid envelopes close the socket.
+
+=item * Raw database errors are logged but not rendered. Known
+L<Selecto::Error> messages are shown. C<show_sql> discloses bound parameters
+and must stay off in production.
+
+=back
+
+A strict Content Security Policy works unchanged:
+
+    default-src 'self'; script-src 'self'; style-src 'self';
+    connect-src 'self' ws: wss:; img-src 'self'; base-uri 'none'; frame-ancestors 'none'
+
+=head1 OPTIONAL ADD-ONS
+
+Native-template pages live in the separate C<Selecto-Components-Templates>
+distribution, L<https://github.com/seeken/selecto-perl-components-templates>.
+
+=head1 SEE ALSO
+
+L<Selecto>, L<Selecto::Domain>, L<Selecto::CannedPage>, L<Mojolicious>,
+L<Selecto::Components::Config>, L<Selecto::Components::CannedPage>,
+L<Selecto::Components::Actions>, L<Selecto::Components::RowActions>,
+L<Selecto::Components::RecordEditor>, L<Selecto::Components::Dashboard>,
+L<Selecto::Components::APIConsole>, L<Selecto::Components::Importer>,
+L<Selecto::Components::I18N>, L<Selecto::Components::ExplorerSession>,
+L<Selecto::Components::WebSocketPolicy>
+
+The vendored browser assets and their licenses are listed in
+F<THIRD_PARTY_NOTICES.md>.
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

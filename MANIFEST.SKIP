@@ -1,12 +1,27 @@
+# Version control and CI
 ^\.git/
 ^\.github/
-^node_modules/
-^test-results/
-^playwright-report/
+^\.gitignore$
+# Build products
 ^blib/
 ^local/
 ^Makefile$
+^Makefile\.old$
 ^MANIFEST\.bak$
 ^MYMETA\.
 ^pm_to_blib$
 ^Selecto-Components-
+^\.prove$
+# Developer tooling not needed to build, test, or install from CPAN
+^AGENTS\.md$
+^SECURITY_REVIEW_
+^mise\.toml$
+^package\.json$
+^package-lock\.json$
+^playwright\.config\.js$
+^node_modules/
+^test-results/
+^playwright-report/
+^src/
+^script/
+^t/browser/
