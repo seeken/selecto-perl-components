@@ -53,3 +53,70 @@ sub page ($class, %options) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::Importer - Serve the packaged Selecto Importer page
+
+=head1 SYNOPSIS
+
+    use Selecto::Components::Importer;
+
+    Selecto::Components::Importer->install_assets(app);
+
+    get '/api/orders/v1/import' => sub ($c) {
+        $c->render(data => Selecto::Components::Importer->page(
+            base_path  => '/api/orders/v1',
+            title      => 'Import orders',
+            csrf_token => $c->csrf_token,
+        ), format => 'html');
+    };
+
+=head1 DESCRIPTION
+
+The Importer is the API Console's companion page for importing CSV and TSV
+files through a canonical Selecto HTTP API. Users inspect a file, map its
+columns to fields, preview the rows and run the import. The API behind
+C<base_path> must provide the HTTP import endpoints the page calls. The
+parsing and preview logic is in L<Selecto::Importer>, but the routes belong
+to the host API. Its browser code ships with this distribution under
+C</selecto-api-console/selecto-importer.js>. This module renders the HTML
+page that mounts it. The API must enforce authorization and validation for
+every write.
+
+=head1 METHODS
+
+=head2 install_assets
+
+    Selecto::Components::Importer->install_assets($app);
+
+The same as L<Selecto::Components::APIConsole/install_assets>.
+
+=head2 page
+
+    my $html = Selecto::Components::Importer->page(%options);
+
+Returns a complete HTML document. It accepts the same options as
+L<Selecto::Components::APIConsole/page>: C<base_path> and C<csrf_token> are
+required, and C<title> (default C<Importer>), C<curl_auth>, C<theme> and
+C<page_shell> are optional.
+
+=head1 SEE ALSO
+
+L<Selecto::Components::APIConsole>, L<Selecto::Importer>, L<Selecto::Components>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

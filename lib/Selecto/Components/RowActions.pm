@@ -161,3 +161,118 @@ sub safe_url ($class, $value) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::RowActions - Row-click actions for Detail results
+
+=head1 SYNOPSIS
+
+    # Domain contract:
+    detail_actions => {
+        open_product => {
+            name => 'Product maintenance',
+            type => 'iframe_modal',               # or external_link, record_editor
+            required_fields => ['id', 'product_name'],
+            payload => {
+                url_template => '/products/maint?id={{id}}',
+                title => 'Product {{product_name}}',
+                size => 'xl',
+            },
+        },
+    },
+
+    # Explorer configuration: enable one on the initial view.
+    default_row_click_action => 'open_product',
+
+=head1 DESCRIPTION
+
+Row-click actions make the unused surface of each Detail row open a
+destination the domain governs. The user picks the active action (or
+C<No row action>) in the result toolbar. The choice is part of the canonical
+URL and saved-query state. C<required_fields> are fetched as hidden columns
+when they are not already selected, and left out of the display and of
+exports. Clicking a link, a button, a form control or selected text does not
+trigger the row action.
+
+The action types are:
+
+=over 4
+
+=item external_link
+
+Navigates to C<payload.url_template>, with C<payload.target> set to
+C<_self> (the default), C<_blank>, C<_parent> or C<_top>.
+
+=item iframe_modal
+
+Opens the URL in the shared dialog, which loads lazily and has
+Previous/Next navigation through the current page and an C<Open full page>
+link. The payload also accepts C<title>, C<size> (C<sm md lg xl full third
+fullscreen>), C<referrer_policy>, C<navigation_enabled>, and optional C<allow>
+and C<sandbox> iframe attributes.
+
+=item record_editor
+
+Opens a native editor. C<< payload => {editor => $editor_id, target_field => 'id'} >>
+names an entry of the domain's C<editors> and the root field that
+identifies the row. See L<Selecto::Components::RecordEditor>.
+
+=back
+
+C<{{field}}> placeholders are substituted from the row. In URLs the values are
+percent-encoded. A template whose placeholder has no value resolves to
+nothing. Executable schemes (C<javascript:>, C<data:>, C<vbscript:>),
+protocol-relative URLs and schemes other than C<http:> and C<https:> are
+refused.
+
+=head1 METHODS
+
+All methods are class methods.
+
+=head2 catalog
+
+    my $actions = Selecto::Components::RowActions->catalog($domain, $config);
+
+The domain's supported C<detail_actions>, localized when C<$config> is given,
+and sorted by name.
+
+=head2 find
+
+    my $action = Selecto::Components::RowActions->find($domain, $id, $config);
+
+=head2 resolve
+
+    my $target = Selecto::Components::RowActions->resolve($action, $record, $fields);
+
+Resolves an action against one row. It returns the type-specific target, such
+as C<< {type, url, target} >> for an external link, or C<undef> when a value
+is missing or the URL is unsafe. C<resolve_external_link>,
+C<resolve_iframe_modal> and C<resolve_record_editor> do the same for a single
+type.
+
+=head2 safe_url
+
+    my $url = Selecto::Components::RowActions->safe_url($candidate);   # or undef
+
+The URL check used above.
+
+=head1 SEE ALSO
+
+L<Selecto::Components>, L<Selecto::Components::RecordEditor>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

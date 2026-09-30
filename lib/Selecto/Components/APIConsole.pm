@@ -154,3 +154,133 @@ sub _string ($value, $label) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::APIConsole - Serve the packaged Selecto API Console page
+
+=head1 SYNOPSIS
+
+    use Selecto::Components::APIConsole;
+
+    Selecto::Components::APIConsole->install_assets(app);
+
+    get '/api/orders/v1/console' => sub ($c) {
+        $c->render(data => Selecto::Components::APIConsole->page(
+            base_path  => '/api/orders/v1',
+            title      => 'Orders API Console',
+            csrf_token => $c->csrf_token,
+            curl_auth  => 'cookie',
+            theme      => {scheme => 'light', primary => '#0B5FFF'},
+        ), format => 'html');
+    };
+
+=head1 DESCRIPTION
+
+The Selecto API Console is a JavaScript application that works with any
+canonical Selecto HTTP API. At startup it reads the API's base manifest,
+C<domain> and C<openapi.json> resources, using same-origin credentials. From
+these it builds controls for the public fields, types, named views,
+projections, segments, parameters and orderings. It runs bounded queries
+through the advertised versioned C<query> route and shows the results. No
+domain-specific JavaScript is involved, and the UI cannot select an adapter,
+a table, raw SQL or an unpublished identifier.
+
+This distribution ships the generated console assets (built from the
+C<selecto-api-console> project) under C</selecto-api-console/>. This module
+renders the HTML page that mounts them. Hosts that are not built on
+Mojolicious can serve the same files with this markup:
+
+    <link rel="stylesheet" href="/selecto-api-console/selecto-api-console.css">
+    <script defer src="/selecto-api-console/selecto-api-console.js"></script>
+    <main data-selecto-api-console data-api-base="/api/orders/v1"
+          data-curl-auth="basic" data-title="Orders API Console"></main>
+
+A standalone page is also served at
+C</selecto-api-console/index.html?api=/api/orders/v1>.
+
+Explorers can link to a console with an C<api_console_resolver>
+(L<Selecto::Components/api_console_resolver>). A Detail query is handed over
+in the URL fragment, so it never reaches server logs. Aggregate and grid
+drilldown queries cannot be expressed in the canonical API, so their API
+button is disabled.
+
+=head1 METHODS
+
+=head2 install_assets
+
+    my $public_dir = Selecto::Components::APIConsole->install_assets($app);
+
+Adds the packaged C<public/> directory to C<< $app->static->paths >>, unless
+it is already present, and returns the directory. The L<Selecto::Components>
+plugin does this for you. Call it when you use the console without the
+plugin.
+
+=head2 page
+
+    my $html = Selecto::Components::APIConsole->page(%options);
+
+Returns a complete HTML document as a character string. The options are:
+
+=over 4
+
+=item base_path
+
+Required. The absolute path of the canonical API, such as C</api/orders/v1>.
+Trailing slashes are removed.
+
+=item csrf_token
+
+Required. It is passed to the console for state-changing requests.
+
+=item title
+
+The page title. Default C<API Console>.
+
+=item curl_auth
+
+How generated cURL commands authenticate: C<cookie> (the default, with a
+session cookie placeholder), C<basic> (with username and password
+placeholders) or C<none>.
+
+=item theme
+
+C<< {scheme => 'light'|'dark', primary, secondary, on_primary} >> with
+C<#RRGGBB> colours. The default scheme is C<light>.
+
+=item page_shell
+
+C<< {head_start_html, head_html, body_start_html, body_class, content_class} >>.
+This is trusted host markup and class names, with the same meaning as an
+Explorer page shell (L<Selecto::Components/page_shell_resolver>). Unknown
+keys die.
+
+=back
+
+=head2 page_presentation
+
+    my $p = Selecto::Components::APIConsole->page_presentation(theme => ..., page_shell => ...);
+
+Returns C<< {theme, page_shell, theme_style} >>, the validated theme, the
+validated shell and the CSS custom properties. L<Selecto::Components::Importer>
+uses it.
+
+=head1 SEE ALSO
+
+L<Selecto::Components>, L<Selecto::Components::Importer>, L<Selecto::API>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

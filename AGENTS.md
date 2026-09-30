@@ -14,6 +14,10 @@
   permalink/export links in private URL mode.
 - Never accept raw SQL, identifiers outside the configured domain, arbitrary
   aggregate functions, or client-selected adapters.
+- Native templates (`Selecto::Components::Templates`) live in the optional
+  sibling add-on `selecto-perl-components-templates`. This distribution must
+  not depend on `Selecto::Templates` or on that add-on; the add-on depends on
+  this one and reuses its browser bundle and WebSocket policy.
 - Keep this as an independent sibling repository. Resolve `selecto-perl` from
   `../selecto-perl` by default via `script/with-local-sibling` and support
   `SELECTO_LIVE_SELECTO_PERL` plus `SELECTO_ECOSYSTEM_USE_LOCAL`.

@@ -570,3 +570,185 @@ sub _layout_table ($self, $source_columns, $source_records, $state) {
 sub _escape ($value) { xml_escape(defined($value) ? "$value" : '') }
 
 1;
+
+__END__
+
+=encoding utf8
+
+=head1 NAME
+
+Selecto::Components::CannedPage - Render and serve a Selecto::CannedPage as a search page
+
+=head1 SYNOPSIS
+
+    # Usually through the plugin:
+    plugin 'Selecto::Components' => {
+        pages => {
+            product_search => {
+                path => '/products', title => 'Product Search',
+                domain => $domain,
+                engine_factory => sub ($c) { $engine },
+                scope_factory  => sub ($c, $engine) { $visible_predicate },
+                dataset  => {query => Selecto::Query->new, entity_key => ['id']},
+                views    => [...],
+                controls => [...],
+                record_link => {field => 'id', url_prefix => '/products/view?id='},
+            },
+        },
+    };
+
+    # Or directly, for example to mount it on your own route:
+    my $component = Selecto::Components::CannedPage->new(
+        page           => Selecto::CannedPage->new(id => 'rows', domain => $domain, ...),
+        path           => '/rows',
+        title          => 'Rows',
+        engine_factory => sub ($c) { $engine },
+        theme          => {scheme => 'light', primary => '#0B5FFF'},
+    );
+    $r->get('/rows')->to(cb => sub ($c) { $component->handle($c) });
+
+=head1 DESCRIPTION
+
+A canned page shows views and controls that the page author chose. Users can
+switch views, use facet, range and text controls, page through results and
+drill down from an aggregate row to its detail rows. They cannot edit fields,
+joins, groups or measures, and there is no export. Query planning, facet
+counts and validation belong to L<Selecto::CannedPage>. This class renders it
+with the Explorer's page shell, table renderer and stylesheet, and runs it
+over HTTP and WebSocket.
+
+With query parameters enabled (the default), form state lives in the URL and
+accepted WebSocket updates refresh the shareable URL. When the domain sets
+C<< components => {query_params => 0} >>, the form posts instead, GET query
+strings redirect to the bare path, and responses are C<Cache-Control: no-store>.
+Every path works without JavaScript.
+
+=head1 ATTRIBUTES
+
+These are the arguments to C<new>. Through the plugin, the page's
+L<Selecto::CannedPage> is built from the remaining keys of the page
+definition, and C<path> and C<title> get defaults.
+
+=head2 page
+
+Required. A L<Selecto::CannedPage>.
+
+=head2 engine_factory
+
+Required. C<($controller)> returns the L<Selecto::Engine> authorized for the
+request.
+
+=head2 scope_factory
+
+Optional. C<($controller, $engine)> returns a L<Selecto::Expression> that is
+applied to every result and facet query, including drilldowns. Use it for
+request-specific row scope.
+
+=head2 path, title
+
+The page URL, which must be a local absolute path, and its heading.
+
+=head2 record_link
+
+    record_link => {field => 'id', url_prefix => '/products/view?id=',
+                    target => '_top'}             # or modal_title => 'Product'
+
+This makes the selected detail C<field> link to C<url_prefix> followed by the
+row's value. Every detail view must select that field. C<target> may be
+C<_self>, C<_parent> or C<_top>, for pages shown inside a frame.
+C<modal_title> (which cannot be combined with C<target>) opens the link in the
+shared dialog instead.
+
+=head2 column_layout
+
+An array of column specs that replaces the default detail columns. Each spec
+needs a C<kind> and a C<label>:
+
+=over 4
+
+=item C<< {kind => 'field', field => $path} >>
+
+A selected field.
+
+=item C<< {kind => 'link', field => $path, text => 'Open', url_prefix => '/things/'} >>
+
+A link to C<url_prefix> followed by the field value. C<collection_link> is
+the same, but shown only when the named C<collection> is not empty.
+
+=item C<< {kind => 'join', fields => [...], separator => ' '} >>
+
+Several selected fields joined into one cell.
+
+=item C<< {kind => 'nested', collection => $alias, fields => [{field, label, link}]} >>
+
+A selected C<related_collection> shown as a nested table. The parent row stays
+one result row.
+
+=item C<< {kind => 'collection_values', collection => $alias, field => $child} >>
+
+A related collection shown as a comma-separated list.
+
+=item C<< {kind => 'row_number'} >>
+
+A row number that counts across pages.
+
+=back
+
+When a C<record_link> is set, the layout must display its field.
+
+=head2 websocket_enabled
+
+Default true through the plugin. Set it false for ordinary form navigation
+with no WebSocket route.
+
+=head2 theme
+
+    theme => {scheme => 'light', primary => '#C04040', secondary => '#571414',
+              on_primary => '#FFFFFF'}
+
+This sets the page's colour scheme and brand colours, in the same shape a
+L<Selecto::Components/theme_resolver> returns. Without it, the page uses the
+stylesheet's dark palette. The plugin's C<pages> configuration does not pass
+C<theme> through; construct the component directly to use it.
+
+=head1 METHODS
+
+=head2 new
+
+Validates the attributes above and dies with a one-line message on any
+error.
+
+=head2 handle
+
+    $component->handle($controller);
+
+Serves one GET or POST request. It renders the complete page, or a 422
+response for invalid selections. Execution errors are logged and rendered as
+a generic 500 response.
+
+=head2 handle_websocket
+
+    $component->handle_websocket($controller);
+
+Attaches the message handler for C<E<lt>pathE<gt>/ws>. Each JSON message is
+a form submission with a numeric C<selecto_request_id>, and the reply
+replaces the page surface. The plugin applies the origin check and inactivity
+timeout before calling this.
+
+=head1 SEE ALSO
+
+L<Selecto::Components>, L<Selecto::CannedPage>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

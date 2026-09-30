@@ -1,0 +1,10 @@
+Revision history for Selecto-Components
+
+0.1.0  2026-09-30
+    - First CPAN release: Mojolicious plugin providing the Selecto explorer,
+      canned search pages, dashboards, record editor, row and selected-row
+      actions, and the API Console over htmx 4 WebSockets with GET/POST
+      fallbacks.
+    - Native-template pages (Selecto::Components::Templates) moved to the
+      separate optional Selecto-Components-Templates add-on.
+    - Licensed under the Artistic License 2.0.

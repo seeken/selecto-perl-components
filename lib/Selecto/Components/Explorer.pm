@@ -1032,3 +1032,146 @@ sub _delimited_cell ($value) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::Explorer - Build, run and export one explorer's governed query
+
+=head1 SYNOPSIS
+
+    # Inside a Mojolicious action, with the plugin registered:
+    my $explorer = $c->selecto_components_explorer('products');
+
+    my $model = $explorer->model($c, {
+        q => 1, view => 'detail',
+        field => ['product_name', 'unit_price'],
+        filter_field => 'unit_price', filter_op => 'gte', filter_value => 10,
+    });
+
+    if ($model->{state}->valid && !$model->{runtime_error}) {
+        my $rows  = $model->{result}{records};
+        my $total = $model->{result}{total_count};
+        my $csv   = $explorer->export($model, 'csv');
+    }
+
+=head1 DESCRIPTION
+
+An Explorer ties one L<Selecto::Components::Config> to query execution. It
+parses the input into a L<Selecto::Components::State>, which validates it
+against the domain. It then builds the L<Selecto::Query>, compiles it with the
+request's engine, runs the data and count statements, and shapes the rows for
+rendering or export.
+
+The plugin creates one Explorer per configured explorer and uses it for every
+route. Hosts use it directly mainly for dashboards
+(L<Selecto::Components::Dashboard>) and for their own exports or reports that
+must match the explorer's semantics exactly.
+
+=head1 ATTRIBUTES
+
+=head2 config
+
+The L<Selecto::Components::Config> this explorer runs. Required by C<new>:
+
+    my $explorer = Selecto::Components::Explorer->new(config => $config);
+
+=head1 METHODS
+
+=head2 model
+
+    my $model = $explorer->model($controller);
+    my $model = $explorer->model($controller, \%input);
+    my $model = $explorer->model($controller, \%input, {result_cache => $cache});
+
+Runs one request. Without C<\%input>, the state is read from the controller's
+query parameters. In private URL mode those are ignored and the domain
+defaults apply. C<\%input> uses the same parameter names as the canonical URL
+(see L<Selecto::Components/URL STATE>). Scalars are single values and array
+references are repeated values.
+
+Options:
+
+=over 4
+
+=item result_cache
+
+An object with C<fetch($key)> and C<store($key, $result)>, and optionally
+C<bind_domain($fingerprint)>. Results are keyed by L</result_cache_key>, so
+any difference in SQL or bound values, including scope, is a different
+entry. L<Selecto::Components::ExplorerSession> is one implementation.
+
+=item all_rows
+
+When true (shareable mode only), the query is not paginated. It is still
+capped by C<max_export_rows>.
+
+=back
+
+The returned hash contains C<config> (the request copy), C<input>, C<engine>,
+C<domain>, C<state>, C<canonical_url>, C<runtime_error> (a user-safe message
+or C<undef>) and C<result>. When the state is valid and the query succeeded,
+C<result> holds C<records>, C<columns>, C<count>, C<total_count>,
+C<total_pages>, C<has_more> and C<elapsed_ms>. It also holds C<sql>,
+C<params> and C<debug> when C<show_sql> is on. Database errors are logged and
+reported as a generic C<runtime_error>. C<model> does not die for query
+failures.
+
+=head2 input_from_controller
+
+    my $input = $explorer->input_from_controller($c);
+
+Collects the known state parameters from the request.
+
+=head2 canonical_url
+
+    my $url = $explorer->canonical_url($model->{state}, $model->{domain});
+
+The explorer path plus the normalized query string. In private URL mode this
+is the bare path.
+
+=head2 export
+
+    my $bytes = $explorer->export($model, $format);   # csv | tsv | json | xlsx
+
+Serializes a successful model's rows. The C<csv>, C<tsv>, C<json> and C<xlsx>
+methods do the same for one format. Hidden helper columns and action columns
+are left out. Delimited formats neutralize spreadsheet formulas.
+
+=head2 stream_export, xlsx_file_export
+
+    my $stream = $explorer->stream_export($c, 'csv');   # or undef
+    my $file   = $explorer->xlsx_file_export($c);       # or undef
+
+These are the plugin's all-rows exports for the current request.
+C<stream_export> returns C<< {config, next_chunk, close} >> when the adapter
+supports streaming. C<xlsx_file_export> returns C<< {config, path} >> for a
+temporary Excel file. Both return C<undef> when they do not apply, for example
+in private URL mode or for an aggregate grid.
+
+=head2 result_cache_key
+
+    my $key = Selecto::Components::Explorer->result_cache_key($statement);
+
+A SHA-256 over the adapter name, SQL, columns and bound values of a
+L<Selecto::Statement>.
+
+=head1 SEE ALSO
+
+L<Selecto::Components>, L<Selecto::Components::Dashboard>,
+L<Selecto::Components::ExplorerSession>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut

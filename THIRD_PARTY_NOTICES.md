@@ -1,11 +1,11 @@
 # Third-party notices
 
-## @selecto/api-console 0.3.10
+## @selecto/api-console 0.5.0
 
 The files beneath `public/selecto-api-console/` are generated distribution
-artifacts from the sibling `selecto-api-console` repository. They are shipped
-under the Ofizzy License reproduced at
-`public/selecto-api-console/LICENSE`.
+artifacts from the sibling `selecto-api-console` repository by the same
+copyright holder. They are licensed under the Artistic License 2.0, like the
+rest of this distribution; see `public/selecto-api-console/LICENSE`.
 
 ## htmx 4.0.0
 

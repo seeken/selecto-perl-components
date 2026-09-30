@@ -181,23 +181,124 @@ sub filter_controls_html ($class, $config, $domain, $filter) {
 
 1;
 
+__END__
+
+=encoding utf8
+
 =head1 NAME
 
-Selecto::Components::Dashboard - saved Explorer views as tiles on one page
+Selecto::Components::Dashboard - Show saved Explorer views as tiles on one page
 
 =head1 SYNOPSIS
 
+    use Selecto::Components::Dashboard;
+    my $dashboard = 'Selecto::Components::Dashboard';
+
     my $explorer = $c->selecto_components_explorer('load');
-    my $input = Selecto::Components::Dashboard->input_from_url($saved_url);
-    my $model = $explorer->model($c, $input, {result_cache => $cache});
-    my $filters = Selecto::Components::Dashboard->promoted_filters(
+    my $model = $explorer->model($c, $dashboard->input_from_url($saved_url),
+        {result_cache => $cache});
+
+    my $filters = $dashboard->promoted_filters(
         $model->{config}, $model->{domain}, $model->{state},
     );
-    my $shared = Selecto::Components::Dashboard->apply_overrides(
+
+    my $shared = $dashboard->apply_overrides(
         $model->{state}, {delivered_date => {op => 'date_shortcut', value => 'today'}},
     );
-    my $html = Selecto::Components::Dashboard->tile_html(
+    my $html = $dashboard->tile_html(
         $explorer->model($c, $shared, {result_cache => $cache}),
     );
+
+=head1 DESCRIPTION
+
+These helpers support a host page that shows several saved Explorer views at
+once, such as a dashboard or desktop. They read a saved view URL into
+Explorer input, list the view's promoted filters, and apply shared filter
+values (for example one date range for every tile). They also render one
+view's results (chart, grid or table) without the Explorer's page furniture.
+
+The helpers never execute anything themselves. Query meaning, validation and
+execution stay with L<Selecto::Components::Explorer/model>. Every input they
+return must go through C<model> again, which revalidates it against the
+current domain and scope. Pass a C<result_cache> to C<model> to reuse results
+between tiles and requests.
+
+All methods are class methods.
+
+=head1 METHODS
+
+=head2 input_from_url
+
+    my $input = $dashboard->input_from_url('/explore/load?q=1&view=graph&...');
+
+Returns the Explorer input held in a saved view URL. Unknown parameters are
+dropped. Repeated parameters become array references.
+
+=head2 path_from_url
+
+    my $path = $dashboard->path_from_url($saved_url);    # '/explore/load'
+
+The explorer path of a saved view URL. Use it to pick the explorer.
+
+=head2 promoted_filters
+
+    my $filters = $dashboard->promoted_filters($config, $domain, $state);
+
+Returns the promoted filters of a valid state, in order, as hashes with
+C<field>, C<label>, C<type>, C<kind> (C<date>, C<number>, C<boolean>,
+C<choice> or C<text>), C<op>, C<value>, C<value_end>, C<instance>, C<summary>
+and C<operators>. Only the first promoted filter on each field is listed,
+because that is the one shared values replace.
+
+=head2 apply_overrides
+
+    my $input = $dashboard->apply_overrides($state,
+        {$field => {op => ..., value => ..., value_end => ...}});
+
+Returns Explorer input equal to C<$state>, with the listed promoted filters'
+operator and values replaced. Every other filter, group, measure and option
+stays as saved, and pagination returns to page 1. Fields that are not
+promoted are ignored.
+
+=head2 tile_html
+
+    my $html = $dashboard->tile_html($model);
+
+The result body of one view: a chart, an aggregate grid or a table. For an
+invalid state or a failed query, it returns an alert listing the errors. The
+embedding page must include the Explorer stylesheet and script, and provide
+an ancestor element with C<data-sc-chart-src> so that charts load.
+
+=head2 filter_controls_html
+
+    my $html = $dashboard->filter_controls_html($config, $domain, $filter);
+
+Editor controls for one promoted filter, outside the Explorer page. It
+contains a match-mode select and the value controls for each allowed mode,
+using the Explorer's C<data-sc-promoted-filter-input="op|value|value_end">
+markup.
+
+=head2 filter_summary, filter_kind
+
+    my $text = $dashboard->filter_summary($config, $field, $filter);  # "Today", "≥ 100", "Acme, Globex +2"
+
+A compact summary of a filter value for a chip or tile header, and the
+filter's kind as used by L</promoted_filters>.
+
+=head1 SEE ALSO
+
+L<Selecto::Components>, L<Selecto::Components::Explorer>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
 
 =cut

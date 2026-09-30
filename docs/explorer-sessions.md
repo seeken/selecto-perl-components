@@ -55,8 +55,8 @@ disable result caching. Scope strings are server-only and never returned to the
 browser. `websocket_message_cleanup` still runs after every message, including
 cache hits, revision conflicts, and denied requests.
 
-TMS rechecks the browser login and Explorer access on every message and supplies
-tenant, user, active client, and login session identity. It recreates governed
+A typical host rechecks the browser login and Explorer access on every message
+and supplies tenant, user, and login session identity, recreating governed
 domains and request resources each time. Permission-sensitive field catalogs and
 action eligibility remain request-scoped; this layer deliberately caches data
 only after current query validation and compilation.

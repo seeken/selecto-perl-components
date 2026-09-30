@@ -120,3 +120,99 @@ sub _remove ($self, $key) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Selecto::Components::ExplorerSession - Per-WebSocket form state and bounded result cache
+
+=head1 SYNOPSIS
+
+    # Configured through the plugin (or per explorer):
+    websocket_session_options => {ttl => 30, max_bytes => 2_097_152, max_entries => 8},
+
+    # Also usable as an Explorer result cache, for example for dashboard tiles:
+    my $cache = Selecto::Components::ExplorerSession->new(ttl => 60);
+    my $model = $explorer->model($c, $input, {result_cache => $cache});
+
+=head1 DESCRIPTION
+
+Each Explorer WebSocket connection has one session. It keeps the last
+accepted form snapshot and a revision, so the browser can send
+C<< selecto_session => {revision, set, remove} >> patches instead of whole
+forms. It also keeps a small cache of raw query results, keyed by
+L<Selecto::Components::Explorer/result_cache_key> (adapter, SQL, columns and
+bound values). Presentation changes, paging and going back to an earlier page
+can therefore reuse data within a short TTL.
+
+The session never holds controllers, engines, database handles or
+authorization closures. Every message still obtains a fresh engine,
+validates the state and compiles the SQL before a cached result can be used.
+Cached values are serialized, so rendering cannot change them. The cache is
+cleared when the domain fingerprint or the C<websocket_context> scope
+changes, when the user re-runs the identical query, when the browser sends
+C<selecto_refresh>, and when the connection closes. It is not a durable store.
+See F<docs/explorer-sessions.md> for the protocol.
+
+=head1 ATTRIBUTES
+
+=over 4
+
+=item ttl
+
+Seconds a cached result stays fresh. The default is 30 and the range is 0 to
+300; 0 disables result caching but keeps revisioned form state.
+
+=item max_bytes
+
+The total size of serialized results. The default is 2 MiB and the maximum
+8 MiB. An oversized result is served but not kept.
+
+=item max_entries
+
+The number of cached data and count results. The default is 8 and the range
+is 1 to 32.
+
+=back
+
+=head1 METHODS
+
+=head2 validate_options
+
+    Selecto::Components::ExplorerSession->validate_options(\%options);
+
+Dies unless the hash contains only valid C<ttl>, C<max_bytes> and
+C<max_entries> values.
+
+=head2 fetch, store, bind_domain
+
+The result-cache interface that L<Selecto::Components::Explorer/model>
+expects: C<fetch($key)> returns C<< {result, created_at} >> or C<undef>, and
+C<store($key, $result)> saves a result. C<bind_domain($fingerprint)> clears
+the cache when the domain changes.
+
+=head2 bind_scope, prepare, commit, clear_results
+
+Used by the WebSocket route. C<bind_scope> resets the session when the
+security scope changes. C<prepare> applies a revisioned patch, and returns
+C<undef> when the revision is stale (the browser then resyncs). C<commit>
+records an accepted state and advances the revision.
+
+=head1 SEE ALSO
+
+L<Selecto::Components>, L<Selecto::Components::Explorer>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut
