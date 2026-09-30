@@ -448,21 +448,15 @@ sub field_catalog ($self, $domain, $options = undef) {
     my $components = $domain->components;
     my %visible_id = map { $_ => 1 }
         @{$components->{picker_visible_id_paths} // []};
-    my $schemas = ref($contract->{schemas}) eq 'HASH' ? $contract->{schemas} : {};
     my $source_associations = ref($source->{associations}) eq 'HASH'
         ? $source->{associations} : {};
-    my (%client_profile_keys, %other_reference_keys);
+    my %reference_keys;
     for my $name (keys %$source_associations) {
         my $spec = $source_associations->{$name};
         next unless ref($spec) eq 'HASH';
         my $owner_key = $spec->{owner_key};
         next unless defined($owner_key) && $owner_key ne ($source->{primary_key} // 'id');
-        my $schema = $schemas->{$spec->{queryable} // ''};
-        if (ref($schema) eq 'HASH' && ($schema->{source_table} // '') eq 'client_profile') {
-            $client_profile_keys{$owner_key} = 1;
-        } else {
-            $other_reference_keys{$owner_key} = 1;
-        }
+        $reference_keys{$owner_key} = 1;
     }
     for my $path (sort keys %$fields) {
         next if !$include_internal && !$domain->field_is_public($path);
@@ -482,8 +476,7 @@ sub field_catalog ($self, $domain, $options = undef) {
             association => undef,
             internal => $domain->field_is_public($path) ? 0 : 1,
             (_picker_hidden_id($path, $source->{primary_key}, $dimension,
-                \%visible_id, \%client_profile_keys, \%other_reference_keys,
-                $source->{source_table})
+                \%visible_id, \%reference_keys)
                 ? (picker_hidden => 1) : ()),
             (defined($domain->field_unit($path))
                 ? (unit => $domain->field_unit($path)) : ()),
@@ -541,7 +534,7 @@ sub field_catalog ($self, $domain, $options = undef) {
                 internal => $domain->field_is_public($path) ? 0 : 1,
                 denormalizing => $association->cardinality eq 'many' ? 1 : 0,
                 (_picker_hidden_id($path, $schema->{primary_key}, $dimension,
-                    \%visible_id, {}, {}, $schema->{source_table})
+                    \%visible_id, {})
                     ? (picker_hidden => 1) : ()),
                 (defined($domain->field_unit($path))
                     ? (unit => $domain->field_unit($path)) : ()),
@@ -595,16 +588,17 @@ sub field_catalog ($self, $domain, $options = undef) {
     return $catalog;
 }
 
-sub _picker_hidden_id ($path, $primary_key, $dimension, $visible, $client_keys,
-    $other_keys, $source_table) {
+# Technical ids stay out of the pickers: a field named id or ending in _id,
+# and a root association owner key, except the root primary key. A domain
+# keeps identifiers its users know (client or account numbers) visible by
+# listing them in components.picker_visible_id_paths.
+sub _picker_hidden_id ($path, $primary_key, $dimension, $visible, $reference_keys) {
     return 0 if $visible->{$path};
     return 1 if $dimension && $path eq $dimension->{key_field};
     my ($field) = $path =~ /([^.]+)\z/;
     return 0 unless $field eq 'id' || $field =~ /_id\z/
-        || (index($path, '.') < 0 && $other_keys->{$field});
+        || (index($path, '.') < 0 && $reference_keys->{$field});
     return 0 if index($path, '.') < 0 && $field eq ($primary_key // 'id');
-    return 0 if ($source_table // '') eq 'client_profile' && $field eq 'id';
-    return 0 if index($path, '.') < 0 && $client_keys->{$field};
     return 1;
 }
 
