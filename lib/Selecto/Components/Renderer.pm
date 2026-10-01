@@ -18,10 +18,8 @@ sub page ($class, $model) {
     # Resolve the shell first because a host may resolve and cache its shell
     # and theme together.  The shell needs the model's effective page title.
     my $page_shell = $config->page_shell($model);
-    my $theme_style = $config->theme_style;
+    my $theme_stylesheet = $config->theme_stylesheet;
     my $theme_scheme = $config->theme_scheme;
-    my $theme_attribute = length($theme_style)
-        ? ' style="' . _h($theme_style) . '"' : '';
     my $scheme_attribute = length($theme_scheme)
         ? ' data-sc-color-scheme="' . _h($theme_scheme) . '"' : '';
     my $body_class = length($page_shell->{body_class} // '')
@@ -31,7 +29,7 @@ sub page ($class, $model) {
         if length($page_shell->{content_class} // '');
     return $class->page_document(
         title => $title, scheme_attribute => $scheme_attribute,
-        theme_attribute => $theme_attribute, body_class => $body_class,
+        theme_stylesheet => $theme_stylesheet, body_class => $body_class,
         page_shell => $page_shell, main_class => $main_class,
         channel_id => 'selecto-channel-' . $config->id,
         ws_path => $config->path . '/ws', surface => $surface,
@@ -41,14 +39,18 @@ sub page ($class, $model) {
 sub page_document ($class, %args) {
     my $page_shell = $args{page_shell} // {};
     my $websocket = defined($args{ws_path}) && length($args{ws_path});
-    return '<!doctype html><html lang="en"' . ($args{scheme_attribute} // '') . ($args{theme_attribute} // '') .
+    # No inline style attribute or <style> element: a strict style-src policy
+    # would refuse it, here and when a record-editor save re-parses this page.
+    # Host colours come from a same-origin stylesheet, and the no-script chart
+    # fallback from the shared stylesheet's (scripting: none) rule.
+    my $theme_stylesheet = $args{theme_stylesheet} // '';
+    return '<!doctype html><html lang="en"' . ($args{scheme_attribute} // '') .
         '><head><meta charset="utf-8">' .
         '<meta name="viewport" content="width=device-width,initial-scale=1">' .
         '<title>' . $args{title} . '</title>' .
         ($page_shell->{head_start_html} // '') .
         '<link rel="stylesheet" href="/selecto-components/selecto-components.css?v=' . asset_revision() . '">' .
-        '<noscript><style>.sc-chart .sc-chart-canvas{display:none!important}' .
-        '.sc-chart .sc-chart-fallback{display:block!important}</style></noscript>' .
+        (length($theme_stylesheet) ? '<link rel="stylesheet" href="' . _h($theme_stylesheet) . '">' : '') .
         ($websocket
             ? '<script defer src="/selecto-components/htmx.min.js?v=' . asset_revision() . '"></script>' .
               '<script defer src="/selecto-components/hx-ws.min.js?v=' . asset_revision() . '"></script>'

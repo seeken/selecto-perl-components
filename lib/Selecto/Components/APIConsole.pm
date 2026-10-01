@@ -7,6 +7,7 @@ use warnings;
 use Mojo::Base -base, -signatures;
 use Mojo::File qw(path);
 use Selecto::Components::Util qw(html_escape);
+use Selecto::Components::ThemeStylesheet ();
 
 my $ASSET_REVISION = '0.5.5';
 
@@ -23,6 +24,7 @@ sub install_assets ($class, $app) {
     my $resolved = $public_path->to_string;
     unshift @{$app->static->paths}, $resolved
         unless grep { $_ eq $resolved } @{$app->static->paths};
+    Selecto::Components::ThemeStylesheet->install_route($app, 'console');
     return $resolved;
 }
 
@@ -34,9 +36,8 @@ sub page ($class, %options) {
     my $presentation = $class->page_presentation(%options);
     my $theme = $presentation->{theme};
     my $shell = $presentation->{page_shell};
-    my $style = $presentation->{theme_style};
-    my $html_attributes = ' data-sac-color-scheme="' . html_escape($theme->{scheme}) . '"' .
-        (length($style) ? ' style="' . html_escape($style) . '"' : '');
+    my $theme_link = Selecto::Components::ThemeStylesheet->link_tag('console', $theme);
+    my $html_attributes = ' data-sac-color-scheme="' . html_escape($theme->{scheme}) . '"';
     my $body_classes = join ' ', grep { length } 'sac-body', $shell->{body_class} // '';
     my $content_classes = join ' ', grep { length } 'sac-app', $shell->{content_class} // '';
     return '<!doctype html><html lang="en"' . $html_attributes .
@@ -45,7 +46,7 @@ sub page ($class, %options) {
         '<title>' . html_escape($title) . '</title>' .
         ($shell->{head_start_html} // '') .
         '<link rel="stylesheet" href="/selecto-api-console/selecto-api-console.css?v=' .
-        $ASSET_REVISION . '">' .
+        $ASSET_REVISION . '">' . $theme_link .
         '<script defer src="/selecto-api-console/selecto-api-console.js?v=' .
         $ASSET_REVISION . '"></script>' .
         ($shell->{head_html} // '') .
@@ -94,24 +95,8 @@ sub _theme ($value) {
 }
 
 sub _theme_style ($theme) {
-    my @properties;
-    if (defined $theme->{primary}) {
-        push @properties,
-            '--sac-accent:' . $theme->{primary},
-            '--cgt-brand:' . $theme->{primary};
-    }
-    my $secondary = $theme->{secondary} // $theme->{primary};
-    if (defined $secondary) {
-        push @properties,
-            '--sac-teal:' . $secondary,
-            '--cgt-accent:' . $secondary;
-    }
-    if (defined $theme->{on_primary}) {
-        push @properties,
-            '--sac-on-accent:' . $theme->{on_primary},
-            '--cgt-on-brand:' . $theme->{on_primary};
-    }
-    return join ';', @properties;
+    return join ';', map { "$_->[0]:$_->[1]" }
+        @{Selecto::Components::ThemeStylesheet->declarations('console', $theme)};
 }
 
 sub _page_shell ($value) {
@@ -214,9 +199,10 @@ button is disabled.
     my $public_dir = Selecto::Components::APIConsole->install_assets($app);
 
 Adds the packaged C<public/> directory to C<< $app->static->paths >>, unless
-it is already present, and returns the directory. The L<Selecto::Components>
-plugin does this for you. Call it when you use the console without the
-plugin.
+it is already present, registers C<GET /selecto-api-console/theme.css> (the
+theme colours as a same-origin stylesheet), and returns the directory. The
+L<Selecto::Components> plugin does this for you. Call it when you use the
+console without the plugin.
 
 =head2 page
 
@@ -248,7 +234,9 @@ placeholders) or C<none>.
 =item theme
 
 C<< {scheme => 'light'|'dark', primary, secondary, on_primary} >> with
-C<#RRGGBB> colours. The default scheme is C<light>.
+C<#RRGGBB> colours. The default scheme is C<light>. Colours are linked as
+C</selecto-api-console/theme.css>, not an inline C<style> attribute, so a
+strict C<style-src 'self'> Content-Security-Policy keeps them.
 
 =item page_shell
 
@@ -264,8 +252,9 @@ keys die.
     my $p = Selecto::Components::APIConsole->page_presentation(theme => ..., page_shell => ...);
 
 Returns C<< {theme, page_shell, theme_style} >>, the validated theme, the
-validated shell and the CSS custom properties. L<Selecto::Components::Importer>
-uses it.
+validated shell and the CSS custom properties as declarations. The page links
+them as a stylesheet rather than rendering C<theme_style> inline.
+L<Selecto::Components::Importer> uses it.
 
 =head1 SEE ALSO
 

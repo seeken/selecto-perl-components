@@ -19,6 +19,7 @@ use Selecto::Components::Controller::SavedQueries ();
 use Selecto::Components::Explorer ();
 use Selecto::Components::ExplorerSession ();
 use Selecto::Components::Renderer ();
+use Selecto::Components::ThemeStylesheet ();
 use Selecto::Components::Util qw(humanize);
 use Selecto::Components::WebSocketPolicy ();
 
@@ -96,6 +97,7 @@ sub register ($self, $app, $plugin_config) {
     my ($public_path) = grep { -d $_ } @public_candidates;
     die "Selecto::Components packaged browser assets were not found\n" unless $public_path;
     unshift @{$app->static->paths}, $public_path->to_string;
+    Selecto::Components::ThemeStylesheet->install_route($app, $_) for qw(explorer console);
 
     my %explorers;
     for my $id (sort keys %$specs) {
@@ -783,7 +785,11 @@ query. The download controls show the cap.
 A coderef C<($controller, $config)> that returns
 C<< {scheme => 'light'|'dark', primary => '#RRGGBB', secondary => '#RRGGBB', on_primary => '#RRGGBB'} >>.
 Every key is optional. An empty hash keeps the stylesheet's dark palette.
-The values are validated and become scoped CSS custom properties.
+The values are validated and become CSS custom properties in a same-origin
+stylesheet, C</selecto-components/theme.css>, which the page links instead of
+an inline C<style> attribute so a strict C<style-src 'self'> policy keeps
+them. The plugin serves that route (and C</selecto-api-console/theme.css> for
+the API Console and Importer); it echoes only C<#RRGGBB> colours.
 
 =item page_shell_resolver
 
@@ -1200,6 +1206,10 @@ A strict Content Security Policy works unchanged:
 
     default-src 'self'; script-src 'self'; style-src 'self';
     connect-src 'self' ws: wss:; img-src 'self'; base-uri 'none'; frame-ancestors 'none'
+
+The pages render no inline C<style> attribute or C<< <style> >> element: host
+theme colours are a same-origin stylesheet, aggregate heat and rollup indents
+are classes, and the browser code sets only CSSOM properties.
 
 =head1 OPTIONAL ADD-ONS
 

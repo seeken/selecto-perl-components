@@ -13,6 +13,7 @@ use Selecto::Components::Renderer ();
 use Selecto::Components::Renderer::Builder ();
 use Selecto::Components::Renderer::Results ();
 use Selecto::Components::State ();
+use Selecto::Components::ThemeStylesheet ();
 use Selecto::Components::Util qw(html_escape humanize);
 
 is humanize('status_code'), 'Status Code', 'underscores become title-cased words';
@@ -110,8 +111,8 @@ like $html, qr/saved &lt;b&gt;ok&lt;\/b&gt;/,
     'action notices are HTML-escaped';
 like $html, qr/data-selecto-url="\/explore\/products\?q=1&amp;filter_value=&lt;script&gt;"/,
     'canonical URLs are escaped in attributes';
-like $html, qr{<head>.*<noscript><style>\.sc-chart \.sc-chart-canvas\{display:none!important\}.*</style></noscript>}s,
-    'no-JavaScript chart fallback styles live in the initial document head';
+unlike $html, qr{<style|<noscript>.*</noscript></head>|\sstyle=}s,
+    'the page has no inline style for a strict style-src policy (the no-script chart fallback is in the stylesheet)';
 
 my $saved_title_html = Selecto::Components::Renderer->page({
     config => $config,
@@ -225,8 +226,15 @@ my $themed_html = Selecto::Components::Renderer->page({
     canonical_url => '/explore/themed-products',
 });
 like $themed_html,
-    qr{<html lang="en" data-sc-color-scheme="light" style="--sc-brand:#123456;--sc-accent:#ABCDEF;--sc-on-brand:#FFFFFF">},
-    'request-resolved theme colors are rendered as scoped Explorer variables';
+    qr{<html lang="en" data-sc-color-scheme="light"><head>},
+    'request-resolved theme scheme is on the document without an inline style';
+like $themed_html,
+    qr{<link rel="stylesheet" href="/selecto-components/selecto-components\.css\?v=[^"]+"><link rel="stylesheet" href="/selecto-components/theme\.css\?primary=123456&amp;secondary=ABCDEF&amp;on_primary=FFFFFF&amp;v=[^"]+">},
+    'request-resolved theme colors are linked as a same-origin stylesheet after the component stylesheet';
+unlike $themed_html, qr/\sstyle=|<style/, 'a themed page has no inline style';
+is(Selecto::Components::ThemeStylesheet->css('explorer', {primary => '#123456', secondary => '#abcdef', on_primary => '#FFFFFF'}),
+    ":root{--sc-brand:#123456 !important;--sc-accent:#ABCDEF !important;--sc-on-brand:#FFFFFF !important}\n",
+    'the theme stylesheet carries the Explorer variables');
 like $themed_html, qr{<meta name="host-shell" content="enabled"></head>},
     'trusted host shell head markup is included in the full page';
 like $themed_html,
@@ -535,10 +543,15 @@ like $grid_html, qr/<strong>Aggregate Grid<\/strong><span>Linear heat scale<\/sp
     'aggregate grid identifies its active heat scale';
 like $grid_html, qr/class="sc-table-wrap sc-aggregate-grid-wrap"/,
     'aggregate grid renders in its sticky scroll viewport';
-like $grid_html, qr/data-sc-grid-heat="10"/,
+like $grid_html, qr/<td class="sc-grid-cell[^"]* sc-heat-0"[^>]* data-sc-grid-heat="10"/,
     'the smallest positive grid value uses the low heat color';
-like $grid_html, qr/data-sc-grid-heat="64"/,
+like $grid_html, qr/<td class="sc-grid-cell[^"]* sc-heat-9"[^>]* data-sc-grid-heat="64"/,
     'the maximum grid value uses the high heat color';
+like $grid_html,
+    qr{<span class="sc-grid-legend-scale"[^>]*><span class="sc-heat-0"></span>.*<span class="sc-heat-9"></span></span>},
+    'the heat legend swatches use the same bucket classes';
+unlike $grid_html, qr/\sstyle=/,
+    'grid heat needs no inline style under a strict style-src policy';
 like $grid_html, qr/<form class="sc-grid-selection-form"[^>]*data-sc-grid-selection/,
     'the aggregate matrix is one explicit multi-cell selection form';
 is scalar(() = $grid_html =~ /data-sc-grid-cell/g), 4,

@@ -334,6 +334,18 @@ a { color: inherit; }
 .sc-grid-legend { align-items: center; display: flex; flex-wrap: wrap; gap: 7px; padding: 0 18px 10px; color: var(--sc-muted); font-size: .7rem; }
 .sc-grid-legend-scale { display: flex; gap: 2px; }
 .sc-grid-legend-scale > span { border: 1px solid var(--sc-border); border-radius: 2px; display: block; height: 12px; width: 18px; }
+/* Aggregate-grid heat buckets (10%..64% accent), as classes so a strict style-src
+   policy needs no inline style. !important keeps the colour through row hover. */
+.sc-aggregate-grid td.sc-heat-0, .sc-grid-legend-scale > .sc-heat-0 { background: color-mix(in srgb, var(--sc-accent) 10%, var(--sc-panel)) !important; }
+.sc-aggregate-grid td.sc-heat-1, .sc-grid-legend-scale > .sc-heat-1 { background: color-mix(in srgb, var(--sc-accent) 16%, var(--sc-panel)) !important; }
+.sc-aggregate-grid td.sc-heat-2, .sc-grid-legend-scale > .sc-heat-2 { background: color-mix(in srgb, var(--sc-accent) 22%, var(--sc-panel)) !important; }
+.sc-aggregate-grid td.sc-heat-3, .sc-grid-legend-scale > .sc-heat-3 { background: color-mix(in srgb, var(--sc-accent) 28%, var(--sc-panel)) !important; }
+.sc-aggregate-grid td.sc-heat-4, .sc-grid-legend-scale > .sc-heat-4 { background: color-mix(in srgb, var(--sc-accent) 34%, var(--sc-panel)) !important; }
+.sc-aggregate-grid td.sc-heat-5, .sc-grid-legend-scale > .sc-heat-5 { background: color-mix(in srgb, var(--sc-accent) 40%, var(--sc-panel)) !important; }
+.sc-aggregate-grid td.sc-heat-6, .sc-grid-legend-scale > .sc-heat-6 { background: color-mix(in srgb, var(--sc-accent) 46%, var(--sc-panel)) !important; }
+.sc-aggregate-grid td.sc-heat-7, .sc-grid-legend-scale > .sc-heat-7 { background: color-mix(in srgb, var(--sc-accent) 52%, var(--sc-panel)) !important; }
+.sc-aggregate-grid td.sc-heat-8, .sc-grid-legend-scale > .sc-heat-8 { background: color-mix(in srgb, var(--sc-accent) 58%, var(--sc-panel)) !important; }
+.sc-aggregate-grid td.sc-heat-9, .sc-grid-legend-scale > .sc-heat-9 { background: color-mix(in srgb, var(--sc-accent) 64%, var(--sc-panel)) !important; }
 .sc-grid-selection-form { margin: 0; }
 .sc-grid-selection-actions { align-items: center; border-top: 1px solid var(--sc-border); display: flex; gap: 12px; justify-content: space-between; padding: 9px 18px; }
 .sc-grid-selection-actions > span:first-child { color: var(--sc-muted); font-size: .76rem; }
@@ -436,6 +448,11 @@ a { color: inherit; }
 .sc-chart-fallback { display: none; }
 .sc-chart.is-fallback .sc-chart-canvas { display: none; }
 .sc-chart.is-fallback .sc-chart-fallback { display: block; }
+/* Without JavaScript the Perl canvas chart ([data-sc-chart]) shows its fallback values. */
+@media (scripting: none) {
+  .sc-chart[data-sc-chart] .sc-chart-canvas { display: none !important; }
+  .sc-chart[data-sc-chart] .sc-chart-fallback { display: block !important; }
+}
 .sc-chart-fallback ul { display: grid; gap: 9px; list-style: none; margin: 0; padding: 0; }
 .sc-chart-fallback li { align-items: center; display: grid; grid-template-columns: minmax(110px, 220px) minmax(120px, 1fr) 72px; gap: 12px; }
 .sc-chart-fallback meter { height: 20px; width: 100%; }
@@ -463,6 +480,8 @@ a { color: inherit; }
 .sc-drilldown-form { margin: 0; }
 .sc-drilldown-value { appearance: none; background: transparent; border: 0; color: var(--sc-accent); cursor: pointer; font: inherit; margin: 0; padding: 0 0 0 calc((var(--sc-rollup-level, 1) - 1) * 16px); text-align: left; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; white-space: nowrap; }
 .sc-drilldown-value:hover, .sc-drilldown-value:focus-visible { text-decoration-color: currentColor; }
+.sc-drilldown-value.sc-rollup-level-2 { --sc-rollup-level: 2; }
+.sc-drilldown-value.sc-rollup-level-3 { --sc-rollup-level: 3; }
 .sc-debug-panel { background: linear-gradient(145deg, var(--sc-debug-start), var(--sc-debug-end)); border: 1px solid var(--sc-nested-border); border-radius: 12px; margin: 6px 18px 18px; overflow: hidden; }
 .sc-debug-panel > summary { align-items: center; background: color-mix(in srgb, var(--sc-accent) 8%, var(--sc-table-fixed-bg)); cursor: pointer; display: flex; justify-content: space-between; list-style: none; padding: 13px 16px; }
 .sc-debug-panel > summary::-webkit-details-marker { display: none; }

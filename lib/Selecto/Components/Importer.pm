@@ -7,6 +7,7 @@ use warnings;
 use Mojo::Base -base, -signatures;
 use Selecto::Components::APIConsole ();
 use Selecto::Components::Util qw(html_escape);
+use Selecto::Components::ThemeStylesheet ();
 
 my $ASSET_REVISION = '0.5.0-importer-16';
 
@@ -32,9 +33,8 @@ sub page ($class, %options) {
     my $presentation = Selecto::Components::APIConsole->page_presentation(%options);
     my $theme = $presentation->{theme};
     my $shell = $presentation->{page_shell};
-    my $style = $presentation->{theme_style};
-    my $html_attributes = ' data-sac-color-scheme="' . html_escape($theme->{scheme}) . '"' .
-        (length($style) ? ' style="' . html_escape($style) . '"' : '');
+    my $theme_link = Selecto::Components::ThemeStylesheet->link_tag('console', $theme);
+    my $html_attributes = ' data-sac-color-scheme="' . html_escape($theme->{scheme}) . '"';
     my $body_classes = join ' ', grep { length } 'sai-body', $shell->{body_class} // '';
     my $content_classes = join ' ', grep { length } 'sai-app', $shell->{content_class} // '';
     return '<!doctype html><html lang="en"' . $html_attributes . '><head><meta charset="utf-8">' .
@@ -42,6 +42,7 @@ sub page ($class, %options) {
         '<title>' . html_escape($title) . '</title>' .
         ($shell->{head_start_html} // '') .
         '<link rel="stylesheet" href="/selecto-api-console/selecto-importer.css?v=' . $ASSET_REVISION . '">' .
+        $theme_link .
         '<script defer src="/selecto-api-console/selecto-importer.js?v=' . $ASSET_REVISION . '"></script>' .
         ($shell->{head_html} // '') .
         '</head><body class="' . html_escape($body_classes) . '">' .
