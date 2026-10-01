@@ -11,6 +11,8 @@ use Selecto::Components::Util qw(trim);
 use Selecto::Analytics::UnitRegistry ();
 use Selecto::Analytics::TransformRegistry ();
 use Selecto::Error ();
+use Selecto::Expression ();
+use Selecto::Query ();
 use Selecto::QueryLibrary ();
 
 has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
@@ -891,6 +893,13 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
             push @$errors, 'A filter operator is not available.';
             next;
         }
+        # A choice filter over an internal field reads it only through the
+        # domain's declared choices: any other value, a range or a null test
+        # would probe it.
+        if ($field_map->{$field}{choices_only} && !_declared_choice($field_map->{$field}, $op, $value)) {
+            push @$errors, 'Choose an available filter value.';
+            next;
+        }
         if ($group_filter && (!$valid_group_field{$field} || ($op ne 'eq' && $op ne 'is_null'))) {
             push @$errors, 'An aggregate drilldown filter is not available.';
             next;
@@ -953,6 +962,13 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
         }
     }
     return \@filters;
+}
+
+sub _declared_choice ($catalog, $op, $value) {
+    return 0 unless $op =~ /\A(?:eq|ne|in|not_in)\z/;
+    my %declared = map { ("$_->{value}" => 1) } @{$catalog->{filter_choices} // []};
+    my @values = $op =~ /in\z/ ? (map { _trim($_) } split /,/, $value) : ($value);
+    return !grep { length($_) && !$declared{$_} } @values;
 }
 
 sub _grid_cell_filter_inputs ($config, $grid_cells, $grid_axes, $field_map, $valid_groups, $group_configs, $errors) {
@@ -1228,6 +1244,17 @@ sub _query_library_state ($domain, $input, $errors) {
         1;
     };
     push @$errors, 'Complete the query-library parameters with valid values.' unless $ok;
+    # Segments are not permission to filter on an internal field: with a
+    # parameter, a caller could probe its value.
+    if ($ok && @effective_segments) {
+        my @paths = eval {
+            Selecto::Expression->field_references(Selecto::QueryLibrary->apply_segments(
+                $domain, Selecto::Query->new, \@effective_segments, $normalized,
+            )->predicate);
+        };
+        push @$errors, 'Choose an available query-library segment.'
+            if grep { !eval { $domain->field_is_public($_) } } @paths;
+    }
 
     my (@projection_fields, @orders);
     if (length($view)) {

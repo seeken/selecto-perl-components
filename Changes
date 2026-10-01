@@ -8,6 +8,23 @@ Unreleased
       retarget targets and swaps the pickers to the target's fields. The
       rows_of URL parameter carries the grain. Requires Selecto with
       Query->retarget.
+    - Security: the record editor no longer signs or verifies snapshots
+      with a guessable key. Without a host-set $app->secrets (Mojolicious
+      defaults to the app moniker; the editor fell back to
+      'selecto-components') the editor answers 500 and refuses saves.
+    - Security: the record-editor signature also binds the session's CSRF
+      token, the engine tenant, the domain fingerprint and the time the form
+      was opened (record_signed_at). A form replayed in another session or
+      tenant is refused, and so is one older than the new
+      record_editor_max_age option (default 3600 seconds, at most 86400).
+    - Security: the explorer refuses (state error) a query-library segment,
+      requested or from a view, that reads an internal or redacted field. A
+      components.filter_choices filter over an internal field the host did
+      not list in filter_fields, and a conditional choice filter over any
+      non-public field, accept only their declared choice values with eq,
+      ne, in or not_in; the picker no longer offers them a null test.
+      Previously a parameterized segment or a range filter probed the hidden
+      values row by row.
 
 0.1.0  2026-09-30
     - First CPAN release: Mojolicious plugin providing the Selecto explorer,
