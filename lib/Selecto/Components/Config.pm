@@ -9,6 +9,7 @@ use Selecto::Components::ExplorerSession ();
 use Selecto::Components::Util qw(humanize);
 use Selecto::Components::ThemeStylesheet ();
 use Selecto::Analytics::UnitRegistry ();
+use Selecto::Retarget ();
 
 has [qw(id title path engine_factory)];
 has views         => sub { return [qw(detail aggregate graph)] };
@@ -406,18 +407,96 @@ sub bulk_action_catalog ($self, $domain, $available = undef) {
     } sort { $a->{id} cmp $b->{id} } @actions];
 }
 
-sub detail_column_catalog ($self, $domain, $available = undef) {
+sub detail_column_catalog ($self, $domain, $available = undef, $rows_of = undef) {
+    # Bulk actions act on root rows, so a retargeted grain offers none.
+    return [@{$self->field_catalog($domain, {rows_of => $rows_of})}] if defined $rows_of;
     return [
         @{$self->bulk_action_catalog($domain, $available)},
         @{$self->field_catalog($domain)},
     ];
 }
 
-sub detail_column_map ($self, $domain, $available = undef) {
-    return {map { $_->{path} => {%$_} } @{$self->detail_column_catalog($domain, $available)}};
+sub detail_column_map ($self, $domain, $available = undef, $rows_of = undef) {
+    return {map { $_->{path} => {%$_} }
+        @{$self->detail_column_catalog($domain, $available, $rows_of)}};
 }
 
-sub primary_key ($self, $domain) {
+# A retarget ("Rows of") target: the relation at an association path that the
+# domain allows as a row grain. Undefined when the path is not one. Catalog
+# paths for a target stay root-relative: the target's fields are prefixed with
+# its path, and the query builder re-roots them.
+sub retarget_target ($self, $domain, $path) {
+    return undef unless defined($path) && !ref($path)
+        && "$path" =~ /\A[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\z/;
+    my $cache_key = join "\x1f", 'retarget', $domain->fingerprint, $path;
+    my $cache = $self->{_catalog_cache};
+    return $cache->{$cache_key} if ref($cache) eq 'HASH' && exists $cache->{$cache_key};
+    my $target = eval { Selecto::Retarget->target($domain, "$path") };
+    unless ($target) {
+        my $error = $@;
+        die $error unless blessed($error) && $error->isa('Selecto::Error');
+        $cache->{$cache_key} = undef if ref($cache) eq 'HASH';
+        return undef;
+    }
+    my $retarget = $domain->retarget_config // {};
+    my $declared = ref($retarget->{targets}) eq 'HASH' ? $retarget->{targets} : {};
+    my $spec = ref($declared->{$path}) eq 'HASH' ? $declared->{$path} : {};
+    my @associations = @{$domain->resolve_association("$path")->{associations}};
+    my ($last) = "$path" =~ /([^.]+)\z/;
+    my $resolved = {
+        path => "$path",
+        label => $self->localize(
+            $domain, "retarget.targets.$path.label", $spec->{label} // _humanize($last),
+            {kind => 'retarget_target', path => "$path", attribute => 'label'},
+        ),
+        domain => Selecto::Retarget->relation_domain($domain, $target),
+        primary_key => $target->{primary_key},
+        to_many => (grep { $_->cardinality eq 'many' } @associations) ? 1 : 0,
+        declared => exists($declared->{$path}) ? 1 : 0,
+        default_selected => [map { "$path.$_" } @{$spec->{default_selected} // []}],
+    };
+    $cache->{$cache_key} = $resolved if ref($cache) eq 'HASH';
+    return $resolved;
+}
+
+# The targets a "Rows of" picker offers: the domain's declared targets.
+sub retarget_targets ($self, $domain) {
+    my $retarget = $domain->retarget_config;
+    return [] unless ref($retarget) eq 'HASH' && ref($retarget->{targets}) eq 'HASH';
+    return [grep { defined } map { $self->retarget_target($domain, $_) }
+        sort keys %{$retarget->{targets}}];
+}
+
+sub _retarget_or_die ($self, $domain, $path) {
+    return $self->retarget_target($domain, $path)
+        // die "retarget target $path is not available\n";
+}
+
+# Root-relative copy of a target catalog entry.
+sub _prefixed_catalog_entry ($entry, $prefix) {
+    my %copy = %$entry;
+    $copy{path} = "$prefix.$entry->{path}";
+    $copy{picker_group_key} = defined($entry->{association})
+        ? (split /\./, $entry->{association})[0] : '';
+    $copy{association} = defined($entry->{association})
+        ? "$prefix.$entry->{association}" : $prefix;
+    $copy{link} = {%{$entry->{link}}, id_field => "$prefix.$entry->{link}{id_field}"}
+        if ref($entry->{link}) eq 'HASH' && defined $entry->{link}{id_field};
+    if (ref($entry->{dimension}) eq 'HASH') {
+        my %dimension = %{$entry->{dimension}};
+        for my $key (qw(key_field display_field association)) {
+            $dimension{$key} = "$prefix.$dimension{$key}" if defined $dimension{$key};
+        }
+        $copy{dimension} = \%dimension;
+    }
+    return \%copy;
+}
+
+sub primary_key ($self, $domain, $rows_of = undef) {
+    if (defined $rows_of) {
+        my $target = $self->_retarget_or_die($domain, $rows_of);
+        return "$target->{path}.$target->{primary_key}";
+    }
     my $contract = $domain->contract;
     my $primary_key = ref($contract) eq 'HASH' && ref($contract->{source}) eq 'HASH'
         ? $contract->{source}{primary_key} : undef;
@@ -430,10 +509,19 @@ sub field_catalog ($self, $domain, $options = undef) {
     $options //= {};
     die "field catalog options must be an object\n" unless ref($options) eq 'HASH';
     my $include_internal = $options->{include_internal} ? 1 : 0;
+    my $rows_of = $options->{rows_of};
     my $cache_key = join "\x1f", 'fields', $domain->fingerprint,
-        $include_internal ? 'internal' : 'public';
+        $include_internal ? 'internal' : 'public', $rows_of // '';
     my $cache = $self->{_catalog_cache};
     return $cache->{$cache_key} if ref($cache) eq 'HASH' && exists $cache->{$cache_key};
+    if (defined $rows_of) {
+        my $target = $self->_retarget_or_die($domain, $rows_of);
+        my $catalog = [map { _prefixed_catalog_entry($_, $target->{path}) } @{$self->field_catalog(
+            $target->{domain}, {include_internal => $include_internal},
+        )}];
+        $cache->{$cache_key} = $catalog if ref($cache) eq 'HASH';
+        return $catalog;
+    }
     my @catalog;
     my $fields = $domain->fields;
     my ($dimensions_by_key, $dimensions_by_display) = _star_dimensions($domain);
@@ -720,16 +808,28 @@ sub _field_label ($path, $column, $fallback = undef) {
     return "$label";
 }
 
-sub field_map ($self, $domain) {
-    my $cache_key = join "\x1f", 'field-map', $domain->fingerprint;
+sub field_map ($self, $domain, $rows_of = undef) {
+    my $cache_key = join "\x1f", 'field-map', $domain->fingerprint, $rows_of // '';
     my $cache = $self->{_catalog_cache};
     return $cache->{$cache_key} if ref($cache) eq 'HASH' && exists $cache->{$cache_key};
-    my $map = { map { $_->{path} => { %$_ } } @{$self->field_catalog($domain)} };
+    my $map = { map { $_->{path} => { %$_ } }
+        @{$self->field_catalog($domain, {rows_of => $rows_of})} };
     $cache->{$cache_key} = $map if ref($cache) eq 'HASH';
     return $map;
 }
 
-sub filter_catalog ($self, $domain) {
+# Filters always describe root rows (a retarget's context). A retargeted
+# grain adds its own fields, prefixed with the target path, which the root
+# domain resolves through the same join.
+sub filter_catalog ($self, $domain, $rows_of = undef) {
+    my $catalog = $self->_root_filter_catalog($domain);
+    return $catalog unless defined $rows_of;
+    my %present = map { $_->{path} => 1 } @$catalog;
+    return [@$catalog, grep { !$present{$_->{path}} }
+        @{$self->field_catalog($domain, {rows_of => $rows_of})}];
+}
+
+sub _root_filter_catalog ($self, $domain) {
     my %extra = map { $_ => 1 } @{$self->filter_fields};
     my $components = $domain->components;
     my $choice_specs = ref($components->{filter_choices}) eq 'HASH'
@@ -783,55 +883,61 @@ sub filter_catalog ($self, $domain) {
     return \@catalog;
 }
 
-sub filter_map ($self, $domain) {
-    return {map { $_->{path} => { %$_ } } @{$self->filter_catalog($domain)}};
+sub filter_map ($self, $domain, $rows_of = undef) {
+    return {map { $_->{path} => { %$_ } } @{$self->filter_catalog($domain, $rows_of)}};
 }
 
-sub query_field_map ($self, $domain) {
-    my $cache_key = join "\x1f", 'query-field-map', $domain->fingerprint;
+sub query_field_map ($self, $domain, $rows_of = undef) {
+    my $cache_key = join "\x1f", 'query-field-map', $domain->fingerprint, $rows_of // '';
     my $cache = $self->{_catalog_cache};
     return $cache->{$cache_key} if ref($cache) eq 'HASH' && exists $cache->{$cache_key};
     my $map = {
         map { $_->{path} => { %$_ } }
-        @{$self->field_catalog($domain, {include_internal => 1})}
+        @{$self->field_catalog($domain, {include_internal => 1, rows_of => $rows_of})}
     };
     $cache->{$cache_key} = $map if ref($cache) eq 'HASH';
     return $map;
 }
 
-sub resolved_default_fields ($self, $domain) {
-    my $map = $self->detail_column_map($domain);
-    my @configured = grep { $map->{$_} } @{$self->default_fields // []};
+sub resolved_default_fields ($self, $domain, $rows_of = undef) {
+    my $map = $self->detail_column_map($domain, undef, $rows_of);
+    my @defaults = defined($rows_of)
+        ? @{$self->_retarget_or_die($domain, $rows_of)->{default_selected}}
+        : @{$self->default_fields // []};
+    my @configured = grep { $map->{$_} } @defaults;
     return \@configured if @configured;
-    my $catalog = [grep { !$_->{picker_hidden} } @{$self->field_catalog($domain)}];
+    my $catalog = [grep { !$_->{picker_hidden} }
+        @{$self->field_catalog($domain, {rows_of => $rows_of})}];
     return [map { $_->{path} } @{$catalog}[0 .. _last_index($catalog, 6)]];
 }
 
-sub resolved_default_group ($self, $domain) {
-    my $map = $self->field_map($domain);
+sub resolved_default_group ($self, $domain, $rows_of = undef) {
+    my $map = $self->field_map($domain, $rows_of);
     my @configured = grep { $map->{$_} } @{$self->default_group // []};
     return \@configured if @configured;
+    my $catalog = $self->field_catalog($domain, {rows_of => $rows_of});
     my ($first) = grep { $_->{type} !~ /\A(?:integer|decimal|number|float|boolean)\z/i }
-        grep { !$_->{picker_hidden} } @{$self->field_catalog($domain)};
-    ($first) = grep { !$_->{picker_hidden} } @{$self->field_catalog($domain)}
+        grep { !$_->{picker_hidden} } @$catalog;
+    ($first) = grep { !$_->{picker_hidden} } @$catalog
         unless $first;
-    $first //= $self->field_catalog($domain)->[0];
+    $first //= $catalog->[0];
     return [$first->{path}];
 }
 
-sub measure ($self, $id, $domain = undef) {
-    my $measures = defined($domain) ? $self->measures_for_domain($domain) : $self->measures;
+sub measure ($self, $id, $domain = undef, $rows_of = undef) {
+    my $measures = defined($domain)
+        ? $self->measures_for_domain($domain, $rows_of) : $self->measures;
     for my $measure (@$measures) {
         return { %$measure } if $measure->{id} eq $id;
     }
     return undef;
 }
 
-sub measures_for_domain ($self, $domain) {
-    my $cache_key = join "\x1f", 'measures', $domain->fingerprint;
+sub measures_for_domain ($self, $domain, $rows_of = undef) {
+    my $cache_key = join "\x1f", 'measures', $domain->fingerprint, $rows_of // '';
     my $cache = $self->{_catalog_cache};
     return $cache->{$cache_key} if ref($cache) eq 'HASH' && exists $cache->{$cache_key};
-    my $fields = $self->field_map($domain);
+    my $fields = $self->field_map($domain, $rows_of);
     my @measures = map {
         my $measure = $_;
         my $source = defined($measure->{field}) ? $fields->{$measure->{field}} : undef;
@@ -852,6 +958,8 @@ sub measures_for_domain ($self, $domain) {
                 ? (source_behavior => $source->{behavior}) : ()),
             (ref($source) eq 'HASH' && defined($source->{picker_group_label})
                 ? (picker_group_label => $source->{picker_group_label}) : ()),
+            (ref($source) eq 'HASH' && defined($source->{picker_group_key})
+                ? (picker_group_key => $source->{picker_group_key}) : ()),
             (defined($unit) ? (unit => $unit) : ()),
         }
     } grep {
@@ -871,7 +979,7 @@ sub measures_for_domain ($self, $domain) {
         };
         $seen{'__row_count__'} = 1;
     }
-    for my $column (@{$self->field_catalog($domain)}) {
+    for my $column (@{$self->field_catalog($domain, {rows_of => $rows_of})}) {
         my $id = $seen{$column->{path}} ? 'field:' . $column->{path} : $column->{path};
         my $aggregate = _default_measure_function($column->{type});
         my $unit = Selecto::Analytics::UnitRegistry->aggregate_unit(
@@ -887,6 +995,8 @@ sub measures_for_domain ($self, $domain) {
             ($column->{picker_hidden} ? (picker_hidden => 1) : ()),
             (defined($column->{picker_group_label})
                 ? (picker_group_label => $column->{picker_group_label}) : ()),
+            (defined($column->{picker_group_key})
+                ? (picker_group_key => $column->{picker_group_key}) : ()),
             (defined($column->{unit}) ? (source_unit => $column->{unit}) : ()),
             (defined($column->{behavior})
                 ? (source_behavior => $column->{behavior}) : ()),
@@ -899,12 +1009,12 @@ sub measures_for_domain ($self, $domain) {
     return $measures;
 }
 
-sub default_measure ($self, $domain) {
-    my $measures = $self->measures_for_domain($domain);
+sub default_measure ($self, $domain, $rows_of = undef) {
+    my $measures = $self->measures_for_domain($domain, $rows_of);
     return { %{$measures->[0]} };
 }
 
-sub measure_catalog ($self, $domain) {
+sub measure_catalog ($self, $domain, $rows_of = undef) {
     return [map {
         my $measure = $_;
         {
@@ -916,13 +1026,15 @@ sub measure_catalog ($self, $domain) {
             ($measure->{picker_hidden} ? (picker_hidden => 1) : ()),
             (defined($measure->{picker_group_label})
                 ? (picker_group_label => $measure->{picker_group_label}) : ()),
+            (defined($measure->{picker_group_key})
+                ? (picker_group_key => $measure->{picker_group_key}) : ()),
             (defined($measure->{source_unit})
                 ? (source_unit => $measure->{source_unit}) : ()),
             (defined($measure->{source_behavior})
                 ? (source_behavior => $measure->{source_behavior}) : ()),
             (defined($measure->{unit}) ? (unit => $measure->{unit}) : ()),
         }
-    } @{$self->measures_for_domain($domain)}];
+    } @{$self->measures_for_domain($domain, $rows_of)}];
 }
 
 sub measure_functions ($self, $type, $row_count = 0) {

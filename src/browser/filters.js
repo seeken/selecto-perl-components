@@ -535,6 +535,11 @@
     }
     var builder = event.target.closest("[data-sc-builder]");
     if (!builder) return;
+    if (event.target.matches("[data-sc-rows-of]")) {
+      // The column, group, and measure pickers depend on the row grain.
+      if (typeof builder.requestSubmit === "function") builder.requestSubmit();
+      return;
+    }
     if (event.target.matches('input[name="view"]')) {
       stageResultView(builder, event.target.value);
     } else if (event.target.matches('[name="filter_op"]')) {

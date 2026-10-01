@@ -18,8 +18,9 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         '<label class="sc-view-tab"><input type="radio" name="view" value="' . _h($_) . '"' .
         ($_ eq $state->view ? ' checked' : '') . '><span>' . _h(_humanize($_)) . '</span></label>'
     } @{$config->views};
-    my $filter_catalog = $config->filter_catalog($model->{domain});
+    my $filter_catalog = $config->filter_catalog($model->{domain}, $state->grain);
     my $root_label = $model->{domain}->name;
+    my $rows_of_picker = $class->_rows_of_picker($model);
     my $filter_picker = $class->_filter_picker($state, $filter_catalog, $config, $root_label);
     my $query_library_views = $class->_query_library_view_controls(
         $state, $model->{domain}, $config,
@@ -66,7 +67,7 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $saved_tab . '</div>';
     my $view_panel = '<section class="sc-builder-panel" role="tabpanel" id="' . $view_panel_id .
         '" aria-labelledby="' . $view_tab_id . '" data-sc-builder-panel="view">' .
-        $query_library_views .
+        $query_library_views . $rows_of_picker .
         '<div class="sc-view-tabs" role="radiogroup" aria-label="Result view">' . $views . '</div>' .
         '<p class="sc-note" data-sc-controls-status role="status" aria-live="polite" hidden></p>' .
         $view_controls . '</section>';
@@ -106,11 +107,15 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
 
 sub view_controls ($class, $model, $mode, $catalog = undef, $detail_catalog = undef) {
     my ($config, $state, $domain) = @$model{qw(config state domain)};
-    $catalog //= $config->field_catalog($domain);
-    my $root_label = $domain->name;
+    my $grain = $state->grain;
+    $catalog //= $config->field_catalog($domain, {rows_of => $grain});
+    my $root_label = defined($grain) ? $config->retarget_target($domain, $grain)->{label} : $domain->name;
     if ($mode eq 'detail') {
-        $detail_catalog //= $config->detail_column_catalog($domain, $model->{available_actions} // []);
-        return $class->_row_click_picker($state, $domain, $config) .
+        $detail_catalog //= $config->detail_column_catalog(
+            $domain, $model->{available_actions} // [], $grain,
+        );
+        # Row actions act on root rows.
+        return (defined($state->retarget) ? '' : $class->_row_click_picker($state, $domain, $config)) .
             $class->_field_picker($state, $detail_catalog, $config, $root_label) .
             $class->_order_picker($state, $catalog, $config->max_orders, $root_label) .
             _measure_selection_hidden($state) .
@@ -120,7 +125,7 @@ sub view_controls ($class, $model, $mode, $catalog = undef, $detail_catalog = un
     return $class->_aggregate_grid_picker($state) .
         $class->_chart_type_picker($state, $catalog) .
         $class->_group_picker($state, $catalog, $config, $root_label) .
-        $class->_measure_picker($state, $config->measure_catalog($domain), $config, $root_label) .
+        $class->_measure_picker($state, $config->measure_catalog($domain, $grain), $config, $root_label) .
         _selection_hidden('field', $state->fields, $state->field_configs, $state->field_config_list) .
         _hidden('row_click_action', $state->row_click_action // '') .
         join('', map { _hidden('order', $_->{field}) . _hidden('direction', $_->{direction}) }
@@ -135,6 +140,32 @@ sub _query_summary_for_model ($class, $model, $catalog) {
         $model->{config},
     );
     return $class->_query_summary($model->{state}, $catalog, $segments);
+}
+
+# "Rows of" chooses the row grain: automatic (a detail view whose columns
+# all come from one to-many association shows its rows), the root, or a
+# target the domain declares. Changing it reruns the query, because the
+# column pickers change with the grain.
+sub _rows_of_picker ($class, $model) {
+    my ($config, $state, $domain) = @$model{qw(config state domain)};
+    my $targets = $config->retarget_targets($domain);
+    my $rows_of = $state->rows_of // '';
+    my $grain = $state->grain // '';
+    return _hidden('rows_of_from', $grain)
+        unless @$targets || defined($state->retarget) || length($rows_of);
+    my @options = (['', 'Automatic'], ['-', $domain->name]);
+    push @options, map { [$_->{path}, $_->{label}] } @$targets;
+    if (length($grain) && !grep { $_->{path} eq $grain } @$targets) {
+        my $target = $config->retarget_target($domain, $grain);
+        push @options, [$grain, $target->{label}] if $target;
+    }
+    my $selected = length($grain) ? $grain : $rows_of eq '-' ? '-' : '';
+    return '<label class="sc-rows-of-control"><span>Rows of</span>' .
+        '<select name="rows_of" data-sc-rows-of="' . _h($selected) .
+        '" aria-label="Row grain">' . join('', map {
+            '<option value="' . _h($_->[0]) . '"' . ($_->[0] eq $selected ? ' selected' : '') .
+                '>' . _h($_->[1]) . '</option>'
+        } @options) . '</select></label>' . _hidden('rows_of_from', $grain);
 }
 
 sub _row_click_picker ($class, $state, $domain, $config) {
@@ -830,6 +861,8 @@ sub _selection_picker ($class, $state, $catalog, %options) {
 
 sub _picker_group_key ($field) {
     return '_actions' if ($field->{type} // '') eq 'action';
+    # A retargeted grain groups its fields relative to the target.
+    return $field->{picker_group_key} if defined $field->{picker_group_key};
     my $path = $field->{field} // $field->{path} // '';
     $path =~ s/\Afield://;
     return $path =~ /\A([^.]+)\./ ? $1 : '';

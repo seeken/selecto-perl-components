@@ -3,6 +3,7 @@ package Selecto::Components::Renderer::Results;
 use utf8;
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(encode_json);
+use Mojo::URL ();
 use Mojo::Util qw(url_escape);
 use POSIX qw(ceil);
 use Selecto::Components::Renderer::Markup;
@@ -18,7 +19,7 @@ sub _results ($class, $model) {
     my $row_label = $result->{total_count} == 1 ? 'row matched' : 'rows matched';
     my $page_label = $result->{total_pages} == 1 ? 'page' : 'pages';
     my $meta = '<div class="sc-result-meta"><div><h2>' . _h($heading) .
-        '</h2></div><div><strong>' . _h($result->{total_count}) . '</strong> ' . $row_label .
+        '</h2>' . $class->_retarget_note($model) . '</div><div><strong>' . _h($result->{total_count}) . '</strong> ' . $row_label .
         ' · <strong>' . _h($result->{total_pages}) . '</strong> ' . $page_label .
         ' · <strong>' . _h($result->{elapsed_ms}) . ' ms</strong> query time</div></div>';
     my $actions = $model->{state}->view eq 'detail'
@@ -40,6 +41,28 @@ sub _results ($class, $model) {
     my $debug = Selecto::Components::Renderer::Debug->_debug_panel($result, $model);
     return $meta . $actions . $grid_warning . $top_pagination . $body .
         $bottom_pagination . $debug;
+}
+
+# Says which rows a retargeted result shows, and how to return to root rows
+# when the grain was chosen from the selected columns.
+sub _retarget_note ($class, $model) {
+    my $retarget = ref($model->{result}) eq 'HASH' ? $model->{result}{retarget} : undef;
+    return '' unless ref($retarget) eq 'HASH';
+    my $root = $model->{domain}->name;
+    my $note = 'One row per ' . _h($retarget->{label}) . ' for the ' . _h($root) .
+        ' rows that match the filters.';
+    if ($retarget->{auto}) {
+        $note = 'One row per ' . _h($retarget->{label}) . ', because every column is a ' .
+            _h($retarget->{label}) . ' field.';
+        if ($model->{config}->query_params_enabled($model->{domain})) {
+            my $url = Mojo::URL->new($model->{canonical_url});
+            $url->query->merge(rows_of => '-', page => 1);
+            $note .= ' <a href="' . _h($url->to_string) . '">Show one row per ' . _h($root) .
+                ' instead</a>';
+        }
+    }
+    return '<p class="sc-note" data-sc-retarget="' .
+        _h($retarget->{path}) . '">' . $note . '</p>';
 }
 
 sub heading_for_view ($class, $kind) {

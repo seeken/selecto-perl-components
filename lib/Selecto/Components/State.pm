@@ -13,11 +13,11 @@ use Selecto::Analytics::TransformRegistry ();
 use Selecto::Error ();
 use Selecto::QueryLibrary ();
 
-has [qw(view chart_type graph_show_table graph_series_group aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature view chart_type graph_show_table graph_series_group aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
+        q query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_transform measure_transform_window
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
@@ -34,35 +34,74 @@ sub from_input ($class, $config, $domain, $input) {
     my $configured = _first($input, 'q') ? 1 : 0;
     my $query_library = _query_library_state($domain, $input, \@errors);
     my $view = _parse_view($config, $input, $query_library, \@errors);
+    my $rows_of = _parse_rows_of($config, $domain, $input, \@errors);
+    my $retarget = $rows_of eq '' || $rows_of eq '-' ? undef : $rows_of;
+    # A changed "Rows of" choice keeps only the selections its grain offers.
+    # rows_of_from names the explicit grain the submitted selections describe.
+    if (defined(_first($input, 'rows_of_from'))
+        && _scalar(_first($input, 'rows_of_from')) ne ($retarget // '')) {
+        $input = _retain_available($config, $domain, $input, $retarget, $view);
+    }
+    if (defined $retarget) {
+        $field_map = $config->field_map($domain, $retarget);
+        $detail_map = $config->detail_column_map($domain, undef, $retarget);
+        # Saved projections and orderings describe root rows.
+        $query_library = {%$query_library, materialize => 0};
+    }
     my $chart_type = _parse_chart_type($input, \@errors);
     my $graph_show_table = $view eq 'graph'
         ? _truthy(_first($input, 'graph_show_table'), 0) : 0;
     my ($aggregate_grid, $aggregate_grid_colorize, $aggregate_grid_color_scale) =
         _parse_aggregate_grid($view, $input);
-    my $row_click_action = _parse_row_click_action(
+    my $row_click_action = defined($retarget) ? '' : _parse_row_click_action(
         $config, $domain, $input, $configured,
     );
     my ($valid_fields, $field_configs, $field_config_list) = _parse_fields(
         $config, $domain, $input, $detail_map, $field_map, $query_library, $configured, \@errors,
+        $retarget,
     );
+    my $retarget_auto = 0;
+    if (!defined($retarget) && $rows_of eq '' && $view eq 'detail'
+        && defined(my $auto = __PACKAGE__->auto_retarget($config, $domain, $valid_fields))) {
+        $retarget = $auto;
+        $retarget_auto = 1;
+        $row_click_action = '';
+        $input = _retain_available($config, $domain, $input, $retarget, $view, ['order']);
+    }
+    # An explicit grain summarizes its own fields. Its detail view also
+    # carries the root grain's groups and measures, which grouped drilldown
+    # filters and a return to the root summary still need.
+    my $grain = $retarget_auto ? undef : $retarget;
+    my $carry = defined($grain) && $view eq 'detail' ? 1 : 0;
+    $input = _retain_available($config, $domain, $input, $grain, $view, ['group', 'measure'])
+        if defined($grain) && !$carry;
+    my $group_map = $carry
+        ? {%{$config->field_map($domain)}, %{$config->field_map($domain, $grain)}}
+        : $config->field_map($domain, $grain);
     my ($valid_groups, $group_configs) = _parse_groups(
-        $config, $domain, $input, $field_map, $view, $configured, \@errors,
+        $config, $domain, $input, $group_map, $view, $configured, \@errors,
+        $carry ? undef : $grain,
     );
     my $graph_series_group = _parse_graph_series_group(
         $view, $input, $valid_groups, \@errors,
     );
     my ($valid_measures, $measure_configs, $measure_config_list, $measure) = _parse_measures(
-        $config, $domain, $input, $field_map, $view, \@errors,
+        $config, $domain, $input, $group_map, $view, \@errors, $grain, $carry,
     );
     my ($orders, $order, $direction) = _parse_orders(
-        $config, $domain, $input, $field_map, $valid_fields, $query_library, \@errors,
+        $config, $domain, $input, $config->field_map($domain, $retarget), $valid_fields,
+        $query_library, \@errors, $retarget,
     );
     my ($limit, $page) = _parse_pagination($config, $input, $view, \@errors);
     my $filters = _parse_filters(
-        $config, $input, $config->filter_map($domain), $valid_groups, $group_configs, \@errors,
+        $config, $input, $config->filter_map($domain, $grain),
+        $valid_groups, $group_configs, \@errors,
     );
 
     my $state = $class->new(
+        rows_of => $rows_of,
+        retarget => $retarget,
+        retarget_auto => $retarget_auto,
         view => $view,
         chart_type => $chart_type,
         graph_show_table => $graph_show_table,
@@ -101,8 +140,13 @@ sub from_input ($class, $config, $domain, $input) {
 
 sub valid ($self) { return @{$self->errors} ? 0 : 1; }
 
+# The explicitly chosen row grain, whose fields the pickers offer. An
+# automatic retarget keeps the root pickers.
+sub grain ($self) { return $self->retarget_auto ? undef : $self->retarget; }
+
 sub query_pairs ($self) {
     my @pairs = (q => 1, view => $self->view);
+    push @pairs, rows_of => $self->rows_of if length($self->rows_of // '');
     push @pairs, query_library_view => $self->query_library_view
         if defined($self->query_library_view) && length($self->query_library_view);
     push @pairs, query_library_materialized_view => $self->query_library_materialized_view
@@ -208,6 +252,7 @@ sub query_signature ($self) {
 
 sub api_query_payload ($self, $config, $domain) {
     return undef unless $self->valid && $self->view eq 'detail';
+    return undef if defined $self->retarget;
     return undef if grep {
         !$_->{draft} && ($_->{grouped} || defined($_->{clause}))
     } @{$self->filters};
@@ -282,6 +327,9 @@ sub api_query_payload ($self, $config, $domain) {
 
 sub as_hash ($self) {
     return {
+        rows_of => $self->rows_of,
+        retarget => $self->retarget,
+        retarget_auto => $self->retarget_auto,
         view => $self->view,
         chart_type => $self->chart_type,
         graph_show_table => $self->graph_show_table,
@@ -359,7 +407,7 @@ sub _parse_row_click_action ($config, $domain, $input, $configured) {
     return @$available ? $available->[0]{id} : '';
 }
 
-sub _parse_fields ($config, $domain, $input, $detail_map, $field_map, $query_library, $configured, $errors) {
+sub _parse_fields ($config, $domain, $input, $detail_map, $field_map, $query_library, $configured, $errors, $rows_of = undef) {
     my $field_values = _values($input, 'field');
     my $field_aliases = _values($input, 'field_alias');
     my $field_formats = _values($input, 'field_format');
@@ -368,7 +416,7 @@ sub _parse_fields ($config, $domain, $input, $detail_map, $field_map, $query_lib
         $field_aliases = [];
         $field_formats = [];
     }
-    $field_values = [@{$config->resolved_default_fields($domain)}]
+    $field_values = [@{$config->resolved_default_fields($domain, $rows_of)}]
         if !$configured && !grep { length(_scalar($_)) } @$field_values;
     my @valid_fields;
     my %field_configs;
@@ -406,21 +454,21 @@ sub _parse_fields ($config, $domain, $input, $detail_map, $field_map, $query_lib
     }
     push @$errors, 'Choose at least one detail column.' unless @valid_fields;
     unless (@valid_fields) {
-        @valid_fields = @{$config->resolved_default_fields($domain)};
+        @valid_fields = @{$config->resolved_default_fields($domain, $rows_of)};
         %field_configs = map { $_ => { alias => '', format => '' } } @valid_fields;
         @field_config_list = map { $field_configs{$_} } @valid_fields;
     }
     return (\@valid_fields, \%field_configs, \@field_config_list);
 }
 
-sub _parse_groups ($config, $domain, $input, $field_map, $view, $configured, $errors) {
+sub _parse_groups ($config, $domain, $input, $field_map, $view, $configured, $errors, $rows_of = undef) {
     my $group_values = _values($input, 'group');
     my $group_aliases = _values($input, 'group_alias');
     my $group_formats = _values($input, 'group_format');
     my $group_bucket_ranges = _values($input, 'group_bucket_ranges');
     my $group_prefix_lengths = _values($input, 'group_prefix_length');
     my $group_exclude_articles = _values($input, 'group_exclude_articles');
-    $group_values = [@{$config->resolved_default_group($domain)}]
+    $group_values = [@{$config->resolved_default_group($domain, $rows_of)}]
         if !$configured && !grep { length(_scalar($_)) } @$group_values;
     my @valid_groups;
     my %group_configs;
@@ -480,7 +528,7 @@ sub _parse_groups ($config, $domain, $input, $field_map, $view, $configured, $er
     }
     if (($view eq 'aggregate' || $view eq 'graph') && !@valid_groups) {
         push @$errors, 'Choose at least one group field.';
-        @valid_groups = @{$config->resolved_default_group($domain)};
+        @valid_groups = @{$config->resolved_default_group($domain, $rows_of)};
         %group_configs = map { $_ => {
             alias => '', format => '', bucket_ranges => '', prefix_length => 2,
             exclude_articles => 1,
@@ -500,7 +548,7 @@ sub _parse_graph_series_group ($view, $input, $groups, $errors) {
     return $field;
 }
 
-sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
+sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows_of = undef, $carry = 0) {
     my $measure_values = _values($input, 'measure');
     my $measure_aliases = _values($input, 'measure_alias');
     my $measure_functions = _values($input, 'measure_function');
@@ -513,7 +561,7 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
     my $measure_colors = _values($input, 'measure_color');
     my $measure_transforms = _values($input, 'measure_transform');
     my $measure_transform_windows = _values($input, 'measure_transform_window');
-    my $default_measure = $config->default_measure($domain);
+    my $default_measure = $config->default_measure($domain, $carry ? undef : $rows_of);
     $measure_values = [$default_measure->{id}]
         unless grep { length(_scalar($_)) } @$measure_values;
     my @valid_measures;
@@ -527,7 +575,8 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
             push @$errors, 'Too many measures were submitted.';
             last;
         }
-        my $measure = $config->measure($measure_id, $domain);
+        my $measure = $config->measure($measure_id, $domain, $rows_of)
+            // ($carry ? $config->measure($measure_id, $domain) : undef);
         unless ($measure) {
             push @$errors, 'Choose an available measure.';
             next;
@@ -687,7 +736,7 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors) {
     return (\@valid_measures, \%measure_configs, \@measure_config_list, $measure);
 }
 
-sub _parse_orders ($config, $domain, $input, $field_map, $valid_fields, $query_library, $errors) {
+sub _parse_orders ($config, $domain, $input, $field_map, $valid_fields, $query_library, $errors, $rows_of = undef) {
     my $order_fields = _values($input, 'order');
     my $order_directions = _values($input, 'direction');
     if ($query_library->{materialize} && @{$query_library->{orders}}) {
@@ -697,7 +746,7 @@ sub _parse_orders ($config, $domain, $input, $field_map, $valid_fields, $query_l
     my ($default_order) = grep {
         $field_map->{$_} && !$field_map->{$_}{denormalizing}
     } @$valid_fields;
-    $default_order //= $config->primary_key($domain);
+    $default_order //= $config->primary_key($domain, $rows_of);
     $order_fields = [$default_order] unless grep { length(_scalar($_)) } @$order_fields;
     my @orders;
     my %seen_order;
@@ -978,6 +1027,95 @@ sub _grid_group_filters ($field_map, $valid_groups, $group_configs) {
             grouped => !$dimension && length($format) && $format ne 'default' ? 1 : 0,
         }
     } @$valid_groups];
+}
+
+# The "Rows of" choice: '' lets a detail view choose its grain from its
+# columns, '-' keeps root rows, and an association path names a retarget
+# target the domain allows.
+sub _parse_rows_of ($config, $domain, $input, $errors) {
+    my $rows_of = _trim(_scalar(_first($input, 'rows_of')));
+    return $rows_of if $rows_of eq '' || $rows_of eq '-';
+    return $rows_of if $config->retarget_target($domain, $rows_of);
+    push @$errors, 'The selected row grain is not available.';
+    return '';
+}
+
+# The to-many association whose rows a detail view shows when every selected
+# column comes from it: one row per related row rather than one root row with
+# nested lists. Undefined when the columns include the root or span several
+# associations, or when the domain does not allow that target.
+sub auto_retarget ($class, $config, $domain, $fields) {
+    my %associations;
+    for my $field (@$fields) {
+        return undef unless "$field" =~ /\A([^.]+)\.[^.]/;
+        $associations{$1} = 1;
+    }
+    return undef unless keys(%associations) == 1;
+    my ($path) = keys %associations;
+    my $target = $config->retarget_target($domain, $path);
+    return $target && $target->{to_many} ? $path : undef;
+}
+
+# The grain an aggregate's rows count: the single to-many association that
+# its groups and measures read, if any. Its drilldown shows those rows.
+sub aggregate_grain ($class, $config, $domain, $state) {
+    return $state->retarget if defined $state->retarget;
+    my %associations;
+    my @fields = @{$state->groups};
+    for my $measure_id (@{$state->measures}) {
+        my $measure = $config->measure($measure_id, $domain);
+        push @fields, $measure->{field} if $measure && defined $measure->{field};
+    }
+    for my $field (@fields) {
+        next unless "$field" =~ /\A([^.]+)\./;
+        my $target = $config->retarget_target($domain, $1);
+        $associations{$1} = 1 if $target && $target->{to_many};
+    }
+    return keys(%associations) == 1 ? (keys %associations)[0] : undef;
+}
+
+# Submitted selections restricted to those a grain offers, with defaults
+# where none remain, so changing the grain never strands invalid columns.
+sub _retain_available ($config, $domain, $input, $rows_of, $view, $kinds = undef) {
+    my %kinds = map { $_ => 1 } @{$kinds // [qw(field group measure order)]};
+    my %copy = %$input;
+    my $field_map = $config->field_map($domain, $rows_of);
+    my $detail_map = $config->detail_column_map($domain, undef, $rows_of);
+    my $keep = sub ($keys, $available) {
+        my $values = _values(\%copy, $keys->[0]);
+        my @indexes = grep { $available->(_scalar($values->[$_])) } 0 .. $#$values;
+        for my $key (@$keys) {
+            my $aligned = _values(\%copy, $key);
+            $copy{$key} = [map { $aligned->[$_] // '' } @indexes];
+        }
+        return scalar @indexes;
+    };
+    if ($kinds{field}) {
+        $keep->([qw(field field_alias field_format)], sub ($field) { $detail_map->{$field} })
+            or $copy{field} = [@{$config->resolved_default_fields($domain, $rows_of)}];
+    }
+    if ($kinds{group}) {
+        $keep->([qw(group group_alias group_format group_bucket_ranges group_prefix_length
+            group_exclude_articles)], sub ($field) { $field_map->{$field} })
+            or $view eq 'detail'
+            or $copy{group} = [@{$config->resolved_default_group($domain, $rows_of)}];
+        my %groups = map { $_ => 1 } @{_values(\%copy, 'group')};
+        delete $copy{graph_series_group}
+            unless $groups{_scalar(_first(\%copy, 'graph_series_group'))};
+        my $filter_fields = _values(\%copy, 'filter_field');
+        my $filter_groups = _values(\%copy, 'filter_group');
+        $copy{filter_group} = [map {
+            $groups{$filter_fields->[$_] // ''} ? $filter_groups->[$_] : 0
+        } 0 .. $#$filter_groups];
+    }
+    if ($kinds{measure}) {
+        $keep->([qw(measure measure_alias measure_function measure_bucket_ranges
+            measure_ignore_nulls measure_series_id measure_chart_type measure_axis
+            measure_stack measure_color measure_transform measure_transform_window)],
+            sub ($id) { $config->measure($id, $domain, $rows_of) });
+    }
+    $keep->([qw(order direction)], sub ($field) { $field_map->{$field} }) if $kinds{order};
+    return \%copy;
 }
 
 sub _values ($input, $key) {

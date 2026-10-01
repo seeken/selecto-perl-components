@@ -380,7 +380,14 @@
     var activeLibraryView = form.querySelector(
       '[name="query_library_view"]:checked, select[name="query_library_view"]'
     );
-    if (!activeLibraryView || !activeLibraryView.value) {
+    // A changed row grain changes the column pickers, so the whole surface
+    // is rendered again rather than only the results.
+    var rowsOf = form.querySelector("[data-sc-rows-of]");
+    var grainChanged = rowsOf && rowsOf.value !== rowsOf.getAttribute("data-sc-rows-of");
+    if (grainChanged) {
+      var staleScope = form.querySelector('[name="render_scope"]');
+      if (staleScope) staleScope.value = "";
+    } else if (!activeLibraryView || !activeLibraryView.value) {
       var renderScope = form.querySelector('[name="render_scope"]');
       if (!renderScope) {
         renderScope = document.createElement("input");

@@ -1,6 +1,7 @@
 package Selecto::Components::QueryBuilder;
 
 use Mojo::Base -base, -signatures;
+use Scalar::Util qw(blessed);
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
 use Selecto::Components::RowActions ();
@@ -12,14 +13,65 @@ sub build ($class, $config, $domain, $state, $options = undef) {
     die "cannot build an invalid explorer state\n" unless $state->valid;
     $options //= {};
     die "query builder options must be an object\n" unless ref($options) eq 'HASH';
-    return $state->view eq 'detail'
+    my $built = $state->view eq 'detail'
         ? $class->_detail($config, $domain, $state, $options)
         : $class->_aggregate($config, $domain, $state, $options);
+    my $retarget = $state->retarget;
+    return $built unless defined $retarget;
+    # Explorer state names fields from the root. A retargeted grain keeps the
+    # filters and saved segments as root context and re-roots the rest.
+    $built->{query} = _retargeted($built->{query}, $retarget);
+    $built->{count_selections} = [map { _rerooted($_, $retarget) } @{$built->{count_selections}}]
+        if $built->{count_selections};
+    my $target = $config->retarget_target($domain, $retarget);
+    $built->{retarget} = {
+        path => $retarget,
+        label => $target->{label},
+        auto => $state->retarget_auto ? 1 : 0,
+    };
+    return $built;
+}
+
+sub _retargeted ($query, $path) {
+    my $retargeted = $query->retarget($path)
+        ->select(map { _rerooted($_, $path) } @{$query->selections});
+    my @groups = map { _rerooted($_, $path) } @{$query->groups};
+    $retargeted = $query->grouping_mode eq 'rollup'
+        ? $retargeted->group_by_rollup(\@groups) : $retargeted->group_by(\@groups)
+        if @groups;
+    $retargeted = $retargeted->order_by(_rerooted($_->[0], $path), $_->[1]) for @{$query->orders};
+    $retargeted = $retargeted->limit($query->limit_value) if defined $query->limit_value;
+    $retargeted = $retargeted->offset($query->offset_value) if defined $query->offset_value;
+    return $retargeted;
+}
+
+# A copy of an expression with each root-relative field under $path renamed
+# relative to the target relation.
+sub _rerooted ($value, $path) {
+    if (blessed($value) && $value->isa('Selecto::Expression')) {
+        if ($value->kind eq 'field') {
+            my $name = $value->arguments->[0];
+            die "field $name is outside the retarget target $path\n"
+                unless index($name, "$path.") == 0;
+            my $field = Selecto::Expression->field(substr($name, length($path) + 1));
+            return defined($value->alias_name) ? $field->as($value->alias_name) : $field;
+        }
+        my $copy = Selecto::Expression->new(
+            $value->kind, map { _rerooted($_, $path) } @{$value->arguments},
+        );
+        return defined($value->alias_name) ? $copy->as($value->alias_name) : $copy;
+    }
+    return [map { _rerooted($_, $path) } @$value] if ref($value) eq 'ARRAY';
+    return {map { ($_ => _rerooted($value->{$_}, $path)) } keys %$value} if ref($value) eq 'HASH';
+    return $value;
 }
 
 sub _detail ($class, $config, $domain, $state, $options) {
-    my $field_map = $config->query_field_map($domain);
-    my $detail_map = $config->detail_column_map($domain);
+    my $retarget = $state->retarget;
+    my $field_map = $config->query_field_map($domain, $retarget);
+    my $detail_map = $config->detail_column_map($domain, undef, $retarget);
+    # A retargeted grain resolves its columns against the target relation.
+    my $target = defined($retarget) ? $config->retarget_target($domain, $retarget) : undef;
     my (@columns, %nested_column);
     my %field_key_count;
     for my $field_index (0 .. $#{$state->fields}) {
@@ -35,7 +87,9 @@ sub _detail ($class, $config, $domain, $state, $options) {
             };
             next;
         }
-        my $resolved = $domain->resolve($field);
+        my $resolved = $target
+            ? $target->{domain}->resolve(substr($field, length($retarget) + 1))
+            : $domain->resolve($field);
         if ($resolved->{association} && $resolved->{association}->cardinality eq 'many') {
             my $association = $resolved->{association};
             my $name = $association->name;
@@ -92,7 +146,7 @@ sub _detail ($class, $config, $domain, $state, $options) {
     my @action_ids = map { $_->{action_id} } grep { $_->{action_id} } @columns;
     my $action_key;
     if (@action_ids) {
-        my $primary_key = $config->primary_key($domain);
+        my $primary_key = $config->primary_key($domain, $retarget);
         my ($selected_primary_key) = grep {
             $_->{field} eq $primary_key && !$_->{format}
         } @query_columns;
@@ -258,13 +312,13 @@ sub _detail ($class, $config, $domain, $state, $options) {
         action_row_details => \%action_row_details,
         row_click_action => $row_click_action,
         row_click_fields => \@row_click_fields,
-        count_selections => [Selecto::Expression->field($config->primary_key($domain))],
+        count_selections => [Selecto::Expression->field($config->primary_key($domain, $retarget))],
         graph => 0,
     };
 }
 
 sub _aggregate ($class, $config, $domain, $state, $options) {
-    my $field_map = $config->field_map($domain);
+    my $field_map = $config->field_map($domain, $state->retarget);
     # Subtotal rows need the adapter's GROUP BY ROLLUP; callers pass
     # rollup => 0 for adapters without it, which then group plainly.
     my $rollup = $state->view eq 'aggregate' && @{$state->groups}
@@ -336,7 +390,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
     my %measure_occurrence;
     for my $measure_index (0 .. $#{$state->measures}) {
         my $measure_id = $state->measures->[$measure_index];
-        my $measure = $config->measure($measure_id, $domain);
+        my $measure = $config->measure($measure_id, $domain, $state->retarget);
         my $measure_config = ($state->measure_config_list // [])->[$measure_index]
             // $state->measure_configs->{$measure_id} // {};
         my $function = $measure_config->{function} // $measure->{aggregate};
@@ -532,7 +586,7 @@ sub _with_filters ($query, $state, $config, $domain) {
     my @expressions;
     my %clause_expressions;
     my @clause_order;
-    my $field_map = $config->filter_map($domain);
+    my $field_map = $config->filter_map($domain, $state->retarget);
     for my $filter (@{$state->filters}) {
         my ($field, $op, $value, $value_end) = @{$filter}{qw(field op value value_end)};
         next if $filter->{draft};

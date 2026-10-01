@@ -139,9 +139,10 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         _prepare_rollup_records($built, \@records);
         _prepend_continued_rollup_records($built, \@records)
             if !$all_rows && !$grid_all_rows && $state->page > 1;
-        my $drilldowns = _drilldowns($state, $built, \@records);
+        my $drilldown_grain = _drilldown_grain($config, $engine->domain, $state);
+        my $drilldowns = _drilldowns($state, $built, \@records, $drilldown_grain);
         my $graph_axis_drilldowns = _graph_axis_drilldowns(
-            $state, $built, \@records,
+            $state, $built, \@records, $drilldown_grain,
         );
         my $grid_data = _aggregate_grid_data(
             $state, $built, \@records, $drilldowns,
@@ -399,7 +400,17 @@ sub _prepend_continued_rollup_records ($built, $records) {
     return scalar(@continued);
 }
 
-sub _drilldowns ($state, $built, $records) {
+# A summary drilldown opens the rows its measures counted: when the summary
+# reads a single to-many association, the detail view is retargeted to it.
+sub _drilldown_grain ($config, $domain, $state) {
+    return undef if $state->view eq 'detail';
+    my $path = Selecto::Components::State->aggregate_grain($config, $domain, $state);
+    return undef unless defined $path;
+    return {path => $path} if ($state->retarget // '') eq $path;
+    return {path => $path, fields => $config->resolved_default_fields($domain, $path)};
+}
+
+sub _drilldowns ($state, $built, $records, $grain = undef) {
     return [] if $state->view eq 'detail';
     my @groups = grep { !$_->{measure} } @{$built->{columns}};
     my @drilldowns;
@@ -409,7 +420,7 @@ sub _drilldowns ($state, $built, $records) {
         my @row_drilldowns;
         for my $group_index (0 .. $available_levels - 1) {
             push @row_drilldowns, _drilldown_for_group_indexes(
-                $state, \@groups, $record, [0 .. $group_index],
+                $state, \@groups, $record, [0 .. $group_index], $grain,
             );
         }
         push @drilldowns, \@row_drilldowns;
@@ -417,7 +428,7 @@ sub _drilldowns ($state, $built, $records) {
     return \@drilldowns;
 }
 
-sub _drilldown_for_group_indexes ($state, $groups, $record, $indexes) {
+sub _drilldown_for_group_indexes ($state, $groups, $record, $indexes, $grain = undef) {
     # A grouping predicate narrows the existing query; it does not replace
     # filters already applied to that field.  This is especially important for
     # temporal groups: a clicked weekday must remain inside the selected date
@@ -446,11 +457,23 @@ sub _drilldown_for_group_indexes ($state, $groups, $record, $indexes) {
         filters => \@filters,
         page => 1,
         errors => [],
+        ($grain ? (
+            rows_of => $grain->{path},
+            retarget => $grain->{path},
+            retarget_auto => 0,
+            # The root grain's columns and sort do not exist at the target.
+            ($grain->{fields} ? (
+                fields => [@{$grain->{fields}}],
+                field_configs => {map { $_ => {alias => '', format => ''} } @{$grain->{fields}}},
+                field_config_list => [map { {alias => '', format => ''} } @{$grain->{fields}}],
+                orders => [],
+            ) : ()),
+        ) : ()),
     );
     return $drilldown->query_pairs;
 }
 
-sub _graph_axis_drilldowns ($state, $built, $records) {
+sub _graph_axis_drilldowns ($state, $built, $records, $grain = undef) {
     return [] unless $state->view eq 'graph'
         && length($state->graph_series_group // '');
     my @groups = grep { !$_->{measure} } @{$built->{columns}};
@@ -459,7 +482,7 @@ sub _graph_axis_drilldowns ($state, $built, $records) {
     } 0 .. $#groups;
     return [] unless @indexes;
     return [map {
-        _drilldown_for_group_indexes($state, \@groups, $_, \@indexes)
+        _drilldown_for_group_indexes($state, \@groups, $_, \@indexes, $grain)
     } @$records];
 }
 
