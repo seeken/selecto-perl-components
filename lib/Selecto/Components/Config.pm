@@ -45,6 +45,7 @@ has 'export_authorizer';
 # all-rows page render) may return. Without one, exports are unbounded.
 has 'max_export_rows';
 has 'record_editor_handler';
+has record_editor_max_age => 3600;
 has 'saved_query_store';
 has 'localizer';
 has 'theme_resolver';
@@ -133,6 +134,8 @@ sub new ($class, @args) {
     die "record_editor_handler must be a coderef\n"
         if defined($self->record_editor_handler)
             && ref($self->record_editor_handler) ne 'CODE';
+    die "record_editor_max_age must be between 1 and 86400 seconds\n"
+        unless $self->record_editor_max_age =~ /\A[1-9]\d*\z/ && $self->record_editor_max_age <= 86_400;
     if (defined(my $store = $self->saved_query_store)) {
         die "saved_query_store must be an object\n" unless blessed($store);
         for my $method (qw(list save delete)) {
@@ -853,6 +856,9 @@ sub _root_filter_catalog ($self, $domain) {
                 {kind => 'filter_choice', path => $field->{path}, attribute => 'label'},
             ),
             filter_choices => [map { {%$_} } @{$choice->{choices}}],
+            # An internal field the host did not list is filterable only
+            # through its declared choices.
+            ($field->{internal} && !$extra{$field->{path}} ? (choices_only => 1) : ()),
             ($picker_hidden ? (picker_hidden => 1) : ()),
         } : {%filter_field, ($picker_hidden ? (picker_hidden => 1) : ())}
     } grep { !$_->{internal} || $extra{$_->{path}} || $choice_specs->{$_->{path}} }
@@ -877,6 +883,8 @@ sub _root_filter_catalog ($self, $domain) {
             type => $present->{type},
             filter_choices => [map { {%$_} } @{$choice->{choices}}],
             conditional => {%$conditional},
+            ((grep { !$domain->field_is_public($conditional->{$_}) }
+                qw(when_field present_field absent_field)) ? (choices_only => 1) : ()),
             ($choice->{picker_hidden} ? (picker_hidden => 1) : ()),
         };
     }

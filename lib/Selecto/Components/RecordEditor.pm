@@ -224,10 +224,16 @@ row, served by C<GET/POST E<lt>explorer-pathE<gt>/records/:id/edit>.
 
 The editor loads the record through the request's governed engine, so a row
 outside the user's scope is not found. It signs the original editable values
-into the form. When a save arrives, it checks the CSRF token, the signature
-and the submitted field names, then validates each value against its domain
-type and control. It updates only the changed fields with
-C<< expected_count => 1 >>, using the original values as an
+into the form with the application's first secret; until the host sets
+C<< $app->secrets >> (Mojolicious defaults to the guessable moniker) the
+editor neither opens nor saves. The signature also binds the session (its
+CSRF token), the engine's tenant, the domain fingerprint and the time the
+form was opened, so a form cannot be replayed in another session or tenant
+or after C<record_editor_max_age> (default one hour). When a save arrives,
+it checks the CSRF token, the form's age, the signature and the submitted
+field names, then validates each
+value against its domain type and control. It updates only the changed
+fields with C<< expected_count => 1 >>, using the original values as an
 optimistic-concurrency predicate. A competing edit therefore returns HTTP 409
 instead of being overwritten. After a save, the browser fetches the row again
 through the explorer's query. A row that no longer matches stays visible as a

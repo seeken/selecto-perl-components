@@ -37,10 +37,11 @@ sub show ($class, $controller, $explorer) {
         grep { !$_->{readonly} } @{$context->{editor}{fields}}
     };
     my $snapshot_json = $JSON->encode($snapshot);
-    my $signature = _signature(
-        $controller, $context->{editor}{id}, $context->{target}, $snapshot_json,
-    );
-    my $html = _form($controller, $context, $record, $snapshot_json, $signature);
+    my $signed_at = time;
+    my $signature = _signature($controller, $context, $snapshot_json, $signed_at);
+    return _error($controller, 500, 'The record editor is not available.')
+        unless defined $signature;
+    my $html = _form($controller, $context, $record, $snapshot_json, $signature, $signed_at);
     $controller->res->headers->cache_control('no-store');
     # `data` is reserved for response bytes in Mojolicious and bypasses the
     # renderer's UTF-8 encoding. Editor HTML can contain Unicode from labels,
@@ -63,15 +64,22 @@ sub save ($class, $controller, $explorer) {
         message => 'The edit form expired. Reload the row and try again.',
     }) unless Selecto::Components::_csrf_valid($controller);
 
+    # A signed form lives for record_editor_max_age; the clock may be a
+    # minute ahead on another worker.
+    my $signed_at = $controller->param('record_signed_at') // '';
+    return Selecto::Components::_action_response($controller, $return_to, {
+        ok => 0, status => 403,
+        message => 'The edit form expired. Reload the row and try again.',
+    }) unless $signed_at =~ /\A\d{1,12}\z/ && $signed_at <= time + 60
+        && time - $signed_at <= $context->{config}->record_editor_max_age;
+
     my $snapshot_json = $controller->param('record_snapshot') // '';
     my $submitted_signature = $controller->param('record_signature') // '';
-    my $expected_signature = _signature(
-        $controller, $context->{editor}{id}, $context->{target}, $snapshot_json,
-    );
+    my $expected_signature = _signature($controller, $context, $snapshot_json, $signed_at);
     return Selecto::Components::_action_response($controller, $return_to, {
         ok => 0, status => 403,
         message => 'The record snapshot is invalid. Reload the row and try again.',
-    }) unless length($submitted_signature)
+    }) unless defined($expected_signature) && length($submitted_signature)
         && secure_compare("$submitted_signature", "$expected_signature");
 
     my $original;
@@ -202,7 +210,7 @@ sub _context ($controller, $explorer) {
         editor => $editor, target => "$target"}, undef);
 }
 
-sub _form ($controller, $context, $record, $snapshot, $signature) {
+sub _form ($controller, $context, $record, $snapshot, $signature, $signed_at) {
     my $editor = $context->{editor};
     my $field_map = $context->{config}->field_map($context->{domain});
     my @rendered = map {
@@ -314,6 +322,7 @@ sub _form ($controller, $context, $record, $snapshot, $signature) {
         '<input type="hidden" name="return_to" value="' . _h($return_to) . '">' .
         '<input type="hidden" name="record_snapshot" value="' . _h($snapshot) . '">' .
         '<input type="hidden" name="record_signature" value="' . _h($signature) . '">' .
+        '<input type="hidden" name="record_signed_at" value="' . _h($signed_at) . '">' .
         $collections .
         '<div class="sc-record-editor-result" data-sc-record-editor-result role="status" hidden></div>' .
         '<footer><button type="button" class="sc-button sc-secondary" data-sc-row-dialog-close>Cancel</button>' .
@@ -426,10 +435,30 @@ sub _select_empty_option ($spec, $has_display_value) {
         _h($empty_label) . '</option>';
 }
 
-sub _signature ($controller, $editor, $target, $snapshot) {
-    my $secret = $controller->app->secrets->[0] // 'selecto-components';
+# Signs the editor, the record and its original values together with the
+# session (its CSRF token), the engine's tenant, the domain and the issue
+# time, so a form cannot be replayed in another session or tenant or after
+# it expires. Undef unless the host set its own secret: Mojolicious falls
+# back to the app moniker, which anyone can guess, so that default signs
+# nothing.
+sub _signature ($controller, $context, $snapshot, $signed_at) {
+    my $app = $controller->app;
+    my $secret = $app->secrets->[0];
+    unless (defined($secret) && length($secret) && $secret ne $app->moniker) {
+        $app->log->error('Selecto record editor requires $app->secrets to be set');
+        return undef;
+    }
+    # csrf_token returns a freshly masked token on every call; the session
+    # holds the unmasked one it creates.
+    Selecto::Components::_csrf_token($controller);
+    my $session_token = $controller->session->{csrf_token};
+    my $tenant = $context->{engine}->scope->{tenant};
     return hmac_sha256_hex(
-        encode_utf8(join("\x1f", $editor, $target, $snapshot)),
+        encode_utf8($JSON->encode([
+            'selecto-record-editor-v2', "$context->{editor}{id}", "$context->{target}", "$snapshot",
+            "$session_token", defined($tenant) ? "$tenant" : undef,
+            $context->{domain}->fingerprint, "$signed_at",
+        ])),
         encode_utf8($secret),
     );
 }

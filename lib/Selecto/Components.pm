@@ -900,6 +900,14 @@ save in an audit or a transaction. Call C<< $request->{default_save}->() >>
 to perform the governed update. It returns a hash, and
 C<< close_dialog => 1 >> closes the dialog.
 
+=item record_editor_max_age
+
+How long, in seconds, a record-editor form stays valid after it is opened
+(default 3600, the default lifetime of a Mojolicious session, which carries
+the CSRF token the form is bound to; at most 86400). The form's signature
+also binds the session, the engine tenant and the domain, so it cannot be
+replayed in another session or tenant.
+
 =back
 
 =head2 Saved queries

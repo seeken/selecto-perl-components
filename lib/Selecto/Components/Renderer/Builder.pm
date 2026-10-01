@@ -1195,7 +1195,8 @@ sub _filter_operators_for_filter ($config, $field, $filter) {
     return [
         [eq => 'equals'], [ne => 'does not equal'],
         [in => 'one of'], [not_in => 'not one of'],
-        [is_null => 'is empty'], [not_null => 'is not empty'],
+        # A choices-only field accepts no null test (see State).
+        ($field->{choices_only} ? () : ([is_null => 'is empty'], [not_null => 'is not empty'])),
     ] if ref($field->{filter_choices}) eq 'ARRAY' && @{$field->{filter_choices}};
     return $config->filter_operators($field->{type});
 }
