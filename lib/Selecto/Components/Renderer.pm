@@ -72,9 +72,10 @@ sub surface ($class, $model) {
     return '<section id="selecto-surface-' . _h($config->id) . '" class="sc-surface">' .
         '<div class="sc-alert" role="alert">Explorer configuration is unavailable.</div></section>'
         unless $state && $model->{domain};
-    my $field_catalog = $config->field_catalog($model->{domain});
+    my $grain = $state->grain;
+    my $field_catalog = $config->field_catalog($model->{domain}, {rows_of => $grain});
     my $detail_catalog = $config->detail_column_catalog(
-        $model->{domain}, $model->{available_actions} // [],
+        $model->{domain}, $model->{available_actions} // [], $grain,
     );
     my $errors = join '', map { '<li>' . _h($_) . '</li>' } @{$state->errors};
     $errors .= '<li>' . _h($model->{runtime_error}) . '</li>' if $model->{runtime_error};
@@ -130,7 +131,7 @@ sub surface ($class, $model) {
         $alert . '<div class="sc-workspace' . ($builder_collapsed ? ' is-builder-collapsed' : '') .
         '" data-sc-workspace>' .
         $class->_form($model, $field_catalog, $detail_catalog) .
-        $class->results_fragment($model, $config->filter_catalog($model->{domain})) .
+        $class->results_fragment($model, $config->filter_catalog($model->{domain}, $grain)) .
         '</div></section>';
 }
 
@@ -150,7 +151,9 @@ sub _page_title ($class, $model) {
 sub results_fragment ($class, $model, $filter_catalog = undef) {
     # Promoted cards need the filter catalog: it carries components.filter_choices,
     # choice labels, and filter-only paths that the plain field catalog omits.
-    $filter_catalog //= $model->{config}->filter_catalog($model->{domain});
+    $filter_catalog //= $model->{config}->filter_catalog(
+        $model->{domain}, $model->{state} ? $model->{state}->grain : undef,
+    );
     return '<section id="selecto-results-' . _h($model->{config}->id) .
         '" class="sc-results" aria-live="polite">' .
         $class->_promoted_filter_header($model, $filter_catalog) .
@@ -173,7 +176,7 @@ sub websocket_message ($class, $model) {
     my $content = $results_only ? $class->results_fragment($model) : $class->surface($model);
     my $query_summary = $results_only
         ? Selecto::Components::Renderer::Builder->_query_summary_for_model(
-            $model, $model->{config}->filter_catalog($model->{domain}),
+            $model, $model->{config}->filter_catalog($model->{domain}, $model->{state}->grain),
         ) : undef;
     my $render_ms = int((time - $started) * 1000 + 0.5);
     return {
@@ -219,6 +222,7 @@ sub _api_console_control ($class, $model) {
 sub _form ($class, @args) { return Selecto::Components::Renderer::Builder->_form(@args); }
 sub _promoted_filter_header ($class, @args) { return Selecto::Components::Renderer::Builder->_promoted_filter_header(@args); }
 sub _results ($class, @args) { return Selecto::Components::Renderer::Results->_results(@args); }
+sub _retarget_note ($class, @args) { return Selecto::Components::Renderer::Results->_retarget_note(@args); }
 sub _table ($class, @args) { return Selecto::Components::Renderer::Results->_table(@args); }
 sub _nested_table { return Selecto::Components::Renderer::Results::_nested_table(@_); }
 sub _debug_panel ($class, @args) { return Selecto::Components::Renderer::Debug->_debug_panel(@args); }

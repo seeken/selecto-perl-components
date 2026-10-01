@@ -78,6 +78,7 @@ t/query_builder.t
 t/query_library.t
 t/renderer.t
 t/resource_composer.t
+t/retarget.t
 t/route_bridge.t
 t/row_actions.t
 t/security_boundaries.t

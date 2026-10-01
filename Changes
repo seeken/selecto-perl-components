@@ -1,5 +1,14 @@
 Revision history for Selecto-Components
 
+Unreleased
+    - The explorer retargets its row grain: a detail view whose columns all
+      come from one to-many association shows that association's rows, a
+      summary that reads one to-many association drills down into the rows
+      it counted, and a "Rows of" picker lists the domain's declared
+      retarget targets and swaps the pickers to the target's fields. The
+      rows_of URL parameter carries the grain. Requires Selecto with
+      Query->retarget.
+
 0.1.0  2026-09-30
     - First CPAN release: Mojolicious plugin providing the Selecto explorer,
       canned search pages, dashboards, record editor, row and selected-row

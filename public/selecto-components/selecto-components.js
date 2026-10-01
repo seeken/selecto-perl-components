@@ -2085,7 +2085,14 @@
     var activeLibraryView = form.querySelector(
       '[name="query_library_view"]:checked, select[name="query_library_view"]'
     );
-    if (!activeLibraryView || !activeLibraryView.value) {
+    // A changed row grain changes the column pickers, so the whole surface
+    // is rendered again rather than only the results.
+    var rowsOf = form.querySelector("[data-sc-rows-of]");
+    var grainChanged = rowsOf && rowsOf.value !== rowsOf.getAttribute("data-sc-rows-of");
+    if (grainChanged) {
+      var staleScope = form.querySelector('[name="render_scope"]');
+      if (staleScope) staleScope.value = "";
+    } else if (!activeLibraryView || !activeLibraryView.value) {
       var renderScope = form.querySelector('[name="render_scope"]');
       if (!renderScope) {
         renderScope = document.createElement("input");
@@ -3605,6 +3612,11 @@
     }
     var builder = event.target.closest("[data-sc-builder]");
     if (!builder) return;
+    if (event.target.matches("[data-sc-rows-of]")) {
+      // The column, group, and measure pickers depend on the row grain.
+      if (typeof builder.requestSubmit === "function") builder.requestSubmit();
+      return;
+    }
     if (event.target.matches('input[name="view"]')) {
       stageResultView(builder, event.target.value);
     } else if (event.target.matches('[name="filter_op"]')) {
