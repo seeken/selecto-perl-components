@@ -4,6 +4,8 @@ use warnings;
 
 use Test::More;
 use Mojolicious;
+use Test::Mojo;
+use Selecto::Components::ThemeStylesheet ();
 use Selecto::Components::APIConsole ();
 use Selecto::Components::Importer ();
 
@@ -40,9 +42,16 @@ $page = Selecto::Components::APIConsole->page(
         content_class => 'cgt-mojo-page',
     },
 );
+like $page, qr{<html lang="en" data-sac-color-scheme="light"><head>},
+    'the console document carries its scheme without an inline style';
 like $page,
-    qr{<html lang="en" data-sac-color-scheme="light" style="--sac-accent:#CC5500;--cgt-brand:#CC5500;--sac-teal:#DC8B52;--cgt-accent:#DC8B52;--sac-on-accent:#000000;--cgt-on-brand:#000000">},
-    'semantic host colors become console and common menu variables';
+    qr{<link rel="stylesheet" href="/selecto-api-console/selecto-api-console\.css\?v=0\.5\.5"><link rel="stylesheet" href="/selecto-api-console/theme\.css\?primary=CC5500&amp;secondary=DC8B52&amp;on_primary=000000&amp;v=[^"]+">},
+    'semantic host colors are linked as a same-origin console theme stylesheet';
+unlike $page, qr{\sstyle=|<style}, 'a themed console page has no inline style';
+is(Selecto::Components::ThemeStylesheet->css('console', {primary => '#cc5500', secondary => '#DC8B52', on_primary => '#000000'}),
+    ':root{--sac-accent:#CC5500 !important;--cgt-brand:#CC5500 !important;--sac-teal:#DC8B52 !important;' .
+        "--cgt-accent:#DC8B52 !important;--sac-on-accent:#000000 !important;--cgt-on-brand:#000000 !important}\n",
+    'semantic host colors become console and common menu variables');
 like $page,
     qr{<meta name="host-start" content="1"><link rel="stylesheet" href="/selecto-api-console/},
     'host dependencies can load before the shared console assets';
@@ -93,7 +102,7 @@ eval {
     );
 };
 like "$@", qr/theme primary must be a hexadecimal color/,
-    'unsafe tenant colors cannot enter the console style attribute';
+    'unsafe tenant colors cannot enter the console theme stylesheet';
 eval {
     Selecto::Components::APIConsole->page(
         base_path => '/api2/load/v1',
@@ -126,5 +135,16 @@ is(
     1,
     'the shared static path is installed only once',
 );
+
+my $t = Test::Mojo->new($app);
+$t->get_ok('/selecto-api-console/theme.css?primary=cc5500&on_primary=000000&v=1')
+    ->status_is(200)
+    ->content_type_like(qr{\Atext/css})
+    ->header_like('Cache-Control' => qr/immutable/)
+    ->content_is(':root{--sac-accent:#CC5500 !important;--cgt-brand:#CC5500 !important;' .
+        '--sac-teal:#CC5500 !important;--cgt-accent:#CC5500 !important;' .
+        "--sac-on-accent:#000000 !important;--cgt-on-brand:#000000 !important}\n");
+$t->get_ok('/selecto-api-console/theme.css?primary=red;x')->status_is(400);
+$t->get_ok('/selecto-api-console/theme.css')->status_is(200)->content_is('');
 
 done_testing;

@@ -7,6 +7,7 @@ use Selecto::Components::DateShortcut ();
 use Selecto::Components::I18N ();
 use Selecto::Components::ExplorerSession ();
 use Selecto::Components::Util qw(humanize);
+use Selecto::Components::ThemeStylesheet ();
 use Selecto::Analytics::UnitRegistry ();
 
 has [qw(id title path engine_factory)];
@@ -299,22 +300,16 @@ sub api_console_url ($self, $model = undef) {
     return "$url";
 }
 
+# The validated colours as CSS declarations, e.g. "--sc-brand:#123456".
 sub theme_style ($self) {
-    my $theme = $self->_resolved_theme;
+    return join ';', map { "$_->[0]:$_->[1]" }
+        @{Selecto::Components::ThemeStylesheet->declarations('explorer', $self->_resolved_theme)};
+}
 
-    my %properties = (
-        primary    => '--sc-brand',
-        secondary  => '--sc-accent',
-        on_primary => '--sc-on-brand',
-    );
-    my @declarations;
-    for my $key (qw(primary secondary on_primary)) {
-        next unless defined $theme->{$key};
-        die "theme $key must be a hexadecimal color\n"
-            if ref($theme->{$key}) || "$theme->{$key}" !~ /\A#[0-9A-Fa-f]{6}\z/;
-        push @declarations, $properties{$key} . ':' . uc("$theme->{$key}");
-    }
-    return join ';', @declarations;
+# Same-origin stylesheet URL for the theme colours ('' without colours); the
+# page links it instead of an inline style so a strict style-src policy holds.
+sub theme_stylesheet ($self) {
+    return Selecto::Components::ThemeStylesheet->href('explorer', $self->_resolved_theme);
 }
 
 sub theme_scheme ($self) {

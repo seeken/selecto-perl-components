@@ -504,6 +504,36 @@ test("HTTP pagination fallback submits the clicked page and shows loading", asyn
   expect(await page.evaluate(() => window.selectoHttpFallback)).toEqual({q: "1", page: "3"});
 });
 
+test("strict style-src needs no inline style for heat, rollup indents or the no-script chart", async ({browser}) => {
+  const strict = "default-src 'self'; script-src 'self'; style-src 'self'";
+  const html = `<!doctype html><html><head><link rel="stylesheet" href="/selecto-components.css"></head><body>
+    <div class="sc-grid-legend-scale"><span class="sc-heat-0"></span><span class="sc-heat-9"></span></div>
+    <table class="sc-aggregate-grid"><tbody><tr><td class="sc-grid-cell sc-heat-9">9</td></tr></tbody></table>
+    <button class="sc-drilldown-value sc-rollup-level-1">One</button>
+    <button class="sc-drilldown-value sc-rollup-level-3">Three</button>
+    <div class="sc-chart" data-sc-chart><div class="sc-chart-canvas"><canvas></canvas></div>
+      <div class="sc-chart-fallback">Fallback values</div></div></body></html>`;
+  for (const javaScriptEnabled of [true, false]) {
+    const context = await browser.newContext({javaScriptEnabled});
+    const page = await context.newPage();
+    const violations = [];
+    page.on("console", message => { if (/Content Security Policy/.test(message.text())) violations.push(message.text()); });
+    await page.route("http://selecto.test/**", route => route.request().url().endsWith(".css")
+      ? route.fulfill({path: stylesheet, contentType: "text/css"})
+      : route.fulfill({body: html, contentType: "text/html", headers: {"Content-Security-Policy": strict}}));
+    await page.goto("http://selecto.test/explorer");
+    await expect(page.locator(".sc-grid-legend-scale > .sc-heat-0"))
+      .not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(page.locator("td.sc-heat-9")).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(page.locator(".sc-rollup-level-1")).toHaveCSS("padding-left", "0px");
+    await expect(page.locator(".sc-rollup-level-3")).toHaveCSS("padding-left", "32px");
+    await expect(page.locator(".sc-chart-canvas")).toHaveCSS("display", javaScriptEnabled ? "block" : "none");
+    await expect(page.locator(".sc-chart-fallback")).toHaveCSS("display", javaScriptEnabled ? "none" : "block");
+    expect(violations).toEqual([]);
+    await context.close();
+  }
+});
+
 test("a results-only graph swap keeps the no-JavaScript fallback hidden", async ({page}) => {
   await page.route("http://selecto.test/**", route => route.fulfill({
     contentType: "text/html",

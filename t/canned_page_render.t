@@ -58,8 +58,11 @@ my $themed_html = Selecto::Components::CannedPage->new(
     theme => {scheme => 'light', primary => '#c04040', secondary => '#571414',
         on_primary => '#ffffff'},
 )->_html($result, 1);
-like $themed_html, qr{<html lang="en" data-sc-color-scheme="light" style="--sc-brand:#C04040;--sc-accent:#571414;--sc-on-brand:#FFFFFF">},
-    'a theme sets the colour scheme and tenant colours on the document';
+like $themed_html, qr{<html lang="en" data-sc-color-scheme="light"><head>},
+    'a theme sets the colour scheme on the document';
+like $themed_html, qr{<link rel="stylesheet" href="/selecto-components/theme\.css\?primary=C04040&amp;secondary=571414&amp;on_primary=FFFFFF&amp;v=[^"]+">},
+    'a theme links the tenant colours as a same-origin stylesheet';
+unlike $themed_html, qr{\sstyle=|<style}, 'a themed canned page has no inline style';
 ok !eval { Selecto::Components::CannedPage->new(
     page => $page, path => '/rows', engine_factory => sub {}, theme => {scheme => 'sepia'},
 ) }, 'an unknown colour scheme is refused';

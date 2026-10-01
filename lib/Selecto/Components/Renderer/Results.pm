@@ -491,8 +491,7 @@ sub _grid ($class, $result, $model) {
     my $legend = '';
     if ($colorize) {
         my $swatches = join '', map {
-            '<span style="background:color-mix(in srgb, var(--sc-accent) ' . $_ .
-                '%, var(--sc-panel))"></span>'
+            '<span class="' . _grid_heat_class($_) . '"></span>'
         } (10, 16, 22, 28, 34, 40, 46, 52, 58, 64);
         $legend = '<div class="sc-grid-legend"><strong>Color legend</strong><span>Low</span>' .
             '<span class="sc-grid-legend-scale" aria-label="Grid color legend">' .
@@ -552,15 +551,13 @@ sub _grid ($class, $result, $model) {
             my $heat = $colorize ? _grid_heat_percentage(
                 $cell->{value}, $grid->{maximum_positive}, $scale,
             ) : undef;
-            my $style = defined($heat)
-                ? ' style="background:color-mix(in srgb, var(--sc-accent) ' .
-                    _h($heat) . '%, var(--sc-panel))" data-sc-grid-heat="' .
-                    _h($heat) . '"'
-                : '';
+            my $heat_attribute = defined($heat)
+                ? ' data-sc-grid-heat="' . _h($heat) . '"' : '';
             $cells .= '<td class="sc-grid-cell' .
                 (_numeric_measure_class($grid->{measure}, $model) ? ' sc-numeric-measure' : '') .
+                (defined($heat) ? ' ' . _grid_heat_class($heat) : '') .
                 '" data-sc-grid-row="' . _h($current_row) . '" data-sc-grid-column="' .
-                _h($current_column) . '"' . $style . '><label class="sc-grid-cell-toggle"><input ' .
+                _h($current_column) . '"' . $heat_attribute . '><label class="sc-grid-cell-toggle"><input ' .
                 'class="sc-grid-cell-input" type="checkbox" ' .
                 'name="grid_cell" value="' . _h(encode_json($cell->{selection_values})) . '" ' .
                 'data-sc-grid-cell data-sc-grid-row="' . _h($current_row) .
@@ -606,6 +603,12 @@ sub _grid_heat_percentage ($value, $maximum, $scale) {
     $bucket = 1 if $bucket < 1;
     $bucket = 10 if $bucket > 10;
     return 10 + (($bucket - 1) * 6);
+}
+
+# The shared theme colours heat buckets by class (sc-heat-0 is 10%, sc-heat-9
+# is 64%) so a strict style-src policy needs no inline style.
+sub _grid_heat_class ($percentage) {
+    return 'sc-heat-' . int(($percentage - 10) / 6);
 }
 
 sub _numeric_measure_class ($column, $model) {
@@ -953,13 +956,11 @@ sub _drilldown_control ($class, $model, $pairs, $label_html, $level, $options = 
         $hidden .= _hidden($pairs->[$index], $pairs->[$index + 1]);
     }
     my $button_class = $options->{grid}
-        ? 'sc-drilldown-value sc-grid-drilldown-value' : 'sc-drilldown-value';
-    my $style = $options->{grid} ? ''
-        : ' style="--sc-rollup-level:' . _h($level) . '"';
+        ? 'sc-drilldown-value sc-grid-drilldown-value'
+        : 'sc-drilldown-value sc-rollup-level-' . int($level);
     return '<form class="sc-drilldown-form" action="' . _h($model->{config}->path) . '" method="' .
         $method . '" hx-ws:send>' . $hidden .
-        '<button class="' . $button_class . '"' . $style .
-        ' type="submit">' . $label_html . '</button></form>';
+        '<button class="' . $button_class . '" type="submit">' . $label_html . '</button></form>';
 }
 
 sub _pagination ($class, $model, $position = 'bottom') {

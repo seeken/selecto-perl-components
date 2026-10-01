@@ -122,6 +122,17 @@ is Selecto::Components::normalize_export_format('html'), '',
 
 my $t = Test::Mojo->new(TestSelectoComponents::app());
 
+$t->get_ok('/selecto-components/theme.css?primary=123456&secondary=abcdef&v=1')
+    ->status_is(200)
+    ->content_type_like(qr{\Atext/css})
+    ->header_like('Cache-Control' => qr/immutable/)
+    ->content_is(":root{--sc-brand:#123456 !important;--sc-accent:#ABCDEF !important}\n");
+$t->get_ok('/selecto-components/theme.css?primary=%23123456')->status_is(400);
+$t->get_ok('/selecto-components/theme.css?on_primary=12345;}body{x:y')->status_is(400);
+$t->get_ok('/selecto-api-console/theme.css?primary=123456')
+    ->status_is(200)
+    ->content_like(qr/--sac-accent:#123456 !important/);
+
 $t->get_ok('/explore/products')
     ->status_is(200)
     ->content_type_like(qr{text/html})
@@ -1055,7 +1066,7 @@ $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&group=catego
     ->content_like(qr{<tr class="sc-rollup-row sc-rollup-total"[^>]*>.*?sc-rollup-total-label">Total</span>}s)
     ->content_unlike(qr{<th[^>]*>Details</th>})
     ->content_unlike(qr/View details/i)
-    ->content_like(qr{class="sc-drilldown-value"[^>]*>\[NULL\]</button>})
+    ->content_like(qr{class="sc-drilldown-value sc-rollup-level-1"[^>]*>\[NULL\]</button>})
     ->element_exists('form.sc-drilldown-form input[name="filter_op"][value="is_null"]')
     ->content_like(qr{filter_field" value="unit_price".*?filter_group" value="0".*?filter_field" value="category\.category_name".*?filter_group" value="0".*?filter_promote_field" value="category\.category_name"}s);
 
@@ -1090,7 +1101,8 @@ $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&group=catego
     ->element_exists_not('tr.sc-rollup-subtotal[data-rollup-level="1"] input[name="filter_field"][value="units_in_stock"]')
     ->element_exists('tr.sc-rollup-detail[data-rollup-level="2"] input[name="filter_field"][value="category.category_name"]')
     ->element_exists('tr.sc-rollup-detail[data-rollup-level="2"] input[name="filter_field"][value="units_in_stock"]')
-    ->element_exists('button.sc-drilldown-value[style="--sc-rollup-level:2"]')
+    ->element_exists('button.sc-drilldown-value.sc-rollup-level-2')
+    ->element_exists_not('[style]')
     ->content_unlike(qr/View details/i);
 
 $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&group=category.category_name&group=units_in_stock&measure=count&order=product_name&direction=asc&limit=25&page=2')
@@ -1217,7 +1229,7 @@ $t->get_ok('/explore/products?q=1&view=graph&chart_type=area&graph_show_table=1&
     ->text_is('[data-sc-limit-label]' => 'Points')
     ->element_exists('[data-sc-page-control][hidden] input[name="page"][value="1"][disabled]')
     ->element_exists('[data-sc-chart][data-chart-type="area"][data-chart-data] canvas[role="img"]')
-    ->element_exists('head > noscript')
+    ->element_exists_not('noscript style')
     ->element_exists_not('[data-sc-chart] noscript')
     ->element_exists('[data-sc-picker-kind="measure"] [data-field="total_price"] select[name="measure_transform"] option[value="moving_average"][selected]')
     ->element_exists('[data-sc-picker-kind="measure"] [data-field="total_price"] input[name="measure_transform_window"][value="2"]')

@@ -370,12 +370,7 @@ sub _relation_colors ($sql) {
 }
 
 sub _relation_span ($text, $color) {
-    my $style = '';
-    if ($color > 8) {
-        my $hue = (29 + ($color - 1) * 137) % 360;
-        $style = ' style="--sc-sql-relation-color:hsl(' . $hue . ' 78% 72%)"';
-    }
-    return '<span class="sc-sql-relation sc-sql-relation-' . int($color) . '"' . $style . '>' .
+    return '<span class="sc-sql-relation sc-sql-relation-' . int($color) . '">' .
         _h($text) . '</span>';
 }
 

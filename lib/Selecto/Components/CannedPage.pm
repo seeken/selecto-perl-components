@@ -12,6 +12,7 @@ use Selecto::Components::Renderer ();
 use Selecto::Components::Renderer::Results ();
 use Selecto::Components::AssetManifest qw(asset_revision);
 use Selecto::Components::Config ();
+use Selecto::Components::ThemeStylesheet ();
 use Selecto::Components::Util qw(humanize);
 
 # theme (optional): {scheme => 'light'|'dark', primary, secondary, on_primary} as #RRGGBB,
@@ -263,15 +264,11 @@ sub _input ($self, $controller, $payload = undef) {
 sub _html ($self, $result, $public) {
     my $title = _escape($self->title // $self->page->id);
     my $theme = $self->theme // {};
-    my @style = map {
-        my ($key, $property) = @$_;
-        defined($theme->{$key}) ? "$property:" . uc($theme->{$key}) : ();
-    } ([primary => '--sc-brand'], [secondary => '--sc-accent'], [on_primary => '--sc-on-brand']);
     return Selecto::Components::Renderer->page_document(
         title => $title, channel_id => 'selecto-page-channel-' . $self->page->id,
         (defined($theme->{scheme})
             ? (scheme_attribute => ' data-sc-color-scheme="' . $theme->{scheme} . '"') : ()),
-        (@style ? (theme_attribute => ' style="' . _escape(join ';', @style) . '"') : ()),
+        theme_stylesheet => Selecto::Components::ThemeStylesheet->href('explorer', $theme),
         (($self->websocket_enabled // 1) ? (ws_path => $self->path . '/ws') : ()),
         surface => $self->_surface($result, $public),
         include_explorer_script => 0,
@@ -707,7 +704,8 @@ with no WebSocket route.
               on_primary => '#FFFFFF'}
 
 This sets the page's colour scheme and brand colours, in the same shape a
-L<Selecto::Components/theme_resolver> returns. Without it, the page uses the
+L<Selecto::Components/theme_resolver> returns. The colours are linked as the
+plugin's same-origin C</selecto-components/theme.css>, not an inline style. Without it, the page uses the
 stylesheet's dark palette. The plugin's C<pages> configuration does not pass
 C<theme> through; construct the component directly to use it.
 

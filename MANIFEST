@@ -33,6 +33,7 @@ lib/Selecto/Components/Resource/Composer.pm
 lib/Selecto/Components/Resource/Registry.pm
 lib/Selecto/Components/RowActions.pm
 lib/Selecto/Components/State.pm
+lib/Selecto/Components/ThemeStylesheet.pm
 lib/Selecto/Components/Util.pm
 lib/Selecto/Components/WebSocketPolicy.pm
 LICENSE

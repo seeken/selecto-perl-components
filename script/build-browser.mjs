@@ -80,8 +80,41 @@ function perlManifest(manifest) {
     `use strict;\nuse warnings;\nuse Exporter qw(import);\n\n` +
     `our @EXPORT_OK = qw(asset_revision);\n` +
     `my $ASSET_REVISION = '${manifest.revision}';\n\n` +
-    `sub asset_revision { return $ASSET_REVISION; }\n\n1;\n`;
+    `sub asset_revision { return $ASSET_REVISION; }\n\n1;\n` +
+    perlManifestPod;
 }
+
+const perlManifestPod = `
+__END__
+
+=head1 NAME
+
+Selecto::Components::AssetManifest - Cache-busting revision of the packaged browser assets
+
+=head1 DESCRIPTION
+
+This module is an internal part of L<Selecto::Components>. Its interface may
+change without notice; use the plugin and its documented host modules
+instead.
+
+=head1 SEE ALSO
+
+L<Selecto::Components>
+
+=head1 AUTHOR
+
+Chris Rohlfs <seeken@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is Copyright (c) 2026 by Chris Rohlfs.
+
+This is free software, licensed under:
+
+  The Artistic License 2.0 (GPL Compatible)
+
+=cut
+`;
 
 async function writeOrCheck(file, expected, label) {
   if (!process.argv.includes("--check")) {
