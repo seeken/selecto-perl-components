@@ -8,3 +8,6 @@ Revision history for Selecto-Components
     - Native-template pages (Selecto::Components::Templates) moved to the
       separate optional Selecto-Components-Templates add-on.
     - Licensed under the Artistic License 2.0.
+    - Strict Content-Security-Policy clean: no inline styles; heat and rollup
+      cells use shared theme classes and host theme colours load from a
+      validated same-origin stylesheet (Selecto::Components::ThemeStylesheet).
