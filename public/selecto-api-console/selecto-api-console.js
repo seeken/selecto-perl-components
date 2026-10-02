@@ -151,6 +151,40 @@
     return `${path}${path.includes("?") ? "&" : "?"}filename=${encodeURIComponent(filename)}`;
   }
 
+  function safeResourcePathTemplate(value, base) {
+    const template = String(value || "");
+    if (!template.startsWith(`${base}/`) || (template.match(/\{id\}/g) || []).length !== 1) return "";
+    try {
+      normalizeAPIBase(template.replace("{id}", "1"));
+      return template;
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function resourceRequestPath(template, id, fields) {
+    const resourceId = String(id || "").trim();
+    if (!template || !resourceId) return "";
+    const path = template.replace("{id}", encodeURIComponent(resourceId));
+    const selected = Array.from(new Set((fields || []).map((field) => String(field || "").trim()).filter(Boolean)));
+    return selected.length
+      ? `${path}?fields=${selected.map(encodeURIComponent).join(",")}` : path;
+  }
+
+  function fieldTraversesMany(domain, path) {
+    const segments = String(path || "").split(".").filter(Boolean);
+    if (segments.length < 2) return false;
+    const schemas = domain && domain.schemas || {};
+    let relation = domain && domain.source || {};
+    for (const segment of segments.slice(0, -1)) {
+      const association = relation && relation.associations && relation.associations[segment];
+      if (!association) return false;
+      if (associationIsMany(association, schemas)) return true;
+      relation = schemas[association.queryable] || {};
+    }
+    return false;
+  }
+
   async function discoverCanonicalAPI(base, fetchJSON) {
     const normalizedBase = normalizeAPIBase(base);
     const manifest = await fetchJSON(`${normalizedBase}/`);
@@ -168,6 +202,12 @@
     const openapiPath = route("getOpenApi", `${normalizedBase}/openapi.json`);
     const queryPath = route("queryDomain", `${normalizedBase}/query`);
     const writePath = route("writeDomain", `${normalizedBase}/write`);
+    const resourceRoute = routes.find((item) => item
+      && item.operation_id === "getCustomerResourceVersion"
+      && String(item.method || "GET").toUpperCase() === "GET");
+    const resourcePath = safeResourcePathTemplate(
+      resourceRoute && resourceRoute.path, normalizedBase,
+    );
     const actionRoute = routes.find((item) => item && item.operation_id === "executeAction");
     let actionPath = `${normalizedBase}/actions/{action}`;
     if (actionRoute && typeof actionRoute.path === "string" && actionRoute.path.endsWith("/actions/{action}")) {
@@ -189,7 +229,7 @@
       importer: advertisedAccess.importer === true,
     };
     const queryResponseFormats = discoverQueryResponseFormats(openapi, queryPath);
-    return {base: normalizedBase, manifest, domain, openapi, queryPath, writePath, actionPath, access, queryResponseFormats};
+    return {base: normalizedBase, manifest, domain, openapi, queryPath, resourcePath, writePath, actionPath, access, queryResponseFormats};
   }
 
   function humanize(value) {
@@ -464,6 +504,28 @@
     return Object.keys(value).filter((key) => !allowed.includes(key));
   }
 
+  function operationHeaderSpecs(openapi, path, method = "post") {
+    const pathSpec = openapi && openapi.paths && openapi.paths[path];
+    if (!isPlainObject(pathSpec)) return [];
+    const operation = pathSpec[String(method).toLowerCase()];
+    const parameters = [
+      ...(Array.isArray(pathSpec.parameters) ? pathSpec.parameters : []),
+      ...(operation && Array.isArray(operation.parameters) ? operation.parameters : []),
+    ];
+    const byName = new Map();
+    parameters.forEach((parameter) => {
+      if (!isPlainObject(parameter) || parameter.in !== "header"
+        || typeof parameter.name !== "string"
+        || !/^[A-Za-z][A-Za-z0-9-]*$/.test(parameter.name)) return;
+      byName.set(parameter.name.toLowerCase(), {
+        name: parameter.name,
+        required: parameter.required === true,
+        description: typeof parameter.description === "string" ? parameter.description : "",
+      });
+    });
+    return Array.from(byName.values());
+  }
+
   function segmentParameterSpecs(library, ids) {
     const segments = (library && library.segments) || {};
     const specs = {};
@@ -494,6 +556,7 @@
       this.manifest = null;
       this.openapi = null;
       this.queryPath = `${this.base}/query`;
+      this.resourcePath = "";
       this.writePath = `${this.base}/write`;
       this.actionPath = `${this.base}/actions/{action}`;
       this.access = {read: true, write: true, action: true, importer: false};
@@ -505,7 +568,11 @@
       this.availableGroupOpen = {field: new Map(), filter: new Map()};
       this.availableSearch = {field: "", filter: ""};
       this.nextSelectedFieldId = 1;
+      this.postQueryFieldState = null;
+      this.resourceQueryFieldState = null;
       this.state = {
+        queryMethod: "post",
+        resourceId: "",
         mode: "select",
         selectedFields: [],
         configuredField: "",
@@ -531,7 +598,7 @@
       this.writeState = {
         operation: "", assignments: {}, included: {}, filters: [],
         expectedCount: 1, returning: [], conflictTarget: [], updateFields: [],
-        relationships: {},
+        relationships: {}, headers: {},
         rawDirty: false,
         response: null,
       };
@@ -546,6 +613,7 @@
         this.domain = discovery.domain;
         this.openapi = discovery.openapi;
         this.queryPath = discovery.queryPath;
+        this.resourcePath = discovery.resourcePath;
         this.writePath = discovery.writePath;
         this.actionPath = discovery.actionPath;
         this.access = discovery.access;
@@ -641,6 +709,38 @@
       };
     }
 
+    setQueryMethod(value) {
+      const nextMethod = value === "get" && this.resourcePath ? "get" : "post";
+      if (nextMethod === "get" && this.state.queryMethod !== "get") {
+        this.postQueryFieldState = {
+          selectedFields: this.state.selectedFields.map((selection) => ({...selection})),
+          subtables: this.state.subtables.slice(),
+          configuredField: this.state.configuredField,
+        };
+        const saved = this.resourceQueryFieldState;
+        this.state.selectedFields = saved
+          ? saved.selectedFields.map((selection) => ({...selection}))
+          : this.state.selectedFields
+              .filter((selection) => !fieldTraversesMany(this.domain, selection.field))
+              .map((selection) => ({...selection, alias: "", format: ""}));
+        this.state.subtables = [];
+        this.state.configuredField = "";
+      } else if (nextMethod === "post" && this.state.queryMethod === "get") {
+        this.resourceQueryFieldState = {
+          selectedFields: this.state.selectedFields.map((selection) => ({...selection})),
+        };
+        if (this.postQueryFieldState) {
+          this.state.selectedFields = this.postQueryFieldState.selectedFields
+            .map((selection) => ({...selection}));
+          this.state.subtables = this.postQueryFieldState.subtables.slice();
+          this.state.configuredField = this.postQueryFieldState.configuredField;
+        }
+      }
+      this.state.queryMethod = nextMethod;
+      this.state.rawDirty = false;
+      return nextMethod;
+    }
+
     render() {
       this.root.innerHTML = `
         <header class="sac-header">
@@ -667,12 +767,21 @@
             <aside class="sac-builder">
               <section class="sac-card">
                 <div class="sac-card-heading"><div><span class="sac-step">1</span><h2>Choose data</h2></div></div>
-                <label class="sac-label" for="sac-source-mode">Query source</label>
-                <select id="sac-source-mode" data-sac-mode>
-                  <option value="select">Choose fields</option>
-                  <option value="projection">Named projection</option>
-                  <option value="view">Named view</option>
-                </select>
+                <label class="sac-label" for="sac-query-method">Request method</label>
+                <select id="sac-query-method" data-sac-query-method></select>
+                <div data-sac-resource-id-wrap hidden>
+                  <label class="sac-label" for="sac-resource-id">Resource ID</label>
+                  <input id="sac-resource-id" type="text" inputmode="numeric" placeholder="7001" data-sac-resource-id>
+                  <p class="sac-help">The resource GET always returns ID, customer reference, and aggregate version. Selected fields are added through <code>fields=</code>.</p>
+                </div>
+                <div data-sac-post-source>
+                  <label class="sac-label" for="sac-source-mode">Query source</label>
+                  <select id="sac-source-mode" data-sac-mode>
+                    <option value="select">Choose fields</option>
+                    <option value="projection">Named projection</option>
+                    <option value="view">Named view</option>
+                  </select>
+                </div>
                 <div data-sac-select-mode>
                   <div class="sac-selected-fields" data-sac-selected-fields></div>
                   <div class="sac-normalization" data-sac-normalization></div>
@@ -690,7 +799,7 @@
                   <p class="sac-help" data-sac-view-help></p>
                 </div>
               </section>
-              <section class="sac-card">
+              <section class="sac-card" data-sac-post-query-card>
                 <div class="sac-card-heading"><div><span class="sac-step">2</span><h2>Constrain</h2></div></div>
                 <div data-sac-segment-list>
                   <span class="sac-label">Named segments</span>
@@ -703,7 +812,7 @@
                 <input id="sac-filter-search" type="search" placeholder="Search filter fields" data-sac-filter-search>
                 <div class="sac-field-list sac-filter-field-list" data-sac-filter-field-list></div>
               </section>
-              <section class="sac-card">
+              <section class="sac-card" data-sac-post-query-card>
                 <div class="sac-card-heading"><div><span class="sac-step">3</span><h2>Order & page</h2></div><button type="button" class="sac-text-button" data-sac-add-order>+ Sort</button></div>
                 <label class="sac-label" for="sac-ordering">Named ordering</label>
                 <select id="sac-ordering" data-sac-ordering></select>
@@ -732,11 +841,11 @@
             <section class="sac-execution">
               <section class="sac-request-card">
                 <div class="sac-card-heading">
-                  <div><span class="sac-method">POST</span><code data-sac-query-path></code></div>
-                  <div class="sac-compact-actions"><span class="sac-edited" data-sac-edited hidden>Manually edited</span><button type="button" class="sac-text-button" data-sac-load-json>Load into chooser</button><button type="button" class="sac-text-button" data-sac-reset-json>Reset JSON</button><button type="button" class="sac-text-button" data-sac-copy-request>Copy</button></div>
+                  <div><span class="sac-method" data-sac-query-method-badge>POST</span><code data-sac-query-path></code></div>
+                  <div class="sac-compact-actions"><span class="sac-edited" data-sac-edited hidden>Manually edited</span><span data-sac-post-editor-actions><button type="button" class="sac-text-button" data-sac-load-json>Load into chooser</button><button type="button" class="sac-text-button" data-sac-reset-json>Reset JSON</button></span><button type="button" class="sac-text-button" data-sac-copy-request>Copy</button></div>
                 </div>
                 <div class="sac-import-message" data-sac-import-message hidden></div>
-                <textarea class="sac-request-editor" spellcheck="false" aria-label="Query request JSON" data-sac-request></textarea>
+                <textarea class="sac-request-editor" spellcheck="false" aria-label="Query request" data-sac-request></textarea>
                 <div class="sac-run-row"><p>All fields and identifiers are validated against the published domain.</p><button type="button" class="sac-button sac-primary" data-sac-run><span data-sac-run-label>Run query</span></button></div>
               </section>
               <section class="sac-response-card">
@@ -800,6 +909,14 @@
       this.root.querySelector("[data-sac-domain-name]").textContent = this.domain.name || "Domain";
       this.root.querySelector("[data-sac-base]").textContent = this.base;
       this.root.querySelector("[data-sac-query-path]").textContent = this.queryPath;
+      appendOptions(
+        this.root.querySelector("[data-sac-query-method]"),
+        [
+          {value: "post", label: "POST query"},
+          ...(this.resourcePath ? [{value: "get", label: "GET resource"}] : []),
+        ],
+        this.state.queryMethod,
+      );
       this.root.querySelector("[data-sac-write-path]").textContent = this.writePath;
       this.root.querySelector("[data-sac-domain-link]").href = `${this.base}/domain`;
       this.root.querySelector("[data-sac-openapi-link]").href = `${this.base}/openapi.json`;
@@ -989,6 +1106,10 @@
       });
     }
 
+    writeHeaderSpecs() {
+      return operationHeaderSpecs(this.openapi, this.writePath);
+    }
+
     writeFieldsForOperation(fields, fieldContract, operation) {
       const permission = ["insert", "upsert"].includes(operation) ? "insertable" : "updatable";
       return fields.filter((field) => {
@@ -1100,6 +1221,27 @@
       operation.dataset.sacWriteOperation = "";
       appendOptions(operation, operations.map((name) => ({value: name, label: humanize(name)})), this.writeState.operation);
       container.append(operationLabel, operation);
+
+      const headerSpecs = this.writeHeaderSpecs();
+      if (headerSpecs.length) {
+        container.append(element("span", "sac-label", "Request headers"));
+        const headers = element("div", "sac-mutation-fields");
+        headerSpecs.forEach((spec) => {
+          const row = element("label", "sac-mutation-field");
+          const copy = element("span", "");
+          copy.append(
+            element("strong", "", `${spec.name}${spec.required ? " *" : ""}`),
+            element("code", "", "header"),
+          );
+          if (spec.description) copy.append(element("small", "sac-help", spec.description));
+          const input = this.valueControl("text", this.writeState.headers[spec.name], {
+            dataset: {sacWriteHeader: spec.name}, required: spec.required,
+          });
+          row.append(copy, input);
+          headers.append(row);
+        });
+        container.append(headers);
+      }
 
       const contract = this.domain.writes || {};
       const fieldContract = contract.fields || {};
@@ -1383,11 +1525,20 @@
     }
 
     renderAll() {
+      const resourceGet = this.state.queryMethod === "get" && Boolean(this.resourcePath);
       const mode = this.state.mode;
+      this.root.querySelector("[data-sac-query-method]").value = resourceGet ? "get" : "post";
+      this.root.querySelector("[data-sac-resource-id-wrap]").hidden = !resourceGet;
+      this.root.querySelector("[data-sac-resource-id]").value = this.state.resourceId;
+      this.root.querySelector("[data-sac-post-source]").hidden = resourceGet;
+      this.root.querySelectorAll("[data-sac-post-query-card]").forEach((card) => (card.hidden = resourceGet));
+      this.root.querySelector("[data-sac-post-editor-actions]").hidden = resourceGet;
+      this.root.querySelector("[data-sac-query-method-badge]").textContent = resourceGet ? "GET" : "POST";
+      this.root.querySelector("[data-sac-run-label]").textContent = resourceGet ? "Run GET" : "Run query";
       this.root.querySelector("[data-sac-mode]").value = mode;
-      this.root.querySelector("[data-sac-select-mode]").hidden = mode !== "select";
-      this.root.querySelector("[data-sac-projection-mode]").hidden = mode !== "projection";
-      this.root.querySelector("[data-sac-view-mode]").hidden = mode !== "view";
+      this.root.querySelector("[data-sac-select-mode]").hidden = !resourceGet && mode !== "select";
+      this.root.querySelector("[data-sac-projection-mode]").hidden = resourceGet || mode !== "projection";
+      this.root.querySelector("[data-sac-view-mode]").hidden = resourceGet || mode !== "view";
       this.root.querySelector("[data-sac-projection]").value = this.state.projection;
       this.root.querySelector("[data-sac-view]").value = this.state.view;
       this.root.querySelector("[data-sac-ordering]").value = this.state.ordering;
@@ -1403,6 +1554,7 @@
       this.renderSegmentGroups();
       this.renderSelectedFields();
       this.renderNormalization();
+      if (resourceGet) this.root.querySelector("[data-sac-normalization]").hidden = true;
       this.renderFieldList();
       this.renderViewHelp();
       this.renderParameters();
@@ -1457,7 +1609,12 @@
       const container = this.root.querySelector("[data-sac-selected-fields]");
       container.replaceChildren();
       if (!this.state.selectedFields.length) {
-        container.append(element("p", "sac-muted", "Choose at least one field."));
+        container.append(element(
+          "p", "sac-muted",
+          this.state.queryMethod === "get"
+            ? "No additional fields selected; the baseline resource fields will still be returned."
+            : "Choose at least one field.",
+        ));
         return;
       }
       this.state.selectedFields.forEach((selection, index) => {
@@ -1474,7 +1631,10 @@
         const configured = [selection.alias && `as ${selection.alias}`, selection.format].filter(Boolean).join(" · ");
         if (configured) copy.append(element("small", "sac-field-config-summary", configured));
         const actions = element("div", "sac-field-actions");
-        [["configure", "Configure", "Configure"], ["up", "↑", "Move up"], ["down", "↓", "Move down"], ["remove", "×", "Remove"]].forEach(([action, text, label]) => {
+        const actionsAvailable = this.state.queryMethod === "get"
+          ? [["up", "↑", "Move up"], ["down", "↓", "Move down"], ["remove", "×", "Remove"]]
+          : [["configure", "Configure", "Configure"], ["up", "↑", "Move up"], ["down", "↓", "Move down"], ["remove", "×", "Remove"]];
+        actionsAvailable.forEach(([action, text, label]) => {
           const button = element("button", "", text);
           button.type = "button";
           button.dataset.sacFieldAction = action;
@@ -1536,7 +1696,10 @@
     }
 
     renderFieldList() {
-      this.renderAvailableFields("field", this.fields.filter((field) => !field.pickerHidden));
+      this.renderAvailableFields("field", this.fields.filter((field) =>
+        !field.pickerHidden
+          && (this.state.queryMethod !== "get" || !fieldTraversesMany(this.domain, field.path))
+      ));
     }
 
     renderAvailableFields(kind, fields) {
@@ -1822,6 +1985,37 @@
       return payload;
     }
 
+    buildResourceRequest() {
+      const errors = [];
+      const id = String(this.state.resourceId || "").trim();
+      const source = this.domain && this.domain.source || {};
+      const primaryKey = source.primary_key || "id";
+      const primaryType = source.columns && source.columns[primaryKey]
+        && source.columns[primaryKey].type || "string";
+      if (!id) errors.push("Resource ID is required.");
+      else if (["integer", "int", "bigint"].includes(String(primaryType).toLowerCase())
+        && !/^[1-9]\d*$/.test(id)) errors.push("Resource ID must be a positive integer.");
+      const baseline = new Set(["id", "customer_reference", "aggregate_version"]);
+      const fields = [];
+      const seen = new Set();
+      this.state.selectedFields.forEach((selection) => {
+        const field = String(selection.field || "");
+        if (!field || baseline.has(field) || seen.has(field)) return;
+        seen.add(field);
+        if (fieldTraversesMany(this.domain, field)) {
+          errors.push(`${field} crosses a to-many relationship; use POST query.`);
+          return;
+        }
+        fields.push(field);
+      });
+      if (fields.length > 50) errors.push("GET resource allows at most 50 additional fields.");
+      return {
+        path: errors.length ? "" : resourceRequestPath(this.resourcePath, id, fields),
+        fields,
+        errors,
+      };
+    }
+
     chooserStateFromPayload(payload) {
       if (!isPlainObject(payload)) throw new Error("The request must be a JSON object.");
       const allowed = ["select", "projection", "view", "segments", "parameters", "filters", "ordering", "order_by", "timezone", "row_format", "limit", "offset"];
@@ -2003,6 +2197,22 @@
     }
 
     syncRequest(force) {
+      if (this.state.queryMethod === "get" && this.resourcePath) {
+        const model = this.buildResourceRequest();
+        const editor = this.root.querySelector("[data-sac-request]");
+        editor.value = model.path || this.resourcePath;
+        editor.readOnly = true;
+        this.root.querySelector("[data-sac-query-path]").textContent = model.path || this.resourcePath;
+        this.root.querySelector("[data-sac-run]").disabled = Boolean(model.errors.length);
+        this.state.rawDirty = false;
+        this.root.querySelector("[data-sac-edited]").hidden = true;
+        this.setImportMessage(model.errors.join(" "), model.errors.length ? "error" : "");
+        this.updateCurl();
+        return;
+      }
+      this.root.querySelector("[data-sac-request]").readOnly = false;
+      this.root.querySelector("[data-sac-query-path]").textContent = this.queryPath;
+      this.root.querySelector("[data-sac-run]").disabled = false;
       if (this.state.rawDirty && !force) return;
       this.root.querySelector("[data-sac-request]").value = JSON.stringify(this.buildPayload(), null, 2);
       this.state.rawDirty = false;
@@ -2029,6 +2239,13 @@
     }
 
     updateCurl() {
+      if (this.state.queryMethod === "get" && this.resourcePath) {
+        const model = this.buildResourceRequest();
+        const target = this.root.querySelector("[data-sac-curl]");
+        if (target) target.textContent = model.path
+          ? this.getCurlCommand(model.path) : model.errors.join(" ");
+        return;
+      }
       const editor = this.root.querySelector("[data-sac-request]");
       const body = editor ? editor.value : JSON.stringify(this.buildPayload(), null, 2);
       const command = this.curlCommand(
@@ -2044,7 +2261,7 @@
         || QUERY_RESPONSE_FORMATS[0];
     }
 
-    curlCommand(path, body, responseFormat = "json", responseFilename = "") {
+    curlCommand(path, body, responseFormat = "json", responseFilename = "", extraHeaders = {}) {
       const auth = curlAuthConfiguration(this.curlAuth);
       const format = this.responseFormat(responseFormat);
       const validation = validateDownloadFilename(responseFilename, format);
@@ -2057,16 +2274,31 @@
         ...auth.args,
         "  -H 'Content-Type: application/json'",
         `  -H ${shellEscape(`Accept: ${format.mediaType}`)}`,
+        ...Object.entries(extraHeaders).filter(([_name, value]) => String(value || "").trim())
+          .map(([name, value]) => `  -H ${shellEscape(`${name}: ${value}`)}`),
         `  --data-binary ${shellEscape(body)}`,
       ];
       if (format.id !== "json") command.push(`  --output ${shellEscape(filename)}`);
       return command.join(" \\\n");
     }
 
+    getCurlCommand(path) {
+      const auth = curlAuthConfiguration(this.curlAuth);
+      const url = `${window.location.origin}${path}`;
+      return [
+        `curl -X GET ${shellEscape(url)}`,
+        ...auth.args,
+        "  -H 'Accept: application/json'",
+      ].join(" \\\n");
+    }
+
     updateMutationCurl(kind, path) {
       const editor = this.root.querySelector(`[data-sac-${kind}-request]`);
       const target = this.root.querySelector(`[data-sac-${kind}-curl]`);
-      if (editor && target) target.textContent = this.curlCommand(path, editor.value);
+      const headers = kind === "write" ? this.writeState.headers : {};
+      if (editor && target) target.textContent = this.curlCommand(
+        path, editor.value, "json", "", headers,
+      );
     }
 
     coerceValue(raw, type, label) {
@@ -2203,6 +2435,7 @@
         conflictTarget: [],
         updateFields: [],
         relationships: {},
+        headers: Object.assign({}, this.writeState.headers || {}),
         rawDirty: false,
         response: null,
       };
@@ -2306,6 +2539,11 @@
       if (!operations.includes(operation)) errors.push("Choose an enabled write operation.");
       const fields = new Map(this.rootFields().map((field) => [field.name, field]));
       const contract = this.domain && this.domain.writes || {};
+      this.writeHeaderSpecs().forEach((spec) => {
+        if (spec.required && !String(this.writeState.headers[spec.name] || "").trim()) {
+          errors.push(`${spec.name} request header is required.`);
+        }
+      });
       const permission = ["insert", "upsert"].includes(operation) ? "insertable" : "updatable";
       if (operation !== "delete") {
         payload.assignments = {};
@@ -2732,9 +2970,16 @@
       status.dataset.kind = "running";
       const started = performance.now();
       try {
+        const headers = {
+          "Content-Type": "application/json", Accept: "application/json",
+          "X-CSRF-Token": this.csrfToken,
+        };
+        if (isWrite) Object.entries(this.writeState.headers || {}).forEach(([name, value]) => {
+          if (String(value || "").trim()) headers[name] = String(value);
+        });
         const response = await fetch(path, {
           method: "POST", credentials: "same-origin",
-          headers: {"Content-Type": "application/json", Accept: "application/json", "X-CSRF-Token": this.csrfToken},
+          headers,
           body: JSON.stringify(model.payload),
         });
         const text = await response.text();
@@ -2845,6 +3090,10 @@
 
     onChange(event) {
       const target = event.target;
+      if (target.matches("[data-sac-query-method]")) {
+        this.setQueryMethod(target.value);
+        return this.renderAll();
+      }
       if (target.matches("[data-sac-write-operation]")) {
         this.writeState.operation = target.value;
         this.writeState.assignments = {};
@@ -2971,8 +3220,16 @@
 
     onInput(event) {
       const target = event.target;
+      if (target.matches("[data-sac-resource-id]")) {
+        this.state.resourceId = target.value;
+        return this.syncRequest(true);
+      }
       if (target.matches("[data-sac-write-field]")) {
         this.writeState.assignments[target.dataset.sacWriteField] = target.value;
+        return this.mutationFormChanged("write", false);
+      }
+      if (target.matches("[data-sac-write-header]")) {
+        this.writeState.headers[target.dataset.sacWriteHeader] = target.value;
         return this.mutationFormChanged("write", false);
       }
       if (target.matches("[data-sac-write-relationship-field]")) {
@@ -3097,6 +3354,9 @@
     }
 
     async run() {
+      if (this.state.queryMethod === "get" && this.resourcePath) {
+        return this.runResource();
+      }
       const editor = this.root.querySelector("[data-sac-request]");
       let request;
       try {
@@ -3165,6 +3425,49 @@
       }
     }
 
+    async runResource() {
+      const model = this.buildResourceRequest();
+      if (model.errors.length) {
+        this.setStatus("Invalid resource request", "error");
+        this.showLocalError(model.errors.join(" "));
+        return;
+      }
+      const button = this.root.querySelector("[data-sac-run]");
+      button.disabled = true;
+      button.classList.add("is-running");
+      this.root.querySelector("[data-sac-run-label]").textContent = "Running…";
+      this.setStatus("Running resource GET", "running");
+      const started = performance.now();
+      try {
+        const response = await fetch(model.path, {
+          method: "GET",
+          credentials: "same-origin",
+          headers: {Accept: "application/json"},
+        });
+        const text = await response.text();
+        let payload;
+        try {
+          payload = text ? JSON.parse(text) : null;
+        } catch (_error) {
+          payload = {ok: false, error: {code: "invalid_response", message: text || "Empty response", details: {}}};
+        }
+        this.state.response = payload;
+        this.renderResponse(payload);
+        this.setStatus(
+          `${response.status} ${response.statusText} · ${Math.round(performance.now() - started)} ms`,
+          response.ok ? "success" : "error",
+        );
+      } catch (error) {
+        this.state.response = {ok: false, error: {code: "network_error", message: error.message, details: {}}};
+        this.renderResponse(this.state.response);
+        this.setStatus("Network error", "error");
+      } finally {
+        button.classList.remove("is-running");
+        button.disabled = Boolean(this.buildResourceRequest().errors.length);
+        this.root.querySelector("[data-sac-run-label]").textContent = "Run GET";
+      }
+    }
+
     downloadResponse(blob, filename) {
       const url = global.URL.createObjectURL(blob);
       const link = global.document.createElement("a");
@@ -3197,8 +3500,12 @@
       head.replaceChildren();
       body.replaceChildren();
       const data = payload && payload.data;
-      const columns = data && Array.isArray(data.columns) ? data.columns : [];
-      const rows = data && Array.isArray(data.rows) ? data.rows : [];
+      let columns = data && Array.isArray(data.columns) ? data.columns : [];
+      let rows = data && Array.isArray(data.rows) ? data.rows : [];
+      if (this.state.queryMethod === "get" && payload && payload.ok && isPlainObject(data)) {
+        columns = Object.keys(data);
+        rows = [data];
+      }
       if (columns.length) {
         const tr = element("tr", "");
         columns.forEach((column) => {
@@ -3273,9 +3580,13 @@
     operatorsForField,
     compareSemanticFields,
     discoverQueryResponseFormats,
+    operationHeaderSpecs,
     downloadFilename,
     initialSurfaceTab,
     pathWithDownloadFilename,
+    safeResourcePathTemplate,
+    resourceRequestPath,
+    fieldTraversesMany,
     suggestedDownloadFilename,
     validateDownloadFilename,
     normalizeCurlAuth,
