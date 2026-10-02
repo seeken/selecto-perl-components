@@ -169,6 +169,39 @@ is_deeply $updated_api_payload->{segments}, ['low_stock'],
     'a WebSocket response refreshes the API control with submitted segments';
 is_deeply $updated_api_payload->{parameters}, {threshold => 10},
     'the refreshed API control retains segment parameters';
+my $graph_header_model = $export_explorer->model(TestSelectoComponents::Controller->new, {
+    q => 1, view => 'graph', field => 'product_name',
+    group => 'category.category_name', measure => 'count',
+    chart_type => 'bar', render_scope => 'results',
+});
+my $graph_header_message = Selecto::Components::Renderer->websocket_message($graph_header_model);
+is $graph_header_message->{target}, '#selecto-results-products',
+    'the graph query can update results without replacing its header';
+my $graph_header_dom = Mojo::DOM->new($graph_header_message->{selecto}{hero_actions_control});
+ok $graph_header_dom->at('#selecto-hero-actions-products[data-sc-hero-actions]'),
+    'the header update identifies the same Explorer independently of the results target';
+is $graph_header_dom->at('a')->{href}, $graph_header_model->{canonical_url},
+    'the refreshed permalink uses the completed graph query';
+for my $format (qw(xlsx csv tsv json)) {
+    is $graph_header_dom->at('[data-sc-export-format="' . $format . '"]')->{href},
+        $graph_header_model->{canonical_url} . '&format=' . $format,
+        "the refreshed $format export uses the completed graph query";
+}
+my $escaped_header = Selecto::Components::Renderer->_hero_actions_control({
+    %$graph_header_model, canonical_url => q{/explore/products?filter_value="<script>},
+});
+unlike $escaped_header, qr{href="[^"]*"<script>},
+    'the refreshed header escapes hostile URL values';
+like $escaped_header, qr{filter_value=&quot;&lt;script&gt;},
+    'the refreshed header preserves escaped URL values';
+my $private_header = Selecto::Components::Renderer->_hero_actions_control({
+    %$graph_header_model, domain => TestSelectoComponents::private_domain(),
+    canonical_url => '/explore/products?filter_value=secret-medical-value',
+});
+like $private_header, qr{Private URL mode},
+    'a private Explorer header update retains the private-mode indicator';
+unlike $private_header, qr{<a\b|secret-medical-value|format=|Permalink},
+    'a private Explorer header update exposes no canonical state or export links';
 my $aggregate_api_state = Selecto::Components::State->from_input($api_config, $domain, {
     q => 1, view => 'aggregate', group => 'category.category_name', measure => 'count',
 });

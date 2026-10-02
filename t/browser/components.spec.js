@@ -756,6 +756,52 @@ test("a completed query refreshes the API console link outside the results swap"
     .toHaveAttribute("target", "_blank");
 });
 
+test("a results-only query refreshes its permalink and exports without changing another Explorer", async ({page}) => {
+  await load(page, `
+    <section id="selecto-surface-products">
+      <div id="selecto-hero-actions-products" data-sc-hero-actions>
+        <a href="/explore/products?view=detail">Permalink</a>
+        <a data-sc-export-format="csv" href="/explore/products?view=detail&format=csv">CSV</a>
+        <a data-sc-api-console href="/api/products#old">API</a>
+      </div>
+      <section id="selecto-results-products">Graph rows</section>
+    </section>
+    <section id="selecto-surface-orders">
+      <div id="selecto-hero-actions-orders" data-sc-hero-actions>
+        <a href="/explore/orders?view=detail">Permalink</a>
+        <a data-sc-api-console href="/api/orders#old">API</a>
+      </div>
+    </section>
+  `);
+  await page.evaluate(() => {
+    document.dispatchEvent(new CustomEvent("htmx:ws:after:message:incoming", {
+      detail: {message: {json: async () => ({
+        target: "#selecto-results-products",
+        selecto: {
+          url: "/explore/products?view=graph&group=category.category_name&measure=count",
+          hero_actions_control: '<div id="selecto-hero-actions-products" data-sc-hero-actions>' +
+            '<a href="/explore/products?view=graph&amp;group=category.category_name&amp;measure=count">Permalink</a>' +
+            '<a data-sc-export-format="csv" href="/explore/products?view=graph&amp;group=category.category_name&amp;measure=count&amp;format=csv">CSV</a>' +
+            '<button data-sc-api-console disabled>API</button></div>',
+          // Older metadata must not overwrite another Explorer's API control.
+          api_console_control: '<button data-sc-api-console disabled>API</button>',
+        },
+      })}},
+    }));
+  });
+  const actions = page.locator("#selecto-hero-actions-products");
+  await expect(actions.getByRole("link", {name: "Permalink"})).toHaveAttribute("href",
+    "/explore/products?view=graph&group=category.category_name&measure=count");
+  await expect(actions.getByRole("link", {name: "CSV"})).toHaveAttribute("href",
+    "/explore/products?view=graph&group=category.category_name&measure=count&format=csv");
+  await expect(actions.getByRole("button", {name: "API"})).toBeDisabled();
+  await expect(page.locator("#selecto-hero-actions-orders").getByRole("link", {name: "Permalink"}))
+    .toHaveAttribute("href", "/explore/orders?view=detail");
+  await expect(page.locator("#selecto-hero-actions-orders [data-sc-api-console]"))
+    .toHaveAttribute("href", "/api/orders#old");
+  await expect(page.locator("#selecto-results-products")).toHaveText("Graph rows");
+});
+
 test("the builder tray collapses and expands in place", async ({page}) => {
   await load(page, `
     <div data-sc-workspace>
