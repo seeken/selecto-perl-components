@@ -7,10 +7,11 @@
     "command": "mise run verify",
     "result": "pass",
     "perl": "5.40.2",
-    "browser_tests": 99,
-    "perl_source_tests": 2364,
-    "perl_built_module_tests": 2364,
+    "browser_tests": 100,
+    "perl_source_tests": 2375,
+    "perl_built_module_tests": 2375,
     "generated_assets": "pass",
+    "generated_asset_revision": "0.1.0-35529c245d40",
     "syntax": "pass",
     "manifest": "pass"
   },
@@ -53,8 +54,42 @@
     ],
     "cleanup": "server stopped and disposable database removed"
   },
+  "native_demo": {
+    "result": "pass",
+    "browser": "Codex in-app browser",
+    "native_registration": true,
+    "successful_tools": [
+      "get_query_context",
+      "validate_query_target",
+      "apply_query_draft"
+    ],
+    "ui_applied": true,
+    "revision": 1,
+    "results_unchanged_until_run": true,
+    "explicit_run": "user",
+    "permalink_and_export_links_refreshed_after_websocket_run": true,
+    "graph": {
+      "chart_type": "bar",
+      "measure": "product_count",
+      "function": "count",
+      "group": "category.category_name",
+      "labels": [
+        "Camp Pantry",
+        "Harbor Goods",
+        "Orchard Box",
+        "Trail Drinks"
+      ],
+      "values": [
+        2,
+        3,
+        2,
+        3
+      ]
+    },
+    "server": "running for user review"
+  },
   "proof_limits": [
-    "Browser tests and live demo mock document.modelContext; native browser WebMCP registration is unverified.",
+    "Browser tests and the instrumented live_demo mock document.modelContext; statement counts describe that mocked smoke. The native_demo separately verifies actual browser WebMCP registration and the listed tool calls without SQL statement instrumentation.",
     "Evidence covers the configured synthetic fixtures and tested draft operations, not arbitrary host policies or databases."
   ]
 }

@@ -6,6 +6,8 @@ Unreleased
       synchronization, one-step undo, and an optional SQLite store.
     - Development tasks resolve the pinned relocatable Perl directly, including
       commands launched through a shell.
+    - WebSocket query runs refresh the permalink and export links to match
+      the completed query, including assistant-prepared graph drafts.
     - The explorer retargets its row grain: a detail view whose columns all
       come from one to-many association shows that association's rows, a
       summary that reads one to-many association drills down into the rows

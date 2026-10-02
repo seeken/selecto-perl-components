@@ -91,24 +91,7 @@ sub surface ($class, $model) {
     $alert .= '<div class="sc-alert" role="alert">' . _h($model->{saved_query_error}) . '</div>'
         if defined($model->{saved_query_error}) && length($model->{saved_query_error});
     my $query_params = $config->query_params_enabled($model->{domain});
-    my $export_links = join '', map {
-        my ($format, $label) = @$_;
-        '<a class="sc-button sc-secondary" data-sc-export-format="' . _h($format) .
-            '" href="' . _h(_format_url($model->{canonical_url}, $format)) . '">' .
-            _h($label) . '</a>'
-    } ([xlsx => 'Excel'], [csv => 'CSV'], [tsv => 'TSV'], [json => 'JSON']);
-    my $api_link = $class->_api_console_control($model);
-    my $export_label = $config->max_export_rows
-        ? 'Export (up to ' . $config->max_export_rows . ' rows)' : 'Export all';
-    my $export_aria_label = $config->max_export_rows ? $export_label : 'Export all matched rows';
-    my $export_options = $config->export_allowed
-        ? '<div class="sc-export-options" role="group" aria-label="' . _h($export_aria_label) . '">' .
-          '<span>' . _h($export_label) . '</span>' . $export_links . '</div>'
-        : '';
-    my $hero_actions = $query_params
-        ? '<div class="sc-hero-actions"><a class="sc-button sc-secondary" href="' .
-          _h($model->{canonical_url}) . '">Permalink</a>' . $export_options . $api_link . '</div>'
-        : '<div class="sc-hero-actions"><span class="sc-private-mode">Private URL mode</span></div>';
+    my $hero_actions = $class->_hero_actions_control($model);
     my $builder_collapsed = _builder_collapsed($model);
     my $page_title = $class->_page_title($model);
     my $builder_id = _h($config->id);
@@ -191,6 +174,7 @@ sub websocket_message ($class, $model) {
         swap => 'outerHTML',
         selecto => {
             url => $model->{canonical_url},
+            hero_actions_control => $class->_hero_actions_control($model),
             api_console_control => $class->_api_console_control($model),
             (defined($model->{selecto_request_id})
                 ? (request_id => $model->{selecto_request_id}) : ()),
@@ -204,6 +188,31 @@ sub websocket_message ($class, $model) {
             },
         },
     };
+}
+
+sub _hero_actions_control ($class, $model) {
+    my $config = $model->{config};
+    return '' unless $model->{state} && $model->{domain};
+    my $start = '<div id="selecto-hero-actions-' . _h($config->id) .
+        '" class="sc-hero-actions" data-sc-hero-actions>';
+    return $start . '<span class="sc-private-mode">Private URL mode</span></div>'
+        unless $config->query_params_enabled($model->{domain});
+    my $export_links = join '', map {
+        my ($format, $label) = @$_;
+        '<a class="sc-button sc-secondary" data-sc-export-format="' . _h($format) .
+            '" href="' . _h(_format_url($model->{canonical_url}, $format)) . '">' .
+            _h($label) . '</a>'
+    } ([xlsx => 'Excel'], [csv => 'CSV'], [tsv => 'TSV'], [json => 'JSON']);
+    my $export_label = $config->max_export_rows
+        ? 'Export (up to ' . $config->max_export_rows . ' rows)' : 'Export all';
+    my $export_aria_label = $config->max_export_rows ? $export_label : 'Export all matched rows';
+    my $export_options = $config->export_allowed
+        ? '<div class="sc-export-options" role="group" aria-label="' . _h($export_aria_label) . '">' .
+          '<span>' . _h($export_label) . '</span>' . $export_links . '</div>'
+        : '';
+    return $start . '<a class="sc-button sc-secondary" href="' .
+        _h($model->{canonical_url}) . '">Permalink</a>' . $export_options .
+        $class->_api_console_control($model) . '</div>';
 }
 
 sub _api_console_control ($class, $model) {

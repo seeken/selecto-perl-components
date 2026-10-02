@@ -2240,6 +2240,15 @@
     });
   }
 
+  function replaceHeroActionsControl(html) {
+    var template = document.createElement("template");
+    template.innerHTML = html.trim();
+    var replacement = template.content.firstElementChild;
+    if (!replacement || !replacement.id || !replacement.hasAttribute("data-sc-hero-actions")) return;
+    var current = document.getElementById(replacement.id);
+    if (current && current.hasAttribute("data-sc-hero-actions")) current.replaceWith(replacement);
+  }
+
   // Export links are rendered from the last completed query.  The picker can
   // be edited locally immediately before a download, so rebuild the link from
   // the live form as it is clicked. This keeps the export projection, filters,
@@ -2285,6 +2294,11 @@
         }
         var nextUrl = message && message.selecto && message.selecto.url;
         if (message && message.selecto
+            && typeof message.selecto.hero_actions_control === "string") {
+          // A results-only swap leaves the header in place. Refresh its
+          // canonical links from the completed query, scoped to this Explorer.
+          replaceHeroActionsControl(message.selecto.hero_actions_control);
+        } else if (message && message.selecto
             && typeof message.selecto.api_console_control === "string") {
           replaceApiConsoleControl(message.selecto.api_console_control);
         }
