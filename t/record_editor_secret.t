@@ -76,7 +76,7 @@ $t->post_ok($editor_url => {Accept => 'application/json'} => form => {
 my $bound_app = Mojolicious->new;
 $bound_app->secrets(['a-host-chosen-secret']);
 my $bound_config = TestSelectoComponents::config();
-$bound_app->plugin('Selecto::Components' => {explorers => {products => {
+$bound_app->plugin('Selecto::Components' => {websocket_mode => 'public',explorers => {products => {
     %$bound_config,
     record_editor_max_age => 60,
     engine_factory => sub {

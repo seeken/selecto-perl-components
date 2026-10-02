@@ -8,6 +8,7 @@ use Selecto::Components::RowActions ();
 use Selecto::Components::Util qw(humanize trim);
 use Selecto::Expression ();
 use Selecto::QueryLibrary ();
+use Selecto::Components::InputBudget ();
 
 sub build ($class, $config, $domain, $state, $options = undef) {
     die "cannot build an invalid explorer state\n" unless $state->valid;
@@ -16,6 +17,7 @@ sub build ($class, $config, $domain, $state, $options = undef) {
     my $built = $state->view eq 'detail'
         ? $class->_detail($config, $domain, $state, $options)
         : $class->_aggregate($config, $domain, $state, $options);
+    Selecto::Components::InputBudget->query($config->limits, $built->{query});
     my $retarget = $state->retarget;
     return $built unless defined $retarget;
     # Explorer state names fields from the root. A retargeted grain keeps the
@@ -301,7 +303,7 @@ sub _detail ($class, $config, $domain, $state, $options) {
     $query = $query->limit($state->limit)
         ->offset(($state->page - 1) * $state->limit)
         if !exists($options->{paginate}) || $options->{paginate};
-    $query = _with_query_library($query, $domain, $state);
+    $query = _with_query_library($query, $domain, $state, $config->limits);
     return {
         query => $query,
         columns => \@columns,
@@ -487,7 +489,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         $query = $query->limit($state->limit)
             ->offset(($state->page - 1) * $state->limit);
     }
-    $query = _with_query_library($query, $domain, $state);
+    $query = _with_query_library($query, $domain, $state, $config->limits);
     return {
         query => $query,
         columns => \@columns,
@@ -665,7 +667,7 @@ sub _filter_expression ($operand, $op, $value, $value_end, $membership_values = 
     return Selecto::Expression->can($op)->('Selecto::Expression', $operand, $value);
 }
 
-sub _with_query_library ($query, $domain, $state) {
+sub _with_query_library ($query, $domain, $state, $limits) {
     my @segments;
     push @segments, @{Selecto::QueryLibrary->view_segments(
         $domain, $state->query_library_view,
@@ -678,7 +680,7 @@ sub _with_query_library ($query, $domain, $state) {
         $domain,
         $query,
         \@segments,
-        $state->query_library_parameters // {},
+        $state->query_library_parameters // {}, $limits,
     );
 }
 

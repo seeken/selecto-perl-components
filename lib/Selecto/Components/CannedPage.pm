@@ -18,7 +18,9 @@ use Selecto::Components::Util qw(decode_driver_json humanize);
 # theme (optional): {scheme => 'light'|'dark', primary, secondary, on_primary} as #RRGGBB,
 # the same shape as Selecto::Components::Config's theme resolver returns. Without it the
 # page uses the stylesheet's own (dark) palette.
-has [qw(page engine_factory scope_factory path title record_link websocket_enabled column_layout theme)];
+has [qw(page engine_factory scope_factory path title record_link websocket_enabled websocket_context column_layout theme)];
+
+has websocket_mode => 'protected';
 
 sub new ($class, @args) {
     my $self = $class->SUPER::new(@args);
@@ -29,6 +31,12 @@ sub new ($class, @args) {
         if defined($self->scope_factory) && ref($self->scope_factory) ne 'CODE';
     die "canned page path is invalid\n"
         unless defined($self->path) && $self->path =~ m{\A/(?!/)[A-Za-z0-9/_-]+\z};
+    die "websocket_mode must be protected or public\n"
+        unless $self->websocket_mode =~ /\A(?:protected|public)\z/;
+    die "websocket_context must be a coderef\n"
+        if defined($self->websocket_context) && ref($self->websocket_context) ne 'CODE';
+    die "protected canned WebSockets require websocket_context (or websocket_enabled => 0)\n"
+        if $self->websocket_enabled && $self->websocket_mode eq 'protected' && !$self->websocket_context;
     if (defined(my $theme = $self->theme)) {
         die "canned page theme must be an object\n" unless ref($theme) eq 'HASH';
         die "canned page theme scheme must be light or dark\n"
@@ -186,6 +194,11 @@ sub handle_websocket ($self, $controller) {
         return $socket->finish(1003 => 'Invalid request id')
             unless defined($request_id) && !ref($request_id)
                 && "$request_id" =~ /\A[0-9]{1,12}\z/;
+        my $scope_key = eval { $self->websocket_context
+            ? $self->websocket_context->($socket, $self)
+            : $self->websocket_mode eq 'public' ? 'public' : undef };
+        return $socket->finish(1008 => 'Page access is no longer allowed')
+            if $@ || !defined($scope_key) || ref($scope_key);
         my $result;
         my $ok = eval {
             my $engine = $self->engine_factory->($socket);

@@ -62,6 +62,9 @@ sub post {
         form => {selected_id => $id, csrf_token => $csrf, %input});
 }
 post(101, action_input_operation => 'release')->status_is(422);
+post(['101','101'], action_input_operation => 'release')->status_is(422);
+post(['101',' 101 '], action_input_operation => 'release')->status_is(422);
+is scalar(@executed), 0, 'duplicate targets cannot bypass server-fixed inputs';
 post(101, action_input_operation => 'hold', action_input_reason => 'Investigate')->status_is(200);
 is $executed[-1]{variant}, 'hold', 'valid fixed operation dispatches variant';
 post(102, action_input_operation => 'hold', action_input_reason => 'Forged')->status_is(422);

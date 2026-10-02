@@ -28,7 +28,7 @@ use Selecto::PostgreSQL;
 my $store = Selecto::Components::QueryAssistant::Store->new;
 my $config = Selecto::Components::Config->new(
     %{TestSelectoComponents::config()}, id => 'products',
-    query_assistant => {
+    query_assistant => {allow_anonymous => 1,
         store => $store, policy_version => 'test-v1',
         palettes => {ocean => ['#0b7285', '#74c0fc']},
     },
@@ -219,7 +219,7 @@ subtest 'assistant roundtrips grouped and alternative predicates' => sub {
 subtest 'draft mutations enforce explorer and current context' => sub {
     my $other = Selecto::Components::Config->new(
         %{TestSelectoComponents::config()}, id => 'other_products',
-        query_assistant => {store => $store},
+        query_assistant => {allow_anonymous => 1,store => $store},
     );
     for my $method (qw(sync undo)) {
         my %args = (store => $store, id => $inactive_record->{id}, owner => 'owner-2',
@@ -326,7 +326,7 @@ subtest 'explicit association grain uses its catalog and survives validation' =>
 
 subtest 'choice publication changes the authorization context' => sub {
     my $reconfigured = Selecto::Components::Config->new(
-        %{TestSelectoComponents::config()}, id => 'products', query_assistant => {
+        %{TestSelectoComponents::config()}, id => 'products', query_assistant => {allow_anonymous => 1,
             store => $store, policy_version => 'test-v1', palettes => {ocean => ['#0b7285', '#74c0fc']},
             choice_fields => {product_name => 1},
         },

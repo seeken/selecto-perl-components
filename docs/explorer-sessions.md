@@ -47,9 +47,12 @@ websocket_session_options => {
 ```
 
 An undefined context denies access and closes with code 1008. A changed context
-discards the saved form and cached results. With no callback, the session is
-isolated to its connection and relies on the hosting application's existing
-authentication and governed engine. Hosts using database session variables or
+discards the saved form and cached results. The default `websocket_mode => 'protected'` requires this callback at registration.
+Hosts must recheck live identity and permission; the handshake controller stash
+and signed login cookie alone do not establish current permission. Explicit
+`websocket_mode => 'public'` is for intentionally public datasets, and
+`websocket_enabled => 0` keeps HTTP routes without sockets. The same policy
+applies to canned pages, whose callback runs before its engine and scope factories. Hosts using database session variables or
 policy changes not reflected in SQL must include those in the namespace, or
 disable result caching. Scope strings are server-only and never returned to the
 browser. `websocket_message_cleanup` still runs after every message, including

@@ -43,6 +43,7 @@ my ($allowed, $actor, $checks) = (1, 'alice', 0);
 my $app = Mojolicious->new;
 $app->secrets(['explorer-session-test']);
 my $config = TestSelectoComponents::config();
+$config->{websocket_mode} = 'protected';
 $config->{websocket_context} = sub { $checks++; return $allowed ? $actor : undef };
 $app->plugin('Selecto::Components' => {explorers => {products => $config}});
 my $t = Test::Mojo->new($app);

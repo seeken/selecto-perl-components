@@ -1758,6 +1758,11 @@
   });
 
   window.addEventListener("pageshow", function (event) {
+    if (isPrivateSelectoSurface()) {
+      clearSelectoHistory();
+      if (event.persisted) { discardSelectoSurface(); window.location.reload(); }
+      return;
+    }
     if (!event.persisted) {
       // A hosted Explorer can be reactivated with a closed htmx channel even
       // when the browser does not label the pageshow as a bfcache restore.
@@ -1781,10 +1786,18 @@
   });
 
   window.addEventListener("pagehide", function () {
+    if (isPrivateSelectoSurface()) {
+      clearSelectoHistory();
+      // A bfcache document must not paint sensitive content before pageshow.
+      var surface = document.querySelector('[id^="selecto-surface-"]');
+      if (surface) surface.replaceChildren();
+      return;
+    }
     rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
   });
 
   window.addEventListener("popstate", function (event) {
+    if (isPrivateSelectoSurface()) { clearSelectoHistory(); discardSelectoSurface(); window.location.reload(); return; }
     // Selecto's surface snapshot deliberately excludes the host navigation.
     // A toolbar or legacy dynamic menu can still mutate its own body classes
     // while the detail entry is active, so restoring only the surface leaves
@@ -1814,14 +1827,54 @@
     document.body.classList.add("toolbar-left-menu-open");
   }
 
+  function isPrivateSelectoSurface(surface) {
+    surface = surface || document.querySelector('[id^="selecto-surface-"]');
+    return !!(surface && surface.getAttribute("data-sc-query-params") === "disabled");
+  }
+
+  function discardSelectoSurface() {
+    var surface = document.querySelector('[id^="selecto-surface-"]');
+    if (surface) surface.replaceChildren();
+  }
+
+  function clearSelectoHistory() {
+    selectoHistorySnapshots.clear();
+    try {
+      var keys = [];
+      for (var i = 0; i < window.sessionStorage.length; i += 1) {
+        var key = window.sessionStorage.key(i);
+        if (key && key.indexOf("selecto-history:") === 0) keys.push(key);
+      }
+      keys.forEach(function (key) { window.sessionStorage.removeItem(key); });
+    } catch (_error) {}
+    var state = Object.assign({}, window.history.state || {});
+    delete state.selectoSnapshot;
+    delete state.selectoPendingNavigation;
+    delete state.selectoRequestId;
+    try {
+      if (isPrivateSelectoSurface()) window.history.replaceState(state, "", window.location.pathname);
+      else window.history.replaceState(state, "");
+    } catch (_error) {}
+  }
+
+  // Hosts dispatch this event at logout, principal, tenant or policy changes.
+  window.addEventListener("selecto:context-changed", function () {
+    clearSelectoHistory();
+    var surface = document.querySelector('[id^="selecto-surface-"]');
+    if (surface) { surface.replaceChildren(); window.location.reload(); }
+  });
+
   function rememberSelectoHistory(url, push, pendingNavigation, requestId) {
+    if (isPrivateSelectoSurface()) { clearSelectoHistory(); return; }
     var surface = document.querySelector('[id^="selecto-surface-"]');
     if (!surface || !window.history) return;
+    if (surface.getAttribute("data-sc-query-params") !== "enabled") { clearSelectoHistory(); return; }
     var state = window.history.state && typeof window.history.state === "object"
       ? Object.assign({}, window.history.state) : {};
     var key = push ? null : state.selectoSnapshot;
     if (!key) key = "selecto-" + Date.now() + "-" + (++selectoHistoryCounter);
     var snapshot = surface.cloneNode(true);
+    snapshot.setAttribute("data-sc-history-version", "2");
     prepareChartsForSnapshot(snapshot);
     snapshot.querySelectorAll('input[name="selecto_request_id"]').forEach(function (input) {
       input.remove();
@@ -1964,6 +2017,11 @@
     template.innerHTML = snapshot.trim();
     var restored = template.content.firstElementChild;
     if (!restored) return;
+    if (current.getAttribute("data-sc-query-params") !== "enabled"
+        || restored.getAttribute("data-sc-query-params") !== "enabled"
+        || restored.getAttribute("data-sc-history-version") !== "2") {
+      clearSelectoHistory(); current.replaceChildren(); window.location.reload(); return;
+    }
     prepareChartsForSnapshot(restored);
     destroyChartsWithin(current);
     current.replaceWith(restored);

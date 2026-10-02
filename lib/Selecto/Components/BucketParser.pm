@@ -1,11 +1,21 @@
 package Selecto::Components::BucketParser;
 
 use Mojo::Base -base, -signatures;
+use Selecto::Limits ();
 
 sub parse ($class, $input) {
     return [] unless defined($input) && !ref($input);
+    my $limits = Selecto::Limits->new;
+    return [] unless eval {
+        $limits->check_bytes('max_bucket_bytes', $input, 'invalid_query', 'Bucket input');
+        1;
+    };
+    my @parts = split /,/, "$input", $limits->get('max_bucket_ranges') + 1;
+    return [] if @parts > $limits->get('max_bucket_ranges');
+    my $digits = $limits->get('max_numeric_digits');
+    return [] if grep { length($_) > $digits } "$input" =~ /([0-9]+)/g;
     my @ranges;
-    for my $part (split /,/, "$input") {
+    for my $part (@parts) {
         $part =~ s/\A\s+|\s+\z//g;
         next unless length($part);
         if ($part =~ /\A(\d+)\z/) {
@@ -26,6 +36,7 @@ sub parse ($class, $input) {
 
 sub increment ($class, $input) {
     return undef unless defined($input) && !ref($input) && "$input" =~ /\A\s*\*\/(\d+)\s*\z/;
+    return undef if length($1) > Selecto::Limits->new->get('max_numeric_digits');
     return $1 > 0 ? 0 + $1 : undef;
 }
 

@@ -97,4 +97,55 @@ $quota->{dbh}->rollback;
 is $quota->{dbh}->selectrow_array('SELECT count(*) FROM selecto_query_drafts'), 1,
     'the host can roll back a draft created in its transaction';
 
+# Legacy schema migrates once, with exact byte counters and no per-create scan.
+my $legacy_dbh = DBI->connect("dbi:SQLite:dbname=$directory/legacy.sqlite", '', '', {RaiseError=>1,PrintError=>0});
+$legacy_dbh->do('CREATE TABLE selecto_query_drafts (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, created_at REAL NOT NULL, touched_at REAL NOT NULL, payload TEXT NOT NULL)');
+my $legacy_json = Mojo::JSON::encode_json({id=>'legacy',owner=>'legacy-owner',revision=>0,created_at=>time,touched_at=>time});
+$legacy_dbh->do('INSERT INTO selecto_query_drafts VALUES (?,?,?,?,?)',undef,'legacy',0,time,time,$legacy_json);
+my $migrated = Selecto::Components::QueryAssistant::Store::SQLite->new(dbh=>$legacy_dbh);
+is $migrated->get('legacy')->{owner}, 'legacy-owner', 'migration retains the legacy owner';
+is_deeply $legacy_dbh->selectrow_arrayref('SELECT records,bytes FROM selecto_query_draft_totals'), [1,length($legacy_json)], 'migration backfills exact global accounting';
+my $baseline_bytes = $legacy_dbh->selectrow_array('SELECT bytes FROM selecto_query_draft_totals');
+$migrated->get('legacy');
+is $legacy_dbh->selectrow_array('SELECT bytes FROM selecto_query_draft_totals'), $baseline_bytes, 'touch does not alter stored payload accounting';
+{
+    no warnings 'redefine';
+    local *Selecto::Components::QueryAssistant::Store::SQLite::_expire = sub {};
+    $legacy_dbh->do('UPDATE selecto_query_drafts SET expires_at=0 WHERE id=?',undef,'legacy');
+    ok !defined($migrated->get('legacy')), 'expired target cannot revive when batch cleanup leaves it behind';
+    is $migrated->compare_and_swap('legacy',0,{owner=>'legacy-owner'})->{code}, 'draft_expired', 'CAS independently enforces expiry';
+}
+$migrated->_txn(sub {$migrated->_expire});
+is_deeply $legacy_dbh->selectrow_arrayref('SELECT records,bytes FROM selecto_query_draft_totals'), [0,0], 'expiry releases counters exactly';
+
+# Different principals still compete for one shared global budget.
+my $global_path = "$directory/global.sqlite";
+my $global = Selecto::Components::QueryAssistant::Store::SQLite->new(path=>$global_path,max_total_drafts=>2);
+pipe(my $global_read,my $global_write) or die $!;
+my (@global_children,@global_outputs);
+for my $actor (1..4) {
+    pipe(my $read,my $write) or die $!;
+    my $pid=fork(); die $! unless defined $pid;
+    if (!$pid) {
+        close $global_write; close $read;
+        my $worker=Selecto::Components::QueryAssistant::Store::SQLite->new(path=>$global_path,max_total_drafts=>2);
+        my $signal; sysread($global_read,$signal,1);
+        my $ok=eval {$worker->create({owner=>"owner-$actor"});1};
+        print {$write} $ok?'created':($@ =~ /quota exceeded/?'quota':"unexpected:$@");
+        close $write; _exit(0);
+    }
+    close $write; push @global_children,$pid; push @global_outputs,$read;
+}
+close $global_read; syswrite($global_write,'xxxx'); close $global_write;
+my @global_outcomes=map {local $/; my $value=<$_>; close $_; $value} @global_outputs;
+waitpid($_,0) for @global_children;
+is scalar(grep {$_ eq 'created'} @global_outcomes),2,'only two distinct owners win the global slots';
+is scalar(grep {$_ eq 'quota'} @global_outcomes),2,'other owners see atomic global quota rejection';
+is $global->{dbh}->selectrow_array('SELECT records FROM selecto_query_draft_totals'),2,'global counter agrees with concurrent rows';
+for my $class (qw(Selecto::Components::QueryAssistant::Store Selecto::Components::QueryAssistant::Store::SQLite)) {
+    my $limited=$class->new(($class =~ /SQLite/?(path=>"$directory/rate.sqlite"):()),max_creates_per_minute=>1);
+    $limited->create({owner=>'first'});
+    ok !eval {$limited->create({owner=>'rotated'});1}, "$class rate limit crosses owner rotation";
+}
+
 done_testing;

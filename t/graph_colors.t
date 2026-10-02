@@ -17,7 +17,7 @@ use Selecto::Components::State;
 my $store = Selecto::Components::QueryAssistant::Store->new;
 my $config = Selecto::Components::Config->new(
     %{TestSelectoComponents::config()}, id => 'products',
-    query_assistant => {
+    query_assistant => {allow_anonymous => 1,
         store => $store,
         palettes => {brand => ['#112233', '#445566', '#778899']},
     },

@@ -64,6 +64,18 @@ sub find ($class, $config, $domain, $controller, $id, $phase = 'preview', $targe
         $id, $actions->{$id}, $config, $controller, $domain,
     );
     return undef unless $action && $class->_bulk_enabled($action);
+    if (ref($target) eq 'HASH' && exists $target->{ids}) {
+        my $canonical = $class->canonical_target($config, $target->{ids});
+        $target = {%$target, ids => $canonical->{ids}};
+        my $count = @{$target->{ids}};
+        my $minimum = $action->{selection}{min_rows} // 1;
+        my $maximum = $action->{selection}{max_rows} // $config->max_action_rows;
+        my $reason = @{$canonical->{errors}} ? join(' ', @{$canonical->{errors}})
+            : $count < $minimum ? ($minimum == 1 ? 'Select at least one row.' : "Select at least $minimum rows.")
+            : $count > $maximum ? ($maximum == 1 ? 'Select exactly one row.' : "Select no more than $maximum rows.") : undef;
+        return {action => $action, decision => {status => 'disabled', reason => $reason}, invalid_target => 1}
+            if defined $reason;
+    }
     my $decision = $class->_authorize($config, $controller, $action, $phase, $target);
     $class->_target_form($config, $controller, $action, $target)
         if $decision->{status} eq 'enabled';
@@ -131,22 +143,29 @@ sub row_eligibility ($class, $config, $controller, $action, $row_ids, $phase = '
     return {%$eligible};
 }
 
-sub request ($class, $config, $action, $selected_ids, $raw_inputs, $options = undef) {
-    $options = {} unless ref($options) eq 'HASH';
-    my @errors;
-    my @ids;
-    my %seen;
-    for my $value (@{$selected_ids // []}) {
-        next unless defined($value) && !ref($value);
+# Bound raw occurrences before normalizing, so duplicates cannot amplify work or
+# alter row-specific form resolution. Callbacks receive copies of this target.
+sub canonical_target ($class, $config, $values) {
+    my (@ids, @errors, %seen);
+    return {ids => [], errors => ['Too many or invalid selected row identifiers.']}
+        unless ref($values) eq 'ARRAY' && @$values <= $config->max_action_rows;
+    for my $value (@$values) {
+        if (!defined($value) || ref($value) || length($value) > 200 || $value =~ /\0/) {
+            push @errors, 'A selected row identifier is invalid.'; last;
+        }
         my $id = "$value";
         $id =~ s/\A\s+|\s+\z//g;
-        next if $id eq '' || $seen{$id}++;
-        if (length($id) > 200 || $id =~ /\0/) {
-            push @errors, 'A selected row identifier is invalid.';
-            next;
-        }
-        push @ids, $id;
+        if ($id eq '') { push @errors, 'A selected row identifier is invalid.'; last }
+        push @ids, $id unless $seen{$id}++;
     }
+    return {ids => \@ids, errors => \@errors};
+}
+
+sub request ($class, $config, $action, $selected_ids, $raw_inputs, $options = undef) {
+    $options = {} unless ref($options) eq 'HASH';
+    my $target = $class->canonical_target($config, $selected_ids);
+    my @errors = @{$target->{errors}};
+    my @ids = @{$target->{ids}};
     my $minimum = $action->{selection}{min_rows} // 1;
     my $maximum = $action->{selection}{max_rows} // $config->max_action_rows;
     if (@ids < $minimum) {
@@ -628,7 +647,7 @@ sub _authorize ($class, $config, $controller, $action, $phase, $target) {
         phase => $phase,
         action => $action,
         capability => $action->{capability},
-        target => $target,
+        target => defined($target) ? dclone($target) : undef,
     });
     return {status => $raw} if defined($raw) && !ref($raw)
         && $raw =~ /\A(?:enabled|disabled|hidden)\z/;

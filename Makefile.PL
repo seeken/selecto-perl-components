@@ -31,7 +31,7 @@ WriteMakefile(
         'Digest::SHA' => 0,
         'JSON::PP'    => '4.06',
         'Mojolicious' => '9.49',
-        'Selecto'     => '0.2.0',
+        'Selecto'     => '0.2.1',
         'Time::HiRes' => 0,
     },
     CONFIGURE_REQUIRES => {

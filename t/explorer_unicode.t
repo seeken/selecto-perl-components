@@ -32,7 +32,7 @@ my $domain = Selecto::Domain->new(
 );
 my $app = Mojolicious->new;
 $app->secrets(['explorer-unicode-test']);
-$app->plugin('Selecto::Components' => {explorers => {places => {
+$app->plugin('Selecto::Components' => {websocket_mode => 'public',explorers => {places => {
     path => '/places', title => 'Places',
     engine_factory => sub {
         Selecto::Engine->new(domain => $domain,

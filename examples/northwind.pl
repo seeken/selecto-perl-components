@@ -35,7 +35,7 @@ app->hook(after_dispatch => sub ($controller) {
         q{default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' ws: wss:; img-src 'self'; base-uri 'none'; frame-ancestors 'none'});
 });
 
-plugin 'Selecto::Components' => {
+plugin 'Selecto::Components' => {websocket_mode => 'public',
     explorers => {
         products => {
             path => '/explore/products',
@@ -53,7 +53,7 @@ plugin 'Selecto::Components' => {
                 { id => 'inventory_value', label => 'Sum of unit prices', aggregate => 'sum', field => 'unit_price' },
                 { id => 'highest_price', label => 'Highest unit price', aggregate => 'max', field => 'unit_price' },
             ],
-            query_assistant => {
+            query_assistant => {allow_anonymous => 1,
                 store => $query_drafts,
                 policy_version => 'northwind-demo-v1',
                 palettes => {
@@ -77,7 +77,7 @@ plugin 'Selecto::Components' => {
                 { id => 'order_count', label => 'Order count', aggregate => 'count' },
                 { id => 'total_freight', label => 'Total freight', aggregate => 'sum', field => 'freight' },
             ],
-            query_assistant => {
+            query_assistant => {allow_anonymous => 1,
                 store => $query_drafts,
                 policy_version => 'northwind-demo-v1',
                 palettes => {

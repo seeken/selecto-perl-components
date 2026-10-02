@@ -6,10 +6,11 @@ use Selecto::Components::Renderer::Results ();
 
 sub form ($controller, $explorer) {
     $controller->res->headers->cache_control('private, no-store');
-    my $ids = $controller->every_param('selected_id');
-    return $controller->render(status => 422, json => {ok => 0, message => 'Select exactly one row.'})
-        unless @$ids == 1 && defined($ids->[0]) && length($ids->[0]) && length($ids->[0]) <= 200;
     my $config = $explorer->config->for_request($controller);
+    my $target = Selecto::Components::Actions->canonical_target($config, $controller->every_param('selected_id'));
+    my $ids = $target->{ids};
+    return $controller->render(status => 422, json => {ok => 0, message => 'Select exactly one row.'})
+        unless !@{$target->{errors}} && @$ids == 1 && defined($ids->[0]) && length($ids->[0]) && length($ids->[0]) <= 200;
     my $id = $controller->stash('selecto_action_id') // '';
     return $controller->render(status => 404, json => {ok => 0, message => 'That action form is not available.'})
         unless $config->action_form_resolvers->{$id};
@@ -39,7 +40,11 @@ sub _run_action ($controller, $explorer) {
     }) unless Selecto::Components::_csrf_valid($controller);
 
     my $selected_values = $controller->every_param('selected_id');
-    my @selected_ids = ref($selected_values) eq 'ARRAY' ? @$selected_values : ();
+    my $target = Selecto::Components::Actions->canonical_target($config, $selected_values);
+    return Selecto::Components::_action_response($controller, $return_to, {
+        ok => 0, status => 422, message => join(' ', @{$target->{errors}}),
+    }) if @{$target->{errors}};
+    my @selected_ids = @{$target->{ids}};
     my $action_id = $controller->stash('selecto_action_id') // '';
     my ($domain, $resolved);
     my $discovery_ok = eval {
@@ -59,7 +64,7 @@ sub _run_action ($controller, $explorer) {
         ok => 0, status => 404, message => 'That action is not available.',
     }) unless $resolved;
     return Selecto::Components::_action_response($controller, $return_to, {
-        ok => 0, status => 403,
+        ok => 0, status => $resolved->{invalid_target} ? 422 : 403,
         message => $resolved->{decision}{reason} || 'That action is not permitted.',
     }) unless $resolved->{decision}{status} eq 'enabled';
 

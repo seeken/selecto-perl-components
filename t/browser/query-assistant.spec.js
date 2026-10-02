@@ -15,7 +15,7 @@ const tools = ["get_query_context", "search_choices", "validate_query_target", "
 
 function surface() {
   return `<section id="selecto-surface-products" data-sc-query-assistant="/explore/products/assistant/drafts"
-      data-sc-query-assistant-csrf="csrf-token">
+      data-sc-query-assistant-csrf="csrf-token" data-sc-query-params="enabled">
     <div data-sc-workspace><aside data-sc-builder-shell="products" data-sc-builder-collapsed="false">
       <form data-sc-builder data-sc-edit-generation="0">
         <input name="q" value="1"><input name="view" value="detail">

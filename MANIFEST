@@ -108,3 +108,7 @@ t/text_filters.t
 THIRD_PARTY_NOTICES.md
 xt/changes.t
 xt/pod.t
+lib/Selecto/Components/ExportBudget.pm
+lib/Selecto/Components/InputBudget.pm
+t/security_budgets.t
+t/export_security.t

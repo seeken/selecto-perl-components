@@ -60,7 +60,7 @@ my $app = Mojolicious->new;
 $app->secrets(['canned-page-test']);
 my $public_spec = page_spec(0);
 $public_spec->{record_link} = {field => 'id', url_prefix => '/products/view?id='};
-$app->plugin('Selecto::Components' => {pages => {products => $public_spec}});
+$app->plugin('Selecto::Components' => {websocket_mode => 'public',pages => {products => $public_spec}});
 my $t = Test::Mojo->new($app);
 $t->get_ok('/products')->status_is(200)
     ->content_like(qr/Alpha shoe/)
@@ -120,7 +120,7 @@ $t->finish_ok;
 
 my $private = Mojolicious->new;
 $private->secrets(['canned-private-test']);
-$private->plugin('Selecto::Components' => {pages => {products => page_spec(1)}});
+$private->plugin('Selecto::Components' => {websocket_mode => 'public',pages => {products => page_spec(1)}});
 my $p = Test::Mojo->new($private);
 $p->get_ok('/products')->status_is(200)
     ->header_is('Cache-Control', 'no-store')
@@ -151,7 +151,7 @@ $scoped_spec->{scope_factory} = sub {
         ? 'North' : 'Acme';
     return Selecto::Expression->eq('brand', $brand);
 };
-$scoped_app->plugin('Selecto::Components' => {pages => {products => $scoped_spec}});
+$scoped_app->plugin('Selecto::Components' => {websocket_mode => 'public',pages => {products => $scoped_spec}});
 my $s = Test::Mojo->new($scoped_app);
 $s->get_ok('/products?submitted=1&view=list&f_brand=Acme'
     => {'X-Test-Brand' => 'North'})
@@ -171,7 +171,7 @@ my $routes = $guarded->routes->under('/secured')->to(cb => sub {
 });
 my $guarded_spec = page_spec(0);
 $guarded_spec->{path} = '/secured/products';
-$guarded->plugin('Selecto::Components' => {
+$guarded->plugin('Selecto::Components' => {websocket_mode => 'public',
     route_bridge => {routes => $routes, prefix => '/secured'},
     pages => {products => $guarded_spec},
 });
@@ -195,7 +195,7 @@ $g->get_ok('/products')->status_is(404);
     };
     my $escaped_app = Mojolicious->new;
     $escaped_app->secrets(['canned-escaping-test']);
-    $escaped_app->plugin('Selecto::Components' => {pages => {products => page_spec(0)}});
+    $escaped_app->plugin('Selecto::Components' => {websocket_mode => 'public',pages => {products => page_spec(0)}});
     my $e = Test::Mojo->new($escaped_app);
     $e->get_ok('/products?submitted=1&view=list')->status_is(200);
     my $body = $e->tx->res->body;
@@ -206,4 +206,22 @@ $g->get_ok('/products')->status_is(404);
     like $body, qr/<span>Page 2&quot;&gt;&lt;img/, 'current page label is escaped';
 }
 
+my ($live_access, $live_factory_calls) = (1, 0);
+my $protected = Mojolicious->new;
+my $protected_spec = page_spec(0);
+my $factory = $protected_spec->{engine_factory};
+$protected_spec->{engine_factory} = sub { $live_factory_calls++; $factory->(@_) };
+$protected_spec->{websocket_context} = sub { $live_access ? 'principal:1' : undef };
+$protected->plugin('Selecto::Components' => {pages => {products => $protected_spec}});
+my $live = Test::Mojo->new($protected);
+$live->websocket_ok('/products/ws')->send_ok({text => encode_json({submitted => 1, selecto_request_id => 1})})->message_ok;
+my $before_revoke = $live_factory_calls;
+$live_access = 0;
+$live->send_ok({text => encode_json({submitted => 1, selecto_request_id => 2})})->finished_ok(1008);
+is $live_factory_calls, $before_revoke, 'revoked canned frame never resolves an engine';
+my $http_only = Mojolicious->new;
+$http_only->plugin('Selecto::Components' => {websocket_enabled => 0, pages => {products => page_spec(0)}});
+my $http = Test::Mojo->new($http_only);
+$http->get_ok('/products')->status_is(200)->element_exists_not('[hx-ws\\:connect]');
+$http->get_ok('/products/ws')->status_is(404);
 done_testing;

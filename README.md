@@ -13,7 +13,7 @@ What you get:
 - **Explorer**: a query builder with Detail, Aggregate (including a two-axis
   grid) and Graph views. Users can choose columns, filters, groupings,
   measures, sorting and pagination, and drill down from aggregates to rows.
-- **Exports** of every matching row as CSV, TSV, JSON or Excel, streamed where
+- **Bounded exports** as CSV, TSV, JSON or Excel, streamed where
   the database adapter supports it.
 - **Canned search pages**: author-defined views with promoted facet, range and
   text controls, and no free-form builder.
@@ -29,7 +29,7 @@ What you get:
 The UI is rendered on the server. [htmx 4](https://htmx.org) WebSockets send
 incremental updates, and plain GET/POST forms still work without JavaScript.
 
-This is an early release (0.1.0). Expect the interface to change.
+This is an early release (0.1.1). Expect the interface to change.
 
 ## Installation
 
@@ -176,7 +176,7 @@ options are:
 | `default_fields`, `default_group` | first fields | Initial Detail columns and Aggregate groups |
 | `measures` | row count | Curated presets such as `{id, label, aggregate, field}` |
 | `default_limit`, `max_limit` | 25, 100 | Page size and its upper bound |
-| `export_authorizer`, `max_export_rows` | allow, unbounded | Who may export, and a row cap |
+| `export_authorizer`, `max_export_rows` | allow, 10,000 | Who may export, and the finite row cap |
 | `theme_resolver`, `page_shell_resolver` | none | Per-request colors, and host navigation markup |
 | `localizer` | none | Translation callback |
 | `action_handlers`, `action_authorizer`, … | none | Selected-row actions |
@@ -251,8 +251,10 @@ that string changes, the connection's cached results are discarded. See
 
 ```perl
 websocket_context => sub ($c, $config) {
-    my $user = $c->session('user_id') // return undef;    # undef closes the socket
-    return join ':', $c->session('tenant_id'), $user;
+    # Application functions must consult current server-side identity/policy.
+    my $identity = resolve_live_identity($c) // return undef;
+    return undef unless may_explore_now($identity, $config->id);
+    return join ':', $identity->{tenant}, $identity->{user}, $identity->{policy_revision};
 },
 ```
 
@@ -597,3 +599,71 @@ Artistic License 2.0 (GPL Compatible). See [LICENSE](LICENSE).
 
 The vendored browser assets have their own licenses (htmx: 0BSD, Chart.js:
 MIT). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### Security boundary configuration
+
+WebSockets default to `websocket_mode => 'protected'`. Registration requires a
+`websocket_context` callback which checks **live** authentication and permission
+on every frame, returning an opaque principal/tenant/policy namespace or `undef`
+to deny access. Both Explorer and canned pages close denied frames with 1008
+before resolving their engine. Existing applications must add this callback,
+explicitly opt genuinely public datasets into `websocket_mode => 'public'`, or
+set `websocket_enabled => 0` for HTTP only. A route bridge authenticates the
+upgrade but does not replace the live callback. See [Explorer sessions](docs/explorer-sessions.md).
+
+Query Assistant requires a stable host `actor` callback. Public demonstrations
+may explicitly use `allow_anonymous => 1`; resetting cookies cannot evade the
+store's total quotas. All assistant routes reject more than 65,536 received body
+bytes before buffering or JSON decoding, including chunked requests. Compressed
+bodies are refused. When routes are mounted into another receiving application,
+pass `ingress_app => $actual_mojolicious_app` at plugin registration; requests
+without the installed ingress guard fail closed.
+
+Both draft stores default to 10 drafts / 655,360 payload bytes per owner, 1,000
+drafts / 16 MiB total, 65,536 bytes per serialized draft including metadata, and
+100 successful creations per minute across the store. Idle expiry is 30 minutes
+and maximum lifetime is two hours. Constructor options are positive finite
+integers. The memory store is per process. SQLite shares atomic quota accounting
+across workers, preserves borrowed transactions, and migrates legacy rows once
+at store initialization to indexed owner/expiry metadata and byte counters.
+Back up the database before upgrading; initialize the migration before serving
+traffic. Normal operations do not decode unrelated payloads. All workers sharing
+a database must use the same quota settings.
+
+Exports default to 10,000 rows, 16 MiB output, 30 seconds, 32 MiB temporary disk,
+four concurrent exports, and two per actor. Configure `max_export_rows`,
+`max_export_bytes`, `max_export_seconds`, `max_export_temp_bytes`,
+`max_concurrent_exports`, `max_actor_exports`, and a stable `export_actor` callback
+on trusted Config objects. Missing actors share one conservative bucket. Leases
+use a private `export_lock_dir` shared by workers on one host; multiple hosts
+need separate finite deployment quotas. Use consistent settings for a shared
+lease directory. XLSX reserves XML and ZIP space conservatively before writing,
+so its temporary limit can be reached before its row/output limits.
+
+Exports require an adapter advertising both bounded result streaming and a
+real database query deadline. Initially PostgreSQL server cursors and SQLite
+are supported. Other adapters and aggregate-grid exports return a controlled
+422; run those through a separately bounded host job. `model(..., {all_rows=>1})`
+is refused; use `stream_export` or `xlsx_file_export`. There is no unbounded
+fallback. A budget failure before transmission returns 422; a failure after
+transmission interrupts the download, which clients must treat as incomplete.
+Timeouts, errors and disconnects close streams and release leases and temp files.
+The SQL row cap may produce a subset of matching rows, as the export UI states.
+JSON exports retain `scope: "all"` for compatibility and expose `row_limit`;
+`row_count` and `total_count` both count exported rows, not all database matches.
+
+`limits => Selecto::Limits->new(...)` sets trusted query-state budgets: 128 KiB
+state, 100 detail columns, 100 membership values of at most 4 KiB each, 64 KiB
+combined parameter bytes, 100 bucket ranges / 16 KiB bucket input, 15 numeric
+digits, 256 generated selections, 1,000 generated parameters, and 10,000
+expression nodes. Expansion is checked again before execution. Request fields
+cannot increase these ceilings. Duplicate action IDs are normalized before
+host authorization and row-specific form resolution. Choice-only membership
+filters require every value, including an empty string, to be explicitly listed.
+
+Private query mode writes no history snapshots, purges earlier Selecto snapshots,
+and clears rendered results on pagehide. History traversal and bfcache restoration
+reload the bare route. Hosts changing login, tenant or permissions without a full
+navigation must dispatch `selecto:context-changed` on `window`; this purges browser
+snapshots and reloads the current page. Private saved-query links redirect to the
+bare route without looking up or expanding retained query strings.

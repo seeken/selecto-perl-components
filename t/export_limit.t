@@ -21,6 +21,7 @@ my $url = '/explore/products?q=1&view=detail&field=product_name&field=unit_price
     '&order=product_name&direction=asc&limit=10&page=1';
 for my $format (qw(csv tsv json xlsx)) {
     $t->get_ok("$url&format=$format")->status_is(200);
+    $t->json_is('/row_limit' => 5) if $format eq 'json';
     is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, 5,
         "$format export is capped at max_export_rows";
 }

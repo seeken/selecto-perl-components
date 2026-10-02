@@ -3,7 +3,10 @@ package Selecto::Components::Explorer;
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(encode_json to_json);
 use Mojo::URL ();
-use File::Temp qw(tempfile);
+use File::Temp qw(tempfile tempdir);
+use File::Find ();
+use Encode qw(encode);
+use Selecto::Components::ExportBudget ();
 use Digest::SHA qw(sha256_hex);
 use Scalar::Util qw(blessed looks_like_number);
 use Time::HiRes qw(time);
@@ -39,6 +42,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     # Optional result cache keyed by the exact compiled SQL and bound values
     # (see result_cache_key). Hosts such as dashboards use it to reuse results
     # across requests. WebSocket sessions supply a bounded connection-local cache.
+    die "Use a bounded stream export for all_rows requests\n" if $options->{all_rows};
     my $result_cache = $options->{result_cache};
     die "explorer result_cache must provide fetch and store\n"
         if defined($result_cache)
@@ -688,7 +692,7 @@ sub stream_export ($self, $controller, $format) {
     my $config = $self->config->for_request($controller);
     my $engine = $config->engine($controller);
     return undef unless $config->query_params_enabled($engine->domain);
-    return undef unless $engine->adapter->supports('stream')
+    die "Adapter does not support bounded streaming exports\n" unless $engine->adapter->supports('stream')
         && $engine->adapter->can('stream_query');
     my $input = $self->input_from_controller($controller);
     my $state = Selecto::Components::State->from_input(
@@ -701,9 +705,11 @@ sub stream_export ($self, $controller, $format) {
     );
     # Grids need the bounded matrix transformation; their fallback export is
     # deliberately capped by max_grid_result_cells.
-    return undef if $built->{aggregate_grid};
+    die "Aggregate grid exports require a bounded job\n" if $built->{aggregate_grid};
     _cap_export($config, $built);
-    my $stream = $engine->stream($built->{query}, fetch_size => 500);
+    my $budget = Selecto::Components::ExportBudget->new($config, $engine, $controller);
+    my $stream = $engine->stream($built->{query}, fetch_size => 1, bounded => 1);
+    $controller->on(finish => sub { eval { $stream->close }; eval { $budget->close } }) if $controller->can('on');
     my @result_columns = @{$stream->columns};
     my @columns = grep { !$_->{action_id} } @{$built->{columns}};
     my @headers = _unique_headers(map { $_->{label} } @columns);
@@ -714,8 +720,10 @@ sub stream_export ($self, $controller, $format) {
     my $first_json_row = 1;
     my $row_count = 0;
     my $next_record = sub {
+        $budget->check;
         my $row = $stream->next;
         return undef unless $row;
+        $budget->row($row);
         my %record;
         @record{@result_columns} = @$row;
         my @record = (\%record);
@@ -730,14 +738,14 @@ sub stream_export ($self, $controller, $format) {
         unless ($started) {
             $started = 1;
             if ($format eq 'json') {
-                $chunk = '{"scope":"all","page":1,"total_pages":1,"columns":' .
+                $chunk = '{"scope":"all","row_limit":' . $config->max_export_rows . ',"page":1,"total_pages":1,"columns":' .
                     to_json(\@headers) . ',"rows":[';
             } else {
                 $chunk = join($delimiter, map { _delimited_cell($_) } @headers) . "\r\n";
             }
         }
         my $batch_count = 0;
-        while ($batch_count < 250) {
+        while ($batch_count < 1) {
             my $record = $next_record->();
             unless ($record) {
                 $finished = 1;
@@ -761,6 +769,7 @@ sub stream_export ($self, $controller, $format) {
             }
             $batch_count++;
         }
+        $budget->output($chunk);
         return length($chunk) ? $chunk : undef;
     };
     return {
@@ -768,7 +777,10 @@ sub stream_export ($self, $controller, $format) {
         next_chunk => $next_chunk,
         close => sub {
             return if $closed++;
-            $stream->close;
+            my $error;
+            eval { $stream->close; 1 } or $error = $@;
+            $budget->close;
+            die $error if $error;
         },
     };
 }
@@ -777,7 +789,7 @@ sub xlsx_file_export ($self, $controller) {
     my $config = $self->config->for_request($controller);
     my $engine = $config->engine($controller);
     return undef unless $config->query_params_enabled($engine->domain);
-    return undef unless $engine->adapter->supports('stream')
+    die "Adapter does not support bounded streaming exports\n" unless $engine->adapter->supports('stream')
         && $engine->adapter->can('stream_query');
     my $input = $self->input_from_controller($controller);
     my $state = Selecto::Components::State->from_input(
@@ -788,18 +800,34 @@ sub xlsx_file_export ($self, $controller) {
         $config, $engine->domain, $state,
         {paginate => 0, rollup => _rollup_supported($engine)},
     );
-    return undef if $built->{aggregate_grid};
+    die "Aggregate grid exports require a bounded job\n" if $built->{aggregate_grid};
     _cap_export($config, $built);
-    my ($output_handle, $output_path) = tempfile(SUFFIX => '.xlsx', UNLINK => 0);
+    my $budget = Selecto::Components::ExportBudget->new($config, $engine, $controller);
+    my $spool = File::Temp->newdir('selecto-xlsx-XXXXXX', TMPDIR => 1, CLEANUP => 1);
+    my ($output_handle, $output_path) = tempfile(DIR => "$spool", SUFFIX => '.xlsx', UNLINK => 0);
     close $output_handle or die "could not prepare Excel export file\n";
     my ($stream, $workbook);
+    my $spool_reserved = 262_144;
+    my $reserve_cell = sub ($text) {
+        $budget->check;
+        $spool_reserved += 4 * (1024 + 6 * length(encode('UTF-8', $text)));
+        die "Excel temporary disk limit exceeded\n" if $spool_reserved > $config->max_export_temp_bytes;
+    };
+    my $spool_check = sub {
+        $budget->check;
+        my $bytes = 0;
+        File::Find::find(sub { $bytes += -s $_ if -f $_ }, "$spool");
+        die "Excel temporary disk limit exceeded\n" if $bytes > $config->max_export_temp_bytes;
+    };
+    $controller->on(finish => sub { eval { $stream->close } if $stream; eval { $budget->close } }) if $controller->can('on');
     my $ok = eval {
-        $stream = $engine->stream($built->{query}, fetch_size => 500);
+        $stream = $engine->stream($built->{query}, fetch_size => 1, bounded => 1);
         my @result_columns = @{$stream->columns};
         my @columns = grep { !$_->{action_id} } @{$built->{columns}};
         require Excel::Writer::XLSX;
         $workbook = Excel::Writer::XLSX->new($output_path)
             or die "could not create Excel export\n";
+        $workbook->set_tempdir("$spool");
         $workbook->set_optimization if $workbook->can('set_optimization');
         my $header_format = $workbook->add_format(
             bold => 1, bg_color => '#DCE6F1', bottom => 1,
@@ -814,6 +842,7 @@ sub xlsx_file_export ($self, $controller) {
             for my $column_index (0 .. $#columns) {
                 my $label = defined($columns[$column_index]{label})
                     ? "$columns[$column_index]{label}" : '';
+                $reserve_cell->($label);
                 $worksheet->write_string(0, $column_index, $label, $header_format);
                 $widths[$column_index] = length($label);
             }
@@ -831,7 +860,10 @@ sub xlsx_file_export ($self, $controller) {
             }
         };
         $start_sheet->();
-        while (my $row = $stream->next) {
+        while (1) {
+            $spool_check->();
+            my $row = $stream->next or last;
+            $budget->row($row);
             if ($row_index >= 1_048_576) {
                 $finish_sheet->();
                 $start_sheet->();
@@ -844,10 +876,16 @@ sub xlsx_file_export ($self, $controller) {
             for my $column_index (0 .. $#columns) {
                 my $value = $record{$columns[$column_index]{key}};
                 if (!defined($value)) {
+                    $reserve_cell->('');
                     $worksheet->write_blank($row_index, $column_index, undef);
                     next;
                 }
                 my $text = _flat_value($value);
+                # XML escaping can expand bytes sixfold; reserve conservatively
+                # before the writer retains or flushes the cell.
+                $budget->output($text);
+                $reserve_cell->($text);
+
                 if (!ref($value) && looks_like_number($value) && $text !~ /\A[+-]?0\d/) {
                     $worksheet->write_number($row_index, $column_index, 0 + $value);
                 } else {
@@ -863,6 +901,8 @@ sub xlsx_file_export ($self, $controller) {
         $finish_sheet->();
         $workbook->close or die "could not finish Excel export\n";
         undef $workbook;
+        $spool_check->();
+        die "Excel output exceeds byte limit\n" if -s $output_path > $config->max_export_bytes;
         1;
     };
     unless ($ok) {
@@ -872,7 +912,9 @@ sub xlsx_file_export ($self, $controller) {
         unlink $output_path if -f $output_path;
         die $error;
     }
-    return {config => $config, path => $output_path};
+    # Keep both spool ownership and concurrency lease alive through delivery.
+    return {config => $config, path => $output_path,
+        close => sub { $budget->close; unlink $output_path if -f $output_path; undef $spool }};
 }
 
 sub export ($self, $model, $format) {
@@ -1153,8 +1195,7 @@ entry. L<Selecto::Components::ExplorerSession> is one implementation.
 
 =item all_rows
 
-When true (shareable mode only), the query is not paginated. It is still
-capped by C<max_export_rows>.
+Rejected. Use C<stream_export> or C<xlsx_file_export> with a bounded adapter.
 
 =back
 

@@ -127,4 +127,13 @@ my $host_listed = explorer(filter_fields => ['secret_code']);
 is_deeply(ids(request($host_listed, filter('secret_code', 'gt', 150))), [1, 3],
     'a host that lists the field in filter_fields may filter it freely');
 
+for my $field (qw(secret_code code_or_backup either_code)) {
+    for my $json ('[""]', '["", "100"]') {
+        my $model = request($explorer, filter_field => $field, filter_op => 'in', filter_values_json => $json);
+        ok !$model->{state}->valid, "$field rejects undeclared empty membership $json";
+        ok !$model->{result}, 'rejected empty membership executes no query';
+    }
+}
+ok Selecto::Components::State::_declared_choice({filter_choices => [{value => ''}]}, 'in', '', ['']),
+    'an explicitly declared empty membership choice remains allowed';
 done_testing;

@@ -228,7 +228,7 @@ test("Available stays beside Set until the picker truly lacks room", async ({pag
 test("a loaded saved view stays identified while its query is rerun", async ({page}) => {
   await page.route("http://saved.test/**", route => route.fulfill({
     contentType: "text/html",
-    body: `<section id="selecto-surface-load" hx-ws:connect="/explorer/load/ws">
+    body: `<section id="selecto-surface-load" hx-ws:connect="/explorer/load/ws" data-sc-query-params="enabled">
       <div class="sc-workspace"><aside class="sc-builder" data-sc-builder-shell="load">
         <form action="/explorer/load" method="get" data-sc-builder="load"
           data-sc-builder-query hx-ws:send>
@@ -343,7 +343,7 @@ test("a live Explorer builder sends its complete query over the WebSocket", asyn
     body: `
       <section id="selecto-channel-quotes" hx-ext="ws" hx-ws:connect="/explorer/quote/ws">
         <span data-selecto-connection>Connecting</span>
-        <section id="selecto-surface-quotes">
+        <section id="selecto-surface-quotes" data-sc-query-params="enabled">
           <div data-sc-workspace>
             <aside data-sc-builder-shell="quotes" data-sc-builder-collapsed="false">
               <form action="/explorer/quote" method="get" hx-ws:send hx-trigger="submit"
@@ -416,7 +416,7 @@ test("pagination shows the chosen page loading until its WebSocket results arriv
   await page.route("http://selecto.test/**", route => route.fulfill({
     contentType: "text/html",
     body: `<section id="selecto-channel-truck" hx-ext="ws" hx-ws:connect="/explorer/truck/ws">
-      <section id="selecto-surface-truck"><section id="selecto-results-truck">
+      <section id="selecto-surface-truck" data-sc-query-params="enabled"><section id="selecto-results-truck">
         <nav class="sc-pagination"><span>Page 1 of 3
           <span data-sc-pagination-status role="status" aria-live="polite" hidden></span></span>
           <form action="/explorer/truck" method="get" hx-ws:send>
@@ -539,7 +539,7 @@ test("a results-only graph swap keeps the no-JavaScript fallback hidden", async 
     contentType: "text/html",
     body: `
       <section id="selecto-channel-load" hx-ext="ws" hx-ws:connect="/explorer/load/ws">
-        <section id="selecto-surface-load" data-sc-chart-src="/chart.js">
+        <section id="selecto-surface-load" data-sc-chart-src="/chart.js" data-sc-query-params="enabled">
           <div data-sc-workspace>
             <form action="/explorer/load" method="get" hx-ws:send hx-trigger="submit"
               data-sc-builder="load">
@@ -732,7 +732,7 @@ test("a policy-rejected WebSocket does not enter a reconnect storm", async ({pag
 
 test("a completed query refreshes the API console link outside the results swap", async ({page}) => {
   await load(page, `
-    <section id="selecto-surface-loads">
+    <section id="selecto-surface-loads" data-sc-query-params="enabled">
       <a data-sc-api-console href="/api2/load/v1/console#request=old">API</a>
       <section id="selecto-results-loads">Rows</section>
     </section>
@@ -758,7 +758,7 @@ test("a completed query refreshes the API console link outside the results swap"
 
 test("a results-only query refreshes its permalink and exports without changing another Explorer", async ({page}) => {
   await load(page, `
-    <section id="selecto-surface-products">
+    <section id="selecto-surface-products" data-sc-query-params="enabled">
       <div id="selecto-hero-actions-products" data-sc-hero-actions>
         <a href="/explore/products?view=detail">Permalink</a>
         <a data-sc-export-format="csv" href="/explore/products?view=detail&format=csv">CSV</a>
@@ -766,7 +766,7 @@ test("a results-only query refreshes its permalink and exports without changing 
       </div>
       <section id="selecto-results-products">Graph rows</section>
     </section>
-    <section id="selecto-surface-orders">
+    <section id="selecto-surface-orders" data-sc-query-params="enabled">
       <div id="selecto-hero-actions-orders" data-sc-hero-actions>
         <a href="/explore/orders?view=detail">Permalink</a>
         <a data-sc-api-console href="/api/orders#old">API</a>
@@ -1402,7 +1402,7 @@ test("a host limit below 250 remains selectable in graph mode", async ({page}) =
 
 test("an export uses the columns currently selected in the builder", async ({page}) => {
   await load(page, `
-    <section id="selecto-surface-truck">
+    <section id="selecto-surface-truck" data-sc-query-params="enabled">
       <a data-sc-export-format="tsv" href="/explorer/truck?q=1&format=tsv">TSV</a>
       <form data-sc-builder action="http://selecto.test/explorer/truck">
         <input name="q" value="1"><input name="view" value="detail">
@@ -1493,7 +1493,7 @@ test("a toolbar-hosted popstate reloads the exact Explorer history URL", async (
       <body class="sc-host-menu-toolbar">
         <toolbar-menu data-host-menu sidebar-always-open>Tenant navigation</toolbar-menu>
         <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
-          <section id="selecto-surface-loads"><div data-graph>Monthly loads</div></section>
+          <section id="selecto-surface-loads" data-sc-query-params="enabled"><div data-graph>Monthly loads</div></section>
         </section>
       </body>
     `});
@@ -1522,7 +1522,7 @@ test("a legacy-menu popstate reloads the complete Explorer document", async ({pa
       <body class="sc-host-menu-dynamic menu_adjusted_left">
         <nav data-host-menu>Legacy tenant navigation</nav>
         <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
-          <section id="selecto-surface-loads"><div data-graph>Monthly loads</div></section>
+          <section id="selecto-surface-loads" data-sc-query-params="enabled"><div data-graph>Monthly loads</div></section>
         </section>
       </body>
     `});
@@ -1548,7 +1548,7 @@ test("Back restores the previous applied query without rerunning it", async ({pa
     await route.fulfill({contentType: "text/html", body: `
       <section id="selecto-channel-orders" hx-ws:connect="/explore/orders/ws">
         <span data-selecto-connection class="is-live">Live</span>
-        <section id="selecto-surface-orders">
+        <section id="selecto-surface-orders" data-sc-query-params="enabled">
           <div data-sc-workspace>
             <form data-sc-grid-selection data-sc-grid-max="10">
               <input type="checkbox" checked data-sc-grid-cell data-sc-grid-row="late" data-sc-grid-column="east">
@@ -1566,7 +1566,7 @@ test("Back restores the previous applied query without rerunning it", async ({pa
     document.dispatchEvent(new Event("DOMContentLoaded"));
     window.dispatchEvent(new Event("pagehide"));
     document.querySelector("#selecto-surface-orders").outerHTML = `
-      <section id="selecto-surface-orders">
+      <section id="selecto-surface-orders" data-sc-query-params="enabled">
         <div data-sc-workspace><section class="sc-results">
           <div data-detail-results>Selected-cell details</div>
         </section></div>
@@ -1595,7 +1595,7 @@ test("Back rebuilds a graph from a clean history snapshot", async ({page}) => {
       <nav data-host-menu>Tenant navigation</nav>
       <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
         <span data-selecto-connection class="is-live">Live</span>
-        <section id="selecto-surface-loads" data-sc-chart-src="/chart.js">
+        <section id="selecto-surface-loads" data-sc-chart-src="/chart.js" data-sc-query-params="enabled">
           <div data-sc-workspace>
             <form action="/explorer/load" method="get" data-sc-builder>
               <input name="view" value="graph">
@@ -1654,7 +1654,7 @@ test("Back rebuilds a graph from a clean history snapshot", async ({page}) => {
       detail: {target: document.querySelector(".sc-results")}
     }));
     document.querySelector("#selecto-surface-loads").outerHTML = `
-      <section id="selecto-surface-loads"><div data-sc-workspace>
+      <section id="selecto-surface-loads" data-sc-query-params="enabled"><div data-sc-workspace>
         <section class="sc-results"><div data-detail-results>January loads</div></section>
       </div></section>`;
     document.dispatchEvent(new CustomEvent("htmx:ws:after:message:incoming", {
@@ -1681,7 +1681,7 @@ test("a reconnecting Explorer keeps drilldown and Back inside browser history", 
       <nav data-host-menu>Tenant navigation</nav>
       <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
         <span data-selecto-connection>Reconnecting</span>
-        <section id="selecto-surface-loads">
+        <section id="selecto-surface-loads" data-sc-query-params="enabled">
           <div data-sc-workspace><section class="sc-results">
             <div data-aggregate-results>Aggregate results</div>
             <form action="/explorer/load" method="get" hx-ws:send data-drilldown>
@@ -1757,7 +1757,7 @@ test("browser Back restores an Explorer history entry inside a legacy host frame
     await route.fulfill({contentType: "text/html", body: `
       <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
         <span data-selecto-connection>Connecting</span>
-        <section id="selecto-surface-loads">
+        <section id="selecto-surface-loads" data-sc-query-params="enabled">
           <form action="/explorer/load" method="get" data-sc-builder>
             <input name="view" value="aggregate">
           </form>
@@ -1784,7 +1784,7 @@ test("browser Back restores an Explorer history entry inside a legacy host frame
     form.addEventListener("submit", event => event.preventDefault(), {once: true});
     form.requestSubmit();
     document.querySelector("#selecto-surface-loads").outerHTML = `
-      <section id="selecto-surface-loads">
+      <section id="selecto-surface-loads" data-sc-query-params="enabled">
         <section class="sc-results"><div data-detail-results>Detail results</div></section>
       </section>`;
     document.dispatchEvent(new CustomEvent("htmx:ws:after:message:incoming", {
