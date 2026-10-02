@@ -20,9 +20,9 @@ like $page, qr{data-curl-auth="cookie"}, 'page defaults generated cURL to cookie
 like $page, qr{data-csrf-token="test-csrf-token"}, 'page supplies the host CSRF token';
 like $page, qr{<html lang="en" data-sac-color-scheme="light">},
     'console pages use the shared light operational palette by default';
-like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.5\.5},
+like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.5\.6},
     'page loads the versioned shared stylesheet';
-like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.5\.5},
+like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.5\.6},
     'page loads the versioned shared JavaScript';
 
 $page = Selecto::Components::APIConsole->page(
@@ -45,7 +45,7 @@ $page = Selecto::Components::APIConsole->page(
 like $page, qr{<html lang="en" data-sac-color-scheme="light"><head>},
     'the console document carries its scheme without an inline style';
 like $page,
-    qr{<link rel="stylesheet" href="/selecto-api-console/selecto-api-console\.css\?v=0\.5\.5"><link rel="stylesheet" href="/selecto-api-console/theme\.css\?primary=CC5500&amp;secondary=DC8B52&amp;on_primary=000000&amp;v=[^"]+">},
+    qr{<link rel="stylesheet" href="/selecto-api-console/selecto-api-console\.css\?v=0\.5\.6"><link rel="stylesheet" href="/selecto-api-console/theme\.css\?primary=CC5500&amp;secondary=DC8B52&amp;on_primary=000000&amp;v=[^"]+">},
     'semantic host colors are linked as a same-origin console theme stylesheet';
 unlike $page, qr{\sstyle=|<style}, 'a themed console page has no inline style';
 is(Selecto::Components::ThemeStylesheet->css('console', {primary => '#cc5500', secondary => '#DC8B52', on_primary => '#000000'}),

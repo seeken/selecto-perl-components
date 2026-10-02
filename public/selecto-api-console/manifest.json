@@ -3,8 +3,8 @@
   "version": "0.5.0",
   "assets": {
     "selecto-api-console.js": {
-      "bytes": 169126,
-      "sha256": "1b2168f9e164ca9a7c56ddea490c768a4f1675e1089583af80fa134ad739616a"
+      "bytes": 169834,
+      "sha256": "5f961fbcdd4c85ac119f961c25640c6664c3ea41810e5e0f400252eb484f1e1d"
     },
     "selecto-api-console.css": {
       "bytes": 23576,
