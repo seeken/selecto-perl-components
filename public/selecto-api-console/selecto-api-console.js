@@ -439,9 +439,21 @@
     return String(value);
   }
 
+  // Result columns are typed descriptors ({id, label, type, ...}) under the
+  // remote query profile, or bare id strings from hosts that predate it.
+  function columnId(column) {
+    if (isPlainObject(column)) return String(column.id ?? column.field ?? "");
+    return column === null || column === undefined ? "" : String(column);
+  }
+
+  function columnLabel(column) {
+    const label = isPlainObject(column) ? column.label : undefined;
+    return typeof label === "string" && label !== "" ? label : columnId(column);
+  }
+
   function rowValue(row, column, index) {
     if (Array.isArray(row)) return row[index];
-    return row && typeof row === "object" ? row[column] : undefined;
+    return row && typeof row === "object" ? row[columnId(column)] : undefined;
   }
 
   function isPlainObject(value) {
@@ -3189,7 +3201,11 @@
       const rows = data && Array.isArray(data.rows) ? data.rows : [];
       if (columns.length) {
         const tr = element("tr", "");
-        columns.forEach((column) => tr.append(element("th", "", column)));
+        columns.forEach((column) => {
+          const th = element("th", "", columnLabel(column));
+          if (th.textContent !== columnId(column)) th.title = columnId(column);
+          tr.append(th);
+        });
         head.append(tr);
         rows.forEach((row) => {
           const resultRow = element("tr", "");
@@ -3272,6 +3288,8 @@
     writeFieldRequired,
     writeRequiredValueMissing,
     renderValue,
+    columnId,
+    columnLabel,
     rowValue,
     segmentParameterSpecs,
   };
