@@ -127,7 +127,7 @@
       this.root.innerHTML = `
         <header class="sai-header"><div><h1></h1><p>Map a file to governed writes, validate every row, then import deliberately.</p></div><a class="sai-back" href="${this.base}/console">API Console</a></header>
         <section class="sai-card"><h2>1. Upload or choose a profile</h2><div class="sai-inline"><label>Import profile<select data-sai-profile><option value="">New mapping</option></select></label><label>File<input type="file" accept=".csv,.tsv,text/csv,text/tab-separated-values" data-sai-file></label><button type="button" class="sai-button" data-sai-upload>Inspect file</button></div><p class="sai-message" data-sai-message></p></section>
-        <section class="sai-card" data-sai-mapping-card hidden><h2>2. Map file data</h2><div data-sai-file-summary></div><p class="sai-hint">Each row below is a column in the uploaded file. Choose a governed write field or governed action input that should receive it. A Match radio appears only for file columns that can identify an existing record.</p><div class="sai-mapping" data-sai-mappings></div><details class="sai-additional-values"><summary>Additional values not in the file</summary><p class="sai-hint">Use these for static values, run parameters, and trusted context such as the active client.</p><label class="sai-add-field">Add field<select data-sai-add-extra></select></label><div class="sai-mapping" data-sai-extra-mappings></div></details><div class="sai-inline"><label>On existing<select data-sai-on-match></select></label><label>When missing<select data-sai-on-missing></select></label><label>Rows from<input type="number" min="1" value="1" data-sai-start></label><label>through<input type="number" min="1" data-sai-end></label><label><input type="checkbox" checked data-sai-idempotency> Skip rows already imported from this file</label></div><p class="sai-hint">Turn off duplicate protection only when deliberately replaying a corrected mapping; the import will ask for confirmation.</p><label class="sai-label">Configuration JSON<textarea spellcheck="false" data-sai-config></textarea></label><div class="sai-actions"><button type="button" class="sai-button sai-secondary" data-sai-copy>Copy JSON</button><button type="button" class="sai-button sai-secondary" data-sai-save-profile>Save profile</button><button type="button" class="sai-button" data-sai-preview>Validate & preview</button><button type="button" class="sai-button sai-primary" data-sai-run>Import valid rows</button></div></section>
+        <section class="sai-card" data-sai-mapping-card hidden><h2>2. Map file data</h2><div data-sai-file-summary></div><p class="sai-hint">Each row below is a column in the uploaded file. Choose one or more governed write fields or governed action inputs that should receive it. Use Add another destination to send the same input value to another target. A Match radio appears only for file columns that can identify an existing record.</p><div class="sai-mapping" data-sai-mappings></div><details class="sai-additional-values"><summary>Additional values not in the file</summary><p class="sai-hint">Use these for static values, run parameters, and trusted context such as the active client.</p><label class="sai-add-field">Add field<select data-sai-add-extra></select></label><div class="sai-mapping" data-sai-extra-mappings></div></details><div class="sai-inline"><label>On existing<select data-sai-on-match></select></label><label>When missing<select data-sai-on-missing></select></label><label>Rows from<input type="number" min="1" value="1" data-sai-start></label><label>through<input type="number" min="1" data-sai-end></label><label><input type="checkbox" checked data-sai-idempotency> Skip rows already imported from this file</label></div><p class="sai-hint">Turn off duplicate protection only when deliberately replaying a corrected mapping; the import will ask for confirmation.</p><label class="sai-label">Configuration JSON<textarea spellcheck="false" data-sai-config></textarea></label><div class="sai-actions"><button type="button" class="sai-button sai-secondary" data-sai-copy>Copy JSON</button><button type="button" class="sai-button sai-secondary" data-sai-save-profile>Save profile</button><button type="button" class="sai-button" data-sai-preview>Validate & preview</button><button type="button" class="sai-button sai-primary" data-sai-run>Import valid rows</button></div></section>
         <section class="sai-card" data-sai-results-card hidden><h2>3. Staged rows</h2><div data-sai-results></div></section>`;
       this.root.querySelector("h1").textContent = title;
       this.populateProfiles();
@@ -241,24 +241,20 @@
       this.extraActionInputs.clear();
       this.selectedKeySetId = null;
       const columns = this.upload.inspection.columns || [];
-      const claimedColumns = new Set();
-      // Action inputs are operational semantics rather than ordinary table
-      // assignments.  Give their explicit aliases precedence, then ensure a
-      // file column can never feed more than one destination.
+      // A file column may intentionally feed multiple governed destinations.
+      // Each destination still has exactly one source mapping.
       this.actionInputEntries().forEach(({action, input, spec}) => {
         const aliases = [input, ...(spec.header_aliases || [])].map(normalize);
-        const column = columns.find((item) => !claimedColumns.has(item.id) && aliases.includes(normalize(item.header)));
+        const column = columns.find((item) => aliases.includes(normalize(item.header)));
         if (column) {
           this.actionMappings.set(`${action}:${input}`, {kind: "column", column_id: column.id});
-          claimedColumns.add(column.id);
         } else this.actionMappings.set(`${action}:${input}`, {kind: "omit", value: ""});
       });
       Object.entries(this.importFields()).forEach(([field, spec]) => {
         const aliases = [field, ...(spec.header_aliases || [])].map(normalize);
-        const column = columns.find((item) => !claimedColumns.has(item.id) && aliases.includes(normalize(item.header)));
+        const column = columns.find((item) => aliases.includes(normalize(item.header)));
         if (column) {
           this.mappings.set(field, {kind: "column", column_id: column.id});
-          claimedColumns.add(column.id);
         }
         else if ((spec.sources || []).length === 1 && spec.sources[0] === "trusted") {
           this.mappings.set(field, {kind: "trusted", value: ""});
@@ -276,11 +272,16 @@
       body.replaceChildren();
       const fields = this.importFields();
       const mappedColumns = new Map();
+      const rememberMapping = (columnId, target) => {
+        const targets = mappedColumns.get(columnId) || [];
+        targets.push(target);
+        mappedColumns.set(columnId, targets);
+      };
       this.mappings.forEach((mapping, field) => {
-        if (mapping.kind === "column") mappedColumns.set(mapping.column_id, field);
+        if (mapping.kind === "column") rememberMapping(mapping.column_id, field);
       });
       this.actionMappings.forEach((mapping, key) => {
-        if (mapping.kind === "column") mappedColumns.set(mapping.column_id, `action:${key}`);
+        if (mapping.kind === "column") rememberMapping(mapping.column_id, `action:${key}`);
       });
       this.renderKeySetChoices();
       const eligibleKeySets = this.eligibleKeySets();
@@ -288,28 +289,39 @@
         const row = element("div", "sai-mapping-row");
         const copy = element("div", "");
         copy.append(element("strong", "", column.label), element("code", "", column.header || `Column ${column.ordinal}`));
-        const target = element("select", "");
-        target.dataset.saiColumn = column.id;
-        target.add(new Option("Do not send", "", false, !mappedColumns.has(column.id)));
-        const targetGroups = new Map();
-        Object.entries(fields).sort(([a], [b]) => a.localeCompare(b)).forEach(([field, spec]) => {
-          if (!(spec.sources || []).includes("column")) return;
-          const option = new Option(`${this.fieldLabel(field)} (${field})`, field, false, mappedColumns.get(column.id) === field);
-          const existing = this.mappings.get(field);
-          option.disabled = Boolean(existing && existing.kind === "column" && existing.column_id !== column.id);
-          addGroupedOption(target, targetGroups, targetGroupLabel(this.domain, field), option);
-        });
-        this.actionInputEntries().sort((a, b) => a.label.localeCompare(b.label)).forEach(({action, input, spec, label}) => {
-          if (!(spec.sources || []).includes("column")) return;
-          const key = `${action}:${input}`;
-          const existing = this.actionMappings.get(key);
-          const option = new Option(`${label} (${action}.${input})`, `action:${key}`, false, mappedColumns.get(column.id) === `action:${key}`);
-          option.disabled = Boolean(existing && existing.kind === "column" && existing.column_id !== column.id);
-          addGroupedOption(target, targetGroups, "Actions", option);
-        });
-        const field = mappedColumns.get(column.id);
-        const matchSets = field && !field.startsWith("action:")
-          ? eligibleKeySets.filter((set) => (set.fields || []).includes(field)) : [];
+        const mappedTargets = mappedColumns.get(column.id) || [];
+        const destinations = element("div", "sai-mapping-targets");
+        const appendTarget = (selectedTarget) => {
+          const target = element("select", "");
+          target.dataset.saiColumn = column.id;
+          target.dataset.saiCurrentTarget = selectedTarget;
+          target.add(new Option(selectedTarget ? "Remove mapping" : "Add another destination…", "", false, !selectedTarget));
+          const targetGroups = new Map();
+          Object.entries(fields).sort(([a], [b]) => a.localeCompare(b)).forEach(([field, spec]) => {
+            if (!(spec.sources || []).includes("column")) return;
+            const option = new Option(`${this.fieldLabel(field)} (${field})`, field, false, selectedTarget === field);
+            const existing = this.mappings.get(field);
+            option.disabled = Boolean(existing && existing.kind === "column"
+              && (existing.column_id !== column.id || selectedTarget !== field));
+            addGroupedOption(target, targetGroups, targetGroupLabel(this.domain, field), option);
+          });
+          this.actionInputEntries().sort((a, b) => a.label.localeCompare(b.label)).forEach(({action, input, spec, label}) => {
+            if (!(spec.sources || []).includes("column")) return;
+            const key = `${action}:${input}`;
+            const value = `action:${key}`;
+            const existing = this.actionMappings.get(key);
+            const option = new Option(`${label} (${action}.${input})`, value, false, selectedTarget === value);
+            option.disabled = Boolean(existing && existing.kind === "column"
+              && (existing.column_id !== column.id || selectedTarget !== value));
+            addGroupedOption(target, targetGroups, "Actions", option);
+          });
+          destinations.append(target);
+        };
+        mappedTargets.forEach(appendTarget);
+        appendTarget("");
+        const ordinaryTargets = mappedTargets.filter((target) => !target.startsWith("action:"));
+        const matchSets = ordinaryTargets.length
+          ? eligibleKeySets.filter((set) => (set.fields || []).some((field) => ordinaryTargets.includes(field))) : [];
         const match = element("div", "sai-match-choice");
         matchSets.forEach((set) => {
           const label = element("label", "sai-key-choice");
@@ -319,7 +331,7 @@
           label.append(input, document.createTextNode(` Match: ${set.label || set.id}`));
           match.append(label);
         });
-        row.append(copy, target, match);
+        row.append(copy, destinations, match);
         body.append(row);
       });
       this.renderExtraMappings(fields);
@@ -399,24 +411,29 @@
 
     columnChanged(node) {
       const columnId = node.dataset.saiColumn;
-      this.mappings.forEach((mapping, field) => {
-        if (mapping.kind === "column" && mapping.column_id === columnId) this.mappings.set(field, {kind: "omit", value: ""});
-      });
-      this.actionMappings.forEach((mapping, key) => {
-        if (mapping.kind === "column" && mapping.column_id === columnId) this.actionMappings.set(key, {kind: "omit", value: ""});
-      });
+      const previous = node.dataset.saiCurrentTarget || "";
+      if (previous && previous !== node.value) {
+        if (previous.startsWith("action:")) {
+          const key = previous.slice(7);
+          const mapping = this.actionMappings.get(key);
+          if (mapping && mapping.kind === "column" && mapping.column_id === columnId) {
+            this.actionMappings.set(key, {kind: "omit", value: ""});
+          }
+        } else {
+          const mapping = this.mappings.get(previous);
+          if (mapping && mapping.kind === "column" && mapping.column_id === columnId) {
+            this.mappings.set(previous, {kind: "omit", value: ""});
+          }
+        }
+      }
       if (node.value) {
         if (node.value.startsWith("action:")) {
           const key = node.value.slice(7);
-          const old = this.actionMappings.get(key);
-          if (old && old.kind === "column") this.actionMappings.set(key, {kind: "omit", value: ""});
           this.actionMappings.set(key, {kind: "column", column_id: columnId});
           this.extraActionInputs.delete(key);
           this.renderMapping();
           return;
         }
-        const old = this.mappings.get(node.value);
-        if (old && old.kind === "column") this.mappings.set(node.value, {kind: "omit", value: ""});
         this.mappings.set(node.value, {kind: "column", column_id: columnId});
         this.extraFields.delete(node.value);
       }

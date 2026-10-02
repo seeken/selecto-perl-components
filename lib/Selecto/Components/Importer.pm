@@ -9,7 +9,7 @@ use Selecto::Components::APIConsole ();
 use Selecto::Components::Util qw(html_escape);
 use Selecto::Components::ThemeStylesheet ();
 
-my $ASSET_REVISION = '0.5.0-importer-16';
+my $ASSET_REVISION = '0.5.0-importer-17';
 
 sub install_assets ($class, $app) {
     return Selecto::Components::APIConsole->install_assets($app);
