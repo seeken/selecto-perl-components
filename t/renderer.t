@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use Test::More;
 use Mojo::DOM ();
-use Mojo::JSON qw(decode_json);
+use Mojo::JSON qw(decode_json from_json);
 use Mojo::Util qw(url_unescape);
 use lib 't/lib';
 use TestSelectoComponents;
@@ -623,7 +623,7 @@ is(
     'a full aggregate grid does not render misleading page controls',
 );
 
-my $grid_export = decode_json(
+my $grid_export = from_json(
     Selecto::Components::Explorer->new(config => $config)->json($grid_model)
 );
 is_deeply $grid_export->{columns}, ['Category', '1', '2'],

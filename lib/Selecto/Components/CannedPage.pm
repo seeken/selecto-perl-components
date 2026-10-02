@@ -3,7 +3,7 @@ package Selecto::Components::CannedPage;
 use utf8;
 use Mojo::Base -base, -signatures;
 use Mojo::Util qw(xml_escape);
-use Mojo::JSON qw(decode_json encode_json);
+use Mojo::JSON qw(decode_json encode_json from_json to_json);
 use Encode qw(encode);
 use Scalar::Util qw(blessed);
 use Selecto::CannedPage ();
@@ -179,7 +179,7 @@ sub handle_websocket ($self, $controller) {
     $controller->on(message => sub ($socket, $message) {
         return $socket->finish(1009 => 'WebSocket message is too large')
             if !defined($message) || length($message) > 131_072;
-        my $payload = eval { decode_json($message) };
+        my $payload = eval { from_json($message) };
         return $socket->finish(1003 => 'Expected a JSON form')
             unless ref($payload) eq 'HASH';
         my $request_id = $payload->{selecto_request_id};
@@ -246,7 +246,7 @@ sub _input ($self, $controller, $payload = undef) {
     my $drilldown_json = $clicked ? $get->('drilldown_select') : $get->('drilldown');
     if (!$get->('clear_drilldown') && defined($drilldown_json)
         && length($drilldown_json)) {
-        $drilldown = eval { decode_json($drilldown_json) };
+        $drilldown = eval { from_json($drilldown_json) };
         Selecto::Error->throw('invalid_canned_page', 'invalid drilldown')
             unless ref($drilldown) eq 'HASH';
     }
@@ -295,7 +295,7 @@ sub _surface ($self, $result, $public) {
     $html .= '<input type="hidden" name="limit" value="' . _escape($state->{limit}) . '">';
     if ($state->{drilldown}) {
         $html .= '<input type="hidden" name="drilldown" value="'
-            . _escape(encode_json($state->{drilldown})) . '">';
+            . _escape(to_json($state->{drilldown})) . '">';
         $html .= '<p class="sc-note">Showing matching detail rows from ' . _escape($state->{drilldown}{view})
             . '.</p><button class="sc-button sc-secondary" type="submit" name="clear_drilldown" value="1">Clear drilldown</button>';
     }
@@ -407,7 +407,7 @@ sub _hidden_state ($self, $state) {
                 _escape($value // '') . '">';
         }
     }
-    $html .= '<input type="hidden" name="drilldown" value="' . _escape(encode_json($state->{drilldown})) . '">'
+    $html .= '<input type="hidden" name="drilldown" value="' . _escape(to_json($state->{drilldown})) . '">'
         if $state->{drilldown};
     return $html;
 }
@@ -467,7 +467,7 @@ sub _table ($self, $result) {
         $table->{extra_column} = {label => 'Details', cell => sub ($record, $index) {
             my @values = map { $record->{"column_$_"} } 0 .. $group_count - 1;
             return '<button class="sc-button sc-secondary" type="submit" name="drilldown_select" value="' .
-                _escape(encode_json({view => $result->{state}{view}, values => \@values})) .
+                _escape(to_json({view => $result->{state}{view}, values => \@values})) .
                 '">Show matching items</button>';
         }};
     } elsif (my $link = $self->record_link) {

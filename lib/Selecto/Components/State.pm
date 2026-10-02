@@ -1,8 +1,9 @@
 package Selecto::Components::State;
 
 use Mojo::Base -base, -signatures;
-use Mojo::JSON qw(decode_json encode_json);
+use Mojo::JSON qw(from_json to_json);
 use Digest::SHA qw(sha256_hex);
+use Encode qw(encode);
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
 use Selecto::Components::Graph::AxisPlanner ();
@@ -202,7 +203,7 @@ sub query_pairs ($self) {
             filter_op => $filter->{op},
             filter_value => $filter->{value},
             filter_values_json => ref($filter->{values}) eq 'ARRAY'
-                ? encode_json($filter->{values}) : '',
+                ? to_json($filter->{values}) : '',
             filter_value_end => $filter->{value_end} // '',
             filter_group => $filter->{grouped} ? 1 : 0,
             filter_clause => $filter->{clause} // '';
@@ -264,7 +265,7 @@ sub query_signature ($self) {
         my $value = defined($pairs->[$index + 1]) ? "$pairs->[$index + 1]" : '';
         push @parts, length($key) . ":$key", length($value) . ":$value";
     }
-    return sha256_hex(join('|', @parts));
+    return sha256_hex(encode('UTF-8', join('|', @parts)));
 }
 
 sub api_query_payload ($self, $config, $domain) {
@@ -971,7 +972,7 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
         ($value, $value_end) = ('', '') if $op =~ /_null\z/;
         my $membership_values;
         if (($op eq 'in' || $op eq 'not_in') && length($values_json)) {
-            my $decoded = eval { decode_json($values_json) };
+            my $decoded = eval { from_json($values_json) };
             if (ref($decoded) ne 'ARRAY' || !@$decoded
                 || grep { !defined($_) || ref($_) } @$decoded) {
                 push @$errors, 'Membership filter values must be a non-empty JSON array of scalars.';
@@ -1072,7 +1073,7 @@ sub _grid_cell_filter_inputs ($config, $grid_cells, $grid_axes, $field_map, $val
     my $clause = 0;
     my %selected_axis;
     for my $encoded (@$grid_axes) {
-        my $axis = eval { decode_json($encoded) };
+        my $axis = eval { from_json($encoded) };
         if ($@ || ref($axis) ne 'HASH' || !exists($axis->{axis}) || !exists($axis->{value})
             || $axis->{axis} !~ /\A[01]\z/ || ref($axis->{value})
             || (defined($axis->{value}) && length("$axis->{value}") > 1_000)) {
@@ -1089,7 +1090,7 @@ sub _grid_cell_filter_inputs ($config, $grid_cells, $grid_axes, $field_map, $val
         };
     }
     for my $encoded (@$grid_cells) {
-        my $values = eval { decode_json($encoded) };
+        my $values = eval { from_json($encoded) };
         if ($@ || ref($values) ne 'ARRAY' || @$values != 2
             || grep { defined($_) && ref($_) } @$values
             || grep { defined($_) && length("$_") > 1_000 } @$values) {

@@ -4,7 +4,7 @@ use 5.034;
 use strict;
 use warnings;
 use Mojo::Base -base, -signatures;
-use Mojo::JSON qw(decode_json);
+use Mojo::JSON qw(from_json);
 use JSON::PP ();
 use Selecto::Action ();
 use Selecto::Components::Util qw(humanize);
@@ -473,7 +473,7 @@ sub _request_inputs {
         if ($input->{type} eq 'collection') {
             if ($options && $options->{form_encoded} && defined($value) && !ref($value) && length($value) <= 131_072) {
                 if (length($value)) {
-                    my $parsed = eval { decode_json($value) };
+                    my $parsed = eval { from_json($value) };
                     if ($@ || ref($parsed) ne 'ARRAY') {
                         push @errors, "$input->{label} must be a JSON array.";
                         next;
@@ -562,7 +562,7 @@ sub _request_groups {
     my @errors;
     my $raw_groups;
     if (!defined($payload) || ref($payload) || length($payload) > 131_072
-        || !eval { $raw_groups = decode_json($payload); 1 }
+        || !eval { $raw_groups = from_json($payload); 1 }
         || ref($raw_groups) ne 'ARRAY') {
         return ([], ['The action groups are invalid.']);
     }

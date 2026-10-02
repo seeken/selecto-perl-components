@@ -1,7 +1,7 @@
 package Selecto::Components::Explorer;
 
 use Mojo::Base -base, -signatures;
-use Mojo::JSON qw(decode_json encode_json);
+use Mojo::JSON qw(decode_json encode_json to_json);
 use Mojo::URL ();
 use File::Temp qw(tempfile);
 use Digest::SHA qw(sha256_hex);
@@ -730,7 +730,7 @@ sub stream_export ($self, $controller, $format) {
             $started = 1;
             if ($format eq 'json') {
                 $chunk = '{"scope":"all","page":1,"total_pages":1,"columns":' .
-                    encode_json(\@headers) . ',"rows":[';
+                    to_json(\@headers) . ',"rows":[';
             } else {
                 $chunk = join($delimiter, map { _delimited_cell($_) } @headers) . "\r\n";
             }
@@ -751,7 +751,7 @@ sub stream_export ($self, $controller, $format) {
                     $headers[$index] => _json_value($record->{$columns[$index]{key}})
                 } 0 .. $#columns;
                 $chunk .= ',' unless $first_json_row;
-                $chunk .= encode_json(\%row);
+                $chunk .= to_json(\%row);
                 $first_json_row = 0;
             } else {
                 $chunk .= join($delimiter, map {
@@ -904,7 +904,7 @@ sub json ($self, $model) {
             } 0 .. $#columns
         }
     } @$records;
-    return encode_json({
+    return to_json({
         scope => $model->{result}{all_rows} ? 'all' : 'page',
         page => $model->{result}{all_rows} ? 1 : $model->{state}->page,
         total_pages => $model->{result}{total_pages},
@@ -1052,7 +1052,7 @@ sub _json_value ($value) {
 
 sub _flat_value ($value) {
     return '' unless defined($value);
-    return encode_json(_json_value($value)) if ref($value);
+    return to_json(_json_value($value)) if ref($value);
     return "$value";
 }
 
@@ -1181,11 +1181,12 @@ is the bare path.
 
 =head2 export
 
-    my $bytes = $explorer->export($model, $format);   # csv | tsv | json | xlsx
+    my $data = $explorer->export($model, $format);   # csv | tsv | json | xlsx
 
 Serializes a successful model's rows. The C<csv>, C<tsv>, C<json> and C<xlsx>
-methods do the same for one format. Hidden helper columns and action columns
-are left out. Delimited formats neutralize spreadsheet formulas.
+methods do the same for one format. Text formats return a character string
+for the caller to encode; C<xlsx> returns bytes. Hidden helper columns and
+action columns are left out. Delimited formats neutralize spreadsheet formulas.
 
 =head2 stream_export, xlsx_file_export
 

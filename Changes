@@ -6,6 +6,13 @@ Unreleased
     - The canned page record dialog uses the theme's panel colour. It fell
       back to white because the shared theme defines no --sc-surface, which
       left the dark palette's light text unreadable.
+    - Non-ASCII values in JSON the explorer and canned pages embed in HTML
+      (drilldown buttons, carried drilldown and membership filters, data-*
+      attributes, permalinks) and in CSV, TSV and JSON exports are UTF-8
+      encoded once instead of twice. Submitted JSON and WebSocket messages
+      are parsed as the characters Mojolicious already decoded, so a
+      membership filter or drilldown with accented text or emoji selects
+      exactly that value instead of failing.
     - Optional WebMCP tools edit validated query-form drafts without running
       queries. Drafts support revision checks, idempotent apply, manual-edit
       synchronization, one-step undo, and an optional SQLite store.
