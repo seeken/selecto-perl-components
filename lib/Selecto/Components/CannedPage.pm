@@ -3,7 +3,7 @@ package Selecto::Components::CannedPage;
 use utf8;
 use Mojo::Base -base, -signatures;
 use Mojo::Util qw(xml_escape);
-use Mojo::JSON qw(decode_json encode_json from_json to_json);
+use Mojo::JSON qw(encode_json from_json to_json);
 use Encode qw(encode);
 use Scalar::Util qw(blessed);
 use Selecto::CannedPage ();
@@ -13,7 +13,7 @@ use Selecto::Components::Renderer::Results ();
 use Selecto::Components::AssetManifest qw(asset_revision);
 use Selecto::Components::Config ();
 use Selecto::Components::ThemeStylesheet ();
-use Selecto::Components::Util qw(humanize);
+use Selecto::Components::Util qw(decode_driver_json humanize);
 
 # theme (optional): {scheme => 'light'|'dark', primary, secondary, on_primary} as #RRGGBB,
 # the same shape as Selecto::Components::Config's theme resolver returns. Without it the
@@ -447,7 +447,7 @@ sub _table ($self, $result) {
         for my $column (grep { $_->{nested} } @columns) {
             my $value = $record->{$column->{key}};
             if (defined($value) && !ref($value)) {
-                $value = eval { decode_json($value) };
+                $value = eval { decode_driver_json($value) };
             }
             my $valid_collection = ref($value) eq 'ARRAY'
                 && !(grep { ref($_) ne 'HASH' } @$value);

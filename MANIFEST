@@ -88,6 +88,7 @@ t/internal_field_secrecy.t
 t/lazy_view_controls.t
 t/lib/TestSelectoComponents.pm
 t/manifest.t
+t/nested_unicode.t
 t/plugin.t
 t/query_builder.t
 t/query_assistant.t

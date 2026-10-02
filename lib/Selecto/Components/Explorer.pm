@@ -1,7 +1,7 @@
 package Selecto::Components::Explorer;
 
 use Mojo::Base -base, -signatures;
-use Mojo::JSON qw(decode_json encode_json to_json);
+use Mojo::JSON qw(encode_json to_json);
 use Mojo::URL ();
 use File::Temp qw(tempfile);
 use Digest::SHA qw(sha256_hex);
@@ -9,6 +9,7 @@ use Scalar::Util qw(blessed looks_like_number);
 use Time::HiRes qw(time);
 use Selecto::Components::QueryBuilder ();
 use Selecto::Components::State ();
+use Selecto::Components::Util qw(decode_driver_json);
 use Selecto::Statement ();
 
 has 'config';
@@ -352,7 +353,7 @@ sub _prepare_nested_records ($built, $records) {
             my $value = $record->{$column->{key}};
             if (defined($value) && !ref($value)) {
                 my $decoded;
-                my $ok = eval { $decoded = decode_json($value); 1 };
+                my $ok = eval { $decoded = decode_driver_json($value); 1 };
                 $value = $ok ? $decoded : undef;
             }
             if (ref($value) eq 'ARRAY'
