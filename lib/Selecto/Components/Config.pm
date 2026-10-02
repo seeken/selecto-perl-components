@@ -10,6 +10,8 @@ use Selecto::Components::Util qw(humanize);
 use Selecto::Components::ThemeStylesheet ();
 use Selecto::Analytics::UnitRegistry ();
 use Selecto::Retarget ();
+use Selecto::Limits ();
+use File::Spec ();
 
 has [qw(id title path engine_factory)];
 has views         => sub { return [qw(detail aggregate graph)] };
@@ -26,6 +28,7 @@ has max_grid_result_cells => 10_000;
 has max_orders     => 10;
 has max_measures   => 10;
 has max_action_rows => 1000;
+has limits => sub { Selecto::Limits->new };
 has show_sql       => 0;
 # Hosts can opt in to fetching inactive detail/summary controls on demand.
 has lazy_view_controls => 0;
@@ -41,9 +44,15 @@ has 'action_authorizer';
 # Optional coderef ($controller, $config) returning true when the request may
 # export results (Excel/CSV/TSV/JSON). Without one, exports are allowed.
 has 'export_authorizer';
-# Optional positive integer: the most rows any export (CSV/TSV/JSON/XLSX or an
-# all-rows page render) may return. Without one, exports are unbounded.
-has 'max_export_rows';
+# Positive finite export budgets. Materializing all-rows models are refused.
+has max_export_rows => 10_000;
+has max_export_bytes => 16_777_216;
+has max_export_seconds => 30;
+has max_export_temp_bytes => 33_554_432;
+has max_concurrent_exports => 4;
+has max_actor_exports => 2;
+has export_lock_dir => sub { File::Spec->catdir(File::Spec->tmpdir, 'selecto-export-' . $<) };
+has 'export_actor';
 has 'record_editor_handler';
 has record_editor_max_age => 3600;
 has 'saved_query_store';
@@ -53,6 +62,8 @@ has 'page_shell_resolver';
 has 'api_console_resolver';
 has 'websocket_message_cleanup';
 has 'websocket_context';
+has websocket_mode => 'protected';
+has websocket_enabled => 1;
 has websocket_session_options => sub { {} };
 has 'query_assistant';
 
@@ -60,6 +71,7 @@ my @DATE_FORMATS = @{Selecto::DateFormat->choices};
 
 sub new ($class, @args) {
     my $self = $class->SUPER::new(@args);
+    die "limits must be a Selecto::Limits object\n" unless blessed($self->limits) && $self->limits->isa('Selecto::Limits');
     die "explorer id must be a lowercase identifier\n"
         unless defined($self->id) && $self->id =~ /\A[a-z][a-z0-9_-]*\z/;
     die "explorer title is required\n"
@@ -119,6 +131,8 @@ sub new ($class, @args) {
             && ref($self->websocket_message_cleanup) ne 'CODE';
     die "websocket_context must be a coderef\n"
         if defined($self->websocket_context) && ref($self->websocket_context) ne 'CODE';
+    die "websocket_mode must be protected or public\n"
+        unless $self->websocket_mode =~ /\A(?:protected|public)\z/;
     Selecto::Components::ExplorerSession->validate_options($self->websocket_session_options);
     if (defined(my $assistant = $self->query_assistant)) {
         die "query_assistant must be an object\n" unless ref($assistant) eq 'HASH';
@@ -131,6 +145,8 @@ sub new ($class, @args) {
             die "query_assistant $callback must be a coderef\n"
                 if defined($assistant->{$callback}) && ref($assistant->{$callback}) ne 'CODE';
         }
+        die "query_assistant requires actor or explicit allow_anonymous => 1\n"
+            unless $assistant->{actor} || $assistant->{allow_anonymous};
         die "query_assistant choice_fields must be an object\n"
             if defined($assistant->{choice_fields}) && ref($assistant->{choice_fields}) ne 'HASH';
     }
@@ -143,9 +159,15 @@ sub new ($class, @args) {
         if defined($self->action_authorizer) && ref($self->action_authorizer) ne 'CODE';
     die "export_authorizer must be a coderef\n"
         if defined($self->export_authorizer) && ref($self->export_authorizer) ne 'CODE';
+    for my $key (qw(max_export_bytes max_export_temp_bytes max_export_seconds max_concurrent_exports max_actor_exports)) {
+        my $value = $self->$key;
+        die "Invalid $key\n" unless defined($value) && !ref($value) && "$value" =~ /\A[1-9][0-9]{0,8}\z/;
+    }
+    die "export concurrency cannot exceed 64\n" if $self->max_concurrent_exports > 64 || $self->max_actor_exports > 64;
+    die "export_actor must be a coderef\n" if defined($self->export_actor) && ref($self->export_actor) ne 'CODE';
     die "max_export_rows must be a positive integer up to 10000000\n"
-        if defined($self->max_export_rows)
-            && ($self->max_export_rows !~ /\A[1-9]\d{0,7}\z/ || $self->max_export_rows > 10_000_000);
+        if !defined($self->max_export_rows)
+            || ($self->max_export_rows !~ /\A[1-9]\d{0,7}\z/ || $self->max_export_rows > 10_000_000);
     die "record_editor_handler must be a coderef\n"
         if defined($self->record_editor_handler)
             && ref($self->record_editor_handler) ne 'CODE';

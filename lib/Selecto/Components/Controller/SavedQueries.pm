@@ -19,6 +19,12 @@ sub _expand_saved_query ($controller, $explorer) {
         unless @$types == 1 && $types->[0] =~ /\A(?:user|client)\z/;
 
     my $config = $explorer->config;
+    # Privacy is resolved before listing the store or emitting its URL.
+    my $domain = $config->engine($controller)->domain;
+    return $controller->redirect_to($config->path)
+        unless $config->query_params_enabled($domain);
+    return $controller->render(text => 'Saved query not found.', status => 404)
+        unless $config->saved_queries_enabled($domain);
     my $store = $config->saved_query_store;
     return $controller->render(text => 'Saved query not found.', status => 404)
         unless $store;

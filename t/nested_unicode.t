@@ -63,7 +63,7 @@ sub check_nested {
     my $engine = $engine_factory->();
     my $app = Mojolicious->new;
     $app->secrets(['nested-unicode-test']);
-    $app->plugin('Selecto::Components' => {
+    $app->plugin('Selecto::Components' => {websocket_mode => 'public',
         explorers => {customers => {path => '/customers', title => 'Customers',
             engine_factory => $engine_factory,
             default_fields => [qw(id name notes.body)]}},

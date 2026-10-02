@@ -15,6 +15,7 @@ use Selecto::Error ();
 use Selecto::Expression ();
 use Selecto::Query ();
 use Selecto::QueryLibrary ();
+use Selecto::Components::InputBudget ();
 
 has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
@@ -30,12 +31,14 @@ sub parameter_names ($class) {
 
 sub from_input ($class, $config, $domain, $input) {
     $input = {} unless ref($input) eq 'HASH';
+    my $budget_ok = eval { Selecto::Components::InputBudget->input($config->limits, $input); 1 };
+    $input = {} unless $budget_ok;
     $config->validate_domain($domain);
     my $field_map = $config->field_map($domain);
     my $detail_map = $config->detail_column_map($domain);
-    my @errors;
+    my @errors = $budget_ok ? () : ('Query state exceeds the configured input budget.');
     my $configured = _first($input, 'q') ? 1 : 0;
-    my $query_library = _query_library_state($domain, $input, \@errors);
+    my $query_library = _query_library_state($domain, $input, \@errors, $config->limits);
     my $view = _parse_view($config, $input, $query_library, \@errors);
     my $rows_of = _parse_rows_of($config, $domain, $input, \@errors);
     my $retarget = $rows_of eq '' || $rows_of eq '-' ? undef : $rows_of;
@@ -438,6 +441,10 @@ sub _parse_fields ($config, $domain, $input, $detail_map, $field_map, $query_lib
     }
     $field_values = [@{$config->resolved_default_fields($domain, $rows_of)}]
         if !$configured && !grep { length(_scalar($_)) } @$field_values;
+    if (@$field_values > $config->limits->get('max_fields')) {
+        push @$errors, 'Too many detail columns were submitted.';
+        $field_values = [];
+    }
     my @valid_fields;
     my %field_configs;
     my @field_config_list;
@@ -972,7 +979,13 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
         ($value, $value_end) = ('', '') if $op =~ /_null\z/;
         my $membership_values;
         if (($op eq 'in' || $op eq 'not_in') && length($values_json)) {
-            my $decoded = eval { from_json($values_json) };
+            my $decoded = eval {
+                $config->limits->check_bytes('max_parameter_bytes', $values_json, 'invalid_query', 'Membership JSON');
+                my $items = from_json($values_json);
+                die "invalid membership" unless ref($items) eq 'ARRAY';
+                Selecto::Components::InputBudget->membership($config->limits, $items);
+                $items;
+            };
             if (ref($decoded) ne 'ARRAY' || !@$decoded
                 || grep { !defined($_) || ref($_) } @$decoded) {
                 push @$errors, 'Membership filter values must be a non-empty JSON array of scalars.';
@@ -981,7 +994,14 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
             $membership_values = [map { "$_" } @$decoded];
             $value = '';
         } elsif (($op eq 'in' || $op eq 'not_in') && length($value)) {
-            my @legacy = grep { length } map { _trim($_) } split /,/, $value, -1;
+            my @legacy;
+            my $bounded = eval {
+                $config->limits->check_bytes('max_parameter_bytes', $value, 'invalid_query', 'Membership input');
+                @legacy = grep { length } map { _trim($_) } split /,/, $value, $config->limits->get('max_filter_values') + 1;
+                Selecto::Components::InputBudget->membership($config->limits, \@legacy);
+                1;
+            };
+            if (!$bounded) { push @$errors, 'Membership filter exceeds the configured budget.'; next; }
             unless (@legacy) {
                 push @$errors, 'Membership filters require at least one value.';
                 next;
@@ -1055,6 +1075,7 @@ sub _declared_choice ($catalog, $op, $value, $membership_values = undef) {
     my @values = $op =~ /in\z/
         ? (ref($membership_values) eq 'ARRAY' ? @$membership_values : (map { _trim($_) } split /,/, $value))
         : ($value);
+    return !grep { !$declared{$_} } @values if ref($membership_values) eq 'ARRAY';
     return !grep { length($_) && !$declared{$_} } @values;
 }
 
@@ -1259,7 +1280,7 @@ sub _valid_temporal_value ($value) {
     return Selecto::Components::DateShortcut->valid_date($1);
 }
 
-sub _query_library_state ($domain, $input, $errors) {
+sub _query_library_state ($domain, $input, $errors, $limits) {
     my $library = Selecto::QueryLibrary->library($domain);
     my $view = _trim(_first($input, 'query_library_view'));
     my $materialized_view = _trim(_first($input, 'query_library_materialized_view'));
@@ -1326,7 +1347,7 @@ sub _query_library_state ($domain, $input, $errors) {
             'invalid_query_library', 'unknown query-library parameters', {names => \@unknown}
         ) if @unknown;
         $normalized = Selecto::QueryLibrary->normalize_parameters_for_selection(
-            $domain, $selection, \%parameters,
+            $domain, $selection, \%parameters, $limits,
         );
         1;
     };
@@ -1336,7 +1357,7 @@ sub _query_library_state ($domain, $input, $errors) {
     if ($ok && @effective_segments) {
         my @paths = eval {
             Selecto::Expression->field_references(Selecto::QueryLibrary->apply_segments(
-                $domain, Selecto::Query->new, \@effective_segments, $normalized,
+                $domain, Selecto::Query->new, \@effective_segments, $normalized, $limits,
             )->predicate);
         };
         push @$errors, 'Choose an available query-library segment.'

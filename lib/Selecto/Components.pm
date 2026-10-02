@@ -24,7 +24,7 @@ use Selecto::Components::ThemeStylesheet ();
 use Selecto::Components::Util qw(humanize);
 use Selecto::Components::WebSocketPolicy ();
 
-our $VERSION = '0.1.0';
+our $VERSION = '0.1.1';
 
 my %EXPORT_FORMATS = (
     csv => {
@@ -105,6 +105,8 @@ sub register ($self, $app, $plugin_config) {
         die "explorer $id configuration must be an object\n" unless ref($specs->{$id}) eq 'HASH';
         my $config = Selecto::Components::Config->new(
             websocket_context => $plugin_config->{websocket_context},
+            websocket_mode => $plugin_config->{websocket_mode} // 'protected',
+            websocket_enabled => $plugin_config->{websocket_enabled} // 1,
             websocket_session_options => $plugin_config->{websocket_session_options} // {},
             lazy_view_controls => $plugin_config->{lazy_view_controls} // 0,
             %{$specs->{$id}},
@@ -117,6 +119,11 @@ sub register ($self, $app, $plugin_config) {
             . 'The Query Debug panel renders SQL with bound parameters, '
             . 'including tenant and scope values; disable show_sql in production.'
         ) if $config->show_sql && $app->mode eq 'production';
+        die "protected Explorer WebSockets require websocket_context (or websocket_enabled => 0)\n"
+            if $config->websocket_enabled && $config->websocket_mode eq 'protected'
+                && !$config->websocket_context;
+        _assistant_ingress($plugin_config->{ingress_app} // $app, $config->path)
+            if $config->query_assistant_enabled;
         my $explorer = Selecto::Components::Explorer->new(config => $config);
         $explorers{$id} = $explorer;
         _routes(
@@ -135,16 +142,18 @@ sub register ($self, $app, $plugin_config) {
         my $path = $spec->{path} // "/pages/$id";
         die "duplicate Selecto Components route $path\n" if $registered_path{$path}++;
         my %definition = %$spec;
-        delete @definition{qw(engine_factory scope_factory path title record_link websocket_enabled column_layout)};
+        delete @definition{qw(engine_factory scope_factory path title record_link websocket_enabled websocket_mode websocket_context column_layout)};
         my $page = Selecto::CannedPage->new(%definition, id => $id);
         my $component = Selecto::Components::CannedPage->new(
             page => $page, engine_factory => $engine_factory,
+            websocket_mode => $spec->{websocket_mode} // $plugin_config->{websocket_mode} // 'protected',
+            websocket_context => $spec->{websocket_context} // $plugin_config->{websocket_context},
             scope_factory => $scope_factory,
             path => $path, title => $spec->{title} // _humanize($id),
             record_link => $spec->{record_link},
             column_layout => $spec->{column_layout},
             websocket_enabled => exists($spec->{websocket_enabled})
-                ? ($spec->{websocket_enabled} ? 1 : 0) : 1,
+                ? ($spec->{websocket_enabled} ? 1 : 0) : ($plugin_config->{websocket_enabled} // 1),
         );
         my $route_path = _mounted_route_path($path, $route_prefix);
         $routes->get($route_path)->to(cb => sub ($controller) { $component->handle($controller) });
@@ -168,6 +177,41 @@ sub register ($self, $app, $plugin_config) {
         return $pages{$id};
     });
     return $self;
+}
+
+# Install on the actual HTTP host, including for embedded applications. This
+# runs after headers but before the content's default buffering callback.
+sub _assistant_ingress ($host, $path) {
+    die "ingress_app must be a Mojolicious application\n" unless blessed($host) && $host->can('hook');
+    $host->hook(after_build_tx => sub ($tx, $app) {
+        my $req = $tx->req;
+        $req->content->on(body => sub ($content) {
+            return unless $req->url->path->to_route =~ m{\A\Q$path\E/assistant/drafts(?:/|\z)};
+            $req->{selecto_assistant_bounded} = 1;
+            # Assistant routes accept JSON, never multipart or compressed input.
+            $content->auto_upgrade(0) if $content->can('auto_upgrade');
+            my $reject = sub {
+                $req->{selecto_assistant_too_large} = 1;
+                $req->error({message => 'Assistant request exceeds receive budget', code => 413});
+            };
+            my $length = $req->headers->content_length;
+            if ((defined($length) && ($length !~ /\A[0-9]+\z/ || $length > 65_536))
+                || defined($req->headers->content_encoding)) { $reject->(); }
+            my @read = @{$content->subscribers('read')};
+            $content->unsubscribe('read');
+            my $bytes = 0;
+            $content->on(read => sub ($part, $chunk) {
+                return if $req->{selecto_assistant_too_large};
+                $bytes += length($chunk);
+                if ($bytes > 65_536) { $reject->(); return; }
+                $_->($part, $chunk) for @read;
+            });
+        });
+    });
+    $host->hook(before_dispatch => sub ($controller) {
+        $controller->render(status => 413, json => {ok => 0, code => 'limit_exceeded'})
+            if $controller->req->{selecto_assistant_too_large};
+    });
 }
 
 sub _routes (
@@ -200,6 +244,8 @@ sub _routes (
             return _render_stream_export($controller, $stream_export, $format)
                 if $stream_export;
         }
+        return $controller->render(text => 'This export requires bounded streaming support.', status => 422)
+            if $EXPORT_FORMATS{$format};
         my $model = Selecto::Components::Controller::Explorer::_decorate_model($controller, $explorer->model(
             $controller, undef, {all_rows => $EXPORT_FORMATS{$format} ? 1 : 0},
         ));
@@ -274,6 +320,7 @@ sub _routes (
         });
     }
 
+    return unless $config->websocket_enabled;
     $routes->websocket($route_path . '/ws')->to(cb => sub ($controller) {
         unless ($origin_check->($controller)) {
             return $controller->finish(1008 => 'WebSocket origin is not allowed');
@@ -313,8 +360,9 @@ sub _routes (
                 my $patch = delete $input{selecto_session};
                 my $refresh = delete $input{selecto_refresh};
                 my $context = $config->websocket_context;
-                my $scope = $context ? $context->($socket, $config) : 'connection';
-                if (!defined($scope)) {
+                my $scope = eval { $context ? $context->($socket, $config)
+                    : $config->websocket_mode eq 'public' ? 'public' : undef };
+                if ($@ || !defined($scope) || ref($scope)) {
                     $denied = 1;
                     $session->clear_results;
                 } else {
@@ -470,6 +518,7 @@ sub _render_stream_export ($controller, $export, $format) {
     });
     $controller->render_later;
     my $write_next;
+    my $wrote = 0;
     $write_next = sub {
         my $chunk;
         my $ok = eval { $chunk = $export->{next_chunk}->(); 1 };
@@ -478,13 +527,20 @@ sub _render_stream_export ($controller, $export, $format) {
             $error =~ s/\s+\z//;
             $controller->app->log->error("Selecto streaming export failed: $error");
             eval { $export->{close}->() } if $export->{close};
-            return $controller->write('');
+            unless ($wrote) {
+                $controller->res->headers->remove('Content-Disposition');
+                return _render_export_preparation_error($controller, $error);
+            }
+            # End the transport without a successful final chunk: consumers
+            # must not accept a budget-limited file as a complete export.
+            return Mojo::IOLoop->remove($controller->tx->connection);
         }
         unless (defined $chunk) {
             eval { $export->{close}->() } if $export->{close};
             return $controller->write('');
         }
         $chunk = encode('UTF-8', $chunk) if $metadata->{utf8};
+        $wrote = 1;
         return $controller->write($chunk => sub { $write_next->() });
     };
     $write_next->();
@@ -498,7 +554,7 @@ sub _render_file_export ($controller, $export, $format) {
     $controller->res->headers->content_disposition(qq{attachment; filename="$filename"});
     $controller->res->headers->content_type($metadata->{content_type});
     my $path = $export->{path};
-    $controller->on(finish => sub { unlink $path if defined($path) && -f $path });
+    $controller->on(finish => sub { eval { $export->{close}->() } if $export->{close}; unlink $path if defined($path) && -f $path });
     return $controller->reply->file($path);
 }
 
@@ -984,7 +1040,11 @@ A coderef C<($controller, $config)> that is called for every WebSocket
 message. Return C<undef> to close the socket with code 1008. Otherwise return
 a string that identifies the security context, such as tenant, principal and
 policy revision. A changed string discards the connection's saved form and
-cached results. Without a callback, the session is scoped to the connection.
+cached results. The default C<websocket_mode =E<gt> 'protected'> requires
+this callback. It must resolve current server-side identity and permission;
+a copied controller stash or signed cookie alone does not reauthorize.
+Use explicit C<websocket_mode =E<gt> 'public'> for public data, or
+C<websocket_enabled =E<gt> 0> to disable sockets. Canned pages use the same policy.
 See F<docs/explorer-sessions.md> in the distribution.
 
 =item websocket_session_options

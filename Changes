@@ -1,6 +1,12 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Security: protected WebSockets require live authorization; public and
+      disabled modes are explicit. Assistant request bodies, shared draft
+      storage, query-state expansion and exports have finite enforced budgets.
+    - Security: canonical action targets precede host callbacks; empty choice
+      membership is validated; private history and saved URL expansion are
+      disabled. See README migration and adapter capability requirements.
     - Graph axes that measure counts tick on whole numbers, so small counts
       no longer repeat rounded labels (3, 3, 2, 2, ...).
     - The canned page record dialog uses the theme's panel colour. It fell

@@ -329,7 +329,7 @@ sub _domain {
 }
 
 sub config {
-    return {
+    return {websocket_mode => 'public',
         path => '/explore/products',
         title => 'Product Explorer',
         engine_factory => sub {
@@ -513,6 +513,9 @@ our (
 our $RECORD_PRODUCT_NAME = 'Test Widget';
 
 sub name { return 'test'; }
+sub bounded_stream_supported { 1 }
+sub query_budget_supported { 1 }
+sub begin_query_budget { bless {}, 'TestSelectoComponents::Budget' }
 sub dialect { return __PACKAGE__; }
 sub supports ($self, $feature) { return $feature eq 'stream' || $feature eq 'rollup' ? 1 : 0; }
 sub compile ($self, $domain, $query) {
@@ -694,4 +697,9 @@ sub stash ($self, @args) {
     return $self;
 }
 
+1;
+
+package TestSelectoComponents::Budget;
+sub check { 1 }
+sub close { 1 }
 1;

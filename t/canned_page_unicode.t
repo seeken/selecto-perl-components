@@ -69,7 +69,7 @@ sub only_name {
 
 my $app = Mojolicious->new;
 $app->secrets(['canned-unicode-test']);
-$app->plugin('Selecto::Components' => {pages => {products => page_spec(0)}});
+$app->plugin('Selecto::Components' => {websocket_mode => 'public',pages => {products => page_spec(0)}});
 my $t = Test::Mojo->new($app);
 $t->get_ok('/products')->status_is(200)
     ->content_type_like(qr/charset=UTF-8/i)->content_like(qr/Zürich/);
@@ -109,7 +109,7 @@ for my $case (@expected) {
 
 my $private = Mojolicious->new;
 $private->secrets(['canned-unicode-private']);
-$private->plugin('Selecto::Components' => {pages => {products => page_spec(1)}});
+$private->plugin('Selecto::Components' => {websocket_mode => 'public',pages => {products => page_spec(1)}});
 my $p = Test::Mojo->new($private);
 $p->get_ok('/products')->status_is(200);
 my $private_buttons = buttons($p->tx->res->dom);

@@ -32,7 +32,7 @@ sub page ($class, $model) {
         theme_stylesheet => $theme_stylesheet, body_class => $body_class,
         page_shell => $page_shell, main_class => $main_class,
         channel_id => 'selecto-channel-' . $config->id,
-        ws_path => $config->path . '/ws', surface => $surface,
+        ws_path => $config->websocket_enabled ? $config->path . '/ws' : undef, surface => $surface,
     );
 }
 

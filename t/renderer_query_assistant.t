@@ -15,7 +15,7 @@ use Selecto::Components::State;
 my $domain = TestSelectoComponents::domain();
 my $config = Selecto::Components::Config->new(
     %{TestSelectoComponents::config()}, id => 'products', lazy_view_controls => 1,
-    query_assistant => {
+    query_assistant => {allow_anonymous => 1,
         store => Selecto::Components::QueryAssistant::Store->new,
         palettes => {brand => ['#112233', '#445566', '#778899']},
     },

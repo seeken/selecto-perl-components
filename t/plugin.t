@@ -197,8 +197,8 @@ $t->get_ok('/explore/products')
     ->element_exists('[data-sc-export-format="csv"][href*="format=csv"]')
     ->element_exists('[data-sc-export-format="tsv"][href*="format=tsv"]')
     ->element_exists('[data-sc-export-format="json"][href*="format=json"]')
-    ->text_is('.sc-export-options > span' => 'Export all')
-    ->attr_is('.sc-export-options' => 'aria-label' => 'Export all matched rows')
+    ->text_is('.sc-export-options > span' => 'Export (up to 10000 rows)')
+    ->attr_is('.sc-export-options' => 'aria-label' => 'Export (up to 10000 rows)')
     ->content_like(qr{>Excel</a>.*>CSV</a>.*>TSV</a>.*>JSON</a>}s)
     ->content_like(qr{hx-ws:connect="/explore/products/ws"})
     ->content_like(qr{hx-ws:send})
@@ -1329,8 +1329,8 @@ $t->get_ok($export_url . '&format=csv')
     ->content_like(qr/"Product Name","Unit Price"\r?\n/)
     ->content_unlike(qr/Action: Add Product Note/)
     ->content_like(qr/"'=2\+2"/);
-is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, undef,
-    'CSV export executes the active query without a row limit';
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, 10_000,
+    'CSV export applies the finite default row limit';
 is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->offset_value, undef,
     'CSV export ignores the requested result page';
 is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $count_executions_before_export,
@@ -1564,4 +1564,9 @@ is scalar(@$scoped_saved_views), 3,
 is $scoped_saved_views->[2]{folder}, 'Operations',
     'privilege folder metadata survives normalization';
 
+{
+    local @TestSelectoComponents::SAVED_QUERIES = ({name => 'Retained', url => '/explore/private-products?q=1&filter_value=synthetic-secret'});
+    $t->get_ok('/explore/private-products?expand_saved=Retained&expand_saved_type=user')
+        ->status_is(302)->header_is(Location => '/explore/private-products');
+}
 done_testing;

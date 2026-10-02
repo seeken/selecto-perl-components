@@ -153,7 +153,10 @@ sub _request ($controller, $explorer, $origin_check) {
         return ($config, $assistant, undef, [403, 'forbidden']) unless $allowed;
     }
     return ($config, $assistant, undef, [403, 'origin_not_allowed']) unless $origin_check->($controller);
-    my $length = $controller->req->headers->content_length // 0;
+    # Embedded hosts must install ingress_app on the real receiving app.
+    return ($config, $assistant, undef, [503, 'ingress_limit_unavailable'])
+        unless $controller->req->{selecto_assistant_bounded};
+    my $length = $controller->req->body_size;
     return ($config, $assistant, undef, [413, 'limit_exceeded']) if $length > 65_536;
     my $provided = $controller->req->headers->header('X-CSRF-Token') // '';
     return ($config, $assistant, undef, [403, 'csrf_failed']) unless Selecto::Components::WebSocketPolicy::valid_csrf($controller, $provided);
