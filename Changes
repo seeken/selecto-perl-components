@@ -13,6 +13,9 @@ Unreleased
       are parsed as the characters Mojolicious already decoded, so a
       membership filter or drilldown with accented text or emoji selects
       exactly that value instead of failing.
+    - Nested to-many columns show non-ASCII values. JSON text from drivers
+      that return characters (DBD::Pg on a UTF-8 database, DBD::SQLite with
+      sqlite_unicode) failed to parse, and the nested table rendered empty.
     - Optional WebMCP tools edit validated query-form drafts without running
       queries. Drafts support revision checks, idempotent apply, manual-edit
       synchronization, one-step undo, and an optional SQLite store.
