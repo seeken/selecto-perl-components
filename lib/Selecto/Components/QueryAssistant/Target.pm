@@ -100,7 +100,7 @@ sub to_input {
                 if grep { !_is_json_scalar($_) } @{$filter->{value}};
             push @filter_value, '';
             require Mojo::JSON;
-            push @filter_values_json, Mojo::JSON::encode_json([
+            push @filter_values_json, Mojo::JSON::to_json([
                 map { _json_scalar($_, 'membership filter value') } @{$filter->{value}}
             ]);
         } elsif ($op =~ /_null\z/) {

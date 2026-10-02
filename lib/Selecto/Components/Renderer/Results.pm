@@ -2,7 +2,7 @@ package Selecto::Components::Renderer::Results;
 
 use utf8;
 use Mojo::Base -base, -signatures;
-use Mojo::JSON qw(encode_json);
+use Mojo::JSON qw(to_json);
 use Mojo::URL ();
 use Mojo::Util qw(url_escape);
 use POSIX qw(ceil);
@@ -178,8 +178,8 @@ sub _grouped_action_panel ($model, $action) {
         'data-sc-action-id="' . _h($id) . '" data-sc-action-mode="groups" ' .
         'data-sc-action-state-key="' . _h($config->id . ':' . $id) . '" ' .
         'data-sc-action-submit-label="' . _h($action->{submit_label}) . '" ' .
-        'data-sc-action-markers="' . _h(encode_json($action->{selection}{markers})) . '" ' .
-        'data-sc-group-inputs="' . _h(encode_json($action->{selection}{group_inputs})) . '">' .
+        'data-sc-action-markers="' . _h(to_json($action->{selection}{markers})) . '" ' .
+        'data-sc-group-inputs="' . _h(to_json($action->{selection}{group_inputs})) . '">' .
         '<div role="status" aria-live="polite" aria-atomic="true"><strong ' .
         'data-sc-selection-count>0</strong> <span data-sc-selection-label>rows assigned</span>' .
         '<span class="sc-group-count-summary"> · <strong data-sc-group-count>0</strong> loads</span></div>' .
@@ -193,7 +193,7 @@ sub _action_inputs ($action, $instance = '') {
         id => $_->{id}, label => $_->{label}, when => $_->{when},
         fields => [map { $_->{id} } @{$_->{inputs}}],
     } } @{$action->{variants}}]};
-    return '<div class="sc-action-inputs" data-sc-action-variants="' . _h(encode_json($metadata)) . '">' .
+    return '<div class="sc-action-inputs" data-sc-action-variants="' . _h(to_json($metadata)) . '">' .
         '<div class="sc-action-inputs" data-sc-action-base>' . $base . '</div>' .
         '<p data-sc-action-variant-status role="status" aria-live="polite">Choose the action options to show the appropriate fields.</p>' .
         '<noscript>JavaScript is required to choose an action form.</noscript>' .
@@ -215,7 +215,7 @@ sub _action_input ($input, $action_id = 'action', $instance_id = '') {
     my $default = $input->{default};
     $default = "$default" =~ /\A(?:true|1)\z/i ? 'true' : 'false'
         if $input->{type} eq 'boolean' && defined($default);
-    $default = encode_json($default) if $input->{type} eq 'collection' && ref($default) eq 'ARRAY';
+    $default = to_json($default) if $input->{type} eq 'collection' && ref($default) eq 'ARRAY';
     $default = '' if !defined($default) || ref($default);
     my $control;
     if ($input->{fixed}) {
@@ -405,7 +405,7 @@ sub _table ($class, $result, $model) {
                         }
                     } grep { ref($_) eq 'HASH' } @$detail_specs;
                     my $row_details = @row_details
-                        ? ' data-sc-row-details="' . _h(encode_json(\@row_details)) . '"' : '';
+                        ? ' data-sc-row-details="' . _h(to_json(\@row_details)) . '"' : '';
                     $cells .= '<td class="sc-select-column sc-group-select-column" ' .
                         'data-sc-action-column="' . _h($column->{action_id}) . '"><div ' .
                         'class="sc-group-markers" data-sc-group-markers data-sc-action-id="' .
@@ -538,7 +538,7 @@ sub _grid ($class, $result, $model) {
             my $index = $column_index++;
             '<th scope="col"><label class="sc-grid-axis-toggle"><input class="sc-grid-axis-input" ' .
                 'type="checkbox" name="grid_axis" value="' .
-                _h(encode_json({axis => 1, value => $column->{selection_value}})) . '" ' .
+                _h(to_json({axis => 1, value => $column->{selection_value}})) . '" ' .
                 'data-sc-grid-column-toggle="' . _h($index) . '" aria-label="Select column ' .
                 _h(_display_group($column->{value})) . '"><span>' .
                 _html_display($grid->{column_axis}, $column->{value}, 1) . '</span></label></th>'
@@ -550,7 +550,7 @@ sub _grid ($class, $result, $model) {
         my $current_row = $row_index++;
         my $cells = '<th scope="row"><label class="sc-grid-axis-toggle"><input ' .
             'class="sc-grid-axis-input" type="checkbox" name="grid_axis" value="' .
-            _h(encode_json({axis => 0, value => $row->{selection_value}})) . '" ' .
+            _h(to_json({axis => 0, value => $row->{selection_value}})) . '" ' .
             'data-sc-grid-row-toggle="' . _h($current_row) . '" aria-label="Select row ' .
             _h(_display_group($row->{value})) . '"><span>' .
             _html_display($grid->{row_axis}, $row->{value}, 1) . '</span></label></th>';
@@ -563,7 +563,7 @@ sub _grid ($class, $result, $model) {
                     _h($current_row) . '" data-sc-grid-column="' .
                     _h($current_column) . '"><label class="sc-grid-cell-toggle"><input ' .
                     'class="sc-grid-cell-input" type="checkbox" name="grid_cell" value="' .
-                    _h(encode_json([$row->{selection_value}, $column->{selection_value}])) . '" ' .
+                    _h(to_json([$row->{selection_value}, $column->{selection_value}])) . '" ' .
                     'data-sc-grid-cell data-sc-grid-row="' . _h($current_row) .
                     '" data-sc-grid-column="' . _h($current_column) . '" aria-label="Select empty ' .
                     _h(_display_group($row->{value}) . ', ' .
@@ -583,7 +583,7 @@ sub _grid ($class, $result, $model) {
                 '" data-sc-grid-row="' . _h($current_row) . '" data-sc-grid-column="' .
                 _h($current_column) . '"' . $heat_attribute . '><label class="sc-grid-cell-toggle"><input ' .
                 'class="sc-grid-cell-input" type="checkbox" ' .
-                'name="grid_cell" value="' . _h(encode_json($cell->{selection_values})) . '" ' .
+                'name="grid_cell" value="' . _h(to_json($cell->{selection_values})) . '" ' .
                 'data-sc-grid-cell data-sc-grid-row="' . _h($current_row) .
                 '" data-sc-grid-column="' . _h($current_column) . '" aria-label="Select ' .
                 _h(_display_group($row->{value}) . ', ' .
@@ -707,7 +707,7 @@ sub _nested_table ($column, $value, $row_number = undef) {
         my $record = ref($_) eq 'HASH' ? $_ : {};
         '<tr>' . join('', map {
             my $cell = $record->{$_->{field}};
-            my $display = ref($cell) ? encode_json($cell)
+            my $display = ref($cell) ? to_json($cell)
                 : defined($cell) ? "$cell" : '';
             my $content = _html_display($_, $display);
             if (my $link = $_->{link}) {
@@ -747,7 +747,7 @@ sub _graph ($class, $result, $model) {
     for my $record_index (0 .. $#records) {
         my $record = $records[$record_index];
         my @axis_values = map { $record->{$_->{key}} } @axis_dimensions;
-        my $point_key = encode_json(\@axis_values);
+        my $point_key = to_json(\@axis_values);
         unless (exists $point_index{$point_key}) {
             $point_index{$point_key} = scalar @points;
             push @points, {
@@ -759,7 +759,7 @@ sub _graph ($class, $result, $model) {
         my $series_key = '__all';
         if ($series_dimension) {
             my $series_value = $record->{$series_dimension->{key}};
-            $series_key = encode_json([$series_value]);
+            $series_key = to_json([$series_value]);
             unless ($series_seen{$series_key}++) {
                 push @series_values, {
                     key => $series_key,
@@ -892,7 +892,7 @@ sub _graph ($class, $result, $model) {
     my @axis_drilldown_indices = $series_dimension
         ? map { scalar(@records) + $_ } 0 .. $#points
         : map { $_ } 0 .. $#points;
-    my $chart_data = encode_json({
+    my $chart_data = to_json({
         labels => \@labels,
         datasets => \@datasets,
         axisDrilldownIndices => \@axis_drilldown_indices,

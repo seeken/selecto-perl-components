@@ -1,7 +1,7 @@
 package Selecto::Components::Renderer::Builder;
 
 use Mojo::Base -base, -signatures;
-use Mojo::JSON qw(encode_json);
+use Mojo::JSON qw(to_json);
 use Mojo::URL ();
 use Selecto::Components::DateShortcut ();
 use Selecto::Components::QueryLibrary ();
@@ -85,7 +85,7 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $builder_tabs . '<form id="selecto-query-' . _h($config->id) . '" action="' .
         _h($config->path) . '" method="' . $method . '" hx-ws:send hx-trigger="submit" data-sc-builder="' .
         $builder_id . '" data-sc-builder-query data-sc-date-shortcuts="' .
-        _h(encode_json([map { [$_->{group}, $_->{id}, $_->{label}] } @{$config->date_shortcuts}])) . '"' .
+        _h(to_json([map { [$_->{group}, $_->{id}, $_->{label}] } @{$config->date_shortcuts}])) . '"' .
         ($config->lazy_view_controls ? ' data-sc-controls-url="' . _h($config->path . '/controls') .
             '" data-sc-controls-csrf="' . _h($model->{csrf_token} // '') . '"' : '') . '>' .
         _hidden('q', 1) .
@@ -290,7 +290,7 @@ sub _query_library_view_controls ($class, $state, $domain, $config = undef) {
                 $domain, $entry->{id},
             );
             '<option value="' . _h($entry->{id}) . '" data-sc-view-segments="' .
-                _h(encode_json($segment_ids)) . '"' .
+                _h(to_json($segment_ids)) . '"' .
                 ($selected_view eq $entry->{id} ? ' selected' : '') . '>' .
                 _h($entry->{label}) . '</option>'
         } @$views);
@@ -591,7 +591,7 @@ sub _promoted_filter_value_controls ($class, $config, $field, $filter, $clause =
         return '<label>Values (JSON array)<textarea' .
             _promoted_filter_input_attributes('values_json', $field_name, $clause, $filter->{instance}) .
             ' aria-label="Membership values for ' . _h($label) . '">' .
-            _h(encode_json($filter->{values})) . '</textarea></label>';
+            _h(to_json($filter->{values})) . '</textarea></label>';
     }
     if ($config->boolean_type($type)) {
         return '<label>Value<select' .
@@ -1213,7 +1213,7 @@ sub _filter_clause_picker ($class, $state, $by_path, $config) {
                     ? _hidden('filter_op', $filter->{op}) .
                       _hidden('filter_value', $filter->{value}) .
                       _hidden('filter_values_json', ref($filter->{values}) eq 'ARRAY'
-                          ? encode_json($filter->{values}) : '') .
+                          ? to_json($filter->{values}) : '') .
                       _hidden('filter_value_end', $filter->{value_end} // '') .
                       '<strong>' . _h(_filter_summary_text($field->{label}, $filter, $field)) . '</strong>'
                     : '<strong>' . _h($field->{label}) . '</strong>' .
@@ -1261,7 +1261,7 @@ sub _filter_operators_for_filter ($config, $field, $filter) {
 sub _filter_choice_attribute ($field) {
     return '' unless ref($field->{filter_choices}) eq 'ARRAY'
         && @{$field->{filter_choices}};
-    return ' data-sc-filter-choices="' . _h(encode_json($field->{filter_choices})) . '"';
+    return ' data-sc-filter-choices="' . _h(to_json($field->{filter_choices})) . '"';
 }
 
 sub _filter_value_controls ($class, $config, $field, $filter) {
@@ -1336,7 +1336,7 @@ sub _filter_value_controls ($class, $config, $field, $filter) {
     if ($operator eq 'in' && ref($filter->{values}) eq 'ARRAY') {
         return $controls . '<label class="sc-filter-value-wide">Values (JSON array)<textarea ' .
             'name="filter_values_json" aria-label="Membership values for ' . _h($label) . '">' .
-            _h(encode_json($filter->{values})) . '</textarea></label>' .
+            _h(to_json($filter->{values})) . '</textarea></label>' .
             _hidden('filter_value', '') . _hidden('filter_value_end', '') . '</div>';
     }
     if ($config->boolean_type($type)) {

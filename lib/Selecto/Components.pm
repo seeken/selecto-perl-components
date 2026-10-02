@@ -5,7 +5,7 @@ use Mojo::Base 'Mojolicious::Plugin', -signatures;
 use Encode qw(encode);
 use Mojo::File qw(path);
 use Mojo::IOLoop ();
-use Mojo::JSON qw(decode_json encode_json);
+use Mojo::JSON qw(encode_json from_json);
 use Mojo::WebSocket qw(WS_PING);
 use Scalar::Util qw(blessed);
 use Time::HiRes qw(time);
@@ -299,7 +299,7 @@ sub _routes (
             return $socket->finish(1009 => 'WebSocket message is too large')
                 if !defined($message) || length($message) > 131_072;
             my $envelope;
-            my $ok = eval { $envelope = decode_json($message); 1 };
+            my $ok = eval { $envelope = from_json($message); 1 };
             return $socket->finish(1003 => 'Expected a JSON message')
                 unless $ok && ref($envelope) eq 'HASH' && ref($envelope->{headers}) eq 'HASH';
             my ($response, $processing_error, $denied);

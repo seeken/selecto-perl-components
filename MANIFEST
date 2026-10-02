@@ -75,9 +75,11 @@ t/api_console.t
 t/bucket_parser.t
 t/canned_page_http.t
 t/canned_page_render.t
+t/canned_page_unicode.t
 t/dashboard.t
 t/date_shortcut.t
 t/explorer_session.t
+t/explorer_unicode.t
 t/export_limit.t
 t/graph_axis_planner.t
 t/graph_colors.t

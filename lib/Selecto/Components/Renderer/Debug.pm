@@ -1,7 +1,7 @@
 package Selecto::Components::Renderer::Debug;
 
 use Mojo::Base -base, -signatures;
-use Mojo::JSON qw(encode_json);
+use Mojo::JSON qw(to_json);
 use Selecto::Components::Renderer::Markup;
 
 sub _debug_panel ($class, $result, $model) {
@@ -153,7 +153,7 @@ sub _map_sql_tokens ($sql, $mapper) {
 
 sub _sql_literal ($value, $adapter) {
     return 'NULL' unless defined $value;
-    my $text = ref($value) ? encode_json($value) : "$value";
+    my $text = ref($value) ? to_json($value) : "$value";
     $text =~ s/'/''/g;
     if ($adapter eq 'postgresql') {
         $text =~ s/\\/\\\\/g;
@@ -376,8 +376,8 @@ sub _relation_span ($text, $color) {
 
 sub _debug_parameter ($value) {
     return 'NULL' unless defined($value);
-    return encode_json($value) if ref($value);
-    my $encoded = encode_json("$value");
+    return to_json($value) if ref($value);
+    my $encoded = to_json("$value");
     return $encoded;
 }
 
