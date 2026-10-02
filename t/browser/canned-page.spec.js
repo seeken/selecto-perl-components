@@ -29,6 +29,41 @@ test("a canned record link opens its local summary in an accessible dialog", asy
   await expect(link).toBeFocused();
 });
 
+test("the record dialog uses the theme's panel colour in the dark palette", async ({page}) => {
+  const assets = path.resolve(path.dirname(fileURLToPath(import.meta.url)),
+    "../../public/selecto-components");
+  await page.route("http://canned.test/orders", (route) => route.fulfill({
+    contentType: "text/html",
+    body: `<main class="selecto-canned-page">
+      <a href="/portal-views/order-display/42" data-sc-canned-modal-link
+         data-sc-canned-modal-title="Order ID Display">42</a>
+    </main>`,
+  }));
+  await page.route("http://canned.test/portal-views/order-display/42", (route) => route.fulfill({
+    contentType: "text/html", body: "<main>Order 42 summary</main>",
+  }));
+  await page.goto("http://canned.test/orders");
+  await page.addStyleTag({path: path.join(assets, "selecto-components.css")});
+  await page.addStyleTag({path: path.join(assets, "canned-page.css")});
+  await page.addScriptTag({path: script});
+
+  await page.getByRole("link", {name: "42"}).click();
+  const dialog = page.getByRole("dialog", {name: "Order ID Display"});
+  await expect(dialog).toBeVisible();
+  const colours = await dialog.evaluate((element) => {
+    const panel = getComputedStyle(document.documentElement).getPropertyValue("--sc-panel").trim();
+    const probe = document.createElement("span");
+    probe.style.color = panel;
+    document.body.append(probe);
+    const expected = getComputedStyle(probe).color;
+    probe.remove();
+    return {background: getComputedStyle(element).backgroundColor, expected};
+  });
+  // The shared theme defines no --sc-surface; a white fallback left light text on white.
+  expect(colours.background).toBe(colours.expected);
+  expect(colours.background).not.toBe("rgb(255, 255, 255)");
+});
+
 test("a record dialog in a full-height host frame opens where the user can see it", async ({page}) => {
   await page.setViewportSize({width: 1000, height: 700});
   await page.route("http://canned.test/host", (route) => route.fulfill({

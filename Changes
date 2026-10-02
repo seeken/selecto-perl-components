@@ -1,6 +1,11 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Graph axes that measure counts tick on whole numbers, so small counts
+      no longer repeat rounded labels (3, 3, 2, 2, ...).
+    - The canned page record dialog uses the theme's panel colour. It fell
+      back to white because the shared theme defines no --sc-surface, which
+      left the dark palette's light text unreadable.
     - Optional WebMCP tools edit validated query-form drafts without running
       queries. Drafts support revision checks, idempotent apply, manual-edit
       synchronization, one-step undo, and an optional SQLite store.

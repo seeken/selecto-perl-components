@@ -45,7 +45,7 @@
   padding: 0;
   border: 1px solid var(--sc-border, #cbd5e1);
   border-radius: 14px;
-  background: var(--sc-surface, #fff);
+  background: var(--sc-panel, #fff);
   color: var(--sc-ink, #172033);
   box-shadow: 0 24px 64px rgb(15 23 42 / 24%);
 }
