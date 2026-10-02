@@ -1159,6 +1159,9 @@ test("mixed graph series configure independent left and right axes", async ({pag
   expect(chart.options.scales.y1.stacked).toBe(true);
   expect(chart.options.scales.x.stacked).toBe(true);
   expect(chart.options.scales.y1.grid.drawOnChartArea).toBe(false);
+  // Count axes tick on whole numbers, so small counts never repeat a rounded label.
+  expect(chart.options.scales.y.ticks.precision).toBe(0);
+  expect(chart.options.scales.y1.ticks.precision).toBeUndefined();
   expect(await page.evaluate(() => window.capturedCurrencyTick)).toContain("1,234.5");
   expect(await page.evaluate(() => window.capturedCurrencyTooltip)).toContain("Revenue:");
   const axisDrilldown = await page.evaluate(() => {

@@ -567,6 +567,10 @@
         options.scales[axisId].ticks = Object.assign({}, axis.ticks, {
           callback: function (value) { return formatChartValue(value, definition.unit); }
         });
+        // Counts are whole numbers: fractional ticks would round to duplicate labels.
+        if (definition.unit && definition.unit.kind === "count") {
+          options.scales[axisId].ticks.precision = 0;
+        }
         if (definition.side === "right") {
           options.scales[axisId].grid = Object.assign({}, axis.grid, {drawOnChartArea: false});
         }
