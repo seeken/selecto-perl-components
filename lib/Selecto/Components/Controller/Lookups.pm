@@ -31,7 +31,7 @@ sub _run_action_lookup ($controller, $explorer) {
     my $discovery_ok = eval {
         $domain = $config->engine($controller)->domain;
         $resolved = Selecto::Components::Actions->find(
-            $config, $domain, $controller, $action_id, 'preview',
+            $config, $domain, $controller, $action_id, 'lookup',
             @selected_ids ? {ids => \@selected_ids} : undef,
         );
         1;

@@ -2,6 +2,9 @@ package Selecto::Components::Renderer::Results;
 
 use utf8;
 use Mojo::Base -base, -signatures;
+use Selecto::Limits ();
+use Selecto::OperationBudget ();
+use Selecto::Components::ResponseBudget ();
 use Mojo::JSON qw(to_json);
 use Mojo::URL ();
 use Mojo::Util qw(url_escape);
@@ -695,6 +698,13 @@ sub _row_record_editor_dialog ($dialog_id, $action, $row_count) {
 }
 
 sub _nested_table ($column, $value, $row_number = undef) {
+    my $limits = $Selecto::Components::ResponseBudget::CURRENT
+        ? $Selecto::Components::ResponseBudget::CURRENT->{limits} : Selecto::Limits->new;
+    if (ref($value) eq 'ARRAY') {
+        $limits->check_count('max_collection_rows', scalar(@$value), 'response_limit_exceeded', 'Nested items');
+        Selecto::OperationBudget->new(limits => $limits, code => 'response_limit_exceeded')->check_tree(
+            $value, bytes_limit => 'max_response_bytes', scalar_limit => 'max_result_cell_bytes');
+    }
     my @fields = @{$column->{nested_fields} // []};
     return '<span class="sc-nested-empty">No data</span>' unless @fields;
     my $caption = defined($row_number)
@@ -705,7 +715,7 @@ sub _nested_table ($column, $value, $row_number = undef) {
     } @fields) . '</tr></thead>';
     my $rows = ref($value) eq 'ARRAY' && @$value ? join('', map {
         my $record = ref($_) eq 'HASH' ? $_ : {};
-        '<tr>' . join('', map {
+        Selecto::Components::ResponseBudget->fragment('<tr>' . join('', map {
             my $cell = $record->{$_->{field}};
             my $display = ref($cell) ? to_json($cell)
                 : defined($cell) ? "$cell" : '';
@@ -726,7 +736,7 @@ sub _nested_table ($column, $value, $row_number = undef) {
                     if defined $prefix;
             }
             '<td>' . $content . '</td>'
-        } @fields) . '</tr>'
+        } @fields) . '</tr>')
     } @$value) : '<tr><td class="sc-nested-empty" colspan="' . scalar(@fields) . '">No data</td></tr>';
     return '<table class="sc-nested-table"><caption class="sc-visually-hidden">' .
         _h($caption) . '</caption>' . $head . '<tbody>' . $rows . '</tbody></table>';

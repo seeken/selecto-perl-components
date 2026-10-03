@@ -8,6 +8,8 @@ use Encode qw(encode);
 use Scalar::Util qw(blessed);
 use Selecto::CannedPage ();
 use Selecto::Error ();
+use Selecto::Limits ();
+use Selecto::Components::ResponseBudget ();
 use Selecto::Components::Renderer ();
 use Selecto::Components::Renderer::Results ();
 use Selecto::Components::AssetManifest qw(asset_revision);
@@ -21,9 +23,11 @@ use Selecto::Components::Util qw(decode_driver_json humanize);
 has [qw(page engine_factory scope_factory path title record_link websocket_enabled websocket_context column_layout theme)];
 
 has websocket_mode => 'protected';
+has limits => sub { Selecto::Limits->new };
 
 sub new ($class, @args) {
     my $self = $class->SUPER::new(@args);
+    die "canned page limits must be a Selecto::Limits\n" unless blessed($self->limits) && $self->limits->isa('Selecto::Limits');
     die "canned page must be a Selecto::CannedPage\n"
         unless blessed($self->page) && $self->page->isa('Selecto::CannedPage');
     die "canned page needs an engine_factory\n" unless ref($self->engine_factory) eq 'CODE';
@@ -162,12 +166,14 @@ sub handle ($self, $controller) {
         && length($controller->req->url->query->to_string)) {
         return $controller->redirect_to($self->path);
     }
-    my ($result, $error);
+    my ($result, $error, $html);
     eval {
         my $engine = $self->engine_factory->($controller);
         my $scope = $self->scope_factory
             ? $self->scope_factory->($controller, $engine) : undef;
-        $result = $self->page->run($engine, $self->_input($controller), $scope);
+        my $limits = $engine->can('limits') ? $self->limits->intersect($engine->limits) : $self->limits;
+        $result = $self->page->run($engine, $self->_input($controller), $scope, {limits => $limits, max_rows => 1000});
+        $html = Selecto::Components::ResponseBudget->render($limits, sub { $self->_html($result, $public) });
         1;
     } or $error = $@ || 'Canned page execution failed';
     if ($error) {
@@ -179,7 +185,7 @@ sub handle ($self, $controller) {
             status => $invalid ? 422 : 500,
         );
     }
-    return $controller->render(data => encode('UTF-8', $self->_html($result, $public)),
+    return $controller->render(data => encode('UTF-8', $html),
         format => 'html', status => 200);
 }
 
@@ -199,12 +205,18 @@ sub handle_websocket ($self, $controller) {
             : $self->websocket_mode eq 'public' ? 'public' : undef };
         return $socket->finish(1008 => 'Page access is no longer allowed')
             if $@ || !defined($scope_key) || ref($scope_key);
-        my $result;
+        my ($result, $response);
         my $ok = eval {
             my $engine = $self->engine_factory->($socket);
             my $scope = $self->scope_factory
                 ? $self->scope_factory->($socket, $engine) : undef;
-            $result = $self->page->run($engine, $self->_input($socket, $payload), $scope);
+            my $limits = $engine->can('limits') ? $self->limits->intersect($engine->limits) : $self->limits;
+            $result = $self->page->run($engine, $self->_input($socket, $payload), $scope, {limits => $limits, max_rows => 1000});
+            my $public = ($self->page->domain->components->{query_params} // 1) ? 1 : 0;
+            my $content = Selecto::Components::ResponseBudget->render($limits, sub { $self->_surface($result, $public) });
+            $response = Selecto::Components::ResponseBudget->json({content => $content,
+                target => '#selecto-page-' . $self->page->id, swap => 'outerHTML',
+                selecto => {request_id => "$request_id"}}, $limits);
             1;
         };
         unless ($ok) {
@@ -216,13 +228,7 @@ sub handle_websocket ($self, $controller) {
                 : 'Page request could not be completed';
             return $socket->finish($code => $reason);
         }
-        my $public = ($self->page->domain->components->{query_params} // 1) ? 1 : 0;
-        return $socket->send({text => encode_json({
-            content => $self->_surface($result, $public),
-            target => '#selecto-page-' . $self->page->id,
-            swap => 'outerHTML',
-            selecto => {request_id => "$request_id"},
-        })});
+        return $socket->send({text => $response});
     });
 }
 
@@ -577,7 +583,7 @@ sub _layout_table ($self, $source_columns, $source_records, $state) {
     return (\@columns, \@records);
 }
 
-sub _escape ($value) { xml_escape(defined($value) ? "$value" : '') }
+sub _escape ($value) { Selecto::Components::ResponseBudget->escape($value); xml_escape(defined($value) ? "$value" : '') }
 
 1;
 

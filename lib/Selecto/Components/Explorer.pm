@@ -7,6 +7,7 @@ use File::Temp qw(tempfile tempdir);
 use File::Find ();
 use Encode qw(encode);
 use Selecto::Components::ExportBudget ();
+use Selecto::BoundedQuery ();
 use Digest::SHA qw(sha256_hex);
 use Scalar::Util qw(blessed looks_like_number);
 use Time::HiRes qw(time);
@@ -48,8 +49,13 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         if defined($result_cache)
             && !(blessed($result_cache) && $result_cache->can('fetch') && $result_cache->can('store'));
     my %cache_info = (hits => 0, misses => 0);
+    my $cache_namespace;
     my $input_supplied = defined $input;
     my $config = $self->config->for_request($controller);
+    $cache_namespace = $options->{cache_namespace};
+    $cache_namespace //= $config->result_cache_namespace->($controller, $config)
+        if $config->result_cache_namespace;
+    _cache_identity($cache_namespace, 'namespace') if $result_cache || defined($cache_namespace);
     my $engine;
     my $state;
     my $all_rows = 0;
@@ -63,6 +69,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     my $ok = eval {
         my $setup_started = time;
         $engine = $config->engine($controller);
+        $config->limits($config->limits->intersect($engine->limits)) if $engine->can('limits');
         $result_cache->bind_domain($engine->domain->fingerprint)
             if $result_cache && $result_cache->can('bind_domain');
         $all_rows = $options->{all_rows}
@@ -91,12 +98,13 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         $grid_all_rows = $built->{aggregate_grid} ? 1 : 0;
         my $started = time;
         my $compile_started = time;
-        my $statement = $engine->compile($built->{query});
+        my $prepared = Selecto::BoundedQuery->prepare($engine, $built->{query}, limits => $config->limits);
+        my $statement = $prepared->{statement};
         my $compile_ms = _elapsed_ms($compile_started);
         my $data_started = time;
-        my $raw = _execute($engine, $statement, $result_cache, \%cache_info);
+        my $raw = _execute($engine, $prepared, $result_cache, \%cache_info, $cache_namespace, $config);
         my $data_query_ms = _elapsed_ms($data_started);
-        _validate_result($raw);
+        _validate_result($raw, $config->limits);
         my $grid_limit_exceeded = $grid_all_rows
             && @{$raw->{rows}} > $config->max_grid_result_cells ? 1 : 0;
         my $total_count;
@@ -105,14 +113,15 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             $total_count = scalar @{$raw->{rows}};
         } else {
             my $count_query = defined($built->{count_selections})
-                ? $built->{query}->count_query($built->{count_selections})
-                : $built->{query}->count_query;
+                ? $prepared->{query}->count_query($built->{count_selections})
+                : $prepared->{query}->count_query;
             my $count_compile_started = time;
             my $count_source = $engine->compile($count_query);
             $count_statement = _count_statement($count_source);
             $count_compile_ms = _elapsed_ms($count_compile_started);
-            my $count_key = _count_cache_key($count_statement);
-            $total_count = !$result_cache && _wants_cached_count($input)
+            my $count_key = defined($cache_namespace) ? __PACKAGE__->result_cache_key(
+                $count_statement, $cache_namespace, $engine->domain->fingerprint) : undef;
+            $total_count = !$result_cache && defined($count_key) && _wants_cached_count($input)
                 ? _cached_count($controller, $count_key) : undef;
             if (defined($total_count)) {
                 $count_cache_hit = 1;
@@ -120,11 +129,11 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             } else {
                 my $count_started = time;
                 my $hits_before_count = $cache_info{hits};
-                my $count_raw = _execute($engine, $count_statement, $result_cache, \%cache_info);
+                my $count_raw = _execute($engine, $count_statement, $result_cache, \%cache_info, $cache_namespace, $config);
                 $count_query_ms = _elapsed_ms($count_started);
-                _validate_result($count_raw);
+                _validate_result($count_raw, $config->limits);
                 $total_count = _total_count($count_raw);
-                _store_count($controller, $count_key, $total_count) unless $result_cache;
+                _store_count($controller, $count_key, $total_count) if !$result_cache && defined($count_key);
                 $count_cache_hit = $cache_info{hits} > $hits_before_count ? 1 : 0;
             }
         }
@@ -234,11 +243,19 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     return $model;
 }
 
-# The cache key for a compiled statement: adapter, SQL text and bound values,
-# so any difference in the query (including visibility scoping) is a different entry.
-sub result_cache_key ($class, $statement) {
+# A trusted namespace identifies data source and authorization context.
+# Statement equality alone does not imply authority or physical-source equality.
+sub _cache_identity ($value, $label) {
+    die "result_cache requires a trusted $label\n"
+        unless defined($value) && !ref($value) && length($value) && length($value) <= 4096;
+    return $value;
+}
+
+sub result_cache_key ($class, $statement, $namespace, $domain_fingerprint) {
     return sha256_hex(encode_json([
-        'selecto-result-v2',
+        'selecto-result-v3',
+        _cache_identity($namespace, 'namespace'),
+        _cache_identity($domain_fingerprint, 'domain fingerprint'),
         $statement->adapter_name,
         $statement->sql,
         $statement->columns,
@@ -249,20 +266,23 @@ sub result_cache_key ($class, $statement) {
 # Run a statement, through the result cache when one is supplied. fetch($key)
 # returns {result => {columns, rows}, created_at => epoch} or undef;
 # store($key, {columns, rows}) saves a fresh result.
-sub _execute ($engine, $statement, $cache, $info) {
-    return $engine->adapter->execute_query($statement) unless $cache;
-    my $key = __PACKAGE__->result_cache_key($statement);
+sub _execute ($engine, $prepared, $cache, $info, $namespace, $config) {
+    my $statement = ref($prepared) eq 'HASH' ? $prepared->{statement} : $prepared;
+    my $collections = ref($prepared) eq 'HASH' ? $prepared->{collections} : [];
+    my %bounds = (limits => $config->limits, max_rows => $config->max_grid_result_cells + 1);
+    return Selecto::BoundedQuery->execute($engine, $prepared, %bounds) unless $cache;
+    my $key = __PACKAGE__->result_cache_key($statement, $namespace, $engine->domain->fingerprint);
     my $entry = $cache->fetch($key);
     if (ref($entry) eq 'HASH' && ref($entry->{result}) eq 'HASH'
-        && eval { _validate_result($entry->{result}); 1 }) {
+        && eval { Selecto::BoundedQuery->validate_result($entry->{result}, $config->limits, $collections); 1 }) {
         $info->{hits}++;
         my $created = $entry->{created_at};
         $info->{created_at} = $created
             if defined($created) && (!defined($info->{created_at}) || $created < $info->{created_at});
         return $entry->{result};
     }
-    my $raw = $engine->adapter->execute_query($statement);
-    _validate_result($raw);
+    my $raw = Selecto::BoundedQuery->execute($engine, $prepared, %bounds);
+    _validate_result($raw, $config->limits);
     $info->{misses}++;
     $info->{created_at} //= time;  # the oldest part of the result decides its age
     $cache->store($key, {columns => $raw->{columns}, rows => $raw->{rows}});
@@ -296,14 +316,6 @@ sub prepare ($self, $controller, $input = undef) {
 
 sub _elapsed_ms ($started) {
     return int((time - $started) * 1000 + 0.5);
-}
-
-sub _count_cache_key ($statement) {
-    return sha256_hex(encode_json([
-        $statement->adapter_name,
-        $statement->sql,
-        @{$statement->params},
-    ]));
 }
 
 sub _wants_cached_count ($input) {
@@ -709,6 +721,7 @@ sub stream_export ($self, $controller, $format) {
     _cap_export($config, $built);
     my $budget = Selecto::Components::ExportBudget->new($config, $engine, $controller);
     my $stream = $engine->stream($built->{query}, fetch_size => 1, bounded => 1);
+    $budget->on_cancel(sub { eval { $stream->close } });
     $controller->on(finish => sub { eval { $stream->close }; eval { $budget->close } }) if $controller->can('on');
     my @result_columns = @{$stream->columns};
     my @columns = grep { !$_->{action_id} } @{$built->{columns}};
@@ -773,7 +786,7 @@ sub stream_export ($self, $controller, $format) {
         return length($chunk) ? $chunk : undef;
     };
     return {
-        config => $config,
+        config => $config, budget => $budget,
         next_chunk => $next_chunk,
         close => sub {
             return if $closed++;
@@ -819,6 +832,7 @@ sub xlsx_file_export ($self, $controller) {
         File::Find::find(sub { $bytes += -s $_ if -f $_ }, "$spool");
         die "Excel temporary disk limit exceeded\n" if $bytes > $config->max_export_temp_bytes;
     };
+    $budget->on_cancel(sub { eval { $stream->close } if $stream; unlink $output_path if -f $output_path; undef $spool });
     $controller->on(finish => sub { eval { $stream->close } if $stream; eval { $budget->close } }) if $controller->can('on');
     my $ok = eval {
         $stream = $engine->stream($built->{query}, fetch_size => 1, bounded => 1);
@@ -913,7 +927,7 @@ sub xlsx_file_export ($self, $controller) {
         die $error;
     }
     # Keep both spool ownership and concurrency lease alive through delivery.
-    return {config => $config, path => $output_path,
+    return {config => $config, budget => $budget, path => $output_path,
         close => sub { $budget->close; unlink $output_path if -f $output_path; undef $spool }};
 }
 
@@ -1099,7 +1113,8 @@ sub _flat_value ($value) {
     return "$value";
 }
 
-sub _validate_result ($result) {
+sub _validate_result ($result, $limits = undef) {
+    Selecto::BoundedQuery->validate_result($result, $limits // Selecto::Limits->new);
     die "adapter returned an invalid result\n" unless ref($result) eq 'HASH';
     die "adapter result columns must be an array\n" unless ref($result->{columns}) eq 'ARRAY';
     die "adapter result rows must be an array\n" unless ref($result->{rows}) eq 'ARRAY';
@@ -1189,7 +1204,10 @@ Options:
 =item result_cache
 
 An object with C<fetch($key)> and C<store($key, $result)>, and optionally
-C<bind_domain($fingerprint)>. Results are keyed by L</result_cache_key>, so
+C<bind_domain($fingerprint)>. A trusted C<cache_namespace> model option or
+C<result_cache_namespace> configuration callback is mandatory. It covers physical
+data source, tenant/principal policy and policy epoch; request data must not
+select it. Results are keyed by L</result_cache_key>, including the domain, so
 any difference in SQL or bound values, including scope, is a different
 entry. L<Selecto::Components::ExplorerSession> is one implementation.
 
@@ -1243,7 +1261,7 @@ in private URL mode or for an aggregate grid.
 
 =head2 result_cache_key
 
-    my $key = Selecto::Components::Explorer->result_cache_key($statement);
+    my $key = Selecto::Components::Explorer->result_cache_key($statement, $namespace, $domain_fingerprint);
 
 A SHA-256 over the adapter name, SQL, columns and bound values of a
 L<Selecto::Statement>.

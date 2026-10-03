@@ -63,36 +63,19 @@ sub _debug_query ($id, $title, $query, $adapter = undef) {
         '<li><span>$' . ($index + 1) . '</span><code>' .
             _h(_debug_parameter($parameters->[$index])) . '</code></li>'
     } 0 .. $#$parameters) . '</ol>' : '<p class="sc-debug-no-params">No bound parameters.</p>';
-    my $copy_id = $id . '-standalone';
+    my $copy_id = $id . '-diagnostics';
     my $readable_sql = _readable_sql($query->{sql}, $adapter);
-    my $standalone_sql = _interpolate_sql($readable_sql, $parameters, $adapter);
+    my $diagnostics = to_json({format => 'selecto-query-diagnostics-v1',
+        adapter => $adapter, sql => $query->{sql}, parameters => $parameters});
     return '<article class="sc-debug-query"><header><h4>' . _h($title) . '</h4>' .
         '<button class="sc-button sc-secondary" type="button" data-sc-debug-copy="' .
-        _h($id) . '" data-sc-debug-copy-source="' . _h($copy_id) . '">Copy SQL</button></header>' .
+        _h($id) . '" data-sc-debug-copy-source="' . _h($copy_id) . '">Copy diagnostics</button></header>' .
         '<pre id="' . _h($id) . '"><code class="sc-sql">' .
         _highlight_sql($readable_sql) . '</code></pre>' .
         '<pre id="' . _h($copy_id) . '" hidden aria-hidden="true">' .
-        _h(_format_sql($standalone_sql)) . '</pre>' .
+        _h($diagnostics) . '</pre>' .
         '<div class="sc-debug-parameter-block"><h5>Bound parameters</h5>' .
         $parameter_list . '</div></article>';
-}
-
-sub _interpolate_sql ($sql, $parameters, $adapter = undef) {
-    return "$sql" unless ref($parameters) eq 'ARRAY' && @$parameters;
-    my $dialect = lc($adapter // '');
-    my $position = 0;
-    return _map_sql_tokens($sql, sub ($token, $kind) {
-        if ($kind eq 'postgresql_parameter' && $dialect eq 'postgresql') {
-            my ($index) = $token =~ /\A\$(\d+)\z/;
-            return $index && $index <= @$parameters
-                ? _sql_literal($parameters->[$index - 1], $dialect) : $token;
-        }
-        if ($kind eq 'question_parameter' && $dialect =~ /\A(?:mysql|mariadb|mssql|sqlite|duckdb)\z/) {
-            return $position < @$parameters
-                ? _sql_literal($parameters->[$position++], $dialect) : $token;
-        }
-        return $token;
-    });
 }
 
 sub _readable_sql ($sql, $adapter = undef) {
@@ -149,22 +132,6 @@ sub _map_sql_tokens ($sql, $mapper) {
         }
     }
     return $output;
-}
-
-sub _sql_literal ($value, $adapter) {
-    return 'NULL' unless defined $value;
-    my $text = ref($value) ? to_json($value) : "$value";
-    $text =~ s/'/''/g;
-    if ($adapter eq 'postgresql') {
-        $text =~ s/\\/\\\\/g;
-        $text =~ s/\x00/\\000/g;
-        $text =~ s/\r/\\r/g;
-        $text =~ s/\n/\\n/g;
-        $text =~ s/\t/\\t/g;
-        return "E'$text'";
-    }
-    return "N'$text'" if $adapter eq 'mssql';
-    return "'$text'";
 }
 
 sub _format_sql ($sql) {

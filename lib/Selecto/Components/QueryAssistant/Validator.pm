@@ -8,12 +8,15 @@ use Storable qw(dclone);
 use Selecto::Components::QueryAssistant::Target ();
 use Selecto::Components::QueryBuilder ();
 use Selecto::Components::State ();
+use Selecto::OperationBudget ();
 
 sub validate {
     my ($class, %args) = @_;
     my ($config, $domain, $engine, $target) = @args{qw(config domain engine target)};
     my ($input, $state, $built, $statement);
     my $ok = eval {
+        Selecto::OperationBudget->new(limits => $config->limits, code => 'invalid_query')
+            ->check_tree($target, label => 'Assistant target', bytes_limit => 'max_state_bytes');
         $input = Selecto::Components::QueryAssistant::Target->to_input($target);
         _preserve_inactive_state($input, $args{preserve_input});
         die "view is not enabled\n" unless $config->allows_view($input->{view});

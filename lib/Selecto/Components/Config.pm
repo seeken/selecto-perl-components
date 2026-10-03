@@ -62,6 +62,7 @@ has 'page_shell_resolver';
 has 'api_console_resolver';
 has 'websocket_message_cleanup';
 has 'websocket_context';
+has 'result_cache_namespace';
 has websocket_mode => 'protected';
 has websocket_enabled => 1;
 has websocket_session_options => sub { {} };
@@ -129,6 +130,8 @@ sub new ($class, @args) {
     die "websocket_message_cleanup must be a coderef\n"
         if defined($self->websocket_message_cleanup)
             && ref($self->websocket_message_cleanup) ne 'CODE';
+    die "result_cache_namespace must be a coderef\n"
+        if defined($self->result_cache_namespace) && ref($self->result_cache_namespace) ne 'CODE';
     die "websocket_context must be a coderef\n"
         if defined($self->websocket_context) && ref($self->websocket_context) ne 'CODE';
     die "websocket_mode must be protected or public\n"
@@ -147,6 +150,8 @@ sub new ($class, @args) {
         }
         die "query_assistant requires actor or explicit allow_anonymous => 1\n"
             unless $assistant->{actor} || $assistant->{allow_anonymous};
+        die "query_assistant choice_range_fields must be an object\n"
+            if defined($assistant->{choice_range_fields}) && ref($assistant->{choice_range_fields}) ne 'HASH';
         die "query_assistant choice_fields must be an object\n"
             if defined($assistant->{choice_fields}) && ref($assistant->{choice_fields}) ne 'HASH';
     }

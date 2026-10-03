@@ -946,14 +946,12 @@ my $readable_membership_sql = Selecto::Components::Renderer::Debug::_readable_sq
 is $readable_membership_sql,
     'SELECT s0.id, s0."order" FROM load AS s0 WHERE s0.id = $1',
     'debug SQL removes only unnecessary PostgreSQL identifier quotes';
-my $standalone_sql = Selecto::Components::Renderer::Debug::_interpolate_sql(
-    q{SELECT "s0"."name" FROM "load" AS "s0" WHERE "s0"."name" = $1 AND "s0"."id" = $2 AND "s0"."note" = $3},
-    ["x'; DROP TABLE load; --\\haul\nnext", '12.50', undef],
-    'postgresql',
-);
-is $standalone_sql,
-    q{SELECT "s0"."name" FROM "load" AS "s0" WHERE "s0"."name" = E'x''; DROP TABLE load; --\\\\haul\nnext' AND "s0"."id" = E'12.50' AND "s0"."note" = NULL},
-    'standalone PostgreSQL debug SQL safely quotes and interpolates every parameter';
+my $diagnostics_html = Selecto::Components::Renderer::Debug::_debug_query('unsafe', 'Query',
+    {sql => 'SELECT name FROM products WHERE name = ?', params => ["x\\' OR 1=1 -- ", undef]}, 'mysql');
+my $diagnostics = Mojo::DOM->new($diagnostics_html)->at('pre[hidden]')->text;
+my $decoded_diagnostics = Mojo::JSON::from_json($diagnostics);
+is $decoded_diagnostics->{sql}, 'SELECT name FROM products WHERE name = ?', 'copied diagnostic SQL remains parameterized';
+is_deeply $decoded_diagnostics->{parameters}, ["x\\' OR 1=1 -- ", undef], 'copied values remain separate JSON data';
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
     ->status_is(200)

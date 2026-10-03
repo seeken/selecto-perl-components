@@ -667,3 +667,67 @@ reload the bare route. Hosts changing login, tenant or permissions without a ful
 navigation must dispatch `selecto:context-changed` on `window`; this purges browser
 snapshots and reloads the current page. Private saved-query links redirect to the
 bare route without looking up or expanding retained query strings.
+
+### Bounded responses and cache migration
+
+The guarded ordinary-result profile requires PostgreSQL 12+ or SQLite 3.35+
+for materialized query projections. Older servers fail closed.
+
+Ordinary Explorer and canned-page queries now require an adapter with bounded
+streaming, database deadlines, and a server-side result transfer guard. Native
+PostgreSQL (12+) and SQLite (3.35+) implement scalar result transfer guards. Nested UI
+collections currently require PostgreSQL with a declared child primary key:
+queries fetch at most the configured child limit plus one, and refuse an
+oversized collection instead of presenting an incomplete collection as complete.
+SQLite nested UI requests and other unproven adapter capabilities fail before
+execution. Trusted core callers can continue to select their own execution
+policy; the Components HTTP/WebSocket paths always request the bounded profile.
+
+`Selecto::Limits` controls raw cell bytes (`max_result_cell_bytes`, default
+65,536), cumulative response bytes, response nodes/depth, cells, and child counts.
+The engine's tighter limits win. Rendering and cache admission check structure
+before decoding/encoding and reserve escaping overhead before concatenation;
+final HTTP/WebSocket representations must fit the response ceiling. Query
+execution has a database deadline as well. These controls bound transfer and
+application materialization; they do not assert a universal database query-plan
+memory limit.
+
+Cross-request result caches now need a trusted namespace and use a new key
+version. Old statement-only entries are never reused. Configure a callback:
+
+```perl
+result_cache_namespace => sub ($c, $config) {
+    # Values come from authenticated host state, never query parameters.
+    return join ':', $source_id, $tenant_id, $principal_policy_id, $policy_epoch;
+},
+```
+
+Include the physical data source and every authority dimension absent from
+SQL parameters (for example database RLS/session state). The key also includes
+the current domain fingerprint. Hosts calling `Explorer->model` with a cache
+may instead pass a trusted `cache_namespace` option. Missing namespaces are
+refused for explicitly supplied caches; WebSocket result reuse is disabled
+unless the host configures the callback, and the current live socket scope is
+included in that cache key. A fixed public namespace is appropriate only for
+one deliberately public source and policy. Namespace changes isolate concurrent
+requests without changing a shared cache object's mutable scope.
+
+Assistant targets are normalized and budgeted before exact-choice resolvers
+run. A governed field permits equality/membership/null filters by default;
+`between` additionally requires `query_assistant.choice_range_fields` to mark
+that field as supporting the host's range semantics. The resolver receives
+`operator` and both normalized endpoints in `values`. It must approve every
+endpoint. Do not enable range semantics for a policy that merely permits
+individual discrete values: endpoint approval does not authorize the interval.
+Other governed range/pattern operators are refused. Callback counts and total
+exact values have finite request-wide ceilings.
+
+`max_export_seconds` covers preparation and asynchronous delivery. A monotonic
+deadline timer releases leases and files even when a client stops reading;
+driver-side deadlines remain responsible for synchronous database work.
+
+`show_sql` remains off by default and is a trusted host debug choice. Normal UI
+and assistant responses do not include generated SQL. Debug copy now emits JSON
+with parameterized `sql` and a separate `parameters` array; it never synthesizes
+an executable statement from user values. Treat the debug panel and its copied
+diagnostics as sensitive because bound values may contain tenant or filter data.

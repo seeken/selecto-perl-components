@@ -102,7 +102,7 @@ subtest 'result cache keyed by the exact SQL' => sub {
 
     my $statement = Selecto::Statement->new(sql => 'SELECT 1', params => [1], columns => ['a'], adapter_name => 'test');
     my $scoped = Selecto::Statement->new(sql => 'SELECT 1', params => [2], columns => ['a'], adapter_name => 'test');
-    isnt $explorer->result_cache_key($statement), $explorer->result_cache_key($scoped),
+    isnt $explorer->result_cache_key($statement, 'source:actor', 'domain'), $explorer->result_cache_key($scoped, 'source:actor', 'domain'),
         'e.g. a user with different client ids in scope gets their own entry';
 
     my $uncached = $explorer->model($controller, $dashboard->input_from_url($saved));
