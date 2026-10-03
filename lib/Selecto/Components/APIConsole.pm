@@ -9,7 +9,7 @@ use Mojo::File qw(path);
 use Selecto::Components::Util qw(html_escape);
 use Selecto::Components::ThemeStylesheet ();
 
-my $ASSET_REVISION = '0.5.9';
+my $ASSET_REVISION = '0.5.10';
 
 sub install_assets ($class, $app) {
     die "install_assets requires a Mojolicious application\n"

@@ -921,7 +921,7 @@
       this.root.querySelector("[data-sac-domain-link]").href = `${this.base}/domain`;
       this.root.querySelector("[data-sac-openapi-link]").href = `${this.base}/openapi.json`;
       const importerLink = this.root.querySelector("[data-sac-importer-link]");
-      importerLink.href = `${this.base}/importer`;
+      importerLink.href = `${this.base}/import`;
       importerLink.hidden = !this.access.importer;
       const surfaceTabs = [["query", this.access.read], ["writes", this.access.write], ["actions", this.access.action]];
       for (const [name, allowed] of surfaceTabs) {
