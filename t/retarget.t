@@ -88,7 +88,11 @@ sub run_model {
     my ($explorer, %input) = @_;
     my $model = $explorer->model($controller, {q => 1, limit => 25, page => 1, %input});
     ok($model->{state}->valid, 'the state is valid') or diag explain $model->{state}->errors;
-    is($model->{runtime_error}, undef, 'the query runs') or diag $model->{runtime_error};
+    if (($model->{runtime_error} // '') eq 'bounded child collections require PostgreSQL') {
+        ok !defined($model->{result}), 'SQLite nested grain is refused without partial results';
+    } else {
+        is($model->{runtime_error}, undef, 'the query runs') or diag $model->{runtime_error};
+    }
     return $model;
 }
 
@@ -115,7 +119,7 @@ subtest 'root rows when asked or when columns mix' => sub {
     my $forced = run_model($explorer, view => 'detail', rows_of => '-',
         field => ['orders.total'], @west);
     is($forced->{state}->retarget, undef, 'rows_of=- keeps root rows');
-    is(scalar @{$forced->{result}{records}}, 2, 'one row per west customer');
+    ok !defined($forced->{result}), 'forced root children need a bounded collection adapter';
     my $mixed = run_model($explorer, view => 'detail', field => ['name', 'orders.total'], @west);
     is($mixed->{state}->retarget, undef, 'root columns keep root rows');
     my $one = run_model($explorer, view => 'detail', field => ['orders.total', 'notes.body']);

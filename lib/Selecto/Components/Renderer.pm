@@ -10,8 +10,13 @@ use Selecto::Components::Renderer::Builder ();
 use Selecto::Components::Renderer::Results ();
 use Selecto::Components::Renderer::Debug ();
 use Time::HiRes qw(time);
+use Selecto::Components::ResponseBudget ();
 
 sub page ($class, $model) {
+    return Selecto::Components::ResponseBudget->render($model->{config}->limits,
+        sub { $class->_bounded_page($model) });
+}
+sub _bounded_page ($class, $model) {
     my $config = $model->{config};
     my $title = _h($class->_page_title($model));
     my $surface = $class->surface($model);
@@ -67,6 +72,10 @@ sub page_document ($class, %args) {
 }
 
 sub surface ($class, $model) {
+    return Selecto::Components::ResponseBudget->render($model->{config}->limits,
+        sub { $class->_bounded_surface($model) });
+}
+sub _bounded_surface ($class, $model) {
     my $config = $model->{config};
     my $state = $model->{state};
     return '<section id="selecto-surface-' . _h($config->id) . '" class="sc-surface">' .
@@ -136,6 +145,10 @@ sub _page_title ($class, $model) {
 }
 
 sub results_fragment ($class, $model, $filter_catalog = undef) {
+    return Selecto::Components::ResponseBudget->render($model->{config}->limits,
+        sub { $class->_bounded_results_fragment($model, $filter_catalog) });
+}
+sub _bounded_results_fragment ($class, $model, $filter_catalog = undef) {
     # Promoted cards need the filter catalog: it carries components.filter_choices,
     # choice labels, and filter-only paths that the plain field catalog omits.
     $filter_catalog //= $model->{config}->filter_catalog(

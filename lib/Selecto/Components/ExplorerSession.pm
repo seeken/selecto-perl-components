@@ -3,6 +3,8 @@ package Selecto::Components::ExplorerSession;
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(decode_json encode_json);
 use JSON::PP ();
+use Selecto::Components::ResponseBudget ();
+use Selecto::Limits ();
 use Time::HiRes qw(time);
 
 # One object per socket. Never retain controllers, engines, domain authorization
@@ -99,7 +101,8 @@ sub fetch ($self, $key) {
 
 sub store ($self, $key, $result) {
     return unless $self->ttl && $self->max_bytes;
-    my $json = eval { encode_json($result) };
+    my $json = eval { Selecto::Components::ResponseBudget->json($result,
+        Selecto::Limits->new->tightened(max_response_bytes => $self->max_bytes)) };
     return unless defined $json;
     $self->_remove($key);
     my $size = length($json);
@@ -134,7 +137,7 @@ Selecto::Components::ExplorerSession - Per-WebSocket form state and bounded resu
 
     # Also usable as an Explorer result cache, for example for dashboard tiles:
     my $cache = Selecto::Components::ExplorerSession->new(ttl => 60);
-    my $model = $explorer->model($c, $input, {result_cache => $cache});
+    my $model = $explorer->model($c, $input, {result_cache => $cache, cache_namespace => $trusted_source_and_policy_namespace});
 
 =head1 DESCRIPTION
 
@@ -142,7 +145,7 @@ Each Explorer WebSocket connection has one session. It keeps the last
 accepted form snapshot and a revision, so the browser can send
 C<< selecto_session => {revision, set, remove} >> patches instead of whole
 forms. It also keeps a small cache of raw query results, keyed by
-L<Selecto::Components::Explorer/result_cache_key> (adapter, SQL, columns and
+L<Selecto::Components::Explorer/result_cache_key> (trusted namespace, domain, adapter, SQL, columns and
 bound values). Presentation changes, paging and going back to an earlier page
 can therefore reuse data within a short TTL.
 

@@ -6,6 +6,7 @@ use warnings;
 use Exporter 'import';
 use Mojo::JSON qw(decode_json from_json);
 use Mojo::Util qw(xml_escape);
+use Selecto::Components::ResponseBudget ();
 
 our @EXPORT_OK = qw(decode_driver_json humanize html_escape trim);
 
@@ -18,6 +19,7 @@ sub decode_driver_json {
 
 sub html_escape {
     my ($value) = @_;
+    Selecto::Components::ResponseBudget->escape($value);
     return xml_escape(defined($value) ? "$value" : '');
 }
 

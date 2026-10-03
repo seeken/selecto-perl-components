@@ -80,6 +80,12 @@ sub check_nested {
         }},
     });
     my $t = Test::Mojo->new($app);
+    if ($adapter_name eq 'sqlite') {
+        $t->get_ok('/customers' => form => {q => 1, field => [qw(id notes.body)]})
+            ->status_is(422)->content_like(qr/bounded child collections require PostgreSQL/);
+        $t->get_ok('/customer-notes')->status_is(500)->content_is('Page data is unavailable');
+        return;
+    }
     $t->get_ok('/customers' => form => {q => 1, view => 'detail',
         field => [qw(id name notes.body)], order => 'id', direction => 'asc'})
         ->status_is(200);

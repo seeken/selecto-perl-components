@@ -330,6 +330,7 @@ sub _domain {
 
 sub config {
     return {websocket_mode => 'public',
+        result_cache_namespace => sub { 'synthetic-test-source:public:v1' },
         path => '/explore/products',
         title => 'Product Explorer',
         engine_factory => sub {
@@ -513,6 +514,12 @@ our (
 our $RECORD_PRODUCT_NAME = 'Test Widget';
 
 sub name { return 'test'; }
+sub bounded_result_statement ($self, $statement, %options) {
+    my $copy = Selecto::Statement->new(sql => $statement->sql, params => $statement->params,
+        columns => $statement->columns, adapter_name => $statement->adapter_name);
+    $copy->{_test_bounded} = 1;
+    return $copy;
+}
 sub bounded_stream_supported { 1 }
 sub query_budget_supported { 1 }
 sub begin_query_budget { bless {}, 'TestSelectoComponents::Budget' }
@@ -589,6 +596,10 @@ sub execute_query ($self, $statement) {
 }
 sub stream_query ($self, $statement, %options) {
     my $result = $self->execute_query($statement);
+    if ($statement->{_test_bounded}) {
+        push @{$result->{columns}}, 'selecto_transfer_overflow';
+        push @$_, 0 for @{$result->{rows}};
+    }
     return TestSelectoComponents::Stream->new(
         columns => $result->{columns}, rows => $result->{rows},
     );

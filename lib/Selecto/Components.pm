@@ -24,7 +24,7 @@ use Selecto::Components::ThemeStylesheet ();
 use Selecto::Components::Util qw(humanize);
 use Selecto::Components::WebSocketPolicy ();
 
-our $VERSION = '0.1.1';
+our $VERSION = '0.1.2';
 
 my %EXPORT_FORMATS = (
     csv => {
@@ -142,7 +142,7 @@ sub register ($self, $app, $plugin_config) {
         my $path = $spec->{path} // "/pages/$id";
         die "duplicate Selecto Components route $path\n" if $registered_path{$path}++;
         my %definition = %$spec;
-        delete @definition{qw(engine_factory scope_factory path title record_link websocket_enabled websocket_mode websocket_context column_layout)};
+        delete @definition{qw(engine_factory scope_factory path title record_link websocket_enabled websocket_mode websocket_context column_layout limits)};
         my $page = Selecto::CannedPage->new(%definition, id => $id);
         my $component = Selecto::Components::CannedPage->new(
             page => $page, engine_factory => $engine_factory,
@@ -152,6 +152,7 @@ sub register ($self, $app, $plugin_config) {
             path => $path, title => $spec->{title} // _humanize($id),
             record_link => $spec->{record_link},
             column_layout => $spec->{column_layout},
+            (defined($spec->{limits}) ? (limits => $spec->{limits}) : ()),
             websocket_enabled => exists($spec->{websocket_enabled})
                 ? ($spec->{websocket_enabled} ? 1 : 0) : ($plugin_config->{websocket_enabled} // 1),
         );
@@ -349,7 +350,8 @@ sub _routes (
             my $ok = eval { $envelope = from_json($message); 1 };
             return $socket->finish(1003 => 'Expected a JSON message')
                 unless $ok && ref($envelope) eq 'HASH' && ref($envelope->{headers}) eq 'HASH';
-            my ($response, $processing_error, $denied);
+            my ($response, $encoded_response, $processing_error, $denied);
+            my $response_limits = $config->limits;
             my $processed = eval {
                 my %input = %$envelope;
                 delete $input{headers};
@@ -374,8 +376,15 @@ sub _routes (
                         }};
                     } else {
                         my $model = Selecto::Components::Controller::Explorer::_decorate_model(
-                            $socket, $explorer->model($socket, $state_input, {result_cache => $session}),
+                            $socket, $explorer->model($socket, $state_input,
+                                $config->result_cache_namespace ? {
+                                    result_cache => $session,
+                                    cache_namespace => encode_json([$scope,
+                                        Selecto::Components::Explorer::_cache_identity(
+                                            $config->result_cache_namespace->($socket, $config), 'namespace')]),
+                                } : {}),
                         );
+                        $response_limits = $model->{config}->limits;
                         $model->{selecto_request_id} = $request_id if defined $request_id;
                         $response = Selecto::Components::Renderer->websocket_message($model);
                         my $accepted = $model->{state} && $model->{state}->valid
@@ -387,6 +396,7 @@ sub _routes (
                         };
                     }
                 }
+                $encoded_response = Selecto::Components::ResponseBudget->json($response, $response_limits) unless $denied;
                 1;
             };
             $processing_error = $@ unless $processed;
@@ -404,7 +414,7 @@ sub _routes (
                 return $socket->finish(1011 => 'Explorer request could not be completed');
             }
             return $socket->finish(1008 => 'Explorer access is no longer allowed') if $denied;
-            return $socket->send({text => encode_json($response)});
+            return $socket->send({text => $encoded_response});
         });
     });
 }
@@ -467,7 +477,11 @@ sub _render_page ($controller, $model) {
     }
     my $status = $model->{runtime_error} || !$model->{state} || !$model->{state}->valid ? 422 : 200;
     my $render_started = time;
-    my $html = encode('UTF-8', Selecto::Components::Renderer->page($model));
+    my $html = eval { encode('UTF-8', Selecto::Components::Renderer->page($model)) };
+    if ($@) {
+        $controller->app->log->error("Selecto response failed: $@");
+        return $controller->render(text => 'The query response could not be completed.', status => 422);
+    }
     my $render_ms = int((time - $render_started) * 1000 + 0.5);
     my $stats = ref($model->{result}) eq 'HASH'
         && ref($model->{result}{debug}) eq 'HASH'
@@ -516,10 +530,15 @@ sub _render_stream_export ($controller, $export, $format) {
     $controller->on(finish => sub {
         eval { $export->{close}->() } if $export->{close};
     });
+    $export->{budget}->on_cancel(sub {
+        eval { $export->{close}->() } if $export->{close};
+        Mojo::IOLoop->remove($controller->tx->connection) if defined($controller->tx->connection);
+    });
     $controller->render_later;
     my $write_next;
     my $wrote = 0;
     $write_next = sub {
+        return if $export->{budget}->closed;
         my $chunk;
         my $ok = eval { $chunk = $export->{next_chunk}->(); 1 };
         unless ($ok) {
@@ -554,6 +573,10 @@ sub _render_file_export ($controller, $export, $format) {
     $controller->res->headers->content_disposition(qq{attachment; filename="$filename"});
     $controller->res->headers->content_type($metadata->{content_type});
     my $path = $export->{path};
+    $export->{budget}->on_cancel(sub {
+        eval { $export->{close}->() } if $export->{close};
+        Mojo::IOLoop->remove($controller->tx->connection) if defined($controller->tx->connection);
+    });
     $controller->on(finish => sub { eval { $export->{close}->() } if $export->{close}; unlink $path if defined($path) && -f $path });
     return $controller->reply->file($path);
 }

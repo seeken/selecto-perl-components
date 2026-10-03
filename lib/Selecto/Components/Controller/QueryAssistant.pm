@@ -70,19 +70,31 @@ sub tool ($class, $controller, $explorer, $origin_check) {
             unless defined($body->{base_revision}) && $body->{base_revision} == $record->{revision};
         return _json($controller, {ok => 0, code => 'context_changed'}, 409)
             unless ($body->{context_version} // '') eq $contract->{context_version};
-        my $choice_error = _validate_membership_choices($controller, $assistant, $body->{target});
-        return _json($controller, $choice_error, 422) if $choice_error;
         my $result = Selecto::Components::QueryAssistant::Validator->validate(
             config => $config, domain => $engine->domain, engine => $engine,
             target => $body->{target}, preserve_input => $record->{input},
         );
+        if ($result->{ok}) {
+            my $choice_error = _validate_membership_choices(
+                $controller, $assistant, $result->{normalized_target}, $config);
+            return _json($controller, $choice_error, 422) if $choice_error;
+        }
         delete @{$result}{qw(input state prepared statement)};
         return _json($controller, $result, $result->{ok} ? 200 : 422);
     }
     if ($name eq 'apply_query_draft') {
+        return _json($controller, {ok => 0, code => 'revision_conflict', current_revision => $record->{revision}}, 409)
+            unless defined($body->{base_revision}) && $body->{base_revision} == $record->{revision}
+                || exists($record->{receipts}{$body->{request_id} // ''});
         return _json($controller, {ok => 0, code => 'context_changed'}, 409)
             unless ($body->{context_version} // '') eq $contract->{context_version};
-        my $choice_error = _validate_membership_choices($controller, $assistant, $body->{target});
+        my $validation = Selecto::Components::QueryAssistant::Validator->validate(
+            config => $config, domain => $engine->domain, engine => $engine,
+            target => $body->{target}, preserve_input => $record->{input},
+        );
+        return _json($controller, $validation, 422) unless $validation->{ok};
+        my $choice_error = _validate_membership_choices(
+            $controller, $assistant, $validation->{normalized_target}, $config);
         return _json($controller, $choice_error, 422) if $choice_error;
         my $result = eval { Selecto::Components::QueryAssistant::Draft->apply(
             store => $assistant->{store}, id => $body->{draft_id}, owner => $owner,
@@ -213,30 +225,51 @@ sub _status ($result) {
     return 422;
 }
 
-sub _validate_membership_choices ($controller, $assistant, $target) {
-    return undef unless ref($target) eq 'HASH' && ref($target->{filters}) eq 'ARRAY';
-    my $fields = ref($assistant->{choice_fields}) eq 'HASH' ? $assistant->{choice_fields} : {};
+# Accept only a structurally validated, normalized Target. Build and budget the
+# complete callback plan before the first host call; later invalid operands must
+# not leave earlier resolver work behind.
+sub _validate_membership_choices ($controller, $assistant, $target, $config) {
+    my $fields = $assistant->{choice_fields} // {};
     my $resolver = $assistant->{choice_resolver};
+    my (@requests, $total);
+    $total = 0;
     for my $filter (@{$target->{filters}}) {
-        next unless ref($filter) eq 'HASH' && $fields->{$filter->{field} // ''};
+        next unless $fields->{$filter->{field}};
+        my $op = $filter->{operator};
+        next if $op eq 'is_null' || $op eq 'not_null';
         return {ok => 0, code => 'choice_unavailable'} unless $resolver;
-        my @values = ref($filter->{value}) eq 'ARRAY'
-            ? @{$filter->{value}} : ($filter->{value});
-        next if ($filter->{operator} // '') =~ /_null\z/;
-        my $items = eval {
-            $resolver->($controller, {
-                phase => 'validate', field => $filter->{field}, values => \@values,
-                exact => 1, limit => @values,
-            })
-        };
-        return {ok => 0, code => 'temporarily_unavailable'} unless ref($items) eq 'ARRAY';
+        my @values;
+        if ($op eq 'between') {
+            return {ok => 0, code => 'choice_unavailable', field => $filter->{field}}
+                unless ($assistant->{choice_range_fields} // {})->{$filter->{field}};
+            @values = @{$filter}{qw(value value_end)};
+        } elsif ($op eq 'in' || $op eq 'not_in') {
+            return {ok => 0, code => 'invalid_target'} unless ref($filter->{value}) eq 'ARRAY';
+            @values = @{$filter->{value}};
+        } elsif ($op eq 'eq' || $op eq 'ne') {
+            @values = ($filter->{value});
+        } else {
+            return {ok => 0, code => 'choice_unavailable', field => $filter->{field}};
+        }
+        return {ok => 0, code => 'invalid_target'} if grep { !defined($_) || ref($_) } @values;
+        $total += @values;
+        return {ok => 0, code => 'limit_exceeded'}
+            if @requests >= $config->max_filters
+                || @values > $config->limits->get('max_filter_values')
+                || $total > $config->limits->get('max_generated_parameters');
+        push @requests, {phase => 'validate', field => $filter->{field},
+            operator => $op, values => \@values, exact => 1, limit => scalar(@values)};
+    }
+    for my $request (@requests) {
+        my $items = eval { $resolver->($controller, $request) };
+        return {ok => 0, code => 'temporarily_unavailable'} unless ref($items) eq 'ARRAY'
+            && @$items <= $request->{limit};
         my %allowed = map {
             ref($_) eq 'HASH' && defined($_->{value}) && !ref($_->{value})
                 ? ("$_->{value}" => 1) : ()
         } @$items;
-        my @missing = grep { !defined($_) || ref($_) || !$allowed{"$_"} } @values;
-        return {ok => 0, code => 'choice_unavailable', field => $filter->{field}}
-            if @missing;
+        return {ok => 0, code => 'choice_unavailable', field => $request->{field}}
+            if grep { !$allowed{"$_"} } @{$request->{values}};
     }
     return undef;
 }

@@ -5,10 +5,13 @@ use Digest::SHA qw(sha256_hex);
 use Fcntl qw(O_CREAT O_RDWR O_NOFOLLOW LOCK_EX LOCK_NB);
 use File::Path qw(make_path);
 use File::Spec ();
-use Time::HiRes qw(time);
+use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC);
+use Mojo::IOLoop;
+use Scalar::Util qw(weaken);
 
 sub new ($class, $config, $engine, $controller) {
-    my $self = bless {config => $config, started => time, bytes => 0, rows => 0, locks => []}, $class;
+    my $self = bless {config => $config, started => clock_gettime(CLOCK_MONOTONIC),
+        bytes => 0, rows => 0, locks => [], cancel_callbacks => []}, $class;
     my $dir = $config->export_lock_dir;
     make_path($dir, {mode => 0700}) unless -e $dir;
     die "Export lock directory must be private and owned by this user\n"
@@ -33,11 +36,14 @@ sub new ($class, $config, $engine, $controller) {
         unless $adapter->can('bounded_stream_supported') && $adapter->bounded_stream_supported
             && $adapter->can('begin_query_budget') && $adapter->can('query_budget_supported') && $adapter->query_budget_supported;
     $self->{database} = $adapter->begin_query_budget(timeout_ms => $config->max_export_seconds * 1000);
+    my $weak = $self;
+    weaken($weak);
+    $self->{timer} = Mojo::IOLoop->timer($self->remaining => sub { $weak->cancel if $weak });
     return $self;
 }
 sub check ($self) {
     die "Export was cancelled\n" if $self->{closed};
-    die "Export time limit exceeded\n" if time - $self->{started} > $self->{config}->max_export_seconds;
+    die "Export time limit exceeded\n" if clock_gettime(CLOCK_MONOTONIC) - $self->{started} >= $self->{config}->max_export_seconds;
     $self->{database}->check if $self->{database};
 }
 sub row ($self, $row) {
@@ -65,8 +71,26 @@ sub output ($self, $value, $binary = 0) {
     $self->{bytes} += $binary ? length($value) : length(encode('UTF-8', $value));
     die "Export byte limit exceeded\n" if $self->{bytes} > $self->{config}->max_export_bytes;
 }
+sub remaining ($self) {
+    my $left = $self->{config}->max_export_seconds - (clock_gettime(CLOCK_MONOTONIC) - $self->{started});
+    return $left > 0 ? $left : 0;
+}
+sub closed ($self) { return $self->{closed} ? 1 : 0 }
+sub on_cancel ($self, $callback) {
+    return $callback->() if $self->{cancelled};
+    push @{$self->{cancel_callbacks}}, $callback unless $self->{closed};
+}
+sub cancel ($self) {
+    return if $self->{closed} || $self->{cancelled}++;
+    my @callbacks = @{$self->{cancel_callbacks}};
+    $self->{cancel_callbacks} = [];
+    eval { $_->() } for @callbacks;
+    eval { $self->close };
+}
 sub close ($self) {
     return if $self->{closed}++;
+    Mojo::IOLoop->remove(delete $self->{timer}) if defined $self->{timer};
+    $self->{cancel_callbacks} = [];
     my $error;
     eval { $self->{database}->close if $self->{database}; 1 } or $error = $@;
     close $_ for @{$self->{locks}};

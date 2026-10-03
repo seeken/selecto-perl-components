@@ -196,7 +196,7 @@ Selecto::Components::Dashboard - Show saved Explorer views as tiles on one page
 
     my $explorer = $c->selecto_components_explorer('load');
     my $model = $explorer->model($c, $dashboard->input_from_url($saved_url),
-        {result_cache => $cache});
+        {result_cache => $cache, cache_namespace => $trusted_source_and_policy_namespace});
 
     my $filters = $dashboard->promoted_filters(
         $model->{config}, $model->{domain}, $model->{state},
@@ -206,7 +206,7 @@ Selecto::Components::Dashboard - Show saved Explorer views as tiles on one page
         $model->{state}, {delivered_date => {op => 'date_shortcut', value => 'today'}},
     );
     my $html = $dashboard->tile_html(
-        $explorer->model($c, $shared, {result_cache => $cache}),
+        $explorer->model($c, $shared, {result_cache => $cache, cache_namespace => $trusted_source_and_policy_namespace}),
     );
 
 =head1 DESCRIPTION

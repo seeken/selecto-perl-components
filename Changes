@@ -1,6 +1,13 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - 0.1.2 security remediation: bound ordinary Explorer/canned rows, nested
+      materialization, response bytes and database work; expire stalled export
+      delivery leases and require explicit shared-cache namespaces.
+    - Admit action input before callbacks, authorize both choice-range bounds,
+      distinguish co-domain lookup authorization, and remove executable SQL
+      interpolation. SQL diagnostics require deliberate host debug mode.
+    - Require Selecto 0.2.2 for the common bounded result execution boundary.
     - Security: protected WebSockets require live authorization; public and
       disabled modes are explicit. Assistant request bodies, shared draft
       storage, query-state expansion and exports have finite enforced budgets.

@@ -5,7 +5,7 @@ requires 'JSON::PP', '4.06';
 requires 'Mojolicious', '9.49';
 recommends 'DBI';
 recommends 'DBD::SQLite';
-requires 'Selecto', '0.2.1';
+requires 'Selecto', '0.2.2';
 requires 'Time::HiRes';
 
 on configure => sub {
