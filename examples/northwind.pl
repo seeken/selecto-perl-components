@@ -27,8 +27,16 @@ my $products_domain = Selecto::Perl::Northwind::Domains->load($northwind_root, '
 my $query_drafts = Selecto::Components::QueryAssistant::Store->new;
 
 app->secrets(['selecto-perl-components-development-only']);
-app->hook(after_dispatch => sub ($controller) {
+app->hook(after_render => sub ($controller, $output, $format) {
+        # Change full HTML before Mojolicious compresses the response.
+        return unless $format eq 'html' && $$output =~ /<html\b/i;
+        return if $$output =~ /data-selecto-demo-theme/;
+        $$output =~ s{<html\b}{<html data-selecto-demo-theme}i;
+        $$output =~ s{</head>}{<link rel="stylesheet" href="/selecto-components/demo-theme.css"><script src="/selecto-components/demo-theme.js"></script></head>}i;
+    });
+    app->hook(after_dispatch => sub ($controller) {
     my $headers = $controller->res->headers;
+
     $headers->header('X-Content-Type-Options' => 'nosniff');
     $headers->header('Referrer-Policy' => 'same-origin');
     $headers->header('Content-Security-Policy' =>

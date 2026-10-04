@@ -501,7 +501,7 @@ a { color: inherit; }
 .sc-debug-query h4 { font-size: .78rem; }
 .sc-debug-query h5 { color: var(--sc-muted); font-size: .65rem; letter-spacing: .07em; text-transform: uppercase; }
 .sc-debug-query > header button { font-size: .7rem; min-height: 30px; padding: 5px 9px; }
-.sc-debug-query pre { background: #080d0f; color: #d8e5e7; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .75rem; line-height: 1.55; margin: 0; max-height: 360px; max-width: 100%; overflow: auto; padding: 14px; white-space: pre-wrap; }
+.sc-debug-query pre { background: var(--sc-debug-end); color: var(--sc-ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .75rem; line-height: 1.55; margin: 0; max-height: 360px; max-width: 100%; overflow: auto; padding: 14px; white-space: pre-wrap; }
 .sc-sql-keyword { color: #8bd5ff; font-weight: 750; }
 .sc-sql-identifier { color: #d7b8ff; }
 .sc-sql-string { color: #b9e4a7; }
@@ -546,9 +546,9 @@ a { color: inherit; }
 .sc-row-dialog-navigation { display: flex; gap: 7px; }
 .sc-row-dialog-toolbar .sc-button, .sc-row-dialog-panel > footer .sc-button { font-size: .76rem; min-height: 32px; padding: 5px 10px; }
 .sc-row-dialog-toolbar [data-sc-row-dialog-position] { color: var(--sc-muted); font-size: .75rem; margin-left: auto; }
-.sc-row-dialog-frame-shell { background: #fff; min-height: 0; position: relative; }
+.sc-row-dialog-frame-shell { background: var(--sc-canvas); min-height: 0; position: relative; }
 .sc-row-dialog-frame { display: block; }
-.sc-row-dialog iframe { background: #fff; border: 0; display: block; height: 100%; opacity: 1; transition: opacity .12s ease; width: 100%; }
+.sc-row-dialog iframe { background: var(--sc-canvas); border: 0; display: block; height: 100%; opacity: 1; transition: opacity .12s ease; width: 100%; }
 .sc-row-dialog iframe.is-loading { opacity: .28; }
 .sc-row-dialog-loading { background: rgba(255, 255, 255, .92); border: 1px solid #d7dce0; border-radius: 8px; color: #273138; font-size: .82rem; font-weight: 750; left: 50%; padding: 9px 12px; position: absolute; top: 50%; transform: translate(-50%, -50%); z-index: 2; }
 .sc-row-editor-dialog .sc-row-dialog-frame-shell { background: var(--sc-panel); overflow: auto; }
