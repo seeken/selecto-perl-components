@@ -68,4 +68,49 @@ SKIP: {
     unlike $output, qr/row4/, 'real SQLite query receives hard row cap';
     ok eval { my $guard=$adapter->begin_query_budget(timeout_ms=>1000); $guard->close; 1 }, 'database timeout ownership released after export';
 }
+
+# Real PostgreSQL server cursor: exports fetch EXPORT_FETCH_ROWS rows per round
+# trip, and the row cap and byte budget still apply row by row across batches.
+SKIP: {
+    my $url = $ENV{SELECTO_PERL_TEST_POSTGRES_URL};
+    skip 'SELECTO_PERL_TEST_POSTGRES_URL not set', 7
+        unless $url && eval { require DBI; require DBD::Pg; require Mojo::URL; 1 };
+    my $parsed = Mojo::URL->new($url);
+    my $dbh = DBI->connect('dbi:Pg:dbname=' . substr($parsed->path, 1) . ';host=' . ($parsed->host // 'localhost')
+        . ';port=' . ($parsed->port // 5432), $parsed->username, $parsed->password,
+        {RaiseError=>1,PrintError=>0,AutoCommit=>1});
+    $dbh->do('DROP TABLE IF EXISTS selecto_components_export_rows');
+    $dbh->do('CREATE TABLE selecto_components_export_rows (id integer primary key, label text, amount numeric(10,2))');
+    $dbh->do(q{INSERT INTO selecto_components_export_rows SELECT n, 'row' || n, n / 4.0 FROM generate_series(1,250) n});
+    my $domain = Selecto::Domain->new(name=>'PgRows',table=>'selecto_components_export_rows',
+        fields=>{id=>'integer',label=>'string',amount=>'decimal'});
+    my $adapter = Selecto->adapter(postgresql=>(dbh=>$dbh));
+    my $real = Selecto::Engine->new(domain=>$domain,adapter=>$adapter);
+    my $export_csv = sub {
+        my (%limits) = @_;
+        my $cfg = Selecto::Components::Config->new(id=>'pgrows',title=>'Rows',path=>'/pgrows',
+            export_lock_dir=>$dir,engine_factory=>sub{$real},%limits);
+        my $view = Selecto::Components::Explorer->new(config=>$cfg);
+        my $request = TestSelectoComponents::Controller->new(params=>{q=>1,field=>['id','label','amount'],order=>'id'});
+        my $export = $view->stream_export($request,'csv');
+        my $output = '';
+        my $ok = eval { while (defined(my $chunk = $export->{next_chunk}->())) { $output .= $chunk } 1 };
+        my $error = $@;
+        eval { $export->{close}->() };
+        return ($ok, $output, $error);
+    };
+    my ($ok, $output) = $export_csv->(max_export_rows=>1000, max_export_bytes=>1_000_000);
+    my @lines = grep { length } split /\r\n/, $output;
+    ok $ok, 'PostgreSQL export completes across several fetch batches';
+    is scalar(@lines), 251, 'header plus every row';
+    is_deeply [map { (split /,/, $_)[0] } @lines[1..250]], [map { qq{"$_"} } 1..250], 'rows arrive in order across batch boundaries';
+    is $lines[10], '"10","row10","2.5"', 'decimal cells are decoded as before';
+    ($ok, $output) = $export_csv->(max_export_rows=>150, max_export_bytes=>1_000_000);
+    is scalar(grep { length } split /\r\n/, $output), 151, 'row cap applies inside a batch';
+    my $error;
+    ($ok, $output, $error) = $export_csv->(max_export_rows=>1000, max_export_bytes=>600);
+    ok !$ok, 'byte budget still stops an export partway through a batch';
+    ok $dbh->{AutoCommit}, 'cursor transaction released after an export';
+    $dbh->do('DROP TABLE selecto_components_export_rows');
+}
 done_testing;
