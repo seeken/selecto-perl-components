@@ -1,6 +1,12 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Faster exports: CSV/TSV/JSON and XLSX exports fetch 100 rows per
+      database round trip instead of one (about 7x faster on a 5,000-row,
+      20-column PostgreSQL export, more against a remote database). The
+      driver buffers at most 100 rows; per-row cell, row and byte checks are
+      unchanged. Needs selecto-perl with fetch_size-aware bounded streams;
+      older versions keep fetching one row.
     - 0.1.2 security remediation: bound ordinary Explorer/canned rows, nested
       materialization, response bytes and database work; expire stalled export
       delivery leases and require explicit shared-cache namespaces.
