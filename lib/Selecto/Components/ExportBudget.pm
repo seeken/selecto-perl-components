@@ -44,7 +44,9 @@ sub new ($class, $config, $engine, $controller) {
 sub check ($self) {
     die "Export was cancelled\n" if $self->{closed};
     die "Export time limit exceeded\n" if clock_gettime(CLOCK_MONOTONIC) - $self->{started} >= $self->{config}->max_export_seconds;
-    $self->{database}->check if $self->{database};
+    # Exports' only blocking database work is the bounded stream's FETCH,
+    # which refreshes the server timeout itself just before fetching.
+    $self->{database}->check(defer_rearm => 1) if $self->{database};
 }
 sub row ($self, $row) {
     $self->check;

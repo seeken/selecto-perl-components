@@ -1,6 +1,9 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Exports check their database deadline with defer_rearm, so the server
+      timeout is refreshed before each FETCH rather than once per exported
+      row (removes a database round trip per row).
     - Faster exports: CSV/TSV/JSON and XLSX exports fetch 100 rows per
       database round trip instead of one (about 7x faster on a 5,000-row,
       20-column PostgreSQL export, more against a remote database). The
