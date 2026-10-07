@@ -252,6 +252,10 @@ code, pre, textarea.sac-request-editor {
 .sac-segment-group > .sac-help { display: block; margin: .2rem 0 .25rem; }
 .sac-segment-group-choice { display: inline-flex; align-items: center; gap: .35rem; margin: .25rem 1rem .25rem .75rem; }
 .sac-card .sac-segment-group-choice input[type="radio"] { width: auto; }
+.sac-method-choice { border: 0; margin: 0 0 .6rem; padding: 0; display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; }
+.sac-method-choice legend { width: 100%; padding: 0; }
+.sac-method-option { display: inline-flex; align-items: center; gap: .4rem; }
+.sac-card .sac-method-option input[type="radio"] { width: auto; min-height: 0; margin: 0; }
 
 .sac-card input, .sac-card select, .sac-card textarea, .sac-parameter input {
   width: 100%;
