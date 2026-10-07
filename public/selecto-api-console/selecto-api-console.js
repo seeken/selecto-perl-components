@@ -202,9 +202,13 @@
     const openapiPath = route("getOpenApi", `${normalizedBase}/openapi.json`);
     const queryPath = route("queryDomain", `${normalizedBase}/query`);
     const writePath = route("writeDomain", `${normalizedBase}/write`);
-    const resourceRoute = routes.find((item) => item
-      && item.operation_id === "getCustomerResourceVersion"
-      && String(item.method || "GET").toUpperCase() === "GET");
+    // getResource is the canonical resource read; getCustomerResourceVersion
+    // is the customer API's earlier name for the same route.
+    const resourceRoute = ["getResource", "getCustomerResourceVersion"]
+      .map((operationId) => routes.find((item) => item
+        && item.operation_id === operationId
+        && String(item.method || "GET").toUpperCase() === "GET"))
+      .find(Boolean);
     const resourcePath = safeResourcePathTemplate(
       resourceRoute && resourceRoute.path, normalizedBase,
     );
@@ -767,12 +771,15 @@
             <aside class="sac-builder">
               <section class="sac-card">
                 <div class="sac-card-heading"><div><span class="sac-step">1</span><h2>Choose data</h2></div></div>
-                <label class="sac-label" for="sac-query-method">Request method</label>
-                <select id="sac-query-method" data-sac-query-method></select>
+                <fieldset class="sac-method-choice" data-sac-query-method-group hidden>
+                  <legend class="sac-label">Request method</legend>
+                  <label class="sac-method-option"><input type="radio" name="sac-query-method" value="post" data-sac-query-method> POST query</label>
+                  <label class="sac-method-option"><input type="radio" name="sac-query-method" value="get" data-sac-query-method> GET resource</label>
+                </fieldset>
                 <div data-sac-resource-id-wrap hidden>
                   <label class="sac-label" for="sac-resource-id">Resource ID</label>
                   <input id="sac-resource-id" type="text" inputmode="numeric" placeholder="7001" data-sac-resource-id>
-                  <p class="sac-help">The resource GET always returns ID, customer reference, and aggregate version. Selected fields are added through <code>fields=</code>.</p>
+                  <p class="sac-help">The resource GET always returns the ID. Selected fields are added through <code>fields=</code>; choose Aggregate Version, when the domain publishes it, for the resource version and its ETag.</p>
                 </div>
                 <div data-sac-post-source>
                   <label class="sac-label" for="sac-source-mode">Query source</label>
@@ -909,14 +916,8 @@
       this.root.querySelector("[data-sac-domain-name]").textContent = this.domain.name || "Domain";
       this.root.querySelector("[data-sac-base]").textContent = this.base;
       this.root.querySelector("[data-sac-query-path]").textContent = this.queryPath;
-      appendOptions(
-        this.root.querySelector("[data-sac-query-method]"),
-        [
-          {value: "post", label: "POST query"},
-          ...(this.resourcePath ? [{value: "get", label: "GET resource"}] : []),
-        ],
-        this.state.queryMethod,
-      );
+      // The method choice appears only when the API offers resource GET.
+      this.root.querySelector("[data-sac-query-method-group]").hidden = !this.resourcePath;
       this.root.querySelector("[data-sac-write-path]").textContent = this.writePath;
       this.root.querySelector("[data-sac-domain-link]").href = `${this.base}/domain`;
       this.root.querySelector("[data-sac-openapi-link]").href = `${this.base}/openapi.json`;
@@ -1527,7 +1528,9 @@
     renderAll() {
       const resourceGet = this.state.queryMethod === "get" && Boolean(this.resourcePath);
       const mode = this.state.mode;
-      this.root.querySelector("[data-sac-query-method]").value = resourceGet ? "get" : "post";
+      this.root.querySelectorAll("[data-sac-query-method]").forEach((radio) => {
+        radio.checked = radio.value === (resourceGet ? "get" : "post");
+      });
       this.root.querySelector("[data-sac-resource-id-wrap]").hidden = !resourceGet;
       this.root.querySelector("[data-sac-resource-id]").value = this.state.resourceId;
       this.root.querySelector("[data-sac-post-source]").hidden = resourceGet;
