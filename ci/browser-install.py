@@ -18,7 +18,12 @@ HOSTS = {'playwright_cdn': 'cdn.playwright.dev',
          'playwright_microsoft': 'playwright.download.prss.microsoft.com',
          'microsoft_download': 'download.prss.microsoft.com',
          'playwright_azure': 'playwright.azureedge.net',
-         'chrome_storage': 'storage.googleapis.com'}
+         'chrome_storage': 'storage.googleapis.com',
+         'ubuntu_archive': 'archive.ubuntu.com',
+         'ubuntu_security': 'security.ubuntu.com',
+         'ubuntu_ports': 'ports.ubuntu.com',
+         'debian_archive': 'deb.debian.org',
+         'debian_security': 'security.debian.org'}
 PACKAGES = '''xvfb fonts-noto-color-emoji fonts-unifont libfontconfig1 libfreetype6
 xfonts-cyrillic xfonts-scalable fonts-liberation fonts-ipafont-gothic
 fonts-wqy-zenhei fonts-tlwg-loma-otf fonts-freefont-ttf libasound2 libasound2t64
@@ -30,6 +35,15 @@ libxrandr2'''.split()
 MARKERS = {'apt_started': 'Installing dependencies...',
            'apt_fetch_failed': 'Failed to fetch',
            'apt_resolution_failed': 'Temporary failure resolving',
+           'apt_connect_failed': 'Could not connect',
+           'apt_connection_failed': 'Connection failed',
+           'apt_connection_refused': 'Connection refused',
+           'apt_connection_timeout': 'Connection timed out',
+           'apt_hash_mismatch': 'Hash Sum mismatch',
+           'apt_unexpected_size': 'File has unexpected size',
+           'apt_release_missing': 'does not have a Release file',
+           'apt_index_failed': 'Some index files failed to download',
+           'apt_tls_handshake_failed': 'Could not handshake',
            'apt_package_missing': 'Unable to locate package',
            'apt_no_candidate': 'has no installation candidate',
            'permission_denied': 'Permission denied',
@@ -60,6 +74,11 @@ def summarize(output):
     http = {str(code): min(len(re.findall(r'(?:HTTP(?:/[0-9.]+)?\s+|server returned code\s+)' +
                                          str(code) + r'\b', output, re.I)), 100000)
             for code in HTTP_CODES}
+    for code, phrase in ((401, 'Unauthorized'), (403, 'Forbidden'), (404, 'Not Found'),
+                         (429, 'Too Many Requests'), (500, 'Internal Server Error'),
+                         (502, 'Bad Gateway'), (503, 'Service Unavailable'), (504, 'Gateway Timeout')):
+        http[str(code)] = min(http[str(code)] + len(re.findall(r'\b' + str(code) +
+                              r'\s+' + re.escape(phrase) + r'\b', output, re.I)), 100000)
     return {'marker_counts': markers, 'public_host_ids': hosts,
             'missing_package_counts': packages, 'http_status_counts': http}
 
