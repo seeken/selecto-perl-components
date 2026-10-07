@@ -1,6 +1,10 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Action prerequisite columns (can_<action>, from Selecto's action
+      preconditions and transitions) appear in the Explorer as columns and
+      Yes/No filters only while the action authorizer shows their action;
+      for a hidden action, both are removed from the request's domain.
     - API console 0.5.11: discovers the canonical getResource route (and still
       the customer API's getCustomerResourceVersion), and chooses between POST
       query and GET resource with radio buttons, shown only when the API

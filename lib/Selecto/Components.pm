@@ -958,6 +958,12 @@ C<enabled>, C<disabled> or C<hidden>, or C<< {status, reason} >>. It is
 called for preview, display, execute and lookup phases. An action that
 declares a C<capability> stays hidden unless an authorizer is configured.
 
+An action's C<can_E<lt>actionE<gt>> prerequisite column and its Yes/No filter
+(see L<Selecto::Domain/Action prerequisite columns>) follow the action: when
+the authorizer hides the action in the C<preview> phase (without a target),
+the Explorer removes them from the request's domain, so they can be neither
+shown nor filtered on. A request asks once per action.
+
 =item choice_sources
 
 A hash of source ID to C<sub ($controller, $action, $input)>. The callback

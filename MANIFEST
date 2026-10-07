@@ -75,6 +75,7 @@ public/selecto-components/manifest.json
 public/selecto-components/selecto-components.css
 public/selecto-components/selecto-components.js
 t/00-load.t
+t/action_prerequisite_columns.t
 t/action_target_forms.t
 t/action_variants.t
 t/api_console.t
