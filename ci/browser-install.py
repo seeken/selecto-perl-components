@@ -34,6 +34,41 @@ libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0
 libxrandr2'''.split()
 MARKERS = {'apt_started': 'Installing dependencies...',
            'apt_fetch_failed': 'Failed to fetch',
+           'apt_method_http_died': 'Method http has died unexpectedly',
+           'apt_method_https_died': 'Method https has died unexpectedly',
+           'apt_subprocess_failed': 'Sub-process',
+           'loader_shared_library_error': 'error while loading shared libraries',
+           'loader_symbol_error': 'symbol lookup error',
+           'process_segfault': 'Segmentation fault',
+           'apt_python_binding_error': 'apt_pkg',
+           'apt_post_invoke_hook': 'Post-Invoke',
+           'python_module_not_found': 'ModuleNotFoundError',
+           'apt_could_not_resolve': 'Could not resolve',
+           'apt_dns_wicked': 'Something wicked happened resolving',
+           'apt_clearsigned_invalid': "Clearsigned file isn't valid",
+           'apt_nosplit': 'NOSPLIT',
+           'apt_signature_invalid': 'The following signatures were invalid',
+           'apt_signature_one_invalid': 'At least one invalid signature',
+           'apt_public_key_missing': 'NO_PUBKEY',
+           'apt_repository_unsigned': 'is not signed.',
+           'apt_release_expired': 'is expired (invalid since',
+           'apt_release_not_valid_yet': 'is not valid yet',
+           'apt_proxy_invalid_response': 'Invalid response from proxy',
+           'apt_proxy_unsupported': 'Unsupported proxy',
+           'apt_proxy_bad_header': 'Bad header line',
+           'apt_network_unreachable': 'Network is unreachable',
+           'apt_no_route': 'No route to host',
+           'apt_connection_reset': 'Connection reset by peer',
+           'apt_resource_unavailable': 'Resource temporarily unavailable',
+           'apt_disk_full': 'No space left on device',
+           'apt_read_only_filesystem': 'Read-only file system',
+           'apt_lock_failed': 'Could not get lock',
+           'apt_empty_reply': 'Empty reply from server',
+           'apt_server_read_error': 'Error reading from server',
+           'apt_undetermined_error': 'Undetermined Error',
+           'apt_certificate_verification_failed': 'Certificate verification failed',
+           'apt_certificate_untrusted': 'The certificate is NOT trusted',
+           'apt_certificate_issuer_unknown': 'The certificate issuer is unknown',
            'apt_resolution_failed': 'Temporary failure resolving',
            'apt_connect_failed': 'Could not connect',
            'apt_connection_failed': 'Connection failed',
@@ -57,7 +92,7 @@ MARKERS = {'apt_started': 'Installing dependencies...',
            'connection_refused': 'ECONNREFUSED', 'connection_reset': 'ECONNRESET',
            'connection_timeout': 'ETIMEDOUT', 'certificate_expired': 'CERT_HAS_EXPIRED',
            'certificate_untrusted': 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'}
-HTTP_CODES = (401, 403, 404, 407, 408, 429, 500, 502, 503, 504)
+HTTP_CODES = (400, 401, 403, 404, 407, 408, 429, 470, 500, 502, 503, 504)
 
 
 def summarize(output):
@@ -74,12 +109,20 @@ def summarize(output):
     http = {str(code): min(len(re.findall(r'(?:HTTP(?:/[0-9.]+)?\s+|server returned code\s+)' +
                                          str(code) + r'\b', output, re.I)), 100000)
             for code in HTTP_CODES}
-    for code, phrase in ((401, 'Unauthorized'), (403, 'Forbidden'), (404, 'Not Found'),
+    for code, phrase in ((400, 'Bad Request'), (470, 'status code 470'), (401, 'Unauthorized'), (403, 'Forbidden'), (404, 'Not Found'),
                          (429, 'Too Many Requests'), (500, 'Internal Server Error'),
                          (502, 'Bad Gateway'), (503, 'Service Unavailable'), (504, 'Gateway Timeout')):
         http[str(code)] = min(http[str(code)] + len(re.findall(r'\b' + str(code) +
                               r'\s+' + re.escape(phrase) + r'\b', output, re.I)), 100000)
-    return {'marker_counts': markers, 'public_host_ids': hosts,
+    error_lines = [line for line in output.splitlines() if re.match(r'^(?:W:|E:|Err:)', line)
+                   or 'Failed to fetch' in line]
+    error_hosts = {key: min(sum(bool(re.search(r'(?<![A-Za-z0-9.-])' + re.escape(host) +
+                                             r'(?![A-Za-z0-9.-])', line))
+                               for line in error_lines), 100000)
+                   for key, host in HOSTS.items()}
+    return {'apt_error_line_count': min(len(error_lines), 100000),
+            'apt_error_public_host_ids': error_hosts,
+            'marker_counts': markers, 'public_host_ids': hosts,
             'missing_package_counts': packages, 'http_status_counts': http}
 
 
