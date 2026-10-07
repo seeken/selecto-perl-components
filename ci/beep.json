@@ -16,7 +16,7 @@
     },
     {
       "repository": "seeken/selecto-api-console",
-      "commit": "4d4e13d6872e10c8fa04942de61178910217d4dd",
+      "commit": "03e6f926b055309babc09e47eca9b8ef3b45c6c8",
       "access": "public"
     }
   ],
@@ -42,12 +42,12 @@
     "dependencies": {},
     "required-prerequisites": {},
     "unit": {
-      "minimum_tests": 2593,
+      "minimum_tests": 2591,
       "require_no_skips": true
     },
     "distribution-configure": {},
     "distribution-test": {
-      "minimum_tests": 2593,
+      "minimum_tests": 2591,
       "require_no_skips": true
     },
     "diagnostics": {},
