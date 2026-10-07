@@ -1,6 +1,9 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - An authored query-library segment without parameters may filter on
+      internal fields, directly or through a view. Segments that take
+      parameters remain refused on internal fields.
     - Exports check their database deadline with defer_rearm, so the server
       timeout is refreshed before each FETCH rather than once per exported
       row (removes a database round trip per row).
