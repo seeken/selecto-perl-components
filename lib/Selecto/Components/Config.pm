@@ -258,7 +258,29 @@ sub engine ($self, $controller) {
     my $engine = $self->engine_factory->($controller);
     die "engine_factory did not return a Selecto::Engine\n"
         unless blessed($engine) && $engine->isa('Selecto::Engine');
-    return $engine;
+    return $self->_without_hidden_action_prerequisites($engine, $controller);
+}
+
+# A can_<action> prerequisite column is visible only where its action is, so
+# drop the columns of actions the action authorizer hides from this request.
+# Only a request copy (for_request) remembers the decisions.
+sub _without_hidden_action_prerequisites ($self, $engine, $controller) {
+    my $domain = $engine->domain;
+    return $engine unless $domain->can('action_prerequisite_fields');
+    my $fields = $domain->action_prerequisite_fields;
+    return $engine unless keys %$fields;
+    my $cache = defined($self->{_localization_controller})
+        ? ($self->{_hidden_prerequisite_actions} //= {}) : {};
+    my $hidden = $cache->{$domain->fingerprint} //= do {
+        require Selecto::Components::Actions;
+        my $actions = $domain->actions;
+        [grep {
+            Selecto::Components::Actions->authorize(
+                $self, $controller, {%{$actions->{$_}}, id => $_}, 'preview',
+            )->{status} eq 'hidden'
+        } sort keys %$fields];
+    };
+    return @$hidden ? $engine->without_action_prerequisites(@$hidden) : $engine;
 }
 
 sub query_assistant_enabled ($self) {
@@ -319,6 +341,7 @@ sub for_request ($self, $controller) {
     delete $copy->{_resolved_theme};
     delete $copy->{_resolved_page_shell};
     delete $copy->{_export_allowed};
+    delete $copy->{_hidden_prerequisite_actions};
     # Catalog construction walks the complete domain and localizes every label.
     # A single model/render cycle asks for the same catalogs through several
     # convenience methods, so keep those immutable results on the request copy.
