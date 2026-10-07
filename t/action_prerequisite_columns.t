@@ -10,6 +10,7 @@ use TestSelectoComponents;
 use Selecto::Components::Config;
 use Selecto::Components::QueryBuilder;
 use Selecto::Components::State;
+use Selecto::Components::Renderer::Builder;
 
 my $raw = TestSelectoComponents::domain()->contract;
 $raw->{actions}{mark_for_review}{capability} = 'products.review';
@@ -82,6 +83,19 @@ my $t = Test::Mojo->new($app);
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=can_mark_for_review')
     ->status_is(200)
     ->content_like(qr/Mark for Review prerequisites met/, 'the page shows the prerequisite column');
+$t->get_ok('/explore/products?q=1&view=detail&field=product_name'
+    . '&filter_field=can_mark_for_review&filter_op=eq&filter_value=true')
+    ->status_is(200)
+    ->content_unlike(qr/A filter operator is not available/, 'a Yes filter is accepted');
+my @operators = $t->tx->res->dom
+    ->find('select[aria-label="Operator for Mark for Review prerequisites met"] option')
+    ->map(attr => 'value')->each;
+is_deeply \@operators, [qw(eq is_null not_null)],
+    'the Yes/No filter offers only operators a boolean accepts';
+is_deeply [map { $_->[0] } @{Selecto::Components::Renderer::Builder::_filter_operators_for_filter(
+    $config, {type => 'boolean', filter_choices => [{value => 'true', label => 'Yes'}]}, {},
+)}], [qw(eq is_null not_null)], 'boolean choice filters drop membership and inequality';
+
 $hidden = 1;
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name')
     ->status_is(200)

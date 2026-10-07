@@ -1002,6 +1002,30 @@ test("new text filters expose literal prefix, contains and suffix operators with
   expect(submitted.filter_promote_index).toBe('1');
 });
 
+test("Yes/No choice filters on booleans offer only boolean operators", async ({page}) => {
+  await load(page, `<form data-sc-builder="loads">
+    <div data-sc-filter-root data-sc-filter-max="10">
+      <div data-sc-filter-available>
+        <button type="button" data-sc-filter-action="add" data-sc-filter-available-item
+          data-field="can_load_build" data-label="Load Build prerequisites met"
+          data-type="boolean" data-sc-filter-choices='[{"value":"true","label":"Yes"},{"value":"false","label":"No"}]'
+          data-search="load build prerequisites">Add Load Build prerequisites met</button>
+      </div>
+      <span data-sc-filter-available-count></span><span data-sc-filter-set-count></span>
+      <div data-sc-filter-set></div>
+    </div>
+  </form>`);
+  await page.locator('[data-sc-filter-action="add"]').click();
+  const item = page.locator('[data-sc-filter-set-item]');
+  const operator = item.locator('[name="filter_op"]');
+  await expect(operator).toHaveValue("eq");
+  await expect(operator.locator("option")).toHaveText(["equals", "is empty", "is not empty"]);
+  const choices = item.locator('[data-sc-filter-choice-select]');
+  await expect(choices.locator("option")).toContainText(["Yes", "No"]);
+  await choices.selectOption("false");
+  await expect(item.locator('[name="filter_value"]')).toHaveValue("false");
+});
+
 test("CustomOption filters offer named multi-select choices and retain IDs", async ({page}) => {
   await load(page, `<form data-sc-builder="quote">
     <div data-sc-filter-root data-sc-filter-max="10">
