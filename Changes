@@ -1,6 +1,10 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - API console 0.5.11: discovers the canonical getResource route (and still
+      the customer API's getCustomerResourceVersion), and chooses between POST
+      query and GET resource with radio buttons, shown only when the API
+      offers resource GET.
     - An authored query-library segment without parameters may filter on
       internal fields, directly or through a view. Segments that take
       parameters remain refused on internal fields.
