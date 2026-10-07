@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repo_dir"
+sdk_perl=$(mise which perl --tool perl@5.40.2.1)
+sdk_python=$(mise which python3 --tool python@3.14.3)
+export PATH="$(dirname -- "$sdk_perl"):$(dirname -- "$sdk_python"):$PATH"
+export PERL5LIB="${SELECTO_CI_CPAN_DIR:?}/lib/perl5${PERL5LIB:+:$PERL5LIB}"
+export HARNESS_VERBOSE=1 PYTHONDONTWRITEBYTECODE=1
+stage() { label=$1; shift; python3 -B ci/run.py "$label" -- "$@"; }
+stage checkout python3 -B ci/sources.py checkout
+stage dependencies ci/deps
+trap "ci/postgres-vm stop" EXIT HUP INT TERM
+stage postgres-start ci/postgres-vm start
+stage distribution-configure script/with-local-sibling perl Makefile.PL
+stage required-prerequisites script/with-local-sibling python3 -B ci/required.py
+stage diagnostics-prerequisites script/with-local-sibling python3 -B ci/diagnostics.py
+sdk_node=$(mise which node --tool node@22.23.3)
+export PATH="$(dirname -- "$sdk_node"):$PATH"
+stage npm-dependencies npm ci
+stage browser-install npx playwright install --with-deps chromium
+stage asset-web node script/selecto-web-assets.mjs sync --profile perl-components --target public/selecto-components --check
+stage asset-api script/with-local-sibling perl script/sync-api-console --check
+stage generated-bundle npm run build:check
+stage browser env PLAYWRIGHT_JSON_OUTPUT_NAME="$RUNNER_TEMP/playwright-results.json" npm run test:browser -- --reporter=json
+stage browser-summary python3 -B ci/browser-summary.py
+stage optional-northwind script/with-local-sibling sh -c 'if perl -MSelecto::Perl::Northwind::Database -e 1 >/dev/null 2>&1; then perl -Ilib -c examples/northwind.pl; else echo "Optional Northwind example unavailable"; fi'
+stage unit script/with-local-sibling prove -lrv t
+stage distribution-test script/with-local-sibling make test TEST_VERBOSE=1
+stage diagnostics script/with-local-sibling python3 -B ci/diagnostics.py
