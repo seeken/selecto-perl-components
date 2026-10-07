@@ -18,7 +18,7 @@ stage diagnostics-prerequisites script/with-local-sibling python3 -B ci/diagnost
 sdk_node=$(mise which node --tool node@22.23.3)
 export PATH="$(dirname -- "$sdk_node"):$PATH"
 stage npm-dependencies npm ci
-stage browser-install npx playwright install --with-deps chromium
+stage browser-install python3 -B ci/browser-install.py
 stage asset-web node script/selecto-web-assets.mjs sync --profile perl-components --target public/selecto-components --check
 stage asset-api script/with-local-sibling perl script/sync-api-console --check
 stage generated-bundle npm run build:check
