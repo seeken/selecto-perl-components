@@ -27,5 +27,5 @@ safe = {'counts': counts, 'minimum_tests': minimum,
         'report_sha256': hashlib.sha256(raw).hexdigest(), 'status': 'passed'}
 evidence = Path(os.environ['SELECTO_CI_EVIDENCE_DIR'])
 evidence.mkdir(parents=True, exist_ok=True)
-(evidence / 'browser.json').write_text(json.dumps(safe, indent=2) + '\n')
+(evidence / 'browser-playwright.json').write_text(json.dumps(safe, indent=2) + '\n')
 print(json.dumps(safe))
