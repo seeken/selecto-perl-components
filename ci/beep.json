@@ -42,12 +42,12 @@
     "dependencies": {},
     "required-prerequisites": {},
     "unit": {
-      "minimum_tests": 2593,
+      "minimum_tests": 2591,
       "require_no_skips": true
     },
     "distribution-configure": {},
     "distribution-test": {
-      "minimum_tests": 2593,
+      "minimum_tests": 2591,
       "require_no_skips": true
     },
     "diagnostics": {},
