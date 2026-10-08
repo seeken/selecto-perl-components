@@ -269,7 +269,9 @@ sub result_cache_key ($class, $statement, $namespace, $domain_fingerprint) {
 sub _execute ($engine, $prepared, $cache, $info, $namespace, $config) {
     my $statement = ref($prepared) eq 'HASH' ? $prepared->{statement} : $prepared;
     my $collections = ref($prepared) eq 'HASH' ? $prepared->{collections} : [];
-    my %bounds = (limits => $config->limits, max_rows => $config->max_grid_result_cells + 1);
+    # Grid cells are canonical values (PostgreSQL otherwise returns its driver's).
+    my %bounds = (limits => $config->limits, max_rows => $config->max_grid_result_cells + 1,
+        canonical_values => 1);
     return Selecto::BoundedQuery->execute($engine, $prepared, %bounds) unless $cache;
     my $key = __PACKAGE__->result_cache_key($statement, $namespace, $engine->domain->fingerprint);
     my $entry = $cache->fetch($key);
@@ -726,7 +728,8 @@ sub stream_export ($self, $controller, $format) {
     die "Aggregate grid exports require a bounded job\n" if $built->{aggregate_grid};
     _cap_export($config, $built);
     my $budget = Selecto::Components::ExportBudget->new($config, $engine, $controller);
-    my $stream = $engine->stream($built->{query}, fetch_size => EXPORT_FETCH_ROWS, bounded => 1);
+    my $stream = $engine->stream($built->{query}, fetch_size => EXPORT_FETCH_ROWS, bounded => 1,
+        canonical_values => 1);
     $budget->on_cancel(sub { eval { $stream->close } });
     $controller->on(finish => sub { eval { $stream->close }; eval { $budget->close } }) if $controller->can('on');
     my @result_columns = @{$stream->columns};
@@ -841,7 +844,8 @@ sub xlsx_file_export ($self, $controller) {
     $budget->on_cancel(sub { eval { $stream->close } if $stream; unlink $output_path if -f $output_path; undef $spool });
     $controller->on(finish => sub { eval { $stream->close } if $stream; eval { $budget->close } }) if $controller->can('on');
     my $ok = eval {
-        $stream = $engine->stream($built->{query}, fetch_size => EXPORT_FETCH_ROWS, bounded => 1);
+        $stream = $engine->stream($built->{query}, fetch_size => EXPORT_FETCH_ROWS, bounded => 1,
+            canonical_values => 1);
         my @result_columns = @{$stream->columns};
         my @columns = grep { !$_->{action_id} } @{$built->{columns}};
         require Excel::Writer::XLSX;
