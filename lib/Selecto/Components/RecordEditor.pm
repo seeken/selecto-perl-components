@@ -22,15 +22,17 @@ sub load ($class, $engine, $editor, $target) {
     my @fields = ($primary_key, map { $_->{field} } @{$editor->{fields} // []});
     my %seen;
     @fields = grep { !$seen{$_}++ } @fields;
+    # One row, and has_more (from one extra fetched row) refuses an ambiguous
+    # primary key.
     my $result = Selecto::API::EngineHandler->new(
-        max_limit => 2, default_limit => 2,
+        max_limit => 1, default_limit => 1,
     )->query($engine, {
         select => \@fields,
         filters => [{field => $primary_key, op => 'eq', value => "$target"}],
-        limit => 2,
+        limit => 1,
         row_format => 'objects',
     });
-    return undef unless @{$result->{rows}} == 1;
+    return undef unless @{$result->{rows}} == 1 && !$result->{has_more};
     my $record = {%{$result->{rows}[0]}};
     my %collections;
     for my $collection (@{$editor->{collections} // []}) {
