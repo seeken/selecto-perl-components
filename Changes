@@ -1,6 +1,8 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - A canned page shows a multiple text control as a textarea, so a list
+      of values can be pasted one per line.
     - Canned pages: a column_layout entry no longer takes a kind; it follows
       from the entry's keys (field, fields, collection, url_prefix,
       row_number), and kind is refused. The former join is a fields entry.

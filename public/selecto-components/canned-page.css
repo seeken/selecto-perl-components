@@ -28,6 +28,17 @@
   font-weight: 500;
   gap: 8px;
 }
+.selecto-canned-controls textarea {
+  background: var(--sc-control-bg);
+  border: 1px solid var(--sc-control-border);
+  border-radius: 8px;
+  box-sizing: border-box;
+  color: var(--sc-ink);
+  margin-top: 6px;
+  padding: 7px 9px;
+  resize: vertical;
+  width: 100%;
+}
 .selecto-canned-controls input[type="checkbox"] {
   accent-color: var(--sc-accent);
   height: 16px;

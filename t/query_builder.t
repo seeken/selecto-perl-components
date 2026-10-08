@@ -1082,12 +1082,11 @@ my $shortcut_statement = $postgresql->compile(
     $domain,
     Selecto::Components::QueryBuilder->build($config, $domain, $shortcut_state)->{query},
 );
-my @this_year = Selecto::Components::DateShortcut->bounds('this_year');
 like $shortcut_statement->sql,
-    qr/\("s0"\."created_on" >= \$1\) AND \("s0"\."created_on" < \$2\)/,
-    'date shortcut compiles to a half-open governed range';
-is_deeply $shortcut_statement->params, \@this_year,
-    'date shortcut bounds remain bound parameters';
+    qr/\("s0"\."created_on" >= CAST\(DATE_TRUNC\('year', CURRENT_DATE\) AS DATE\)\) AND \("s0"\."created_on" < CAST\(CAST\(DATE_TRUNC\('year', CURRENT_DATE\) AS DATE\) \+ MAKE_INTERVAL\(months => 12\) AS DATE\)\)/,
+    'date shortcut compiles to a half-open range from the database current date';
+is_deeply $shortcut_statement->params, [],
+    'date shortcut bounds follow the session, not server-bound dates';
 
 my $recurring_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
@@ -1102,13 +1101,9 @@ my $recurring_statement = $postgresql->compile(
     $domain,
     Selecto::Components::QueryBuilder->build($config, $domain, $recurring_state)->{query},
 );
-my $recurring_plan = Selecto::Components::DateShortcut->plan('mtd_all_years');
 like $recurring_statement->sql,
-    qr/TO_CHAR\("s0"\."created_on", 'MM-DD'\) >= \$1\).*TO_CHAR\("s0"\."created_on", 'MM-DD'\) <= \$2/,
+    qr/TO_CHAR\("s0"\."created_on", 'MM-DD'\) >= TO_CHAR\(CAST\(DATE_TRUNC\('month', CURRENT_DATE\) AS DATE\), 'MM-DD'\)\).*TO_CHAR\("s0"\."created_on", 'MM-DD'\) <= TO_CHAR\(CURRENT_DATE, 'MM-DD'\)/,
     'all-years date shortcut compiles as a recurring month/day range';
-is_deeply $recurring_statement->params,
-    [$recurring_plan->{start}, $recurring_plan->{end}],
-    'recurring shortcut boundaries remain bound parameters';
 
 my $collection_contract = $domain->contract;
 $collection_contract->{source}{associations}{variants} = {

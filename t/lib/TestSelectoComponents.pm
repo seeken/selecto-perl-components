@@ -628,6 +628,8 @@ sub _walk ($expression, $values) {
         push @$values, $expression->arguments->[0];
         return;
     }
+    # The shortcut name stands in for the SQL a real adapter would differ by.
+    push @$values, $expression->arguments->[1] if $expression->kind eq 'date_shortcut';
     for my $argument (@{$expression->arguments}) {
         if (ref($argument) eq 'ARRAY') {
             for my $item (@$argument) { _walk($item, $values) }

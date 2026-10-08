@@ -1037,10 +1037,17 @@ $t->get_ok('/explore/products?q=1&view=detail&field=created_on&filter_field=crea
     ->content_like(qr/ytd_all_years/)
     ->element_exists('[data-field="created_on"] select[name="filter_value"] option[value="this_year"][selected]')
     ->text_is('[data-field="created_on"] select[name="filter_value"] option[value="this_year"]' => 'This Year');
-my @this_year = Selecto::Components::DateShortcut->bounds('this_year');
-is_deeply TestSelectoComponents::Adapter::_predicate_values(
-    $TestSelectoComponents::Adapter::LAST_QUERY->predicate,
-), \@this_year, 'This Year shortcut binds its half-open date range';
+my @shortcuts;
+my $find_shortcuts;
+$find_shortcuts = sub {
+    my ($node) = @_;
+    return unless ref($node) && $node->isa('Selecto::Expression');
+    push @shortcuts, $node->arguments->[1] if $node->kind eq 'date_shortcut';
+    $find_shortcuts->($_) for map { ref($_) eq 'ARRAY' ? @$_ : $_ } @{$node->arguments};
+};
+$find_shortcuts->($TestSelectoComponents::Adapter::LAST_QUERY->predicate);
+is_deeply \@shortcuts, ['this_year'],
+    'This Year shortcut reaches the query for the database to measure';
 
 $t->get_ok('/explore/products?q=1&view=aggregate&field=created_on&field_alias=&field_format=&group=created_on&group_alias=Month&group_format=month&measure=count&order=created_on&direction=asc&limit=25&page=1')
     ->status_is(200)

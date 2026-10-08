@@ -147,6 +147,21 @@ ok !eval { Selecto::Components::CannedPage->new(
 ); 1 }, 'canned layout links reject external URL prefixes';
 
 like $html, qr{>Apply filters</button>}, 'a page with controls can apply them';
+my $vins_page = Selecto::CannedPage->new(
+    id => 'vins', domain => $domain,
+    dataset => {query => Selecto::Query->new, entity_key => ['id']},
+    views => [{id => 'list', kind => 'detail',
+        query => Selecto::Query->new->select('id', 'name')}],
+    controls => [{id => 'names', label => 'Names', field => 'name', kind => 'text',
+        multiple => 1}],
+);
+my $vins_html = Selecto::Components::CannedPage->new(
+    page => $vins_page, path => '/vins', title => 'Vins',
+    engine_factory => sub { die 'not needed' }, websocket_enabled => 0,
+)->_html({%$result, state => $vins_page->normalize_state(
+    {filters => {names => "A1\nB2"}})}, 1);
+like $vins_html, qr{<textarea name="f_names" rows="4" spellcheck="false">A1\nB2</textarea>},
+    'a multiple text control is a textarea that keeps its lines';
 my $plain_page = Selecto::CannedPage->new(
     id => 'plain', domain => $domain,
     dataset => {query => Selecto::Query->new, entity_key => ['id']},
