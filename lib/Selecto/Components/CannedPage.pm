@@ -471,6 +471,10 @@ sub _controls ($self, $result, $method, $ws_send) {
                     . _escape($value->{$bound} // '') . '"></label> ';
             }
             $html .= '</fieldset>';
+        } elsif ($control->{multiple}) {
+            $html .= '<label>' . $label . ' <textarea name="' . $name
+                . '" rows="4" spellcheck="false">' . _escape($value // '')
+                . '</textarea></label>';
         } else {
             $html .= '<label>' . $label . ' <input type="search" name="' . $name
                 . '" value="' . _escape($value // '') . '"></label>';
