@@ -1119,7 +1119,7 @@ field link to a local record URL.
 
 =item column_layout
 
-Fixed detail headings, joined fields, row numbers and nested related
+Fixed detail headings, combined fields, row numbers and nested related
 collections. See L<Selecto::Components::CannedPage/column_layout>.
 
 =item websocket_enabled

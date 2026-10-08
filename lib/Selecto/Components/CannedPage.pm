@@ -8,6 +8,7 @@ use Encode qw(encode);
 use Scalar::Util qw(blessed);
 use Selecto::CannedPage ();
 use Selecto::Error ();
+use Selecto::Expression ();
 use Selecto::Limits ();
 use Selecto::Components::ResponseBudget ();
 use Selecto::Components::Renderer ();
@@ -75,56 +76,140 @@ sub new ($class, @args) {
     return $self;
 }
 
+# A layout column's kind follows from the keys it has.
+sub _column_kind ($column) {
+    return '' unless ref($column) eq 'HASH';
+    return 'row_number' if $column->{row_number};
+    if (defined $column->{url_prefix}) {
+        return defined($column->{collection}) ? 'collection_link' : 'link';
+    }
+    if (defined $column->{collection}) {
+        return ref($column->{fields}) eq 'ARRAY' ? 'nested' : 'collection_values';
+    }
+    return 'combined' if ref($column->{fields}) eq 'ARRAY';
+    return defined($column->{field}) ? 'field' : '';
+}
+
+# Formatted fields and collections are selected under their column's alias.
+sub _layout_alias ($position) { return "layout_$position" }
+
+sub _formatted ($path, $format, $timezone) {
+    return Selecto::Expression->datetime_format($path, $format,
+        (defined($timezone) ? (timezone => $timezone) : ()));
+}
+
+sub layout_selections ($class, $layout, %options) {
+    die "canned page column_layout must be a nonempty array\n"
+        unless ref($layout) eq 'ARRAY' && @$layout;
+    my (@selections, %seen);
+    my $field = sub ($path) {
+        push @selections, $path if defined($path) && !$seen{$path}++;
+    };
+    for my $position (0 .. $#$layout) {
+        my $column = $layout->[$position];
+        my $kind = _column_kind($column);
+        if ($kind eq 'field' && defined $column->{format}) {
+            push @selections, _formatted($column->{field}, $column->{format},
+                $options{timezone})->as(_layout_alias($position));
+        } elsif ($kind eq 'field' || $kind eq 'link' || $kind eq 'collection_link') {
+            $field->($column->{field});
+        } elsif ($kind eq 'combined') {
+            $field->($_) for @{$column->{fields}};
+        }
+        next unless $kind =~ /\A(?:nested|collection_values|collection_link)\z/;
+        my @children = $kind eq 'nested'
+            ? map {
+                !defined($_->{format}) ? $_->{field}
+                    : {key => $_->{field}, expression => _formatted(
+                        "$column->{collection}.$_->{field}", $_->{format},
+                        $options{timezone})}
+            } grep { ref($_) eq 'HASH' } @{$column->{fields}}
+            : $kind eq 'collection_values' ? ($column->{field})
+            # Only whether the collection is empty matters.
+            : ('id');
+        if ($kind eq 'nested') {
+            $field->($_->{link}{parent_field}) for grep {
+                ref($_) eq 'HASH' && ref($_->{link}) eq 'HASH'
+            } @{$column->{fields}};
+        }
+        my %options = map { exists($column->{$_}) ? ($_ => $column->{$_}) : () }
+            qw(filters order_by limit);
+        push @selections, Selecto::Expression->related_collection(
+            $column->{collection}, \@children, %options,
+        )->as(_layout_alias($position));
+    }
+    return @selections;
+}
+
 sub _validate_column_layout ($self) {
     my $layout = $self->column_layout;
     die "canned page column_layout must be a nonempty array\n"
         unless ref($layout) eq 'ARRAY' && @$layout;
     if (my $link = $self->record_link) {
         die "canned page column_layout must display the record link field\n"
-            unless grep { ref($_) eq 'HASH' && ($_->{kind} // '') eq 'field'
-                && ($_->{field} // '') eq $link->{field} } @$layout;
+            unless grep { _column_kind($_) eq 'field' && !defined($_->{format})
+                && $_->{field} eq $link->{field} } @$layout;
     }
     for my $view (grep { $_->{kind} eq 'detail' } @{$self->page->views}) {
         my %fields = map { $_->arguments->[0] => 1 }
             grep { $_->kind eq 'field' } @{$view->{query}->selections};
         my %collections = map {
-            my $selection = $_;
-            $selection->alias_name => {map { $_ => 1 } @{$selection->arguments->[1]}}
+            my ($association, $children) = @{$_->arguments};
+            $_->alias_name => {association => $association,
+                fields => {map { (ref($_) ? $_->{key} : $_) => 1 } @$children}}
         }
             grep { $_->kind eq 'related_collection' } @{$view->{query}->selections};
-        for my $column (@$layout) {
+        my %formatted = map {
+            my ($operand, $format) = @{$_->arguments};
+            $_->alias_name => {field => $operand->arguments->[0], format => $format}
+        }
+            grep { $_->kind eq 'datetime_format' && defined($_->alias_name) }
+                @{$view->{query}->selections};
+        for my $position (0 .. $#$layout) {
+            my $column = $layout->[$position];
             die "canned page column_layout entries must be objects\n"
                 unless ref($column) eq 'HASH';
-            my $kind = $column->{kind} // '';
-            die "canned page column_layout kind is invalid\n"
-                unless $kind =~ /\A(?:field|link|collection_link|join|nested|collection_values|row_number)\z/;
+            die "canned page column_layout kind is inferred from its keys; remove kind\n"
+                if exists $column->{kind};
+            my $kind = _column_kind($column);
+            die "canned page column_layout entry needs a field, fields, collection or row_number\n"
+                unless length $kind;
             die "canned page column_layout label is invalid\n"
                 unless defined($column->{label}) && !ref($column->{label})
                     && length($column->{label});
-            if ($kind eq 'field') {
+            my $collection = $collections{_layout_alias($position)};
+            undef $collection unless $collection && defined($column->{collection})
+                && $collection->{association} eq $column->{collection};
+            die "canned page column_layout format applies to a field or nested field\n"
+                if defined($column->{format}) && $kind ne 'field';
+            if ($kind eq 'field' && defined $column->{format}) {
+                my $selected = $formatted{_layout_alias($position)};
+                die "canned page column_layout formatted field is not selected\n"
+                    unless $selected && $selected->{field} eq $column->{field}
+                        && $selected->{format} eq $column->{format};
+            } elsif ($kind eq 'field') {
                 die "canned page column_layout field is not selected\n"
                     unless $fields{$column->{field} // ''};
             } elsif ($kind eq 'link' || $kind eq 'collection_link') {
                 die "canned page link must use a selected field, local URL, and text\n"
                     unless $fields{$column->{field} // ''}
-                        && ($kind ne 'collection_link'
-                            || $collections{$column->{collection} // ''})
+                        && ($kind ne 'collection_link' || $collection)
                         && defined($column->{url_prefix}) && !ref($column->{url_prefix})
                         && $column->{url_prefix} =~ m{\A/(?!/)[A-Za-z0-9_/-]*/\z}
                         && defined($column->{text}) && !ref($column->{text})
                         && length($column->{text})
                         && (!defined($column->{target})
                             || $column->{target} =~ /\A_(?:self|parent|top)\z/);
-            } elsif ($kind eq 'join') {
-                die "canned page column_layout join fields are not selected\n"
-                    unless ref($column->{fields}) eq 'ARRAY' && @{$column->{fields}}
-                        && !grep { !$fields{$_} } @{$column->{fields}};
-                die "canned page column_layout join separator is invalid\n"
+            } elsif ($kind eq 'combined') {
+                die "canned page column_layout fields are not selected\n"
+                    unless @{$column->{fields}}
+                        && !grep { !defined($_) || ref($_) || !$fields{$_} } @{$column->{fields}};
+                die "canned page column_layout separator is invalid\n"
                     if defined($column->{separator}) && ref($column->{separator});
             } elsif ($kind eq 'nested' || $kind eq 'collection_values') {
-                my $available = $collections{$column->{collection} // ''};
                 die "canned page column_layout collection is not selected\n"
-                    unless $available;
+                    unless $collection;
+                my $available = $collection->{fields};
                 if ($kind eq 'nested') {
                     die "canned page column_layout nested fields are invalid\n"
                         unless ref($column->{fields}) eq 'ARRAY' && @{$column->{fields}}
@@ -309,8 +394,36 @@ sub _surface ($self, $result, $public) {
     $html .= qq{<header class="sc-hero"><div class="sc-hero-heading"><h1>$title</h1></div>};
     $html .= $public ? qq{<div class="sc-hero-actions"><a class="sc-button sc-secondary" href="$path">Reset</a></div>}
         : '<div class="sc-hero-actions"><span class="sc-private-mode">Private URL mode</span></div>';
-    $html .= '</header><div class="sc-workspace">';
-    $html .= qq{<aside class="sc-builder selecto-canned-controls"><form method="$method" action="$path"$ws_send><input type="hidden" name="submitted" value="1">};
+    my $controls = $self->page->controls;
+    # A single view with no controls leaves the reader nothing to choose.
+    my $choices = @$controls || @{$self->page->views} > 1 || $state->{drilldown};
+    $html .= '</header><div class="sc-workspace' .
+        ($choices ? '' : ' selecto-canned-no-controls') . '">';
+    $html .= $self->_controls($result, $method, $ws_send) if $choices;
+    $html .= '<section class="sc-results selecto-canned-results" aria-label="Search results">';
+    my $total = $result->{total} // 0;
+    my $total_pages = int(($total + $state->{limit} - 1) / $state->{limit}) || 1;
+    my $row_label = $total == 1 ? 'row matched' : 'rows matched';
+    my $page_label = $total_pages == 1 ? 'page' : 'pages';
+    my $query_time = defined($result->{elapsed_ms})
+        ? ' · <strong>' . _escape($result->{elapsed_ms}) . ' ms</strong> query time' : '';
+    $html .= '<div class="sc-result-meta"><div><h2>' .
+        _escape(Selecto::Components::Renderer::Results->heading_for_view($result->{view}{kind})) .
+        '</h2></div><div><strong>' . _escape($total) . '</strong> ' . $row_label .
+        ' · <strong>' . _escape($total_pages) . '</strong> ' . $page_label .
+        $query_time . '</div></div>';
+    $html .= $self->_pagination($state, $total_pages, $public, 'top');
+    $html .= qq{<form method="$method" action="$path"$ws_send>} . $self->_hidden_state($state);
+    $html .= $self->_table($result);
+    $html .= '</form>';
+    $html .= $self->_pagination($state, $total_pages, $public, 'bottom');
+    return $html . '</section></div></section>';
+}
+
+sub _controls ($self, $result, $method, $ws_send) {
+    my $state = $result->{state};
+    my $path = _escape($self->path);
+    my $html = qq{<aside class="sc-builder selecto-canned-controls"><form method="$method" action="$path"$ws_send><input type="hidden" name="submitted" value="1">};
     $html .= '<input type="hidden" name="limit" value="' . _escape($state->{limit}) . '">';
     if ($state->{drilldown}) {
         $html .= '<input type="hidden" name="drilldown" value="'
@@ -363,26 +476,10 @@ sub _surface ($self, $result, $public) {
                 . '" value="' . _escape($value // '') . '"></label>';
         }
     }
-    $html .= '<div class="selecto-canned-actions"><button class="sc-button sc-primary" type="submit" name="page" value="1">Apply filters</button> ';
+    my $submit = @{$self->page->controls} ? 'Apply filters' : 'Show view';
+    $html .= '<div class="selecto-canned-actions"><button class="sc-button sc-primary" type="submit" name="page" value="1">' . $submit . '</button> ';
     $html .= '<a class="sc-button sc-secondary" href="' . $path . '">Reset</a></div>';
-    $html .= '</form></aside><section class="sc-results selecto-canned-results" aria-label="Search results">';
-    my $total = $result->{total} // 0;
-    my $total_pages = int(($total + $state->{limit} - 1) / $state->{limit}) || 1;
-    my $row_label = $total == 1 ? 'row matched' : 'rows matched';
-    my $page_label = $total_pages == 1 ? 'page' : 'pages';
-    my $query_time = defined($result->{elapsed_ms})
-        ? ' · <strong>' . _escape($result->{elapsed_ms}) . ' ms</strong> query time' : '';
-    $html .= '<div class="sc-result-meta"><div><h2>' .
-        _escape(Selecto::Components::Renderer::Results->heading_for_view($result->{view}{kind})) .
-        '</h2></div><div><strong>' . _escape($total) . '</strong> ' . $row_label .
-        ' · <strong>' . _escape($total_pages) . '</strong> ' . $page_label .
-        $query_time . '</div></div>';
-    $html .= $self->_pagination($state, $total_pages, $public, 'top');
-    $html .= qq{<form method="$method" action="$path"$ws_send>} . $self->_hidden_state($state);
-    $html .= $self->_table($result);
-    $html .= '</form>';
-    $html .= $self->_pagination($state, $total_pages, $public, 'bottom');
-    return $html . '</section></div></section>';
+    return $html . '</form></aside>';
 }
 
 sub _pagination ($self, $state, $total_pages, $public, $position) {
@@ -450,10 +547,12 @@ sub _table ($self, $result) {
         my $nested = $selection && $selection->kind eq 'related_collection';
         my ($association, $fields) = $nested ? @{$selection->arguments} : ();
         +{key => "column_$_", field => $path, label => $label,
+            alias => $selection && $selection->alias_name,
             ($nested ? (collection => $selection->alias_name) : ()),
             ($nested ? (nested => 1, association => $association,
                 nested_fields => [map {
-                    +{field => $_, label => humanize($_)}
+                    my $name = ref($_) ? $_->{key} : $_;
+                    +{field => $name, label => humanize($name)}
                 } @$fields]) : ()),
             measure => $view->{kind} eq 'aggregate' && $_ >= @{$view->{query}->groups} ? 1 : 0}
     } 0 .. $#{$result->{columns}};
@@ -505,7 +604,7 @@ sub _table ($self, $result) {
 sub _layout_table ($self, $source_columns, $source_records, $state) {
     my %field = map { defined($_->{field}) ? ($_->{field} => $_) : () }
         @$source_columns;
-    my %collection = map { defined($_->{collection}) ? ($_->{collection} => $_) : () }
+    my %aliased = map { defined($_->{alias}) ? ($_->{alias} => $_) : () }
         @$source_columns;
     my (@columns, @records);
     for my $index (0 .. $#$source_records) {
@@ -514,20 +613,21 @@ sub _layout_table ($self, $source_columns, $source_records, $state) {
         for my $position (0 .. $#{$self->column_layout}) {
             my $spec = $self->column_layout->[$position];
             my $key = "display_$position";
-            my $kind = $spec->{kind};
+            my $kind = _column_kind($spec);
+            my $selected = $aliased{_layout_alias($position)};
             if ($kind eq 'row_number') {
                 $record{$key} = ($state->{page} - 1) * $state->{limit} + $index + 1;
                 push @columns, {key => $key, label => $spec->{label}}
                     if $index == 0;
             } elsif ($kind eq 'field') {
-                my $column = $field{$spec->{field}};
+                my $column = defined($spec->{format}) ? $selected : $field{$spec->{field}};
                 $record{$key} = $source->{$column->{key}};
                 push @columns, {%$column, key => $key, label => $spec->{label}}
                     if $index == 0;
             } elsif ($kind eq 'link' || $kind eq 'collection_link') {
                 my $column = $field{$spec->{field}};
                 my $enabled = $kind eq 'link'
-                    || @{$source->{$collection{$spec->{collection}}{key}} // []};
+                    || @{$source->{$selected->{key}} // []};
                 $record{$key} = $enabled ? $spec->{text} : '';
                 $record{$key . '_id'} = $enabled
                     ? $source->{$column->{key}} : undef;
@@ -535,15 +635,14 @@ sub _layout_table ($self, $source_columns, $source_records, $state) {
                     link => {url_template => $spec->{url_prefix} . '{{id}}',
                         numeric_id => 1, target => $spec->{target} // '_top'},
                     link_key => $key . '_id'} if $index == 0;
-            } elsif ($kind eq 'join') {
+            } elsif ($kind eq 'combined') {
                 $record{$key} = join($spec->{separator} // ' ',
                     grep { defined($_) && !ref($_) && length("$_") }
                     map { $source->{$field{$_}{key}} } @{$spec->{fields}});
                 push @columns, {key => $key, label => $spec->{label}}
                     if $index == 0;
             } else {
-                my $column = $collection{$spec->{collection}};
-                my $items = $source->{$column->{key}} // [];
+                my $items = $source->{$selected->{key}} // [];
                 if ($kind eq 'nested') {
                     my @parent_fields = map { $_->{link}{parent_field} }
                         grep { ref($_->{link}) eq 'HASH'
@@ -573,10 +672,13 @@ sub _layout_table ($self, $source_columns, $source_records, $state) {
         # Even an empty result retains the authored table headers.
         for my $position (0 .. $#{$self->column_layout}) {
             my $spec = $self->column_layout->[$position];
-            my $column = $spec->{kind} eq 'field' ? $field{$spec->{field}} : {};
+            my $kind = _column_kind($spec);
+            my $column = $kind ne 'field' ? {}
+                : defined($spec->{format}) ? $aliased{_layout_alias($position)}
+                : $field{$spec->{field}};
             push @columns, {%$column, key => "display_$position",
                 label => $spec->{label},
-                ($spec->{kind} eq 'nested'
+                ($kind eq 'nested'
                     ? (nested => 1, nested_fields => $spec->{fields}) : ())};
         }
     }
@@ -678,39 +780,44 @@ shared dialog instead.
 =head2 column_layout
 
 An array of column specs that replaces the default detail columns. Each spec
-needs a C<kind> and a C<label>:
+needs a C<label>; what it shows follows from its other keys:
 
 =over 4
 
-=item C<< {kind => 'field', field => $path} >>
+=item C<< {field => $path, format => 'us_date'} >>
 
-A selected field.
+A field. C<format> (optional) is a L<Selecto::DateFormat> name, applied in
+SQL; a nested table's fields take it too.
 
-=item C<< {kind => 'link', field => $path, text => 'Open', url_prefix => '/things/'} >>
+=item C<< {fields => [...], separator => ', '} >>
 
-A link to C<url_prefix> followed by the field value. C<collection_link> is
-the same, but shown only when the named C<collection> is not empty.
+Several fields in one cell, separated by C<separator> (default a space).
+Empty values are left out.
 
-=item C<< {kind => 'join', fields => [...], separator => ' '} >>
+=item C<< {field => $path, text => 'Open', url_prefix => '/things/'} >>
 
-Several selected fields joined into one cell.
+A link to C<url_prefix> followed by the field value. With a C<collection>,
+the link is shown only when that collection is not empty.
 
-=item C<< {kind => 'nested', collection => $alias, fields => [{field, label, link}]} >>
+=item C<< {collection => $association, fields => [{field, label, link}]} >>
 
-A selected C<related_collection> shown as a nested table. The parent row stays
-one result row.
+A to-many association shown as a nested table. The parent row stays one
+result row.
 
-=item C<< {kind => 'collection_values', collection => $alias, field => $child} >>
+=item C<< {collection => $association, field => $child} >>
 
-A related collection shown as a comma-separated list.
+A to-many association's C<field> values as a comma-separated list.
 
-=item C<< {kind => 'row_number'} >>
+=item C<< {row_number => 1} >>
 
 A row number that counts across pages.
 
 =back
 
-When a C<record_link> is set, the layout must display its field.
+Collection columns also take the C<filters>, C<order_by> and C<limit> options
+of L<Selecto::Expression/related_collection>. When a C<record_link> is set,
+the layout must display its field. Build each detail view's query from the
+layout with L</layout_selections>.
 
 =head2 websocket_enabled
 
@@ -734,6 +841,18 @@ C<theme> through; construct the component directly to use it.
 
 Validates the attributes above and dies with a one-line message on any
 error.
+
+=head2 layout_selections
+
+    my $query = $engine->query->select(
+        Selecto::Components::CannedPage->layout_selections($column_layout,
+            timezone => 'America/New_York'));
+
+Returns the selections a C<column_layout> displays: its fields, one
+C<datetime_format> per formatted field, and one C<related_collection> per
+collection column. C<timezone> (optional) is the IANA zone formatted dates
+are shown in; filters still compare the stored values. A layout with a
+collection or format must be shown by a query built this way.
 
 =head2 handle
 
