@@ -83,6 +83,7 @@ t/bucket_parser.t
 t/canned_page_http.t
 t/canned_page_render.t
 t/canned_page_unicode.t
+t/canonical_values_pg.t
 t/dashboard.t
 t/date_shortcut.t
 t/explorer_session.t
