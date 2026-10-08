@@ -1,6 +1,17 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Canned pages: a column_layout entry no longer takes a kind; it follows
+      from the entry's keys (field, fields, collection, url_prefix,
+      row_number), and kind is refused. The former join is a fields entry.
+      A collection entry names the association, and the new
+      layout_selections builds a detail query's selections from the layout.
+    - Canned layout fields and nested fields take a format (a
+      Selecto::DateFormat name, such as the new us_date and us_datetime),
+      applied in SQL; layout_selections takes the timezone to show them in.
+      The display formats are not offered for Explorer grouping.
+    - A canned page with one view and no controls shows no filter panel or
+      Apply filters button; the results take the full width.
     - Action prerequisite columns (can_<action>, from Selecto's action
       preconditions and transitions) appear in the Explorer as columns and
       Yes/No filters only while the action authorizer shows their action;

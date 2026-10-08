@@ -3,6 +3,10 @@
   --sc-tray-width: clamp(300px, 29vw, 390px);
 }
 
+.selecto-canned-page .sc-workspace.selecto-canned-no-controls {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .selecto-canned-controls {
   border-left: 1px solid var(--sc-border);
   border-radius: var(--sc-radius);

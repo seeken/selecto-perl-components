@@ -1,6 +1,8 @@
 use 5.034;
 use strict;
 use warnings;
+use feature 'signatures';
+no warnings 'experimental::signatures';
 
 use Test::More;
 use Test::Mojo;
@@ -130,8 +132,8 @@ my $layout_component = Selecto::Components::CannedPage->new(
     page => $page, path => '/rows', title => 'Rows',
     engine_factory => sub { die 'not needed' },
     column_layout => [
-        {kind => 'field', field => 'id', label => 'ID'},
-        {kind => 'link', field => 'id', label => 'Photos',
+        {field => 'id', label => 'ID'},
+        {field => 'id', label => 'Photos',
             text => 'View photos', url_prefix => '/portal-views/photos/'},
     ],
 );
@@ -140,9 +142,110 @@ like $layout_component->_table($result),
     'canned layouts can show a local action link instead of an ID';
 ok !eval { Selecto::Components::CannedPage->new(
     page => $page, path => '/rows', engine_factory => sub { die 'not needed' },
-    column_layout => [{kind => 'link', field => 'id', label => 'Photos',
+    column_layout => [{field => 'id', label => 'Photos',
         text => 'View photos', url_prefix => '//external.example/'}],
 ); 1 }, 'canned layout links reject external URL prefixes';
+
+like $html, qr{>Apply filters</button>}, 'a page with controls can apply them';
+my $plain_page = Selecto::CannedPage->new(
+    id => 'plain', domain => $domain,
+    dataset => {query => Selecto::Query->new, entity_key => ['id']},
+    views => [{id => 'list', kind => 'detail',
+        query => Selecto::Query->new->select('id', 'name')}],
+    controls => [],
+);
+my $plain_html = Selecto::Components::CannedPage->new(
+    page => $plain_page, path => '/plain', title => 'Plain',
+    engine_factory => sub { die 'not needed' }, websocket_enabled => 0,
+)->_html({%$result, state => $plain_page->normalize_state({})}, 1);
+unlike $plain_html, qr{Apply filters|selecto-canned-controls},
+    'one view and no controls show no filter panel';
+like $plain_html, qr{class="sc-workspace selecto-canned-no-controls"},
+    'results take the full width without a filter panel';
+
+sub relation ($table, %columns) {
+    return {source_table => $table, primary_key => 'id', fields => [sort keys %columns],
+        columns => {map { $_ => {type => $columns{$_}} } keys %columns},
+        associations => {}};
+}
+my $shipments = Selecto::Domain->parse({
+    schema_version => 1, name => 'Shipments',
+    source => {
+        %{relation('shipments', id => 'integer', city => 'string', state => 'string',
+            picked_up => 'utc_datetime')},
+        associations => {map {
+            $_ => {queryable => $_, owner_key => 'id', related_key => 'shipment_id',
+                cardinality => 'many'}
+        } qw(vehicles orders)},
+    },
+    schemas => {
+        vehicles => relation('vehicles', id => 'integer', shipment_id => 'integer', vin => 'string',
+            added => 'utc_datetime'),
+        orders => relation('orders', id => 'integer', shipment_id => 'integer'),
+    },
+    joins => {},
+});
+my @layout = (
+    {row_number => 1, label => '#'},
+    {field => 'id', label => 'ID'},
+    {fields => [qw(city state)], separator => ', ', label => 'Origin'},
+    {collection => 'vehicles', label => 'Vehicles', order_by => [['vin', 'asc']],
+        fields => [{field => 'vin', label => 'VIN'},
+            {field => 'added', label => 'Added', format => 'us_date'}]},
+    {collection => 'orders', field => 'id', label => 'Orders'},
+    {field => 'picked_up', label => 'Pickup', format => 'us_datetime'},
+);
+my @selections = Selecto::Components::CannedPage->layout_selections(\@layout,
+    timezone => 'America/New_York');
+is_deeply [grep { !ref } @selections], [qw(id city state)],
+    'layout fields become the selected fields, each once';
+my %aliased = map { $_->alias_name => $_ } grep { ref } @selections;
+is_deeply [sort keys %aliased], [qw(layout_3 layout_4 layout_5)],
+    'collections and formatted fields are selected under their column alias';
+is_deeply [map { ref($_) ? $_->{key} : $_ } @{$aliased{layout_3}->arguments->[1]}],
+    [qw(vin added)], 'a nested table selects its child fields';
+my ($added) = grep { ref } @{$aliased{layout_3}->arguments->[1]};
+is_deeply [@{$added->{expression}->arguments}[1, 2]], ['us_date', 'America/New_York'],
+    'a nested field format is shown in the layout zone';
+is_deeply [$aliased{layout_5}->kind, @{$aliased{layout_5}->arguments}[1, 2]],
+    ['datetime_format', 'us_datetime', 'America/New_York'],
+    'a formatted field is formatted in SQL in the layout zone';
+my $layout_page = Selecto::CannedPage->new(
+    id => 'laid_out', domain => $shipments,
+    dataset => {query => Selecto::Query->new, entity_key => ['id']},
+    views => [{id => 'list', kind => 'detail',
+        query => Selecto::Query->new->select(@selections)}],
+    controls => [],
+);
+my $laid_out = Selecto::Components::CannedPage->new(
+    page => $layout_page, path => '/laid-out', title => 'Laid out',
+    engine_factory => sub { die 'not needed' }, column_layout => \@layout,
+);
+my $laid_out_table = $laid_out->_table({
+    state => $layout_page->normalize_state({}),
+    view => {id => 'list', kind => 'detail', label => 'Laid out'},
+    columns => [qw(id city state layout_3 layout_4 layout_5)],
+    rows => [[7, 'Toronto', 'ON', '[{"vin":"VIN1","added":"10/01/2026"}]',
+        '[{"id":11},{"id":12}]', '10/08/2026 2:30 PM']],
+    total => 1, has_more => 0, facets => {},
+});
+like $laid_out_table, qr{<td>Toronto, ON</td>}, 'fields share one cell';
+like $laid_out_table, qr{VIN1}, 'a collection with fields is a nested table';
+like $laid_out_table, qr{<td>11, 12</td>}, 'a collection with one field is a list';
+like $laid_out_table, qr{<td>10/08/2026 2:30 PM</td>}, 'a formatted field shows its SQL value';
+like $laid_out_table, qr{10/01/2026}, 'a formatted nested field shows its SQL value';
+ok !eval { Selecto::Components::CannedPage->new(
+    page => $layout_page, path => '/laid-out', engine_factory => sub { die 'not needed' },
+    column_layout => [{field => 'picked_up', label => 'Pickup', format => 'us_date'}],
+); 1 }, 'a format must match the query the layout built';
+ok !eval { Selecto::Components::CannedPage->new(
+    page => $layout_page, path => '/laid-out', engine_factory => sub { die 'not needed' },
+    column_layout => [{fields => [qw(city state)], label => 'Origin', format => 'us_date'}],
+); 1 }, 'a format applies only to a field';
+ok !eval { Selecto::Components::CannedPage->new(
+    page => $layout_page, path => '/laid-out', engine_factory => sub { die 'not needed' },
+    column_layout => [{kind => 'field', field => 'id', label => 'ID'}],
+); 1 }, 'a layout kind is refused because it follows from the keys';
 
 my $paged_result = {
     %$result,

@@ -1143,7 +1143,7 @@ sub allows_measure_function ($self, $type, $function, $row_count = 0) {
 sub group_formats ($self, $type) {
     return [
         [default => 'Default'],
-        (map { [$_->{id}, $_->{label}] } @DATE_FORMATS),
+        (map { [$_->{id}, $_->{label}] } grep { !$_->{display} } @DATE_FORMATS),
         [age_buckets => 'Age buckets'],
         [custom_buckets => 'Relative date buckets'],
         [year_buckets => 'Year buckets'],
