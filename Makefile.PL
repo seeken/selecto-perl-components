@@ -30,6 +30,7 @@ WriteMakefile(
         'Excel::Writer::XLSX' => '1.10',
         'Digest::SHA' => 0,
         'JSON::PP'    => '4.06',
+        'Cpanel::JSON::XS' => '4.38',
         'Mojolicious' => '9.49',
         'Selecto'     => '0.2.2',
         'Time::HiRes' => 0,
