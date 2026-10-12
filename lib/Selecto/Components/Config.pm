@@ -35,6 +35,11 @@ has lazy_view_controls => 0;
 has action_handlers => sub { return {} };
 has choice_sources  => sub { return {} };
 has filter_fields   => sub { return [] };
+# Star dimensions (association paths) whose lookup tables may be listed whole: a filter on
+# the dimension's key or display field then offers the table's rows as a multi-select,
+# read per request from the tenant's own table (dimension_filter_choices). Only for
+# reference tables that hold nothing private, e.g. ['ref_load_status'].
+has dimension_filter_choices => sub { return [] };
 has lookup_sources  => sub { return {} };
 has co_domain_engines => sub { return {} };
 has co_domain_scopes  => sub { return {} };
@@ -48,6 +53,9 @@ has 'export_authorizer';
 has max_export_rows => 10_000;
 has max_export_bytes => 16_777_216;
 has max_export_seconds => 30;
+# Seconds an Explorer result or count query may run before the database stops it (the
+# page then says so: Explorer _public_error).
+has query_timeout_seconds => 15;
 has max_export_temp_bytes => 33_554_432;
 has max_concurrent_exports => 4;
 has max_actor_exports => 2;
@@ -168,6 +176,13 @@ sub new ($class, @args) {
         my $value = $self->$key;
         die "Invalid $key\n" unless defined($value) && !ref($value) && "$value" =~ /\A[1-9][0-9]{0,8}\z/;
     }
+    die "dimension_filter_choices must be a list of association paths\n"
+        unless ref($self->dimension_filter_choices) eq 'ARRAY'
+            && !grep { !defined($_) || ref($_) || $_ !~ /\A[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\z/ }
+                @{$self->dimension_filter_choices};
+    die "query_timeout_seconds must be a whole number from 1 to 600\n"
+        unless defined($self->query_timeout_seconds) && !ref($self->query_timeout_seconds)
+            && "@{[$self->query_timeout_seconds]}" =~ /\A[1-9][0-9]{0,2}\z/ && $self->query_timeout_seconds <= 600;
     die "export concurrency cannot exceed 64\n" if $self->max_concurrent_exports > 64 || $self->max_actor_exports > 64;
     die "export_actor must be a coderef\n" if defined($self->export_actor) && ref($self->export_actor) ne 'CODE';
     die "max_export_rows must be a positive integer up to 10000000\n"
@@ -958,7 +973,81 @@ sub _root_filter_catalog ($self, $domain) {
             ($choice->{picker_hidden} ? (picker_hidden => 1) : ()),
         };
     }
+    $self->_add_dimension_choices($domain, \@catalog);
     return \@catalog;
+}
+
+use constant MAX_DIMENSION_CHOICES => 200;
+
+# Filters on an opted-in star dimension (dimension_filter_choices) choose from its table:
+# on the key field the value is the key and the label the display text (pick "Delivered",
+# filter status D); on the display field both are the display text. Declared filter
+# choices win. Read once per request copy (for_request), never cached across requests,
+# so each tenant sees its own rows; a table over MAX_DIMENSION_CHOICES rows, or one that
+# can't be read, keeps the free-text filter.
+sub _add_dimension_choices ($self, $domain, $catalog) {
+    my @wanted = @{$self->dimension_filter_choices};
+    my $controller = $self->{_localization_controller};
+    return unless @wanted && $controller;
+    my ($by_key, $by_display) = _star_dimensions($domain);
+    my %dimension = map { $_->{association} => $_ } values %$by_key;
+    for my $path (@wanted) {
+        my $dimension = $dimension{$path} or next;
+        my $rows = $self->{_dimension_choice_rows}{$domain->fingerprint}{$path}
+            //= $self->_dimension_choice_rows($domain, $controller, $path);
+        next unless @$rows;
+        my %choices = (
+            $dimension->{key_field} => [map { {value => $_->[0], label => $_->[1]} } @$rows],
+            $dimension->{display_field} => do {
+                my %seen;
+                [map { {value => $_->[1], label => $_->[1]} } grep { !$seen{$_->[1]}++ } @$rows];
+            },
+        );
+        for my $field (@$catalog) {
+            my $choices = $choices{$field->{path}} or next;
+            next if ref($field->{filter_choices}) eq 'ARRAY' && @{$field->{filter_choices}};
+            $field->{filter_choices} = [map { {%$_} } @$choices];
+        }
+    }
+}
+
+# [[key, display], ...] from a star dimension's table, by display text; [] if it can't be
+# listed (not a plain one-row lookup, too many rows, or the read failed).
+sub _dimension_choice_rows ($self, $domain, $controller, $path) {
+    my $rows = eval {
+        my $association = $domain->resolve_association($path);
+        $association = $association->{association} if ref($association) eq 'HASH';
+        die "not a star dimension\n"
+            unless blessed($association) && ($association->join_mode // '') eq 'star_dimension';
+        # A filtered or tenant-scoped relation is not a plain lookup table.
+        die "conditional dimension\n" if keys %{$association->where}
+            || defined($association->target_tenant_field) || $association->through;
+        my $dbh = $self->engine($controller)->adapter->dbh;
+        my ($table, $key, $display) = ($association->table, $association->related_key, $association->display_field);
+        die "incomplete dimension\n" unless defined($table) && defined($key) && defined($display);
+        my $sql = sprintf 'SELECT %s, %s FROM %s WHERE %s IS NOT NULL AND %s IS NOT NULL ORDER BY %s LIMIT %d',
+            (map { $dbh->quote_identifier($_) } $key, $display, $table, $key, $display, $display),
+            MAX_DIMENSION_CHOICES + 1;
+        $dbh->selectall_arrayref($sql);
+    };
+    unless ($rows) {
+        my $error = $@ // '';
+        $controller->app->log->warn("Selecto dimension filter choices for $path unavailable: $error")
+            if $controller->can('app') && $error !~ /\A(?:not a star dimension|conditional dimension|incomplete dimension)\n\z/;
+        return [];
+    }
+    return [] if @$rows > MAX_DIMENSION_CHOICES;
+    # Keys are trimmed (fixed-width codes come back padded: 'A '); a value with a comma, or a
+    # display text with surrounding blanks, can't be a filter choice and is left out.
+    my (%seen, @rows);
+    for my $row (@$rows) {
+        my ($key, $display) = map { "$_" } @$row;
+        $key =~ s/\A\s+|\s+\z//g;
+        next unless length($key) && length($display) && $key !~ /,/ && $display !~ /,/
+            && $display !~ /\A\s|\s\z/ && !$seen{$key}++;
+        push @rows, [$key, $display];
+    }
+    return \@rows;
 }
 
 sub filter_map ($self, $domain, $rows_of = undef) {

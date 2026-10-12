@@ -478,6 +478,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
     my $rollup_key = '__selecto_rollup_grouping';
     push @selections, Selecto::Expression->grouping(\@groups)->as($rollup_key) if $rollup;
     my $query = Selecto::Query->new->select(@selections);
+    my $peek = 0;
     $query = $rollup ? $query->group_by_rollup(\@groups) : $query->group_by(\@groups);
     $query = _with_filters($query, $state, $config, $domain);
     $query = $query->order_by($_, 'asc') for @group_orders;
@@ -486,13 +487,18 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         # effectively unbounded matrix in both PostgreSQL and the browser.
         $query = $query->limit($config->max_grid_result_cells + 1);
     } elsif (!exists($options->{paginate}) || $options->{paginate}) {
-        $query = $query->limit($state->limit)
+        # An aggregate page is counted from its own rows rather than a second, equally
+        # expensive count query: one row beyond the page says whether another follows
+        # (Explorer model, peek).
+        $peek = $state->view eq 'aggregate' ? 1 : 0;
+        $query = $query->limit($state->limit + $peek)
             ->offset(($state->page - 1) * $state->limit);
     }
     $query = _with_query_library($query, $domain, $state, $config->limits);
     return {
         query => $query,
         columns => \@columns,
+        peek => $peek,
         graph => $state->view eq 'graph' ? 1 : 0,
         aggregate_grid => $aggregate_grid,
         rollup => $rollup,

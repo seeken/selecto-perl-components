@@ -86,6 +86,7 @@ t/canned_page_unicode.t
 t/canonical_values_pg.t
 t/dashboard.t
 t/date_shortcut.t
+t/dimension_filter_choices.t
 t/explorer_session.t
 t/explorer_unicode.t
 t/export_limit.t
@@ -104,6 +105,7 @@ t/query_assistant_routes.t
 t/query_assistant_store.t
 t/query_builder.t
 t/query_library.t
+t/query_timeout.t
 t/record_editor_secret.t
 t/renderer.t
 t/renderer_query_assistant.t

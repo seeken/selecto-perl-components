@@ -598,7 +598,9 @@ my $incompatible_grid_statement = $postgresql->compile(
 );
 ok !$incompatible_grid_result->{aggregate_grid},
     'an incompatible aggregate shape falls back to the rollup table';
-like $incompatible_grid_statement->sql, qr/LIMIT 25 OFFSET 25\z/,
+# An aggregate page fetches one row beyond its 25, which says whether another page follows
+# (no count query).
+like $incompatible_grid_statement->sql, qr/LIMIT 26 OFFSET 25\z/,
     'an incompatible grid request retains ordinary aggregate pagination';
 
 my $multi_measure_state = Selecto::Components::State->from_input($config, $domain, {
@@ -632,7 +634,7 @@ like $multi_measure_statement->sql, qr/GROUP BY ROLLUP \(CASE WHEN "s0"\."unit_p
 like $multi_measure_statement->sql, qr/GROUPING\(CASE WHEN .*?\) AS "__selecto_rollup_grouping"/,
     'aggregate rollup carries governed grouping metadata for hierarchy rendering';
 like $multi_measure_statement->sql,
-    qr/\ASELECT \* FROM \(SELECT .*\) AS rollupfix ORDER BY 5 DESC, 1 ASC NULLS LAST LIMIT 25 OFFSET 0\z/s,
+    qr/\ASELECT \* FROM \(SELECT .*\) AS rollupfix ORDER BY 5 DESC, 1 ASC NULLS LAST LIMIT 26 OFFSET 0\z/s,
     'one-level bucket rollups sort the grand total separately from data NULL buckets';
 unlike $multi_measure_statement->sql, qr/ORDER BY CASE/,
     'the rollup outer sort does not rebuild the parameterized bucket expression';
