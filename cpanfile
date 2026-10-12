@@ -2,6 +2,7 @@ requires 'perl', '5.034';
 requires 'Excel::Writer::XLSX', '1.10';
 requires 'Digest::SHA';
 requires 'JSON::PP', '4.06';
+requires 'Cpanel::JSON::XS', '4.38';
 requires 'Mojolicious', '9.49';
 recommends 'DBI';
 recommends 'DBD::SQLite';
