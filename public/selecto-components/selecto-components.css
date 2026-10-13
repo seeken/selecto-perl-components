@@ -501,7 +501,8 @@ a { color: inherit; }
 .sc-debug-query h4 { font-size: .78rem; }
 .sc-debug-query h5 { color: var(--sc-muted); font-size: .65rem; letter-spacing: .07em; text-transform: uppercase; }
 .sc-debug-query > header button { font-size: .7rem; min-height: 30px; padding: 5px 9px; }
-.sc-debug-query pre { background: var(--sc-debug-end); color: var(--sc-ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .75rem; line-height: 1.55; margin: 0; max-height: 360px; max-width: 100%; overflow: auto; padding: 14px; white-space: pre-wrap; }
+/* Always dark, in either theme: the .sc-sql-* highlight colours are chosen for it. */
+.sc-debug-query pre { background: #080d0f; color: #d8e5e7; color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .75rem; line-height: 1.55; margin: 0; max-height: 360px; max-width: 100%; overflow: auto; padding: 14px; white-space: pre-wrap; }
 .sc-sql-keyword { color: #8bd5ff; font-weight: 750; }
 .sc-sql-identifier { color: #d7b8ff; }
 .sc-sql-string { color: #b9e4a7; }
