@@ -604,6 +604,7 @@ sub stream_query ($self, $statement, %options) {
         columns => $result->{columns}, rows => $result->{rows},
     );
 }
+sub write_capabilities { return {protocol_version => 1, update => 1}; }
 sub preview_write { return {}; }
 sub execute_write {
     my ($self, $command) = @_;
