@@ -299,7 +299,7 @@ like $library_statement->sql, qr/"s0"\."units_in_stock" < \$1/,
     'a named view segment compiles as a governed query constraint';
 like $library_statement->sql, qr/"s0"\."unit_price" >= \$2/,
     'additional named segments compose with the named view';
-is_deeply $library_statement->params, [8, '25.50'],
+is_deeply $library_statement->params, [8, 25.5],
     'query-library values remain bound and typed';
 is_deeply $library_result->{query}->applied_query_library->{segments},
     [qw(low_stock premium)], 'component-built queries retain named-segment provenance';

@@ -1215,8 +1215,10 @@ $t->get_ok('/explore/products?q=1&view=aggregate&aggregate_grid=1&field=product_
         'Grid view requires exactly two Group By fields and one Aggregate.')
     ->element_exists('.sc-table-wrap:not(.sc-aggregate-grid-wrap)')
     ->element_exists('.sc-pagination');
-is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, 25,
-    'an incompatible grid shape retains normal aggregate pagination';
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, 26,
+    'normal aggregate pagination fetches one bounded overflow sentinel';
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->offset_value, 25,
+    'an incompatible grid shape retains the requested second-page offset';
 
 $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&field_alias=&field_format=&group=unit_price&group_alias=Price+band&group_format=buckets&group_bucket_ranges=0-10%2C+11%2B&group_prefix_length=2&group_exclude_articles=1&measure=count&measure_alias=Products&measure_function=count&measure_bucket_ranges=&measure_ignore_nulls=0&measure=total_price&measure_alias=Price+counts&measure_function=buckets&measure_bucket_ranges=0-10%2C+11%2B&measure_ignore_nulls=0&order=product_name&direction=asc&limit=25&page=1')
     ->status_is(200)
