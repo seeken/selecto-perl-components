@@ -112,12 +112,19 @@ sub _readable_sql ($sql, $adapter = undef) {
 # the next one. A placeholder with no value is left as it is.
 sub _interpolate_sql ($sql, $parameters, $adapter = undef) {
     my $dialect = lc($adapter // '');
+    # As DBD::Pg reads them: a statement with $N placeholders uses only those,
+    # and its ? is the jsonb operator; otherwise each ? is a placeholder.
+    my $numbered = 0;
+    _map_sql_tokens($sql, sub ($token, $kind) {
+        $numbered = 1 if $kind eq 'postgresql_parameter';
+        return $token;
+    }) if $dialect eq 'postgresql';
     my $next = 0;
     return _map_sql_tokens($sql, sub ($token, $kind) {
         my $index;
         if ($kind eq 'postgresql_parameter') {
             $index = substr($token, 1) - 1;
-        } elsif ($kind eq 'question_parameter' && $dialect ne 'postgresql') {
+        } elsif ($kind eq 'question_parameter' && !$numbered) {
             $index = $next++;
         } else {
             return $token;

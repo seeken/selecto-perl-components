@@ -961,7 +961,10 @@ is $interpolate->(q{SELECT 1 FROM t WHERE a = $2 AND b = $1 AND c = '$1' AND d =
     q{SELECT 1 FROM t WHERE a = E'x\\\\y' AND b = 'it''s' AND c = '$1' AND d = $3 -- $1},
     'PostgreSQL values are quoted by position, never inside strings or comments, unbound ones kept';
 is $interpolate->('SELECT 1 FROM t WHERE a ? b AND c = $1', ['k'], 'postgresql'),
-    q{SELECT 1 FROM t WHERE a ? b AND c = 'k'}, 'a PostgreSQL ? is an operator, not a placeholder';
+    q{SELECT 1 FROM t WHERE a ? b AND c = 'k'}, 'beside $N placeholders a PostgreSQL ? is an operator';
+is $interpolate->(q{SELECT 1 FROM t WHERE a = ? AND b = '?' AND c = ?}, ["it's", 5], 'postgresql'),
+    q{SELECT 1 FROM t WHERE a = 'it''s' AND b = '?' AND c = 5},
+    'without $N placeholders each PostgreSQL ? is one, as DBD::Pg reads it';
 is $interpolate->('SELECT 1 - $1, $2, $3', [-3, 2.5, '42'], 'postgresql'),
     q{SELECT 1 - (-3), 2.5, '42'}, 'numbers stay bare, negatives cannot start a comment, numeric strings stay strings';
 is $interpolate->('SELECT 1 WHERE id = ANY($1) AND ok = $2', [[1, 'a"b', undef], Mojo::JSON::true], 'postgresql'),
