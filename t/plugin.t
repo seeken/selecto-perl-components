@@ -946,12 +946,30 @@ my $readable_membership_sql = Selecto::Components::Renderer::Debug::_readable_sq
 is $readable_membership_sql,
     'SELECT s0.id, s0."order" FROM load AS s0 WHERE s0.id = $1',
     'debug SQL removes only unnecessary PostgreSQL identifier quotes';
-my $diagnostics_html = Selecto::Components::Renderer::Debug::_debug_query('unsafe', 'Query',
-    {sql => 'SELECT name FROM products WHERE name = ?', params => ["x\\' OR 1=1 -- ", undef]}, 'mysql');
-my $diagnostics = Mojo::DOM->new($diagnostics_html)->at('pre[hidden]')->text;
-my $decoded_diagnostics = Mojo::JSON::from_json($diagnostics);
-is $decoded_diagnostics->{sql}, 'SELECT name FROM products WHERE name = ?', 'copied diagnostic SQL remains parameterized';
-is_deeply $decoded_diagnostics->{parameters}, ["x\\' OR 1=1 -- ", undef], 'copied values remain separate JSON data';
+my $copy_html = Selecto::Components::Renderer::Debug::_debug_query('unsafe', 'Query',
+    {sql => 'SELECT name FROM products WHERE name = ? AND note = ? AND id = ?',
+        params => ["x\\' OR 1=1 -- ", undef, 7]}, 'mysql');
+my $copy_dom = Mojo::DOM->new($copy_html);
+is $copy_dom->at('button[data-sc-debug-copy]')->text, 'Copy SQL', 'the copy button copies SQL';
+is $copy_dom->at('pre[hidden]')->text,
+    "SELECT name\nFROM products\nWHERE name = _utf8mb4 X'785c27204f5220313d31202d2d20'\n  AND note = NULL\n  AND id = 7",
+    'copied MySQL SQL has its values written in, backslash strings as hex in either escape mode';
+
+my $interpolate = \&Selecto::Components::Renderer::Debug::_interpolate_sql;
+is $interpolate->(q{SELECT 1 FROM t WHERE a = $2 AND b = $1 AND c = '$1' AND d = $3 -- $1},
+    ["it's", 'x\\y'], 'postgresql'),
+    q{SELECT 1 FROM t WHERE a = E'x\\\\y' AND b = 'it''s' AND c = '$1' AND d = $3 -- $1},
+    'PostgreSQL values are quoted by position, never inside strings or comments, unbound ones kept';
+is $interpolate->('SELECT 1 FROM t WHERE a ? b AND c = $1', ['k'], 'postgresql'),
+    q{SELECT 1 FROM t WHERE a ? b AND c = 'k'}, 'a PostgreSQL ? is an operator, not a placeholder';
+is $interpolate->('SELECT 1 - $1, $2, $3', [-3, 2.5, '42'], 'postgresql'),
+    q{SELECT 1 - (-3), 2.5, '42'}, 'numbers stay bare, negatives cannot start a comment, numeric strings stay strings';
+is $interpolate->('SELECT 1 WHERE id = ANY($1) AND ok = $2', [[1, 'a"b', undef], Mojo::JSON::true], 'postgresql'),
+    q{SELECT 1 WHERE id = ANY(E'{"1","a\\\\"b",NULL}') AND ok = TRUE}, 'PostgreSQL arrays and booleans';
+is $interpolate->('SELECT ? , ?', ["o'k", Mojo::JSON::false], 'mssql'),
+    q{SELECT N'o''k' , 0}, 'SQL Server strings and booleans';
+is $interpolate->('SELECT ?, ?', ["a\\b", [1, 'x']], 'duckdb'),
+    q{SELECT 'a\\b', [1, 'x']}, 'DuckDB keeps backslashes literal and writes lists';
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
     ->status_is(200)
