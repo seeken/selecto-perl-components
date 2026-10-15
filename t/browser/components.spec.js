@@ -2207,12 +2207,12 @@ test("an inline row action submits only the row containing its form", async ({pa
   await expect(page.locator("[data-sc-row-id='202'] [data-sc-action-result]")).toContainText("Recorded");
 });
 
-test("Copy diagnostics preserves parameterized SQL and separate values", async ({page}) => {
+test("Copy SQL copies the runnable SQL rather than the displayed query", async ({page}) => {
   await load(page, `
     <button type="button" data-sc-debug-copy="parameterized"
-      data-sc-debug-copy-source="diagnostics">Copy diagnostics</button>
+      data-sc-debug-copy-source="runnable">Copy SQL</button>
     <pre id="parameterized">SELECT * FROM load WHERE id = $1</pre>
-    <pre id="diagnostics" hidden>{"sql":"SELECT * FROM load WHERE id = ?","parameters":["42"]}</pre>
+    <pre id="runnable" hidden>SELECT * FROM load WHERE id = '42'</pre>
   `);
   await page.evaluate(() => {
     Object.defineProperty(navigator, "clipboard", {
@@ -2223,7 +2223,7 @@ test("Copy diagnostics preserves parameterized SQL and separate values", async (
 
   await page.locator("[data-sc-debug-copy]").click();
   await expect.poll(() => page.evaluate(() => window.copiedDebugSql)).toBe(
-    '{"sql":"SELECT * FROM load WHERE id = ?","parameters":["42"]}'
+    "SELECT * FROM load WHERE id = '42'"
   );
   await expect(page.locator("[data-sc-debug-copy]")).toHaveText("Copied");
 });

@@ -1,7 +1,10 @@
 package Selecto::Components::Renderer::Debug;
 
 use Mojo::Base -base, -signatures;
+use B ();
+use Encode ();
 use Mojo::JSON qw(to_json);
+use Scalar::Util qw(blessed);
 use Selecto::Components::Renderer::Markup;
 
 sub _debug_panel ($class, $result, $model) {
@@ -63,17 +66,18 @@ sub _debug_query ($id, $title, $query, $adapter = undef) {
         '<li><span>$' . ($index + 1) . '</span><code>' .
             _h(_debug_parameter($parameters->[$index])) . '</code></li>'
     } 0 .. $#$parameters) . '</ol>' : '<p class="sc-debug-no-params">No bound parameters.</p>';
-    my $copy_id = $id . '-diagnostics';
+    my $copy_id = $id . '-sql';
     my $readable_sql = _readable_sql($query->{sql}, $adapter);
-    my $diagnostics = to_json({format => 'selecto-query-diagnostics-v1',
-        adapter => $adapter, sql => $query->{sql}, parameters => $parameters});
+    my $runnable_sql = _format_sql(_readable_sql(
+        _interpolate_sql($query->{sql}, $parameters, $adapter), $adapter,
+    ));
     return '<article class="sc-debug-query"><header><h4>' . _h($title) . '</h4>' .
         '<button class="sc-button sc-secondary" type="button" data-sc-debug-copy="' .
-        _h($id) . '" data-sc-debug-copy-source="' . _h($copy_id) . '">Copy diagnostics</button></header>' .
+        _h($id) . '" data-sc-debug-copy-source="' . _h($copy_id) . '">Copy SQL</button></header>' .
         '<pre id="' . _h($id) . '"><code class="sc-sql">' .
         _highlight_sql($readable_sql) . '</code></pre>' .
         '<pre id="' . _h($copy_id) . '" hidden aria-hidden="true">' .
-        _h($diagnostics) . '</pre>' .
+        _h($runnable_sql) . '</pre>' .
         '<div class="sc-debug-parameter-block"><h5>Bound parameters</h5>' .
         $parameter_list . '</div></article>';
 }
@@ -100,6 +104,75 @@ sub _readable_sql ($sql, $adapter = undef) {
             if $identifier =~ /\A[a-z_][a-z0-9_\$]*\z/ && !$reserved{$identifier};
         return $token;
     });
+}
+
+# The statement with its bound values written in as literals, for pasting
+# into a SQL console. Only placeholder tokens outside strings, quoted
+# identifiers and comments are replaced; $N takes the Nth value and each ?
+# the next one. A placeholder with no value is left as it is.
+sub _interpolate_sql ($sql, $parameters, $adapter = undef) {
+    my $dialect = lc($adapter // '');
+    my $next = 0;
+    return _map_sql_tokens($sql, sub ($token, $kind) {
+        my $index;
+        if ($kind eq 'postgresql_parameter') {
+            $index = substr($token, 1) - 1;
+        } elsif ($kind eq 'question_parameter' && $dialect ne 'postgresql') {
+            $index = $next++;
+        } else {
+            return $token;
+        }
+        return $token unless $index >= 0 && $index <= $#$parameters;
+        return _sql_literal($parameters->[$index], $dialect);
+    });
+}
+
+sub _sql_literal ($value, $dialect) {
+    return 'NULL' unless defined $value;
+    my $class = blessed($value) // '';
+    if ($class =~ /Boolean\z/ || $class eq 'Types::Serialiser::BooleanBase') {
+        return $dialect =~ /\A(?:sqlite|mssql)\z/
+            ? ($value ? '1' : '0') : ($value ? 'TRUE' : 'FALSE');
+    }
+    if (ref($value) eq 'ARRAY') {
+        if ($dialect eq 'postgresql') {
+            # An untyped array literal resolves against the column's array
+            # type, as the bound value did.
+            my $text = '{' . join(',', map {
+                defined($_) ? '"' . ("$_" =~ s/(["\\])/\\$1/gr) . '"' : 'NULL'
+            } @$value) . '}';
+            return _sql_string($text, $dialect);
+        }
+        return '[' . join(', ', map { _sql_literal($_, $dialect) } @$value) . ']'
+            if $dialect eq 'duckdb';
+        return _sql_string(to_json($value), $dialect);
+    }
+    return _sql_string(to_json($value), $dialect) if ref($value) && !length($class);
+    unless (ref $value) {
+        my $flags = B::svref_2object(\$value)->FLAGS;
+        if (($flags & (B::SVp_IOK() | B::SVp_NOK())) && !($flags & B::SVp_POK())
+            && "$value" =~ /\A-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?\z/) {
+            # Parenthesized, so "-$1" cannot become a "--" comment.
+            return "$value" =~ /\A-/ ? "($value)" : "$value";
+        }
+    }
+    return _sql_string("$value", $dialect);
+}
+
+sub _sql_string ($text, $dialect) {
+    if ($dialect eq 'mysql' || $dialect eq 'mariadb') {
+        # Backslash meaning depends on NO_BACKSLASH_ESCAPES; a hex literal
+        # with a character set introducer is the same string in either mode.
+        return '_utf8mb4 X\'' . unpack('H*', Encode::encode('UTF-8', $text)) . "'"
+            if $text =~ /[\\\x00-\x1f\x7f]/;
+        return "'" . ($text =~ s/'/''/gr) . "'";
+    }
+    if ($dialect eq 'postgresql' && $text =~ /\\/) {
+        # E'' reads backslashes as escapes whatever standard_conforming_strings is.
+        return "E'" . ($text =~ s/\\/\\\\/gr =~ s/'/''/gr) . "'";
+    }
+    my $quoted = "'" . ($text =~ s/'/''/gr) . "'";
+    return $dialect eq 'mssql' ? "N$quoted" : $quoted;
 }
 
 sub _map_sql_tokens ($sql, $mapper) {
