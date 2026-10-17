@@ -142,8 +142,10 @@ separate disposable databases, set both `SELECTO_PERL_STACK_POSTGRES_URL` and
 HTTP/browser checks pass for the controlled flat detail subset.
 
 The current `perl-stack:certify` task uses **Elixir/PostgreSQL for all four
-selected native API profiles**. It intentionally exits nonzero while four
-Elixir bounded-collection cases fail. Earlier Go query/collection certificates
-remain historical evidence; the current peer is Elixir. Do not use the passing
-Vue checks as a substitute for those native failures or formal transport/SPA
-qualification. See workspace `STATUS.md` for the current gaps and exact reports.
+selected native API profiles**. After reconciliation with the current core and
+adapters, the controlled pair passes all 52 target checks and 26 differential
+comparisons. The task still exits nonzero if any required case fails. Earlier
+Go certificates and failed collection attempts remain historical evidence.
+The current peer is Elixir. These native certificates and eight HTTP/Vue checks
+remain separate from formal transport/SPA qualification. See workspace
+`STATUS.md` for the current gaps and exact reports.
