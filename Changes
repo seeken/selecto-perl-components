@@ -1,6 +1,34 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - A canned page shows a multiple text control as a textarea, so a list
+      of values can be pasted one per line.
+    - Canned pages: a column_layout entry no longer takes a kind; it follows
+      from the entry's keys (field, fields, collection, url_prefix,
+      row_number), and kind is refused. The former join is a fields entry.
+      A collection entry names the association, and the new
+      layout_selections builds a detail query's selections from the layout.
+    - Canned layout fields and nested fields take a format (a
+      Selecto::DateFormat name, such as the new us_date and us_datetime),
+      applied in SQL; layout_selections takes the timezone to show them in.
+      The display formats are not offered for Explorer grouping.
+    - A canned page with one view and no controls shows no filter panel or
+      Apply filters button; the results take the full width.
+    - Action prerequisite columns (can_<action>, from Selecto's action
+      preconditions and transitions) appear in the Explorer as columns and
+      Yes/No filters only while the action authorizer shows their action;
+      for a hidden action, both are removed from the request's domain.
+    - API console 0.5.11: discovers the canonical getResource route (and still
+      the customer API's getCustomerResourceVersion), and chooses between POST
+      query and GET resource with radio buttons, shown only when the API
+      offers resource GET.
+    - An authored query-library segment without parameters may filter on
+      internal fields, directly or through a view. Segments that take
+      parameters remain refused on internal fields.
+    - The Explorer grid, its counts and its CSV/TSV/JSON and XLSX exports ask
+      Selecto::PostgreSQL for canonical values, which it no longer returns
+      by default, so they are unchanged (2.5, not 2.50; ISO timestamps)
+      whatever the host's adapter options. Other adapters ignore the option.
     - Exports check their database deadline with defer_rearm, so the server
       timeout is refreshed before each FETCH rather than once per exported
       row (removes a database round trip per row).

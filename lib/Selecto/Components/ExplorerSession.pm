@@ -2,7 +2,7 @@ package Selecto::Components::ExplorerSession;
 
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(decode_json encode_json);
-use JSON::PP ();
+use Cpanel::JSON::XS ();
 use Selecto::Components::ResponseBudget ();
 use Selecto::Limits ();
 use Time::HiRes qw(time);
@@ -73,7 +73,7 @@ sub prepare ($self, $input, $patch = undef, $refresh = 0) {
     die "Explorer state is too large\n" if length($encoded) > 131_072;
     # Re-running the identical view is an explicit request for fresh data.
     # Paging and presentation changes can reuse exact SQL within the short TTL.
-    my $json = JSON::PP->new->canonical;
+    my $json = Cpanel::JSON::XS->new->canonical;
     my %comparable = %$input;
     delete @comparable{qw(render_scope reuse_count query_signature)};
     my %previous = %{$self->input // {}};

@@ -20,11 +20,17 @@ sub _results ($class, $model) {
         unless $model->{state}->valid && $model->{result};
     my $result = $model->{result};
     my $heading = $class->heading_for_view($model->{state}->view);
-    my $row_label = $result->{total_count} == 1 ? 'row matched' : 'rows matched';
+    # An aggregate page with more after it was not counted (no count query): say what is known.
+    my $counted = !exists($result->{total_known}) || $result->{total_known};
+    my $row_label = ($result->{total_count} // 0) == 1 ? 'row matched' : 'rows matched';
     my $page_label = $result->{total_pages} == 1 ? 'page' : 'pages';
+    my $matched = $counted
+        ? '<strong>' . _h($result->{total_count}) . '</strong> ' . $row_label .
+          ' · <strong>' . _h($result->{total_pages}) . '</strong> ' . $page_label
+        : '<strong>' . _h($result->{count}) . '</strong> ' . ($result->{count} == 1 ? 'row' : 'rows') .
+          ' on this page · more on the next';
     my $meta = '<div class="sc-result-meta"><div><h2>' . _h($heading) .
-        '</h2>' . $class->_retarget_note($model) . '</div><div><strong>' . _h($result->{total_count}) . '</strong> ' . $row_label .
-        ' · <strong>' . _h($result->{total_pages}) . '</strong> ' . $page_label .
+        '</h2>' . $class->_retarget_note($model) . '</div><div>' . $matched .
         ' · <strong>' . _h($result->{elapsed_ms}) . ' ms</strong> query time</div></div>';
     my $actions = $model->{state}->view eq 'detail'
         ? $class->_bulk_actions($model) : '';
@@ -1031,6 +1037,7 @@ sub _pagination ($class, $model, $position = 'bottom') {
     return '' if $model->{result}{grid_data} || $state->view eq 'graph';
     my $current_page = $state->page;
     my $total_pages = $model->{result}{total_pages};
+    my $counted = !exists($model->{result}{total_known}) || $model->{result}{total_known};
     my $buttons = $class->pagination_buttons($current_page, $total_pages);
     my $hidden = '';
     my $pairs = $state->query_pairs;
@@ -1047,7 +1054,7 @@ sub _pagination ($class, $model, $position = 'bottom') {
     return '<nav class="sc-pagination sc-pagination-' . _h($position) .
         '" data-sc-pagination-position="' . _h($position) .
         '" aria-label="Results pages, ' . _h($position) . '"><span>Page ' . _h($current_page) .
-        ' of ' . _h($total_pages) . '<span class="sc-pagination-status" ' .
+        ($counted ? ' of ' . _h($total_pages) : '') . '<span class="sc-pagination-status" ' .
         'data-sc-pagination-status role="status" aria-live="polite" hidden></span></span>' .
         $controls . '</nav>';
 }

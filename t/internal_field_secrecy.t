@@ -11,7 +11,8 @@ use Selecto::Components::Explorer ();
 
 # PE :123/FV-03 through the Explorer request path: query-library names and
 # choice filters are not permission to read internal fields. Sorting or
-# filtering by one would reveal its values row by row.
+# filtering by one would reveal its values row by row. An authored segment
+# without parameters is an internal use: it may filter on internal fields.
 
 plan skip_all => 'DBD::SQLite is not installed' unless eval { require DBD::SQLite; 1 };
 
@@ -90,8 +91,6 @@ my %refused = (
     'a view ordering by an internal field' => [query_library_view => 'secret_listing'],
     'a parameterized segment on an internal field' => [query_library_segment => 'secret_at_least',
         query_library_param_name => 'min', query_library_param_value => 150],
-    'a fixed segment on an internal field' => [query_library_segment => 'vip_only'],
-    'a view segment on an internal field' => [query_library_view => 'vip_listing'],
     'an undeclared value on a choice filter over an internal field' => [filter('secret_code', 'eq', 300)],
     'a range on a choice filter over an internal field' => [filter('secret_code', 'gt', 150)],
     'an undeclared value among declared ones' => [filter('secret_code', 'in', '100,300')],
@@ -108,6 +107,10 @@ for my $name (sort keys %refused) {
 
 is_deeply(ids(request($explorer, query_library_segment => 'named')), [1, 2, 3],
     'a segment on public fields still applies');
+is_deeply(ids(request($explorer, query_library_segment => 'vip_only')), [1, 3],
+    'a fixed segment applies its authored filter on an internal field');
+is_deeply(ids(request($explorer, query_library_view => 'vip_listing')), [1, 3],
+    'a view segment applies its authored filter on an internal field');
 is_deeply(ids(request($explorer, filter('secret_code', 'eq', 100))), [2],
     'a declared choice still filters an internal field');
 is_deeply(ids(request($explorer, filter('code_or_backup', 'in', '100'))), [2],
