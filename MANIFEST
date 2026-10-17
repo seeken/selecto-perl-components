@@ -4,6 +4,7 @@ MANIFEST
 MANIFEST.SKIP
 Makefile.PL
 README.md
+docs/canonical-stack.md
 THIRD_PARTY_NOTICES.md
 cpanfile
 docs/explorer-sessions.md
@@ -15,6 +16,10 @@ lib/Selecto/Components/AssetManifest.pm
 lib/Selecto/Components/BucketParser.pm
 lib/Selecto/Components/CannedPage.pm
 lib/Selecto/Components/Config.pm
+lib/Selecto/Components/Canonical.pm
+examples/canonical-stack.pl
+examples/lib/CanonicalStack.pm
+t/canonical_stack_postgresql.t
 lib/Selecto/Components/Controller/Actions.pm
 lib/Selecto/Components/Controller/Explorer.pm
 lib/Selecto/Components/Controller/Lookups.pm

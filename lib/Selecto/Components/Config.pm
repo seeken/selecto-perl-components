@@ -63,6 +63,9 @@ has 'api_console_resolver';
 has 'websocket_message_cleanup';
 has 'websocket_context';
 has 'result_cache_namespace';
+has [qw(canonical_api_path canonical_authorizer canonical_publication)];
+has canonical_publish_domain => 0;
+has canonical_field_encodings => sub { {} };
 has websocket_mode => 'protected';
 has websocket_enabled => 1;
 has websocket_session_options => sub { {} };
@@ -80,6 +83,14 @@ sub new ($class, @args) {
     die "explorer path must start with /\n"
         unless defined($self->path) && $self->path =~ m{\A/[A-Za-z0-9/_-]*\z};
     die "explorer engine_factory must be a coderef\n" unless ref($self->engine_factory) eq 'CODE';
+    if (defined $self->canonical_api_path) {
+        die "canonical_api_path must be an absolute path without a trailing slash\n"
+            unless !ref($self->canonical_api_path)
+                && $self->canonical_api_path =~ m{\A/[A-Za-z0-9/_-]*[A-Za-z0-9_-]\z};
+        for my $callback (qw(canonical_authorizer canonical_publication)) {
+            die "$callback must be a host callback\n" unless ref($self->$callback) eq 'CODE';
+        }
+    }
     die "default_limit must be a positive integer\n"
         unless $self->default_limit =~ /\A\d+\z/ && $self->default_limit > 0;
     die "max_limit must be at least default_limit\n"
@@ -258,6 +269,7 @@ sub engine ($self, $controller) {
     my $engine = $self->engine_factory->($controller);
     die "engine_factory did not return a Selecto::Engine\n"
         unless blessed($engine) && $engine->isa('Selecto::Engine');
+    $engine->assert_tenant_boundary(access => 'read');
     return $engine;
 }
 

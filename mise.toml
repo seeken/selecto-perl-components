@@ -7,7 +7,7 @@ PORT = "4128"
 
 [tasks.test]
 description = "Run the Selecto Components Perl test suite"
-run = "script/with-local-sibling mise exec -- perl -S prove -lr t"
+run = 'script/with-local-sibling "$(mise which perl)" "$(dirname "$(mise which perl)")/prove" --exec "$(mise which perl)" -lr t'
 
 [tasks.assets]
 description = "Build and sync shared web assets and the API Console from local siblings or npm"
@@ -27,4 +27,33 @@ run = "script/with-local-sibling mise exec -- perl -Ilib examples/northwind.pl"
 
 [tasks.verify]
 description = "Run syntax, unit, WebSocket, and distribution checks"
-run = "mise run assets:check && mise run test:browser && script/with-local-sibling sh -c 'if mise exec -- perl -MSelecto::Perl::Northwind::Database -e 1 >/dev/null 2>&1; then mise exec -- perl -Ilib -c examples/northwind.pl; else echo \"Skipping optional Northwind example compile (fixture not checked out)\"; fi; mise exec -- perl -S prove -lr t && mise exec -- perl Makefile.PL && make test'"
+run = '''
+set -eu
+mise run assets:check
+mise run test:browser
+selecto_test_perl=$(mise which perl)
+if script/with-local-sibling "$selecto_test_perl" -MSelecto::Perl::Northwind::Database -e 1 >/dev/null 2>&1; then
+  script/with-local-sibling "$selecto_test_perl" -Ilib -c examples/northwind.pl
+else
+  echo "Skipping optional Northwind example compile (fixture not checked out)"
+fi
+script/with-local-sibling "$selecto_test_perl" "$(dirname "$selecto_test_perl")/prove" --exec "$selecto_test_perl" -lr t
+script/with-local-sibling "$selecto_test_perl" Makefile.PL
+script/with-local-sibling make test
+'''
+
+[tasks."stack:setup"]
+description = "Create synthetic stack tables once in an explicitly owned database"
+run = 'script/with-local-sibling mise exec -- perl -Ilib examples/canonical-stack.pl setup'
+
+[tasks."stack:server"]
+description = "Serve native HTMX, canonical API and the built Vue app on localhost"
+run = 'script/with-local-sibling mise exec -- perl -Ilib examples/canonical-stack.pl daemon -l "http://127.0.0.1:${SELECTO_PERL_STACK_HTTP_PORT:-4187}"'
+
+[tasks."test:canonical-stack"]
+description = "Run real PostgreSQL HTTP/session checks for the shared explorer service"
+run = '''
+: "${SELECTO_PERL_STACK_POSTGRES_URL:?Set the owned stack fixture URL}"
+export SELECTO_REMOTE_REQUIRE_POSTGRES=1
+script/with-local-sibling "$(mise which perl)" "$(dirname "$(mise which perl)")/prove" --exec "$(mise which perl)" -lv t/canonical_stack_postgresql.t
+'''
