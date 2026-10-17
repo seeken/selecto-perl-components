@@ -23,11 +23,14 @@
 
   function filterOperatorsForType(type, choices) {
     if (choices) {
+      // Choices pick the value; the field's type still decides which
+      // operators the server accepts (a boolean takes no "one of").
+      var allowed = filterOperatorsForType(type, false).map(function (entry) { return entry[0]; });
       return [
         ["eq", "equals"], ["ne", "does not equal"],
         ["in", "one of"], ["not_in", "not one of"],
         ["is_null", "is empty"], ["not_null", "is not empty"]
-      ];
+      ].filter(function (entry) { return allowed.indexOf(entry[0]) !== -1; });
     }
     if (booleanFilterType(type)) {
       return [["eq", "is"], ["is_null", "is empty"], ["not_null", "is not empty"]];
@@ -272,7 +275,7 @@
     operatorLabel.appendChild(operator);
     editor.appendChild(operatorLabel);
     item.appendChild(editor);
-    if (choice.dataset.scFilterChoices) operator.value = "in";
+    if (choice.dataset.scFilterChoices && operator.querySelector('option[value="in"]')) operator.value = "in";
     rebuildFilterValues(item, "", "");
     var promote = document.createElement("label");
     promote.className = "sc-filter-promote";

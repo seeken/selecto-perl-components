@@ -299,7 +299,7 @@ like $library_statement->sql, qr/"s0"\."units_in_stock" < \$1/,
     'a named view segment compiles as a governed query constraint';
 like $library_statement->sql, qr/"s0"\."unit_price" >= \$2/,
     'additional named segments compose with the named view';
-is_deeply $library_statement->params, [8, '25.50'],
+is_deeply $library_statement->params, [8, 25.5],
     'query-library values remain bound and typed';
 is_deeply $library_result->{query}->applied_query_library->{segments},
     [qw(low_stock premium)], 'component-built queries retain named-segment provenance';
@@ -598,7 +598,9 @@ my $incompatible_grid_statement = $postgresql->compile(
 );
 ok !$incompatible_grid_result->{aggregate_grid},
     'an incompatible aggregate shape falls back to the rollup table';
-like $incompatible_grid_statement->sql, qr/LIMIT 25 OFFSET 25\z/,
+# An aggregate page fetches one row beyond its 25, which says whether another page follows
+# (no count query).
+like $incompatible_grid_statement->sql, qr/LIMIT 26 OFFSET 25\z/,
     'an incompatible grid request retains ordinary aggregate pagination';
 
 my $multi_measure_state = Selecto::Components::State->from_input($config, $domain, {
@@ -632,7 +634,7 @@ like $multi_measure_statement->sql, qr/GROUP BY ROLLUP \(CASE WHEN "s0"\."unit_p
 like $multi_measure_statement->sql, qr/GROUPING\(CASE WHEN .*?\) AS "__selecto_rollup_grouping"/,
     'aggregate rollup carries governed grouping metadata for hierarchy rendering';
 like $multi_measure_statement->sql,
-    qr/\ASELECT \* FROM \(SELECT .*\) AS rollupfix ORDER BY 5 DESC, 1 ASC NULLS LAST LIMIT 25 OFFSET 0\z/s,
+    qr/\ASELECT \* FROM \(SELECT .*\) AS rollupfix ORDER BY 5 DESC, 1 ASC NULLS LAST LIMIT 26 OFFSET 0\z/s,
     'one-level bucket rollups sort the grand total separately from data NULL buckets';
 unlike $multi_measure_statement->sql, qr/ORDER BY CASE/,
     'the rollup outer sort does not rebuild the parameterized bucket expression';
@@ -1082,12 +1084,11 @@ my $shortcut_statement = $postgresql->compile(
     $domain,
     Selecto::Components::QueryBuilder->build($config, $domain, $shortcut_state)->{query},
 );
-my @this_year = Selecto::Components::DateShortcut->bounds('this_year');
 like $shortcut_statement->sql,
-    qr/\("s0"\."created_on" >= \$1\) AND \("s0"\."created_on" < \$2\)/,
-    'date shortcut compiles to a half-open governed range';
-is_deeply $shortcut_statement->params, \@this_year,
-    'date shortcut bounds remain bound parameters';
+    qr/\("s0"\."created_on" >= CAST\(DATE_TRUNC\('year', CURRENT_DATE\) AS DATE\)\) AND \("s0"\."created_on" < CAST\(CAST\(DATE_TRUNC\('year', CURRENT_DATE\) AS DATE\) \+ MAKE_INTERVAL\(months => 12\) AS DATE\)\)/,
+    'date shortcut compiles to a half-open range from the database current date';
+is_deeply $shortcut_statement->params, [],
+    'date shortcut bounds follow the session, not server-bound dates';
 
 my $recurring_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1,
@@ -1102,13 +1103,9 @@ my $recurring_statement = $postgresql->compile(
     $domain,
     Selecto::Components::QueryBuilder->build($config, $domain, $recurring_state)->{query},
 );
-my $recurring_plan = Selecto::Components::DateShortcut->plan('mtd_all_years');
 like $recurring_statement->sql,
-    qr/TO_CHAR\("s0"\."created_on", 'MM-DD'\) >= \$1\).*TO_CHAR\("s0"\."created_on", 'MM-DD'\) <= \$2/,
+    qr/TO_CHAR\("s0"\."created_on", 'MM-DD'\) >= TO_CHAR\(CAST\(DATE_TRUNC\('month', CURRENT_DATE\) AS DATE\), 'MM-DD'\)\).*TO_CHAR\("s0"\."created_on", 'MM-DD'\) <= TO_CHAR\(CURRENT_DATE, 'MM-DD'\)/,
     'all-years date shortcut compiles as a recurring month/day range';
-is_deeply $recurring_statement->params,
-    [$recurring_plan->{start}, $recurring_plan->{end}],
-    'recurring shortcut boundaries remain bound parameters';
 
 my $collection_contract = $domain->contract;
 $collection_contract->{source}{associations}{variants} = {

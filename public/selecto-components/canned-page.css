@@ -3,6 +3,10 @@
   --sc-tray-width: clamp(300px, 29vw, 390px);
 }
 
+.selecto-canned-page .sc-workspace.selecto-canned-no-controls {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .selecto-canned-controls {
   border-left: 1px solid var(--sc-border);
   border-radius: var(--sc-radius);
@@ -23,6 +27,17 @@
   font-size: .88rem;
   font-weight: 500;
   gap: 8px;
+}
+.selecto-canned-controls textarea {
+  background: var(--sc-control-bg);
+  border: 1px solid var(--sc-control-border);
+  border-radius: 8px;
+  box-sizing: border-box;
+  color: var(--sc-ink);
+  margin-top: 6px;
+  padding: 7px 9px;
+  resize: vertical;
+  width: 100%;
 }
 .selecto-canned-controls input[type="checkbox"] {
   accent-color: var(--sc-accent);

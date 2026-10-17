@@ -946,12 +946,33 @@ my $readable_membership_sql = Selecto::Components::Renderer::Debug::_readable_sq
 is $readable_membership_sql,
     'SELECT s0.id, s0."order" FROM load AS s0 WHERE s0.id = $1',
     'debug SQL removes only unnecessary PostgreSQL identifier quotes';
-my $diagnostics_html = Selecto::Components::Renderer::Debug::_debug_query('unsafe', 'Query',
-    {sql => 'SELECT name FROM products WHERE name = ?', params => ["x\\' OR 1=1 -- ", undef]}, 'mysql');
-my $diagnostics = Mojo::DOM->new($diagnostics_html)->at('pre[hidden]')->text;
-my $decoded_diagnostics = Mojo::JSON::from_json($diagnostics);
-is $decoded_diagnostics->{sql}, 'SELECT name FROM products WHERE name = ?', 'copied diagnostic SQL remains parameterized';
-is_deeply $decoded_diagnostics->{parameters}, ["x\\' OR 1=1 -- ", undef], 'copied values remain separate JSON data';
+my $copy_html = Selecto::Components::Renderer::Debug::_debug_query('unsafe', 'Query',
+    {sql => 'SELECT name FROM products WHERE name = ? AND note = ? AND id = ?',
+        params => ["x\\' OR 1=1 -- ", undef, 7]}, 'mysql');
+my $copy_dom = Mojo::DOM->new($copy_html);
+is $copy_dom->at('button[data-sc-debug-copy]')->text, 'Copy SQL', 'the copy button copies SQL';
+is $copy_dom->at('pre[hidden]')->text,
+    "SELECT name\nFROM products\nWHERE name = _utf8mb4 X'785c27204f5220313d31202d2d20'\n  AND note = NULL\n  AND id = 7",
+    'copied MySQL SQL has its values written in, backslash strings as hex in either escape mode';
+
+my $interpolate = \&Selecto::Components::Renderer::Debug::_interpolate_sql;
+is $interpolate->(q{SELECT 1 FROM t WHERE a = $2 AND b = $1 AND c = '$1' AND d = $3 -- $1},
+    ["it's", 'x\\y'], 'postgresql'),
+    q{SELECT 1 FROM t WHERE a = E'x\\\\y' AND b = 'it''s' AND c = '$1' AND d = $3 -- $1},
+    'PostgreSQL values are quoted by position, never inside strings or comments, unbound ones kept';
+is $interpolate->('SELECT 1 FROM t WHERE a ? b AND c = $1', ['k'], 'postgresql'),
+    q{SELECT 1 FROM t WHERE a ? b AND c = 'k'}, 'beside $N placeholders a PostgreSQL ? is an operator';
+is $interpolate->(q{SELECT 1 FROM t WHERE a = ? AND b = '?' AND c = ?}, ["it's", 5], 'postgresql'),
+    q{SELECT 1 FROM t WHERE a = 'it''s' AND b = '?' AND c = 5},
+    'without $N placeholders each PostgreSQL ? is one, as DBD::Pg reads it';
+is $interpolate->('SELECT 1 - $1, $2, $3', [-3, 2.5, '42'], 'postgresql'),
+    q{SELECT 1 - (-3), 2.5, '42'}, 'numbers stay bare, negatives cannot start a comment, numeric strings stay strings';
+is $interpolate->('SELECT 1 WHERE id = ANY($1) AND ok = $2', [[1, 'a"b', undef], Mojo::JSON::true], 'postgresql'),
+    q{SELECT 1 WHERE id = ANY(E'{"1","a\\\\"b",NULL}') AND ok = TRUE}, 'PostgreSQL arrays and booleans';
+is $interpolate->('SELECT ? , ?', ["o'k", Mojo::JSON::false], 'mssql'),
+    q{SELECT N'o''k' , 0}, 'SQL Server strings and booleans';
+is $interpolate->('SELECT ?, ?', ["a\\b", [1, 'x']], 'duckdb'),
+    q{SELECT 'a\\b', [1, 'x']}, 'DuckDB keeps backslashes literal and writes lists';
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
     ->status_is(200)
@@ -1037,10 +1058,17 @@ $t->get_ok('/explore/products?q=1&view=detail&field=created_on&filter_field=crea
     ->content_like(qr/ytd_all_years/)
     ->element_exists('[data-field="created_on"] select[name="filter_value"] option[value="this_year"][selected]')
     ->text_is('[data-field="created_on"] select[name="filter_value"] option[value="this_year"]' => 'This Year');
-my @this_year = Selecto::Components::DateShortcut->bounds('this_year');
-is_deeply TestSelectoComponents::Adapter::_predicate_values(
-    $TestSelectoComponents::Adapter::LAST_QUERY->predicate,
-), \@this_year, 'This Year shortcut binds its half-open date range';
+my @shortcuts;
+my $find_shortcuts;
+$find_shortcuts = sub {
+    my ($node) = @_;
+    return unless ref($node) && $node->isa('Selecto::Expression');
+    push @shortcuts, $node->arguments->[1] if $node->kind eq 'date_shortcut';
+    $find_shortcuts->($_) for map { ref($_) eq 'ARRAY' ? @$_ : $_ } @{$node->arguments};
+};
+$find_shortcuts->($TestSelectoComponents::Adapter::LAST_QUERY->predicate);
+is_deeply \@shortcuts, ['this_year'],
+    'This Year shortcut reaches the query for the database to measure';
 
 $t->get_ok('/explore/products?q=1&view=aggregate&field=created_on&field_alias=&field_format=&group=created_on&group_alias=Month&group_format=month&measure=count&order=created_on&direction=asc&limit=25&page=1')
     ->status_is(200)
@@ -1208,8 +1236,10 @@ $t->get_ok('/explore/products?q=1&view=aggregate&aggregate_grid=1&field=product_
         'Grid view requires exactly two Group By fields and one Aggregate.')
     ->element_exists('.sc-table-wrap:not(.sc-aggregate-grid-wrap)')
     ->element_exists('.sc-pagination');
-is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, 25,
-    'an incompatible grid shape retains normal aggregate pagination';
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, 26,
+    'normal aggregate pagination fetches one bounded overflow sentinel';
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->offset_value, 25,
+    'an incompatible grid shape retains the requested second-page offset';
 
 $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&field_alias=&field_format=&group=unit_price&group_alias=Price+band&group_format=buckets&group_bucket_ranges=0-10%2C+11%2B&group_prefix_length=2&group_exclude_articles=1&measure=count&measure_alias=Products&measure_function=count&measure_bucket_ranges=&measure_ignore_nulls=0&measure=total_price&measure_alias=Price+counts&measure_function=buckets&measure_bucket_ranges=0-10%2C+11%2B&measure_ignore_nulls=0&order=product_name&direction=asc&limit=25&page=1')
     ->status_is(200)

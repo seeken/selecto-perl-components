@@ -7,14 +7,14 @@ use warnings;
 use Mojo::Base -base, -signatures;
 use Digest::SHA qw(hmac_sha256_hex);
 use Encode qw(encode_utf8);
-use JSON::PP ();
+use Cpanel::JSON::XS ();
 use Mojo::Util qw(secure_compare url_escape xml_escape);
 use Scalar::Util qw(blessed);
 use Selecto::Components::Actions ();
 use Selecto::Components::RecordEditor ();
 use Selecto::Components::Renderer::Results ();
 
-my $JSON = JSON::PP->new->canonical->allow_nonref;
+my $JSON = Cpanel::JSON::XS->new->canonical->allow_nonref;
 
 sub show ($class, $controller, $explorer) {
     my ($context, $error) = _context($controller, $explorer);

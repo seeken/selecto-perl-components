@@ -1352,9 +1352,10 @@ sub _query_library_state ($domain, $input, $errors, $limits) {
         1;
     };
     push @$errors, 'Complete the query-library parameters with valid values.' unless $ok;
-    # Segments are not permission to filter on an internal field: with a
-    # parameter, a caller could probe its value.
-    if ($ok && @effective_segments) {
+    # An authored segment may filter on internal fields: that is an internal
+    # use. A segment that takes parameters may not, since a caller could probe
+    # an internal value through them.
+    if ($ok && @effective_segments && %$specs) {
         my @paths = eval {
             Selecto::Expression->field_references(Selecto::QueryLibrary->apply_segments(
                 $domain, Selecto::Query->new, \@effective_segments, $normalized, $limits,

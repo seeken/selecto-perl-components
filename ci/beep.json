@@ -1,0 +1,74 @@
+{
+  "schema": "selecto.perl.beep.v1",
+  "repository": "seeken/selecto-perl-components",
+  "default_branch": "main",
+  "runtime": {
+    "perl": "5.40.2.1",
+    "actual_perl": "v5.40.2",
+    "python": "3.14.3",
+    "mise": "2026.10.3"
+  },
+  "sources": [
+    {
+      "repository": "seeken/selecto-perl",
+      "commit": "5c6d7f18c5951d93c0bbe6f7bd2b0901d172ed58",
+      "access": "public"
+    },
+    {
+      "repository": "seeken/selecto-api-console",
+      "commit": "03e6f926b055309babc09e47eca9b8ef3b45c6c8",
+      "access": "public"
+    }
+  ],
+  "modules": [
+    "DBI",
+    "Mojolicious",
+    "DateTime",
+    "DateTime::TimeZone",
+    "Excel::Writer::XLSX",
+    "Text::CSV",
+    "DBD::SQLite",
+    "DBD::Pg",
+    "Selecto",
+    "Selecto::Components",
+    "URI::Escape"
+  ],
+  "module_sources": {
+    "Selecto": "../selecto-perl/lib",
+    "Selecto::Components": "lib"
+  },
+  "stages": {
+    "checkout": {},
+    "dependencies": {},
+    "required-prerequisites": {},
+    "unit": {
+      "minimum_tests": 2591,
+      "require_no_skips": true
+    },
+    "distribution-configure": {},
+    "distribution-test": {
+      "minimum_tests": 2591,
+      "require_no_skips": true
+    },
+    "diagnostics": {},
+    "postgres-start": {
+      "timeout_seconds": 180
+    },
+    "npm-dependencies": {},
+    "browser-install": {},
+    "asset-web": {},
+    "asset-api": {},
+    "generated-bundle": {},
+    "browser": {},
+    "optional-northwind": {},
+    "diagnostics-prerequisites": {},
+    "browser-summary": {}
+  },
+  "required_env": [
+    "SELECTO_PERL_TEST_POSTGRES_URL"
+  ],
+  "optional_targets": [
+    "Northwind example syntax/smoke when optional demo is absent."
+  ],
+  "browser_minimum_tests": 106
+}

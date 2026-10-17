@@ -109,7 +109,15 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             && @{$raw->{rows}} > $config->max_grid_result_cells ? 1 : 0;
         my $total_count;
         my ($count_statement, $count_compile_ms, $count_query_ms, $count_cache_hit);
-        if ($all_rows || $grid_all_rows) {
+        # Aggregate pages need no count query (QueryBuilder fetched one row beyond the page):
+        # without that row this is the last page and the total is known; with it, another
+        # page follows and the total is left unknown (undef).
+        my $more_pages;
+        if ($built->{peek}) {
+            $more_pages = @{$raw->{rows}} > $state->limit ? 1 : 0;
+            $raw = {%$raw, rows => [@{$raw->{rows}}[0 .. $state->limit - 1]]} if $more_pages;
+            $total_count = $more_pages ? undef : ($state->page - 1) * $state->limit + @{$raw->{rows}};
+        } elsif ($all_rows || $grid_all_rows) {
             $total_count = scalar @{$raw->{rows}};
         } else {
             my $count_query = defined($built->{count_selections})
@@ -139,6 +147,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         }
         my $elapsed_ms = _elapsed_ms($started);
         my $total_pages = $all_rows || $grid_all_rows ? 1
+            : !defined($total_count) ? $state->page + 1   # at least the next one
             : int(($total_count + $state->limit - 1) / $state->limit);
         $total_pages = 1 if $total_pages < 1;
         my $transform_started = time;
@@ -177,6 +186,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             grid_limit_exceeded => $grid_limit_exceeded,
             count => $returned_count,
             total_count => $total_count,
+            total_known => defined($total_count) ? 1 : 0,   # an aggregate page with more after it: no
             total_pages => $total_pages,
             has_more => !$all_rows && !$grid_all_rows && $state->page < $total_pages ? 1 : 0,
             all_rows => $all_rows,
@@ -230,7 +240,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         my $error = $@;
         $controller->app->log->error("Selecto explorer model failed: $error")
             if $controller->can('app');
-        $model->{runtime_error} = _public_error($error);
+        $model->{runtime_error} = _public_error($error, $config);
         if (!$state && $engine) {
             $state = Selecto::Components::State->from_input(
                 $config, $engine->domain, {}
@@ -269,7 +279,9 @@ sub result_cache_key ($class, $statement, $namespace, $domain_fingerprint) {
 sub _execute ($engine, $prepared, $cache, $info, $namespace, $config) {
     my $statement = ref($prepared) eq 'HASH' ? $prepared->{statement} : $prepared;
     my $collections = ref($prepared) eq 'HASH' ? $prepared->{collections} : [];
-    my %bounds = (limits => $config->limits, max_rows => $config->max_grid_result_cells + 1);
+    # Grid cells are canonical values (PostgreSQL otherwise returns its driver's).
+    my %bounds = (limits => $config->limits, max_rows => $config->max_grid_result_cells + 1,
+        canonical_values => 1, timeout_ms => $config->query_timeout_seconds * 1000);
     return Selecto::BoundedQuery->execute($engine, $prepared, %bounds) unless $cache;
     my $key = __PACKAGE__->result_cache_key($statement, $namespace, $engine->domain->fingerprint);
     my $entry = $cache->fetch($key);
@@ -726,7 +738,8 @@ sub stream_export ($self, $controller, $format) {
     die "Aggregate grid exports require a bounded job\n" if $built->{aggregate_grid};
     _cap_export($config, $built);
     my $budget = Selecto::Components::ExportBudget->new($config, $engine, $controller);
-    my $stream = $engine->stream($built->{query}, fetch_size => EXPORT_FETCH_ROWS, bounded => 1);
+    my $stream = $engine->stream($built->{query}, fetch_size => EXPORT_FETCH_ROWS, bounded => 1,
+        canonical_values => 1);
     $budget->on_cancel(sub { eval { $stream->close } });
     $controller->on(finish => sub { eval { $stream->close }; eval { $budget->close } }) if $controller->can('on');
     my @result_columns = @{$stream->columns};
@@ -841,7 +854,8 @@ sub xlsx_file_export ($self, $controller) {
     $budget->on_cancel(sub { eval { $stream->close } if $stream; unlink $output_path if -f $output_path; undef $spool });
     $controller->on(finish => sub { eval { $stream->close } if $stream; eval { $budget->close } }) if $controller->can('on');
     my $ok = eval {
-        $stream = $engine->stream($built->{query}, fetch_size => EXPORT_FETCH_ROWS, bounded => 1);
+        $stream = $engine->stream($built->{query}, fetch_size => EXPORT_FETCH_ROWS, bounded => 1,
+            canonical_values => 1);
         my @result_columns = @{$stream->columns};
         my @columns = grep { !$_->{action_id} } @{$built->{columns}};
         require Excel::Writer::XLSX;
@@ -1131,8 +1145,20 @@ sub _validate_result ($result, $limits = undef) {
     }
 }
 
-sub _public_error ($error) {
-    return $error->message if blessed($error) && $error->isa('Selecto::Error');
+# A user-safe message for a failed model. A query that ran out of time (the database
+# cancelled it, or the time budget ran out between fetches) says so, with the limit.
+sub _public_error ($error, $config = undef) {
+    if (blessed($error) && $error->isa('Selecto::Error')) {
+        my $details = ref($error->details) eq 'HASH' ? $error->details : {};
+        if ($error->code eq 'query_budget_exceeded'
+            || ($error->code eq 'query_error' && ($details->{category} // '') eq 'query_canceled')) {
+            my $seconds = $config ? $config->query_timeout_seconds : undef;
+            return ($seconds ? "The query took longer than $seconds seconds and was stopped."
+                : 'The query took too long and was stopped.')
+                . ' Add a filter or choose a segment to narrow it.';
+        }
+        return $error->message;
+    }
     return 'The query could not be completed.';
 }
 

@@ -80,6 +80,7 @@ public/selecto-components/manifest.json
 public/selecto-components/selecto-components.css
 public/selecto-components/selecto-components.js
 t/00-load.t
+t/action_prerequisite_columns.t
 t/action_target_forms.t
 t/action_variants.t
 t/api_console.t
@@ -87,8 +88,10 @@ t/bucket_parser.t
 t/canned_page_http.t
 t/canned_page_render.t
 t/canned_page_unicode.t
+t/canonical_values_pg.t
 t/dashboard.t
 t/date_shortcut.t
+t/dimension_filter_choices.t
 t/explorer_session.t
 t/explorer_unicode.t
 t/export_limit.t
@@ -107,6 +110,7 @@ t/query_assistant_routes.t
 t/query_assistant_store.t
 t/query_builder.t
 t/query_library.t
+t/query_timeout.t
 t/record_editor_secret.t
 t/renderer.t
 t/renderer_query_assistant.t
