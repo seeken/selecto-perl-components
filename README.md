@@ -31,6 +31,10 @@ incremental updates, and plain GET/POST forms still work without JavaScript.
 
 This is an early release (0.1.1). Expect the interface to change.
 
+The [Perl/PostgreSQL initial stack](docs/canonical-stack.md) runs the native
+HTMX explorer, canonical JSON reads and `selecto_spa_vue` on the same trusted
+engine factory, with direct API and real browser checks.
+
 ## Installation
 
 ```sh
