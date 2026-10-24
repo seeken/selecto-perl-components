@@ -47,6 +47,8 @@ WriteMakefile(
         'meta-spec' => { version => 2 },
         prereqs => {
             runtime => {
+                # 4.80 reorders canonical keys outside the BMP (breaks ER005 and fingerprints).
+                requires => { 'Cpanel::JSON::XS' => '>= 4.38, < 4.80' },
                 recommends => {
                     DBI => 0,
                     'DBD::SQLite' => 0,
