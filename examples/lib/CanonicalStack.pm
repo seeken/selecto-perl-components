@@ -9,6 +9,7 @@ use Digest::SHA qw(sha256_hex hmac_sha256_hex);
 use DBI;
 use Selecto;
 use Selecto::Components;
+use Selecto::Components::APIConsole;
 use Selecto::Components::WebSocketPolicy;
 
 has workspace => sub { path(__FILE__)->to_abs->dirname->dirname->dirname->dirname->to_string };
@@ -127,11 +128,21 @@ sub startup ($self) {
             engine_factory => $factory, default_fields => [map { $_->{id} } @{$self->seed->{fields}}],
             default_limit => 2, max_limit => 100,
             canonical_api_path => '/api/items', canonical_publish_domain => 1,
+            api_console_resolver => sub ($c, $config, $model) { '/api/items/console' },
             canonical_authorizer => sub ($c) { return ($c->session('actor') // '') =~ /\A(?:alpha|beta)\z/ ? 1 : 0 },
             canonical_publication => sub ($c, $engine) {
                 return 'publication:' . hmac_sha256_hex(encode_json([$c->session('actor'), $engine->domain->fingerprint]), $self->secrets->[0]);
             }, canonical_field_encodings => {large_integer => 'decimal-string'},
         }},
+    });
+    $protected->get('/api/items/console')->to(cb => sub ($c) {
+        return $c->redirect_to('/session')
+            unless ($c->session('actor') // '') =~ /\A(?:alpha|beta)\z/;
+        $c->render(data => Selecto::Components::APIConsole->page(
+            base_path => '/api/items', title => 'Perl PostgreSQL API Console',
+            csrf_token => $c->csrf_token,
+            page_shell => {body_start_html => '<nav><a href="/explore/items">Explorer</a> | <a href="/vue">Vue</a></nav>'},
+        ), format => 'html');
     });
     $protected->get('/')->to(cb => sub ($c) { $c->redirect_to('/explore/items') });
     $protected->get('/vue')->to(cb => sub ($c) { $c->redirect_to('/spa-vue/index.html') });

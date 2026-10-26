@@ -8,8 +8,9 @@ use Mojo::Base -base, -signatures;
 use Selecto::Components::APIConsole ();
 use Selecto::Components::Util qw(html_escape);
 use Selecto::Components::ThemeStylesheet ();
+use Selecto::Components::AssetManifest qw(api_console_revision);
 
-my $ASSET_REVISION = '0.5.0-importer-17';
+my $ASSET_REVISION = api_console_revision();
 
 sub install_assets ($class, $app) {
     return Selecto::Components::APIConsole->install_assets($app);

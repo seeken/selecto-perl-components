@@ -20,6 +20,8 @@ lib/Selecto/Components/Canonical.pm
 examples/canonical-stack.pl
 examples/lib/CanonicalStack.pm
 t/canonical_stack_postgresql.t
+playwright.api-console.config.js
+t/browser-stack/api-console.spec.js
 lib/Selecto/Components/Controller/Actions.pm
 lib/Selecto/Components/Controller/Explorer.pm
 lib/Selecto/Components/Controller/Lookups.pm

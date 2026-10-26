@@ -38,6 +38,13 @@ authentication; the example refuses production mode. Override the listener
 with `SELECTO_PERL_STACK_HTTP_PORT`. Vue assets are served from its sibling
 `dist/perl-postgres` directory; rebuild after changing the Vue source.
 
+The Explorer's **API** button opens `/api/items/console` in a new tab and
+hands over its current Detail query. You can also open that path directly
+after signing in. It serves the shared packaged API Console with the current
+session CSRF token and navigation back to HTMX or Vue. Anonymous visits
+redirect to `/session`; every API discovery and query request is authorized
+again. Signing out also prevents an already open Console from running queries.
+
 ## Host configuration
 
 An existing explorer opts into the JSON routes with these trusted settings:
@@ -49,6 +56,7 @@ items => {
     default_fields => [qw(id name amount)],
     default_limit => 25, max_limit => 100,
     canonical_api_path => '/api/items',
+    api_console_resolver => sub ($c, $config, $model) { '/api/items/console' },
     canonical_authorizer => sub ($c) { authorized_reader($c) ? 1 : 0 },
     canonical_publication => sub ($c, $engine) { principal_publication($c, $engine) },
     canonical_field_encodings => {large_integer => 'decimal-string'},
@@ -66,10 +74,17 @@ uses cookie sessions; a Bearer-only transport needs its own reviewed host
 authentication/CSRF policy.
 
 The canonical base serves its manifest, `/catalog`, `/explorer`, `/openapi.json`
-and `POST /query`. Complete `/domain` publication defaults to forbidden; set
+and `POST /query`; its manifest advertises the catalog and Explorer metadata
+for Console discovery. Complete `/domain` publication defaults to forbidden; set
 `canonical_publish_domain => 1` only when your authenticated audience may read
 the complete authored contract, including internal policy metadata. The example
 explicitly opts in for its synthetic contract.
+
+The Console page is a host route, separate from the JSON bridge. Use
+`Selecto::Components::APIConsole->page(base_path => '/api/items',
+csrf_token => $c->csrf_token)` behind the same authentication. The
+`api_console_resolver` setting only provides its Explorer link; it does not
+create a page or grant access.
 
 ## Verify the stack
 
@@ -79,9 +94,18 @@ After setup and the Vue build, from `selecto-perl-components` run
 `mise run test:remote-query`. Both tasks require real PostgreSQL and fail when
 its URL is missing. The core test creates connection-local temporary tables.
 
+Run `mise run test:api-console` from `selecto-perl-components` for the actual
+packaged Console in Chromium. It starts its own temporary HTTP server and
+checks anonymous refusal, the Explorer popup and query handoff, exact large
+integer output, metadata discovery, two principals' scoped results, CSRF and
+revocation after logout. It uses the initialized owned database above and
+refuses to reuse an existing HTTP server. Choose another
+`SELECTO_PERL_STACK_HTTP_PORT` if necessary.
+
 This sibling workspace also provides `mise run perl-stack:verify` from its
 root. With the initialized stack URL exported, it runs the focused core
 checks, builds Vue, runs native HTTP checks and runs the five browser journeys.
+It also runs the three packaged API Console browser journeys.
 It does not create or stop PostgreSQL; its operator owns the database lifecycle.
 
 From `selecto_spa_vue`, with the same `SELECTO_PERL_STACK_POSTGRES_URL`, run:
