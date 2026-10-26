@@ -15,7 +15,7 @@ env:
   SELECTO_ECOSYSTEM_USE_LOCAL: "1"
   PGUSER: "postgres"
   PGPASSWORD: "postgres"
-  MISE_NODE_VERSION: "22.23.3"
+  MISE_NODE_VERSION: "22.23.4"
   SELECTO_PERL_TEST_POSTGRES_URL: "postgres://postgres@127.0.0.1:5432/postgres"
   PLAYWRIGHT_WORKERS: "2"
   PYTHONDONTWRITEBYTECODE: "1"
@@ -40,7 +40,7 @@ jobs:
         with:
           version: "2026.10.3"
           working_directory: selecto-perl-components
-          install_args: perl@5.40.2.1 python@3.14.3 node@22.23.3
+          install_args: perl@5.40.2.1 python@3.14.3 node@22.23.4
           cache: false
           add_shims_to_path: false
           env: false
@@ -54,7 +54,7 @@ jobs:
           SELECTO_CI_EVIDENCE_DIR: ${{ runner.temp }}/selecto-perl-ci-evidence
           SELECTO_CI_CPAN_DIR: ${{ runner.temp }}/selecto-perl-cpan
           UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
-        run: mise exec perl@5.40.2.1 python@3.14.3 node@22.23.3 -- ci/verify
+        run: mise exec perl@5.40.2.1 python@3.14.3 node@22.23.4 -- ci/verify
       - name: Upload bounded CI evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
