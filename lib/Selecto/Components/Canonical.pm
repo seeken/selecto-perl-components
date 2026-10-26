@@ -54,6 +54,13 @@ sub register ($class, $routes, $config, $mounted_path) {
                     path => $config->canonical_api_path . $kind,
                     content_type => $controller->req->headers->content_type,
                     body => $controller->req->json});
+                if (($kind eq '' || $kind eq '/') && $response->{status} == 200) {
+                    my $manifest = JSON::PP->new->utf8->decode($response->{body});
+                    push @{$manifest->{routes}},
+                        {method => 'GET', path => $config->canonical_api_path . '/catalog', operation_id => 'getDomainCatalog'},
+                        {method => 'GET', path => $config->canonical_api_path . '/explorer', operation_id => 'getExplorerMetadata'};
+                    $response->{body} = JSON::PP->new->utf8->canonical->encode($manifest);
+                }
             }
             1;
         };

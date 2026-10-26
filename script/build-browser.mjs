@@ -69,10 +69,14 @@ async function assetManifest(bundle) {
     .update(JSON.stringify(assets))
     .digest("hex")
     .slice(0, 12);
+  const consoleManifest = await readFile(path.join(root, "public/selecto-api-console/manifest.json"));
+  const consoleVersion = JSON.parse(consoleManifest).version;
+  const consoleDigest = createHash("sha256").update(consoleManifest).digest("hex").slice(0, 12);
   return {
     package: packageMetadata.name,
     version: packageMetadata.version,
     revision: `${packageMetadata.version}-${digest}`,
+    api_console_revision: `${consoleVersion}-${consoleDigest}`,
     assets,
   };
 }
@@ -80,9 +84,10 @@ async function assetManifest(bundle) {
 function perlManifest(manifest) {
   return `package Selecto::Components::AssetManifest;\n\n` +
     `use strict;\nuse warnings;\nuse Exporter qw(import);\n\n` +
-    `our @EXPORT_OK = qw(asset_revision);\n` +
+    `our @EXPORT_OK = qw(asset_revision api_console_revision);\n` +
     `my $ASSET_REVISION = '${manifest.revision}';\n\n` +
-    `sub asset_revision { return $ASSET_REVISION; }\n\n1;\n` +
+    `sub asset_revision { return $ASSET_REVISION; }\n` +
+    `sub api_console_revision { return '${manifest.api_console_revision}'; }\n\n1;\n` +
     perlManifestPod;
 }
 

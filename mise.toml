@@ -57,3 +57,10 @@ run = '''
 export SELECTO_REMOTE_REQUIRE_POSTGRES=1
 script/with-local-sibling "$(mise which perl)" "$(dirname "$(mise which perl)")/prove" --exec "$(mise which perl)" -lv t/canonical_stack_postgresql.t
 '''
+
+[tasks."test:api-console"]
+description = "Run the packaged Console through real Perl/PostgreSQL HTTP and browser sessions"
+run = '''
+: "${SELECTO_PERL_STACK_POSTGRES_URL:?Set the owned stack fixture URL}"
+npm exec -- playwright test --config playwright.api-console.config.js
+'''

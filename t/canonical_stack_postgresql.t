@@ -15,6 +15,7 @@ my $app = CanonicalStack->new;
 my $anonymous = Test::Mojo->new($app);
 $anonymous->get_ok('/api/items/catalog')->status_is(401)->json_is('/error/code' => 'authentication_required');
 $anonymous->post_ok('/api/items/query' => json => {})->status_is(401);
+$anonymous->get_ok('/api/items/console')->status_is(302)->header_is(Location => '/session');
 
 sub login {
     my ($actor) = @_;
@@ -27,7 +28,18 @@ sub login {
 my ($alpha, $csrf) = login('alpha');
 my ($beta, $beta_csrf) = login('beta');
 $alpha->get_ok('/api/items')->status_is(200)->json_is('/profiles/0' => 'remote_query.v1');
-my $fingerprint = $alpha->tx->res->json->{domain}{fingerprint};
+my $manifest = $alpha->tx->res->json;
+my $fingerprint = $manifest->{domain}{fingerprint};
+for my $operation ([getDomainCatalog => '/api/items/catalog'], [getExplorerMetadata => '/api/items/explorer']) {
+    ok scalar(grep { $_->{operation_id} eq $operation->[0] && $_->{method} eq 'GET'
+        && $_->{path} eq $operation->[1] } @{$manifest->{routes}}), "$operation->[0] is discoverable";
+}
+$alpha->get_ok('/api/items/console')->status_is(200)
+    ->element_exists('main[data-selecto-api-console][data-api-base="/api/items"][data-csrf-token]')
+    ->header_like('Cache-Control' => qr/no-store/);
+# Mojolicious masks the same session token afresh for each rendered page.
+# Use the Console's token for the successful and rejected POST checks below.
+$csrf = $alpha->tx->res->dom->at('main')->attr('data-csrf-token');
 $alpha->get_ok('/api/items/domain')->status_is(200)->json_is('/domain_fingerprint' => $fingerprint);
 $alpha->get_ok('/api/items/catalog')->status_is(200);
 my $publication = $alpha->tx->res->json->{domains}[0]{publication};
@@ -67,7 +79,8 @@ my $original = Selecto::PostgreSQL->can('stream_query');
     my $stale = decode_json(Mojo::JSON::encode_json($envelope)); $stale->{domain}{fingerprint} = 'stale';
     $alpha->post_ok('/api/items/query' => {'X-CSRF-Token' => $csrf} => json => $stale)->status_is(409);
     is $reads, 2, 'stale publication refuses before native execution';
-    $alpha->get_ok('/explore/items')->status_is(200)->content_like(qr/Alpha One/)->content_unlike(qr/Beta One|alpha-hidden-one/);
+    $alpha->get_ok('/explore/items')->status_is(200)->content_like(qr/Alpha One/)->content_unlike(qr/Beta One|alpha-hidden-one/)
+        ->element_exists('a[data-sc-api-console][href^="/api/items/console#request="]');
     is $reads, 4, 'native HTML uses the bounded reader for its page and explicit total';
     $alpha->get_ok('/explore/items?page=2')->status_is(200)->content_like(qr/Alpha Three/)
         ->content_like(qr/9007199254740993\.123456/)->content_like(qr/9007199254740995/);
@@ -78,4 +91,5 @@ $alpha->get_ok('/spa-vue/index.html')->status_is(200)
     ->content_like(qr{/spa-vue/assets/});
 $alpha->post_ok('/logout' => form => {csrf_token => $csrf})->status_is(302);
 $alpha->get_ok('/api/items/catalog')->status_is(401);
+$alpha->get_ok('/api/items/console')->status_is(302)->header_is(Location => '/session');
 done_testing;
