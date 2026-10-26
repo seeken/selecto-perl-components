@@ -16,7 +16,7 @@ stage postgres-start ci/postgres-vm start
 stage distribution-configure script/with-local-sibling perl Makefile.PL
 stage required-prerequisites script/with-local-sibling python3 -B ci/required.py
 stage diagnostics-prerequisites script/with-local-sibling python3 -B ci/diagnostics.py
-sdk_node=$(mise which node --tool node@22.23.3)
+sdk_node=$(mise which node --tool node@22.23.4)
 export PATH="$(dirname -- "$sdk_node"):$PATH"
 stage npm-dependencies npm ci
 stage browser-install python3 -B ci/browser-install.py
