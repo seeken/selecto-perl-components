@@ -120,3 +120,4 @@ t/state.t
 t/text_filters.t
 xt/changes.t
 xt/pod.t
+t/explorer_count_generated.t
