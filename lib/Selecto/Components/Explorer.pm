@@ -674,13 +674,13 @@ sub _timezone_offset_minutes ($value) {
     return $1 eq '-' ? -$minutes : $minutes;
 }
 
+# derive: a count wrapped around a compiled statement stays generated, so it keeps its
+# relations, and with them its pin and guards.
 sub _count_statement ($source) {
-    return Selecto::Statement->new(
+    return $source->derive(
         sql => 'SELECT COUNT(*) AS selecto_total_count FROM (' . $source->sql .
             ') AS selecto_count_source',
-        params => $source->params,
         columns => ['selecto_total_count'],
-        adapter_name => $source->adapter_name,
     );
 }
 
