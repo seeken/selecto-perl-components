@@ -8,8 +8,9 @@ use Mojo::Base -base, -signatures;
 use Mojo::File qw(path);
 use Selecto::Components::Util qw(html_escape);
 use Selecto::Components::ThemeStylesheet ();
+use Selecto::Components::AssetManifest qw(api_console_revision);
 
-my $ASSET_REVISION = '0.5.11';
+my $ASSET_REVISION = api_console_revision();
 
 sub install_assets ($class, $app) {
     die "install_assets requires a Mojolicious application\n"
