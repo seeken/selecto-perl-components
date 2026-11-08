@@ -3,12 +3,17 @@ use strict;
 use warnings;
 
 use Test::More;
+use Digest::SHA qw(sha256_hex);
+use Mojo::File qw(path);
+use Mojo::JSON qw(decode_json);
+use Selecto::Components::AssetManifest qw(api_console_revision);
 use Mojolicious;
 use Test::Mojo;
 use Selecto::Components::ThemeStylesheet ();
 use Selecto::Components::APIConsole ();
 use Selecto::Components::Importer ();
 
+my $revision = api_console_revision();
 my $page = Selecto::Components::APIConsole->page(
     base_path => '/api2/load/v1/',
     title => 'Load API Console',
@@ -20,9 +25,9 @@ like $page, qr{data-curl-auth="cookie"}, 'page defaults generated cURL to cookie
 like $page, qr{data-csrf-token="test-csrf-token"}, 'page supplies the host CSRF token';
 like $page, qr{<html lang="en" data-sac-color-scheme="light">},
     'console pages use the shared light operational palette by default';
-like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=0\.5\.11},
+like $page, qr{/selecto-api-console/selecto-api-console\.css\?v=\Q$revision\E},
     'page loads the versioned shared stylesheet';
-like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=0\.5\.11},
+like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=\Q$revision\E},
     'page loads the versioned shared JavaScript';
 
 $page = Selecto::Components::APIConsole->page(
@@ -45,7 +50,7 @@ $page = Selecto::Components::APIConsole->page(
 like $page, qr{<html lang="en" data-sac-color-scheme="light"><head>},
     'the console document carries its scheme without an inline style';
 like $page,
-    qr{<link rel="stylesheet" href="/selecto-api-console/selecto-api-console\.css\?v=0\.5\.11"><link rel="stylesheet" href="/selecto-api-console/theme\.css\?primary=CC5500&amp;secondary=DC8B52&amp;on_primary=000000&amp;v=[^"]+">},
+    qr{<link rel="stylesheet" href="/selecto-api-console/selecto-api-console\.css\?v=\Q$revision\E"><link rel="stylesheet" href="/selecto-api-console/theme\.css\?primary=CC5500&amp;secondary=DC8B52&amp;on_primary=000000&amp;v=[^"]+">},
     'semantic host colors are linked as a same-origin console theme stylesheet';
 unlike $page, qr{\sstyle=|<style}, 'a themed console page has no inline style';
 is(Selecto::Components::ThemeStylesheet->css('console', {primary => '#cc5500', secondary => '#DC8B52', on_primary => '#000000'}),
@@ -146,5 +151,19 @@ $t->get_ok('/selecto-api-console/theme.css?primary=cc5500&on_primary=000000&v=1'
         "--sac-on-accent:#000000 !important;--cgt-on-brand:#000000 !important}\n");
 $t->get_ok('/selecto-api-console/theme.css?primary=red;x')->status_is(400);
 $t->get_ok('/selecto-api-console/theme.css')->status_is(200)->content_is('');
+
+# Verify the page URLs against the installed package, including blib installs.
+$t->get_ok('/selecto-api-console/manifest.json')->status_is(200);
+my $manifest = $t->tx->res->json;
+my $manifest_bytes = path($asset_path, 'selecto-api-console/manifest.json')->slurp;
+is $revision, $manifest->{version} . '-' . substr(sha256_hex($manifest_bytes), 0, 12),
+    'cache revision is bound to this packaged Console manifest';
+for my $file (sort keys %{$manifest->{assets}}) {
+    $t->get_ok('/selecto-api-console/' . $file)->status_is(200);
+    is sha256_hex($t->tx->res->body), $manifest->{assets}{$file}{sha256},
+        "$file is served with the exact packaged bytes";
+}
+like $importer_page, qr{/selecto-api-console/selecto-importer\.js\?v=\Q$revision\E},
+    'the companion importer uses the same packaged release revision';
 
 done_testing;

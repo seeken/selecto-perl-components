@@ -10,6 +10,7 @@ use Mojo::WebSocket qw(WS_PING);
 use Scalar::Util qw(blessed);
 use Time::HiRes qw(time);
 use Selecto::Components::Config ();
+use Selecto::Components::Canonical ();
 use Selecto::Components::CannedPage ();
 use Selecto::Components::Controller::Actions ();
 use Selecto::Components::Controller::Explorer ();
@@ -131,6 +132,9 @@ sub register ($self, $app, $plugin_config) {
             0 + $websocket_inactivity_timeout,
             0 + $websocket_heartbeat_interval,
         );
+        Selecto::Components::Canonical->register($routes, $config,
+            _mounted_route_path($config->canonical_api_path, $route_prefix))
+            if defined $config->canonical_api_path;
     }
     my %pages;
     my %registered_path = map { $_->config->path => 1 } values %explorers;

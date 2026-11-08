@@ -1,6 +1,11 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Set up the shared API Console in the authenticated PostgreSQL stack
+      example, with Explorer query handoff, session CSRF and logout checks.
+      Advertise the existing catalog and Explorer metadata routes for current
+      Console discovery. Generate Console and Importer cache revisions from
+      the packaged asset manifest instead of fixed version strings.
     - A canned page shows a multiple text control as a textarea, so a list
       of values can be pasted one per line.
     - Canned pages: a column_layout entry no longer takes a kind; it follows

@@ -550,12 +550,15 @@ sub execute_query ($self, $statement) {
         return { columns => $statement->columns, rows => [[42]] };
     }
     $LAST_DATA_QUERY = $LAST_COMPILED_QUERY;
-    if (defined($LAST_DATA_QUERY->limit_value) && $LAST_DATA_QUERY->limit_value == 2
-        && join(',', @{$statement->columns}) eq
-            'id,product_name,unit_price,created_on,discontinued') {
+    # This fixture has two editable records. Identify the row by the actual
+    # bound identity, independent of the handler's paging/lookahead size.
+    my ($record_id) = grep { defined($_) && !ref($_) && /\A10[12]\z/ } @{$statement->params};
+    if (join(',', @{$statement->columns}) eq
+            'id,product_name,unit_price,created_on,discontinued'
+        && defined($record_id)) {
         return {
             columns => $statement->columns,
-            rows => [[101, $RECORD_PRODUCT_NAME, 12.5, '2026-09-15', 0]],
+            rows => [[0 + $record_id, $RECORD_PRODUCT_NAME, 12.5, '2026-09-15', 0]],
         };
     }
     my $rollup = grep { $_ eq '__selecto_rollup_grouping' } @{$statement->columns};

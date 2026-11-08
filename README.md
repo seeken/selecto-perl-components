@@ -31,6 +31,10 @@ incremental updates, and plain GET/POST forms still work without JavaScript.
 
 This is an early release (0.1.1). Expect the interface to change.
 
+The [Perl/PostgreSQL initial stack](docs/canonical-stack.md) runs the native
+HTMX explorer, canonical JSON reads and `selecto_spa_vue` on the same trusted
+engine factory, with direct API and real browser checks.
+
 ## Installation
 
 ```sh
@@ -422,6 +426,39 @@ string exports and the Saved queries tab are unavailable.
   Console for a canonical Selecto HTTP API, and `install_assets($app)` serves
   its files. An explorer's `api_console_resolver` adds an **API** button that
   hands the current Detail query to it.
+
+For a complete runnable setup, use the authenticated
+[Perl/PostgreSQL stack](docs/canonical-stack.md). Its Explorer **API** button
+opens `/api/items/console` with the current Detail query in a URL fragment.
+The Console discovers the same session-scoped API, catalog and Explorer
+metadata, and sends the page's CSRF token with its queries.
+
+In your own host, put the Console page behind the same authentication as the
+Explorer and set `api_console_resolver` to its absolute same-origin path:
+
+```perl
+# Explorer settings, alongside canonical_api_path and its host callbacks:
+api_console_resolver => sub ($c, $config, $model) { '/api/orders/v1/console' },
+
+# Register on the host's authenticated route bridge:
+$protected->get('/api/orders/v1/console')->to(cb => sub ($c) {
+    $c->res->headers->cache_control('no-store, private');
+    $c->render(data => Selecto::Components::APIConsole->page(
+        base_path => '/api/orders/v1',
+        title => 'Orders API Console',
+        csrf_token => $c->csrf_token,
+    ), format => 'html');
+});
+```
+
+Load `Selecto::Components::APIConsole` in the host. The Components plugin
+already installs its static assets; a standalone host calls `install_assets`.
+The Console needs complete authenticated domain publication, so enable
+`canonical_publish_domain => 1` only for an audience allowed to see that
+contract. The canonical authorizer still checks every API request. Static
+`index.html?api=...` cannot supply a cookie host's session CSRF token; use
+`page` for this setup. Asset URLs include a generated manifest digest, so
+`mise run assets` updates their cache revision with the packaged Console.
 
 ## Optional add-ons
 
