@@ -1,6 +1,9 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - The Query Assistant (WebMCP query form editor) is removed. Move any
+      query_assistant.palettes to the explorer option graph_palettes.
+    - Resource::Composer and Resource::Registry are removed; nothing used them.
     - Set up the shared API Console in the authenticated PostgreSQL stack
       example, with Explorer query handoff, session CSRF and logout checks.
       Advertise the existing catalog and Explorer metadata routes for current
