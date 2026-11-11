@@ -115,6 +115,10 @@ plugin 'Selecto::Components' => {
             },
             default_fields => [qw(product_name category.category_name unit_price)],
             default_group  => ['category.category_name'],
+            # This demo data is public. A real application checks its users on
+            # every WebSocket frame with websocket_context instead (see
+            # "Per-request engines and tenant scope").
+            websocket_mode => 'public',
         },
     },
 };
