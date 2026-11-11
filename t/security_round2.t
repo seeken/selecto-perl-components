@@ -9,8 +9,6 @@ use Mojo::IOLoop;
 use File::Temp qw(tempdir tempfile);
 use lib 't/lib';
 use TestSelectoComponents;
-use Selecto::Components::Controller::QueryAssistant;
-use Selecto::Components::QueryAssistant::Store;
 use Selecto::Components::ResponseBudget;
 use Selecto::Components::ExportBudget;
 use Selecto::Components::ExplorerSession;
@@ -32,44 +30,6 @@ subtest 'cache namespace is mandatory and immutable key material' => sub {
     $explorer->model($controller,{reuse_count=>1});
     ok !defined($controller->stash('selecto_count_cache')),'missing namespace also disables persistent count reuse';
 
-};
-
-subtest 'assistant budgets precede callbacks and both range endpoints are checked' => sub {
-    my @calls;
-    my $spec=TestSelectoComponents::config();
-    $spec->{query_assistant}={store=>Selecto::Components::QueryAssistant::Store->new,
-        actor=>sub{'actor'},choice_fields=>{unit_price=>1},choice_range_fields=>{unit_price=>1},
-        choice_resolver=>sub {my ($c,$r)=@_;push @calls,$r;return [{value=>'1'}]}};
-    my $app=Mojolicious->new; $app->secrets(['bounded-assistant']);
-    $app->plugin('Selecto::Components'=>{explorers=>{products=>$spec}});
-    my $t=Test::Mojo->new($app);
-    $t->get_ok('/explore/products')->status_is(200);
-    my $csrf=$t->tx->res->dom->at('[data-sc-query-assistant]')->attr('data-sc-query-assistant-csrf');
-    my $headers={'Content-Type'=>'application/json','X-CSRF-Token'=>$csrf};
-    $t->post_ok('/explore/products/assistant/drafts'=>$headers=>json=>{input=>{}})->status_is(201);
-    my $draft=$t->tx->res->json;
-    my $target={view=>'detail',fields=>['product_name'],orders=>[],limit=>25,
-        filters=>[{field=>'unit_price',operator=>'between',value=>'1',value_end=>'999'}]};
-    for my $tool (qw(validate_query_target apply_query_draft)) {
-        @calls=();
-        $t->post_ok("/explore/products/assistant/drafts/$draft->{draft_id}/tools/$tool"=>$headers=>json=>{
-            draft_id=>$draft->{draft_id},base_revision=>0,context_version=>$draft->{context_version},($tool eq 'apply_query_draft' ? (request_id=>$tool) : ()),target=>$target})
-            ->status_is(422)->json_is('/code'=>'choice_unavailable');
-        is_deeply $calls[0]{values},['1','999'],'both normalized endpoints reach resolver';
-        is $spec->{query_assistant}{store}->get($draft->{draft_id})->{revision},0,'rejection leaves draft unchanged';
-    }
-    for my $filters ([map {{field=>'unit_price',operator=>'eq',value=>'1'}} 1..100],
-        [{field=>'unit_price',operator=>'in',value=>[(1)x101]}]) {
-        @calls=();$target->{filters}=$filters;
-        $t->post_ok("/explore/products/assistant/drafts/$draft->{draft_id}/tools/validate_query_target"=>$headers=>json=>{
-            draft_id=>$draft->{draft_id},base_revision=>0,context_version=>$draft->{context_version},target=>$target})->status_is(422);
-        is scalar(@calls),0,'oversized target refused before resolver';
-    }
-    my $config=Selecto::Components::Config->new(%$spec,id=>'products');
-    my $error=Selecto::Components::Controller::QueryAssistant::_validate_membership_choices(undef,
-        {%{$spec->{query_assistant}},choice_range_fields=>{}},
-        {filters=>[{field=>'unit_price',operator=>'between',value=>'1',value_end=>'2'}]},$config);
-    is $error->{code},'choice_unavailable','ranges require explicit host semantics';
 };
 
 subtest 'lookup phase authorizes before metadata callbacks' => sub {

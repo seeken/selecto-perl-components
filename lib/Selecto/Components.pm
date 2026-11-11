@@ -17,7 +17,6 @@ use Selecto::Components::Controller::Explorer ();
 use Selecto::Components::Controller::Lookups ();
 use Selecto::Components::Controller::RecordEditor ();
 use Selecto::Components::Controller::SavedQueries ();
-use Selecto::Components::Controller::QueryAssistant ();
 use Selecto::Components::Explorer ();
 use Selecto::Components::ExplorerSession ();
 use Selecto::Components::Renderer ();
@@ -123,8 +122,6 @@ sub register ($self, $app, $plugin_config) {
         die "protected Explorer WebSockets require websocket_context (or websocket_enabled => 0)\n"
             if $config->websocket_enabled && $config->websocket_mode eq 'protected'
                 && !$config->websocket_context;
-        _assistant_ingress($plugin_config->{ingress_app} // $app, $config->path)
-            if $config->query_assistant_enabled;
         my $explorer = Selecto::Components::Explorer->new(config => $config);
         $explorers{$id} = $explorer;
         _routes(
@@ -184,40 +181,6 @@ sub register ($self, $app, $plugin_config) {
     return $self;
 }
 
-# Install on the actual HTTP host, including for embedded applications. This
-# runs after headers but before the content's default buffering callback.
-sub _assistant_ingress ($host, $path) {
-    die "ingress_app must be a Mojolicious application\n" unless blessed($host) && $host->can('hook');
-    $host->hook(after_build_tx => sub ($tx, $app) {
-        my $req = $tx->req;
-        $req->content->on(body => sub ($content) {
-            return unless $req->url->path->to_route =~ m{\A\Q$path\E/assistant/drafts(?:/|\z)};
-            $req->{selecto_assistant_bounded} = 1;
-            # Assistant routes accept JSON, never multipart or compressed input.
-            $content->auto_upgrade(0) if $content->can('auto_upgrade');
-            my $reject = sub {
-                $req->{selecto_assistant_too_large} = 1;
-                $req->error({message => 'Assistant request exceeds receive budget', code => 413});
-            };
-            my $length = $req->headers->content_length;
-            if ((defined($length) && ($length !~ /\A[0-9]+\z/ || $length > 65_536))
-                || defined($req->headers->content_encoding)) { $reject->(); }
-            my @read = @{$content->subscribers('read')};
-            $content->unsubscribe('read');
-            my $bytes = 0;
-            $content->on(read => sub ($part, $chunk) {
-                return if $req->{selecto_assistant_too_large};
-                $bytes += length($chunk);
-                if ($bytes > 65_536) { $reject->(); return; }
-                $_->($part, $chunk) for @read;
-            });
-        });
-    });
-    $host->hook(before_dispatch => sub ($controller) {
-        $controller->render(status => 413, json => {ok => 0, code => 'limit_exceeded'})
-            if $controller->req->{selecto_assistant_too_large};
-    });
-}
 
 sub _routes (
     $routes, $route_prefix, $explorer, $origin_check,
@@ -306,24 +269,6 @@ sub _routes (
     $routes->post($route_path . '/saved-queries/delete')->to(cb => sub ($controller) {
         return Selecto::Components::Controller::SavedQueries::_delete_saved_query($controller, $explorer);
     });
-
-    if ($config->query_assistant_enabled) {
-        $routes->post($route_path . '/assistant/drafts')->to(cb => sub ($controller) {
-            return Selecto::Components::Controller::QueryAssistant->create(
-                $controller, $explorer, $origin_check,
-            );
-        });
-        $routes->post($route_path . '/assistant/drafts/:selecto_assistant_draft/tools/:selecto_assistant_tool')->to(cb => sub ($controller) {
-            return Selecto::Components::Controller::QueryAssistant->tool(
-                $controller, $explorer, $origin_check,
-            );
-        });
-        $routes->post($route_path . '/assistant/drafts/:selecto_assistant_draft/sync')->to(cb => sub ($controller) {
-            return Selecto::Components::Controller::QueryAssistant->sync(
-                $controller, $explorer, $origin_check,
-            );
-        });
-    }
 
     return unless $config->websocket_enabled;
     $routes->websocket($route_path . '/ws')->to(cb => sub ($controller) {

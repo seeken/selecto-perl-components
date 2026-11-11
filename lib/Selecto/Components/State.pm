@@ -772,9 +772,8 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows
 }
 
 sub _parse_graph_colors ($config, $view, $input, $errors) {
-    my $assistant = $config->query_assistant // {};
     require Selecto::Components::Graph::Colors;
-    my $palettes = Selecto::Components::Graph::Colors->palettes($assistant->{palettes});
+    my $palettes = Selecto::Components::Graph::Colors->palettes($config->graph_palettes);
     my $palette = lc(_scalar(_first($input, 'graph_palette')) || 'default');
     if ($palette ne 'auto' && !exists($palettes->{$palette})) {
         push @$errors, 'A graph palette is not available.';

@@ -77,7 +77,7 @@ has canonical_field_encodings => sub { {} };
 has websocket_mode => 'protected';
 has websocket_enabled => 1;
 has websocket_session_options => sub { {} };
-has 'query_assistant';
+has 'graph_palettes';
 
 my @DATE_FORMATS = @{Selecto::DateFormat->choices};
 
@@ -156,24 +156,8 @@ sub new ($class, @args) {
     die "websocket_mode must be protected or public\n"
         unless $self->websocket_mode =~ /\A(?:protected|public)\z/;
     Selecto::Components::ExplorerSession->validate_options($self->websocket_session_options);
-    if (defined(my $assistant = $self->query_assistant)) {
-        die "query_assistant must be an object\n" unless ref($assistant) eq 'HASH';
-        die "query_assistant store is required\n"
-            unless blessed($assistant->{store})
-                && $assistant->{store}->can('create')
-                && $assistant->{store}->can('get')
-                && $assistant->{store}->can('compare_and_swap');
-        for my $callback (qw(actor context_authorizer choice_resolver)) {
-            die "query_assistant $callback must be a coderef\n"
-                if defined($assistant->{$callback}) && ref($assistant->{$callback}) ne 'CODE';
-        }
-        die "query_assistant requires actor or explicit allow_anonymous => 1\n"
-            unless $assistant->{actor} || $assistant->{allow_anonymous};
-        die "query_assistant choice_range_fields must be an object\n"
-            if defined($assistant->{choice_range_fields}) && ref($assistant->{choice_range_fields}) ne 'HASH';
-        die "query_assistant choice_fields must be an object\n"
-            if defined($assistant->{choice_fields}) && ref($assistant->{choice_fields}) ne 'HASH';
-    }
+    die "graph_palettes must be an object\n"
+        if defined($self->graph_palettes) && ref($self->graph_palettes) ne 'HASH';
     die "default_row_click_action must be empty or a lowercase identifier\n"
         if !defined($self->default_row_click_action)
             || ref($self->default_row_click_action)
@@ -310,10 +294,6 @@ sub _without_hidden_action_prerequisites ($self, $engine, $controller) {
     return @$hidden ? $engine->without_action_prerequisites(@$hidden) : $engine;
 }
 
-sub query_assistant_enabled ($self) {
-    return ref($self->query_assistant) eq 'HASH'
-        && ($self->query_assistant->{enabled} // 1) ? 1 : 0;
-}
 
 sub allows_view ($self, $view) {
     return scalar grep { $_ eq $view } @{$self->views};

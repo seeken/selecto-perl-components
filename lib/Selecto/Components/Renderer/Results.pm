@@ -787,8 +787,7 @@ sub _graph ($class, $result, $model) {
     }
     @series_values = ({key => '__all', label => ''}) unless $series_dimension;
     my @labels = map { $_->{label} } @points;
-    my $assistant = $model->{config}->query_assistant // {};
-    my $palettes = Selecto::Components::Graph::Colors->palettes($assistant->{palettes});
+    my $palettes = Selecto::Components::Graph::Colors->palettes($model->{config}->graph_palettes);
     my $palette_id = $model->{state}->graph_palette // 'default';
     my $resolved_palette_id = $palette_id eq 'auto' || !exists($palettes->{$palette_id})
         ? 'default' : $palette_id;
@@ -837,7 +836,7 @@ sub _graph ($class, $result, $model) {
             my $color = Selecto::Components::Graph::Colors->resolve_series(
                 color => $series_dimension ? '' : $configured_color,
                 palette => $palette_id,
-                palettes => $assistant->{palettes},
+                palettes => $model->{config}->graph_palettes,
                 series_id => $series_identity . ($series_dimension ? ':' . $breakout->{key} : ''),
             );
             my $data = \@values;

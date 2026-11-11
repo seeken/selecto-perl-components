@@ -8,19 +8,13 @@ use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::Config;
 use Selecto::Components::Graph::Colors;
-use Selecto::Components::QueryAssistant::Store;
-use Selecto::Components::QueryAssistant::Target;
 use Selecto::Components::QueryBuilder;
 use Selecto::Components::Renderer::Results;
 use Selecto::Components::State;
 
-my $store = Selecto::Components::QueryAssistant::Store->new;
 my $config = Selecto::Components::Config->new(
     %{TestSelectoComponents::config()}, id => 'products',
-    query_assistant => {allow_anonymous => 1,
-        store => $store,
-        palettes => {brand => ['#112233', '#445566', '#778899']},
-    },
+    graph_palettes => {brand => ['#112233', '#445566', '#778899']},
 );
 my $domain = TestSelectoComponents::domain();
 
@@ -51,11 +45,6 @@ is_deeply $state->graph_category_colors, [{
     field => 'category.category_name', value => 'Value 1', format => '', color => '#aa0000',
 }], 'category override is normalized as a field/value/format tuple';
 
-my $target = Selecto::Components::QueryAssistant::Target->from_state($state);
-is $target->{graph}{palette}, 'brand', 'assistant target reuses ordinary palette state';
-is $target->{measures}[0]{fill_opacity}, 0.35, 'assistant target reuses ordinary opacity state';
-is $target->{graph}{category_colors}[0]{color}, '#aa0000',
-    'assistant target reuses ordinary category override state';
 
 my $built = Selecto::Components::QueryBuilder->build($config, $domain, $state);
 my ($dimension) = grep { !$_->{measure} } @{$built->{columns}};
