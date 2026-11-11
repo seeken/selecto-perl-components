@@ -189,6 +189,7 @@ options are:
 | `localizer` | none | Translation callback |
 | `action_handlers`, `action_authorizer`, … | none | Selected-row actions |
 | `saved_query_store` | none | Enables the Saved queries tab |
+| `graph_palettes` | built-in palettes | Extra named graph palettes, e.g. `{brand => ['#2563eb', '#f97316']}` |
 | `show_sql` | 0 | Query Debug panel. **Never enable this in production** |
 
 Some settings belong to the domain rather than the explorer. They go under the
@@ -474,85 +475,6 @@ distribution. It is not yet on CPAN, because it depends on the unpublished
 `Selecto::Templates`. The browser code for those pages still ships in this
 distribution's bundle, so the add-on needs no assets of its own.
 
-## WebMCP query form editor
-
-An explorer can opt in to a browser-integrated AI editing surface. The browser
-registers five governed tools with the current
-[WebMCP imperative API](https://github.com/webmachinelearning/webmcp/blob/main/index.bs):
-`get_query_context`, `search_choices`, `validate_query_target`,
-`apply_query_draft`, and `undo_query_draft`. If `document.modelContext` is not
-available, the ordinary Selecto form continues to work unchanged.
-
-```perl
-use Selecto::Components::QueryAssistant::Store;
-
-my $drafts = Selecto::Components::QueryAssistant::Store->new(
-    idle_ttl => 1800,
-    maximum_lifetime => 7200,
-);
-
-plugin 'Selecto::Components' => {
-    explorers => {
-        products => {
-            # path, engine_factory, fields, groups, and measures ...
-            query_assistant => {
-                store => $drafts,
-                policy_version => 'products-v1',
-                actor => sub ($controller) { $controller->current_user->id },
-                context_authorizer => sub ($controller, $config) {
-                    return $controller->current_user->can('edit_reports');
-                },
-                palettes => {
-                    brand => ['#2563eb', '#f97316', '#16a34a', '#9333ea'],
-                },
-            },
-        },
-    },
-};
-```
-
-The contract describes only domain-authorized fields, filters, measures,
-formats, graph types, point limits, palettes, and category/series color
-controls. The AI submits a complete Detail, Aggregate, or Graph target. Selecto
-then normalizes it through ordinary state parsing, compiles it through the
-configured engine without executing it, and atomically replaces only the form.
-The user must still press **Run query**. Revisions, context versions,
-idempotency receipts, a one-step undo token, CSRF, same-origin checks, request
-size limits, expiry, and per-owner quotas protect the draft boundary. Manual
-form edits are synchronized before a tool call and invalidate an older undo.
-
-Choice lookup is disabled unless both `choice_fields` and `choice_resolver` are
-configured. The resolver is called again for exact validation before a target
-using a governed choice is accepted. Browser-supplied SQL, adapter names,
-unpublished identifiers, and query execution are not part of the tool surface.
-
-The in-memory store is suitable for one process and is used by the Northwind
-example. Multi-worker deployments can use the optional SQLite store:
-
-```perl
-use Selecto::Components::QueryAssistant::Store::SQLite;
-my $drafts = Selecto::Components::QueryAssistant::Store::SQLite->new(
-    path => '/var/lib/myapp/selecto-query-drafts.sqlite',
-);
-```
-
-Both stores enforce revision compare-and-swap, idle and absolute expiry,
-payload bounds, and per-owner draft quotas. Use an application-owned protected
-path for SQLite and the `actor` callback for stable ownership across workers.
-
-Graph targets support mixed bar/line/area series, axes, stacks, transforms,
-NULL policy, explicit series colors, fill opacity, named palettes,
-category color overrides, and the optional raw aggregate table. Explicit
-series/category colors win over a selected palette; the selected palette wins
-over host theme defaults. Graph settings remain in the editable form state when
-the user switches to another view. Drafts also retain row grain, grouped and
-OR-clause filters, promoted filters, and query-library selections. Membership
-arrays preserve literal commas, whitespace, empty strings, and Unicode.
-
-Requests from a removed or replaced explorer surface are cancelled. If the
-user edits the form while a tool request is pending, its response cannot
-replace those newer edits.
-
 ## Security model
 
 - **No SQL from the browser.** Field paths, operators, aggregate functions,
@@ -652,14 +574,6 @@ explicitly opt genuinely public datasets into `websocket_mode => 'public'`, or
 set `websocket_enabled => 0` for HTTP only. A route bridge authenticates the
 upgrade but does not replace the live callback. See [Explorer sessions](docs/explorer-sessions.md).
 
-Query Assistant requires a stable host `actor` callback. Public demonstrations
-may explicitly use `allow_anonymous => 1`; resetting cookies cannot evade the
-store's total quotas. All assistant routes reject more than 65,536 received body
-bytes before buffering or JSON decoding, including chunked requests. Compressed
-bodies are refused. When routes are mounted into another receiving application,
-pass `ingress_app => $actual_mojolicious_app` at plugin registration; requests
-without the installed ingress guard fail closed.
-
 Both draft stores default to 10 drafts / 655,360 payload bytes per owner, 1,000
 drafts / 16 MiB total, 65,536 bytes per serialized draft including metadata, and
 100 successful creations per minute across the store. Idle expiry is 30 minutes
@@ -753,22 +667,12 @@ included in that cache key. A fixed public namespace is appropriate only for
 one deliberately public source and policy. Namespace changes isolate concurrent
 requests without changing a shared cache object's mutable scope.
 
-Assistant targets are normalized and budgeted before exact-choice resolvers
-run. A governed field permits equality/membership/null filters by default;
-`between` additionally requires `query_assistant.choice_range_fields` to mark
-that field as supporting the host's range semantics. The resolver receives
-`operator` and both normalized endpoints in `values`. It must approve every
-endpoint. Do not enable range semantics for a policy that merely permits
-individual discrete values: endpoint approval does not authorize the interval.
-Other governed range/pattern operators are refused. Callback counts and total
-exact values have finite request-wide ceilings.
-
 `max_export_seconds` covers preparation and asynchronous delivery. A monotonic
 deadline timer releases leases and files even when a client stops reading;
 driver-side deadlines remain responsible for synchronous database work.
 
 `show_sql` remains off by default and is a trusted host debug choice. Normal UI
-and assistant responses do not include generated SQL. Debug copy now emits JSON
+responses do not include generated SQL. Debug copy now emits JSON
 with parameterized `sql` and a separate `parameters` array; it never synthesizes
 an executable statement from user values. Treat the debug panel and its copied
 diagnostics as sensitive because bound values may contain tenant or filter data.

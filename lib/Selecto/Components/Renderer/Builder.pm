@@ -96,10 +96,6 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $query_summary . $view_panel . $filter_panel .
         '<div class="sc-builder-apply-note"><span>Changes apply only when you run the query.</span>' .
         '<strong data-sc-builder-pending role="status" aria-live="polite" aria-atomic="true"></strong></div>' .
-        ($config->query_assistant_enabled
-            ? '<div class="sc-query-assistant-status" data-sc-query-assistant-status role="status" aria-live="polite">Connecting browser assistant…</div>' .
-              '<button class="sc-button sc-secondary" type="button" data-sc-query-assistant-undo hidden>Undo assistant edit</button>'
-            : '') .
         '<div class="sc-control-row"><label><span data-sc-limit-label>' .
         ($state->view eq 'graph' ? 'Points' : 'Rows') .
         '</span><select name="limit" data-sc-limit>' . _limit_options($state, $config) . '</select></label>' .
@@ -689,8 +685,7 @@ sub _chart_type_picker ($class, $state, $catalog, $config) {
             ($series_group eq $field ? ' selected' : '') . '>' .
             _h($label) . '</option>'
     } @{$state->groups};
-    my $assistant = $config->query_assistant // {};
-    my $palettes = Selecto::Components::Graph::Colors->palettes($assistant->{palettes});
+    my $palettes = Selecto::Components::Graph::Colors->palettes($config->graph_palettes);
     my $palette_options = '<option value="auto"' .
         (($state->graph_palette // 'default') eq 'auto' ? ' selected' : '') . '>Host theme</option>' .
         join('', map {

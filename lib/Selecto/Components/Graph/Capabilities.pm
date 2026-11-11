@@ -14,8 +14,7 @@ sub for_config {
     my $maximum = 0 + $config->max_limit;
     my $minimum = $maximum < 250 ? $maximum : 250;
     my $default = $maximum < 500 ? $maximum : 500;
-    my $assistant = $config->query_assistant // {};
-    my $palettes = Selecto::Components::Graph::Colors->palettes($assistant->{palettes});
+    my $palettes = Selecto::Components::Graph::Colors->palettes($config->graph_palettes);
     return {
         chart_types => [qw(bar horizontal_bar stacked_bar line area pie doughnut scatter)],
         mixed_series_global_types => [qw(bar line area)],
