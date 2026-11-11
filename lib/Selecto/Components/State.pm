@@ -1235,7 +1235,8 @@ sub _retain_available ($config, $domain, $input, $rows_of, $view, $kinds = undef
     if ($kinds{measure}) {
         $keep->([qw(measure measure_alias measure_function measure_bucket_ranges
             measure_ignore_nulls measure_series_id measure_chart_type measure_axis
-            measure_stack measure_color measure_transform measure_transform_window)],
+            measure_stack measure_color measure_fill_opacity measure_transform
+            measure_transform_window)],
             sub ($id) { $config->measure($id, $domain, $rows_of) });
     }
     $keep->([qw(order direction)], sub ($field) { $field_map->{$field} }) if $kinds{order};

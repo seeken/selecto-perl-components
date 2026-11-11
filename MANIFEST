@@ -113,6 +113,7 @@ t/query_assistant_store.t
 t/query_builder.t
 t/query_library.t
 t/query_timeout.t
+t/readme_quick_start.t
 t/record_editor_secret.t
 t/renderer.t
 t/renderer_query_assistant.t
@@ -124,6 +125,7 @@ t/security_boundaries.t
 t/security_budgets.t
 t/security_round2.t
 t/state.t
+t/state_retain_measures.t
 t/text_filters.t
 xt/changes.t
 xt/pod.t
