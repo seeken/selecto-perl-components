@@ -478,7 +478,7 @@ sub _promoted_filter_header ($class, $model, $catalog) {
         '<article class="sc-promoted-filter" data-sc-promoted-filter data-field="' .
             _h($filter->{field}) . '" data-filter-instance="' .
             _h($filter->{instance} // '') . '"><header><strong>' . _h($field->{label}) .
-            '</strong></header>' .
+            '</strong>' . _description_text($field->{description}) . '</header>' .
             $class->_promoted_filter_mode_control($config, $field, $filter) .
             '<div data-sc-promoted-filter-values>' .
             $class->_promoted_filter_value_controls($config, $field, $filter) . '</div></article>'
@@ -824,8 +824,8 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         ($at_limit ? ' disabled' : '') . ' ' .
         'data-sc-picker-available-item data-field="' . _h($_->{path}) . '" data-label="' .
         _h($_->{label}) . '" data-type="' . _h($_->{type}) . '" data-sc-picker-group-key="' .
-        _h($group_key) . '" data-search="' .
-        _h(lc($_->{label} . ' ' . $_->{type} . ' ' . $_->{path})) . '" data-default-function="' .
+        _h($group_key) . '"' . _description_attributes($_->{description}) . ' data-search="' .
+        _h(lc(join ' ', $_->{label}, $_->{type}, $_->{path}, $_->{description} // ())) . '" data-default-function="' .
         _h($_->{default_function} // '') . '" data-measure-field="' .
         _h($_->{field} // '') . '"' .
         (($kind eq 'field' && ($_->{type} // '') ne 'action') || $kind eq 'measure'
@@ -864,7 +864,7 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         }
         '<article class="sc-picker-set-item" draggable="true" data-sc-picker-set-item data-field="' .
         _h($path) . '" data-label="' . _h($field->{label}) . '" data-type="' . _h($field->{type}) .
-        '" data-default-function="' . _h($field->{default_function} // '') .
+        '"' . _description_data($field->{description}) . ' data-default-function="' . _h($field->{default_function} // '') .
         '" data-measure-field="' . _h($field->{field} // '') .
         '" data-sc-picker-group-key="' . _h(_picker_group_key($field)) .
         '"' . (($kind eq 'field' && ($field->{type} // '') ne 'action') || $kind eq 'measure'
@@ -872,7 +872,8 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         '><input type="hidden" name="' . _h($kind) . '" value="' . _h($path) . '">' .
         '<button class="sc-picker-grip" type="button" title="Drag to reorder" aria-label="Drag ' .
         _h($field->{label}) . ' to reorder">⠿</button><span class="sc-picker-set-label"><strong>' .
-        _h($field->{label}) . '</strong><small>' . _h($path . ' - ' . $field->{type}) . '</small></span>' .
+        _h($field->{label}) . '</strong><small>' . _h($path . ' - ' . $field->{type}) . '</small>' .
+        _description_text($field->{description}) . '</span>' .
         '<span class="sc-picker-controls">' .
         '<button type="button" data-sc-picker-action="up" aria-label="Move ' . _h($field->{label}) .
         ' up" title="Move up"' . $up_disabled . '>↑</button>' .
@@ -1110,8 +1111,8 @@ sub _filter_picker ($class, $state, $catalog, $config, $root_label = 'Main recor
         'data-sc-filter-available-item data-field="' . _h($_->{path}) . '" data-label="' .
         _h($_->{label}) . '" data-type="' . _h($_->{type}) . '" data-sc-picker-group-key="' .
         _h($group_key) . '"' .
-        _filter_choice_attribute($_) . ' data-search="' .
-        _h(lc($_->{label} . ' ' . $_->{type} . ' ' . $_->{path})) . '"><span><strong>' . _h(_picker_leaf_label($_)) .
+        _filter_choice_attribute($_) . _description_attributes($_->{description}) . ' data-search="' .
+        _h(lc(join ' ', $_->{label}, $_->{type}, $_->{path}, $_->{description} // ())) . '"><span><strong>' . _h(_picker_leaf_label($_)) .
         '</strong><small>' . _h($_->{path} . ' - ' . $_->{type}) .
         '</small></span><span aria-hidden="true">+</span></button>'
     });
@@ -1143,7 +1144,8 @@ sub _filter_picker ($class, $state, $catalog, $config, $root_label = 'Main recor
         '<input type="hidden" name="filter_field" value="' . _h($filter->{field}) . '">' .
         _hidden('filter_group', $filter->{grouped} ? 1 : 0) .
         _hidden('filter_clause', '') .
-        '<div class="sc-filter-set-heading"><span><strong>' . _h($field->{label}) . '</strong><small>' .
+        '<div class="sc-filter-set-heading"><span><strong>' . _h($field->{label}) . '</strong>' .
+        _description_text($field->{description}) . '<small>' .
         _h($filter->{field} . ' - ' . $field->{type}) .
         '</small></span><button type="button" data-sc-filter-action="remove" ' .
         'aria-label="Remove ' . _h($field->{label}) . ' filter" title="Remove filter">×</button></div>' .
@@ -1359,6 +1361,24 @@ sub _temporal_filter_input_type ($config, $type, @values) {
     my @populated = grep { defined($_) && !ref($_) && length("$_") } @values;
     return 'date' if @populated && !grep { "$_" !~ /\A\d{4}-\d{2}-\d{2}\z/ } @populated;
     return $config->filter_input_type($type);
+}
+
+
+# A field's description as a tooltip and a data attribute (picker choices,
+# whose label is short), or as text under the label.
+sub _description_attributes ($description) {
+    return '' unless defined($description) && length($description);
+    return ' title="' . _h($description) . '" data-description="' . _h($description) . '"';
+}
+
+sub _description_data ($description) {
+    return '' unless defined($description) && length($description);
+    return ' data-description="' . _h($description) . '"';
+}
+
+sub _description_text ($description) {
+    return '' unless defined($description) && length($description);
+    return '<small class="sc-field-description">' . _h($description) . '</small>';
 }
 
 1;

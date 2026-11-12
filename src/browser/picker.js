@@ -117,7 +117,7 @@
 
   var activeDraggedItem = null;
 
-  function appendLabel(parent, label, type, field, className) {
+  function appendLabel(parent, label, type, field, className, description) {
     var wrapper = document.createElement("span");
     if (className) wrapper.className = className;
     var strong = document.createElement("strong");
@@ -126,6 +126,12 @@
     small.textContent = field + " - " + type;
     wrapper.appendChild(strong);
     wrapper.appendChild(small);
+    if (description) {
+      var note = document.createElement("small");
+      note.className = "sc-field-description";
+      note.textContent = description;
+      wrapper.appendChild(note);
+    }
     parent.appendChild(wrapper);
     return wrapper;
   }
@@ -138,7 +144,11 @@
     choice.dataset.field = field;
     choice.dataset.label = label;
     choice.dataset.type = type;
-    choice.dataset.search = (label + " " + type).toLowerCase();
+    choice.dataset.search = (label + " " + type + (metadata.description ? " " + metadata.description : "")).toLowerCase();
+    if (metadata.description) {
+      choice.dataset.description = metadata.description;
+      choice.title = metadata.description;
+    }
     choice.dataset.defaultFunction = metadata.defaultFunction || "";
     choice.dataset.measureField = metadata.measureField || "";
     choice.dataset.scPickerGroupKey = metadata.groupKey || "";
@@ -182,6 +192,7 @@
     item.dataset.label = label;
     item.dataset.type = type;
     item.dataset.defaultFunction = choice.dataset.defaultFunction || "";
+    if (choice.dataset.description) item.dataset.description = choice.dataset.description;
     item.dataset.measureField = choice.dataset.measureField || "";
     item.dataset.scPickerGroupKey = choice.dataset.scPickerGroupKey || "";
     if (choice.hasAttribute("data-sc-picker-repeatable")) {
@@ -199,7 +210,7 @@
     grip.setAttribute("aria-label", "Drag " + label + " to reorder");
     grip.textContent = "⠿";
     item.appendChild(grip);
-    appendLabel(item, label, type, field, "sc-picker-set-label");
+    appendLabel(item, label, type, field, "sc-picker-set-label", choice.dataset.description);
     var controls = document.createElement("span");
     controls.className = "sc-picker-controls";
     controls.appendChild(createColumnControl("up", label, "↑"));

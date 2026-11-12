@@ -335,8 +335,12 @@ sub _table ($class, $result, $model) {
                     'data-sc-action-id="' . _h($column->{action_id}) . '" aria-label="Select every row for ' .
                     _h($column->{label}) . '"><span>' . _h($column->{label}) . '</span></label></th>';
         } else {
-            '<th scope="col"' . _numeric_measure_class($column, $model) . '>' .
-                _h($column->{label}) . '</th>';
+            my $described = defined($column->{description}) && length($column->{description});
+            my @classes = ((_numeric_measure_class($column, $model) ? 'sc-numeric-measure' : ()),
+                ($described ? 'sc-described' : ()));
+            '<th scope="col"' . (@classes ? ' class="' . join(' ', @classes) . '"' : '')
+                . ($described ? ' title="' . _h($column->{description}) . '"' : '')
+                . '>' . _h($column->{label}) . '</th>';
         }
     } @columns;
     my $extra_column = $result->{extra_column};

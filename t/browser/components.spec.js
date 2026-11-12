@@ -2276,6 +2276,33 @@ test("graph edits survive view switches without duplicate graph form values", as
   expect(graph).toEqual({palette: ["brand"], chart: ["line"]});
 });
 
+test("a filter added in the browser takes promoted edits after a results-only run", async ({page}) => {
+  // The builder item has no instance (added in the browser); the run renders
+  // only results, whose promoted card carries the server's instance.
+  await load(page, `<div data-sc-workspace>
+    <form id="instance-form" data-sc-builder onsubmit="event.preventDefault()">
+      <div data-sc-filter-root data-sc-filter-max="10"><div data-sc-filter-set>
+        <article data-sc-filter-set-item data-field="act_pu" data-label="Act Pu" data-type="epoch_datetime">
+          <input type="hidden" name="filter_field" value="act_pu">
+          <div class="sc-filter-editor"><select name="filter_op"><option value="gte" selected>on or after</option></select>
+            <div data-sc-filter-values><input type="date" name="filter_value" value="2026-11-01"></div></div>
+          <label><input type="checkbox" name="filter_promote_index" value="" checked> Promote</label>
+        </article>
+      </div></div>
+    </form>
+    <div id="results"></div>
+  </div>`);
+  await page.locator("form").evaluate(form => form.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
+  await expect(page.locator("[data-sc-filter-set-item]")).toHaveAttribute("data-filter-instance", "1");
+  await page.locator("#results").evaluate(results => { results.innerHTML = `<div data-sc-promoted-filters>
+    <button type="button" form="instance-form">Run</button>
+    <article data-sc-promoted-filter data-field="act_pu" data-filter-instance="1"><div data-sc-promoted-filter-values>
+      <input type="date" value="2026-11-01" data-sc-promoted-filter-input="value" data-filter-field="act_pu" data-filter-instance="1">
+    </div></article></div>`; });
+  await page.locator('[data-sc-promoted-filter-input="value"]').fill("2026-11-05");
+  await expect(page.locator('[name="filter_value"]')).toHaveValue("2026-11-05");
+});
+
 test("exact membership values stay aligned with newly added filters and promoted edits", async ({page}) => {
   await load(page, `<div data-sc-workspace>
     <form id="membership-form" data-sc-builder>

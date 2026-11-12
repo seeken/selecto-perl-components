@@ -2692,7 +2692,7 @@
 
   var activeDraggedItem = null;
 
-  function appendLabel(parent, label, type, field, className) {
+  function appendLabel(parent, label, type, field, className, description) {
     var wrapper = document.createElement("span");
     if (className) wrapper.className = className;
     var strong = document.createElement("strong");
@@ -2701,6 +2701,12 @@
     small.textContent = field + " - " + type;
     wrapper.appendChild(strong);
     wrapper.appendChild(small);
+    if (description) {
+      var note = document.createElement("small");
+      note.className = "sc-field-description";
+      note.textContent = description;
+      wrapper.appendChild(note);
+    }
     parent.appendChild(wrapper);
     return wrapper;
   }
@@ -2713,7 +2719,11 @@
     choice.dataset.field = field;
     choice.dataset.label = label;
     choice.dataset.type = type;
-    choice.dataset.search = (label + " " + type).toLowerCase();
+    choice.dataset.search = (label + " " + type + (metadata.description ? " " + metadata.description : "")).toLowerCase();
+    if (metadata.description) {
+      choice.dataset.description = metadata.description;
+      choice.title = metadata.description;
+    }
     choice.dataset.defaultFunction = metadata.defaultFunction || "";
     choice.dataset.measureField = metadata.measureField || "";
     choice.dataset.scPickerGroupKey = metadata.groupKey || "";
@@ -2757,6 +2767,7 @@
     item.dataset.label = label;
     item.dataset.type = type;
     item.dataset.defaultFunction = choice.dataset.defaultFunction || "";
+    if (choice.dataset.description) item.dataset.description = choice.dataset.description;
     item.dataset.measureField = choice.dataset.measureField || "";
     item.dataset.scPickerGroupKey = choice.dataset.scPickerGroupKey || "";
     if (choice.hasAttribute("data-sc-picker-repeatable")) {
@@ -2774,7 +2785,7 @@
     grip.setAttribute("aria-label", "Drag " + label + " to reorder");
     grip.textContent = "⠿";
     item.appendChild(grip);
-    appendLabel(item, label, type, field, "sc-picker-set-label");
+    appendLabel(item, label, type, field, "sc-picker-set-label", choice.dataset.description);
     var controls = document.createElement("span");
     controls.className = "sc-picker-controls";
     controls.appendChild(createColumnControl("up", label, "↑"));
@@ -3471,6 +3482,7 @@
     item.dataset.label = label;
     item.dataset.type = type;
     if (choice.dataset.scFilterChoices) item.dataset.scFilterChoices = choice.dataset.scFilterChoices;
+    if (choice.dataset.description) item.dataset.description = choice.dataset.description;
     var fieldInput = document.createElement("input");
     fieldInput.type = "hidden";
     fieldInput.name = "filter_field";
@@ -3480,7 +3492,7 @@
     item.appendChild(hiddenFilterValue("filter_clause", ""));
     var heading = document.createElement("div");
     heading.className = "sc-filter-set-heading";
-    appendLabel(heading, label, type, field);
+    appendLabel(heading, label, type, field, undefined, choice.dataset.description);
     var remove = document.createElement("button");
     remove.type = "button";
     remove.dataset.scFilterAction = "remove";
@@ -3594,11 +3606,17 @@
     refreshFilterBadge(builder, items.length);
   }
 
+  // A filter's position, counting from 1, is both its promote index and the
+  // instance the server renders on its promoted card. A results-only render
+  // replaces the cards but keeps this builder, so its items take the same
+  // instance here, including items added in the browser, which have none.
   function refreshFilterPromoteIndices(builder) {
     if (!builder) return;
     builder.querySelectorAll('[name="filter_field"]').forEach(function (field, index) {
       var item = field.closest("[data-sc-filter-set-item]");
-      var promote = item && item.querySelector('[name="filter_promote_index"]');
+      if (!item) return;
+      item.dataset.filterInstance = String(index + 1);
+      var promote = item.querySelector('[name="filter_promote_index"]');
       if (promote) promote.value = String(index + 1);
     });
   }
@@ -3850,7 +3868,8 @@
           "column", item.dataset.field, item.dataset.label, item.dataset.type, {
             defaultFunction: item.dataset.defaultFunction,
             measureField: item.dataset.measureField,
-            groupKey: item.dataset.scPickerGroupKey
+            groupKey: item.dataset.scPickerGroupKey,
+            description: item.dataset.description
           }
         ));
       }

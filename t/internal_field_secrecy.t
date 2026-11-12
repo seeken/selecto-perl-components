@@ -139,4 +139,26 @@ for my $field (qw(secret_code code_or_backup either_code)) {
 }
 ok Selecto::Components::State::_declared_choice({filter_choices => [{value => ''}]}, 'in', '', ['']),
     'an explicitly declared empty membership choice remains allowed';
+
+# A host may withhold a measure's field from some users (marking it internal):
+# the Explorer still opens, without that measure.
+my $withheld_measure = explorer(measures => [
+    {id => 'count', label => 'Accounts', aggregate => 'count'},
+    {id => 'secret_total', label => 'Secret total', aggregate => 'sum', field => 'secret_code'},
+]);
+my $model = request($withheld_measure, view => 'aggregate', group => 'name', measure => 'count');
+ok $model->{state}->valid, 'a measure on an internal field does not refuse the Explorer'
+    or diag explain $model->{state}->errors;
+ok !grep({ $_->{id} eq 'secret_total' } @{$withheld_measure->config->measures_for_domain($domain)}),
+    'and is not offered';
+ok !request($withheld_measure, view => 'aggregate', group => 'name', measure => 'secret_total')->{state}->valid,
+    'nor accepted';
+my $withheld_defaults = explorer(default_fields => [qw(id secret_code)], default_group => ['vip']);
+ok request($withheld_defaults)->{state}->valid, 'default fields and groups on internal fields do not refuse the Explorer';
+is_deeply $withheld_defaults->config->resolved_default_fields($domain), ['id'], 'and are left out of the defaults';
+ok !eval { explorer(default_fields => ['no_such_field'])->config->validate_domain($domain); 1 },
+    'a default field the domain lacks still fails';
+ok !eval { explorer(measures => [{id => 'typo', label => 'Typo', aggregate => 'sum', field => 'no_such_field'}])
+    ->config->validate_domain($domain); 1 }, 'a measure on a field the domain lacks still fails';
+like $@, qr/configured measure field no_such_field is outside the domain/, 'naming the field';
 done_testing;
