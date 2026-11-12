@@ -135,6 +135,8 @@ sub _detail ($class, $config, $domain, $state, $options) {
             key => $occurrence == 1 ? $base_key : $base_key . '__' . $occurrence,
             field => $field,
             label => $column_config->{alias} || $field_map->{$field}{label},
+            (defined($field_map->{$field}{description})
+                ? (description => $field_map->{$field}{description}) : ()),
             type => $column_config->{format} ? 'string' : $field_map->{$field}{type},
             source_type => $field_map->{$field}{type},
             format => $column_config->{format} // '',
@@ -334,6 +336,8 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             field => $field,
             label => $column_config->{alias}
                 || ($dimension ? $dimension->{label} : $field_map->{$field}{label}),
+            (defined($field_map->{$field}{description})
+                ? (description => $field_map->{$field}{description}) : ()),
             type => $dimension ? $dimension->{display_type}
                 : $column_config->{format} ? 'string' : $field_map->{$field}{type},
             source_type => $field_map->{$field}{type},

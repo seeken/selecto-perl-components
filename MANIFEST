@@ -87,6 +87,7 @@ t/explorer_session.t
 t/explorer_unicode.t
 t/export_limit.t
 t/export_security.t
+t/field_descriptions.t
 t/graph_axis_planner.t
 t/graph_colors.t
 t/i18n.t

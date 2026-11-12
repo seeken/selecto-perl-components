@@ -112,6 +112,8 @@ sub _field_terms ($domain, $contract, $add) {
         my $column = ref($source->{columns}) eq 'HASH' ? $source->{columns}{$field} : undef;
         my $default = $by_key->{$field} // _column_label($column, humanize($field));
         $add->("fields.$field.label", $default);
+        $add->("fields.$field.description", $column->{description})
+            if ref($column) eq 'HASH' && defined($column->{description});
     }
     for my $association_name (sort keys %{$domain->associations}) {
         my $association = $domain->associations->{$association_name};
@@ -128,6 +130,8 @@ sub _field_terms ($domain, $contract, $add) {
             my $default = $by_display->{$path}
                 // humanize($association_name) . ' - ' . _column_label($column, humanize($field));
             $add->("fields.$path.label", $default);
+            $add->("fields.$path.description", $column->{description})
+                if ref($column) eq 'HASH' && defined($column->{description});
             $add->("fields.$path.nested_label", _column_label($column, humanize($field)))
                 if $association->cardinality eq 'many';
         }

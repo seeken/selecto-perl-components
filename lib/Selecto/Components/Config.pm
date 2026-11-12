@@ -632,9 +632,11 @@ sub field_catalog ($self, $domain, $options = undef) {
             $domain, "fields.$path.label", $label,
             {kind => 'field', path => $path, attribute => 'label'},
         );
+        my $description = $self->_field_description($domain, $path);
         push @catalog, {
             path => $path,
             label => $label,
+            (defined($description) ? (description => $description) : ()),
             type => $fields->{$path},
             association => undef,
             internal => $domain->field_is_public($path) ? 0 : 1,
@@ -688,9 +690,11 @@ sub field_catalog ($self, $domain, $options = undef) {
                 $domain, "fields.$path.label", $label,
                 {kind => 'field', path => $path, attribute => 'label'},
             );
+            my $description = $self->_field_description($domain, $path);
             push @catalog, {
                 path => $path,
                 label => $label,
+                (defined($description) ? (description => $description) : ()),
                 type => $association_fields->{$field},
                 association => $association_name,
                 picker_group_label => $group_label,
@@ -888,6 +892,17 @@ sub _field_label ($path, $column, $fallback = undef) {
     return "$label";
 }
 
+# A field's description (Selecto::Domain::field_description), localized as
+# fields.<path>.description; undef when it has none.
+sub _field_description ($self, $domain, $path) {
+    my $description = eval { $domain->field_description($path) };
+    return undef unless defined $description;
+    return $self->localize(
+        $domain, "fields.$path.description", $description,
+        {kind => 'field', path => $path, attribute => 'description'},
+    );
+}
+
 sub field_map ($self, $domain, $rows_of = undef) {
     my $cache_key = join "\x1f", 'field-map', $domain->fingerprint, $rows_of // '';
     my $cache = $self->{_catalog_cache};
@@ -932,6 +947,10 @@ sub _root_filter_catalog ($self, $domain) {
                 $choice->{label},
                 {kind => 'filter_choice', path => $field->{path}, attribute => 'label'},
             ),
+            (defined($choice->{description}) ? (description => $self->localize(
+                $domain, "components.filter_choices.$field->{path}.description", $choice->{description},
+                {kind => 'filter_choice', path => $field->{path}, attribute => 'description'},
+            )) : ()),
             filter_choices => [map { {%$_} } @{$choice->{choices}}],
             # An internal field the host did not list is filterable only
             # through its declared choices.
@@ -957,6 +976,10 @@ sub _root_filter_catalog ($self, $domain) {
                 $domain, "components.filter_choices.$path.label", $choice->{label},
                 {kind => 'filter_choice', path => $path, attribute => 'label'},
             ),
+            (defined($choice->{description}) ? (description => $self->localize(
+                $domain, "components.filter_choices.$path.description", $choice->{description},
+                {kind => 'filter_choice', path => $path, attribute => 'description'},
+            )) : ()),
             type => $present->{type},
             filter_choices => [map { {%$_} } @{$choice->{choices}}],
             conditional => {%$conditional},
@@ -1319,19 +1342,27 @@ sub query_params_enabled ($self, $domain) {
 sub validate_domain ($self, $domain) {
     my $map = $self->field_map($domain);
     my $detail_map = $self->detail_column_map($domain);
+    # A default field or measure on a field withheld from this request
+    # (internal, for example by a host field policy) is valid: the resolved
+    # defaults and measures_for_domain leave it out.
+    my %internal = map { $_->{path} => $_ }
+        @{$self->field_catalog($domain, {include_internal => 1})};
     for my $field (@{$self->default_fields}) {
-        die "configured explorer field $field is outside the domain\n" unless $detail_map->{$field};
+        die "configured explorer field $field is outside the domain\n"
+            unless $detail_map->{$field} || $internal{$field};
     }
     for my $field (@{$self->default_group}) {
-        die "configured explorer field $field is outside the domain\n" unless $map->{$field};
+        die "configured explorer field $field is outside the domain\n"
+            unless $map->{$field} || $internal{$field};
     }
     for my $measure (@{$self->measures}) {
         next unless defined $measure->{field};
+        my $source = $internal{$measure->{field}};
         die "configured measure field $measure->{field} is outside the domain\n"
-            unless $map->{$measure->{field}};
+            unless $source;
         die "configured measure function $measure->{aggregate} is unavailable for $measure->{field}\n"
             unless $self->allows_measure_function(
-                $map->{$measure->{field}}{type}, $measure->{aggregate}, 0
+                $source->{type}, $measure->{aggregate}, 0
             );
     }
     return $self;

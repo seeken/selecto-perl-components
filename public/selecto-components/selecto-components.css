@@ -287,6 +287,10 @@ a { color: inherit; }
 .sc-filter-set-heading > span { min-width: 0; }
 .sc-filter-set-heading strong { display: block; font-size: .76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-filter-set-heading small { color: var(--sc-hint); display: block; font-size: .64rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Field descriptions (a column's or filter choice's description): wrapped hint text. */
+.sc-field-description, .sc-picker-set-label small.sc-field-description, .sc-filter-set-heading small.sc-field-description { color: var(--sc-hint); display: block; font-size: .68rem; font-weight: 400; line-height: 1.35; overflow: visible; white-space: pre-line; }
+.sc-promoted-filter header .sc-field-description { margin-top: .15rem; }
+th.sc-described { cursor: help; text-decoration: underline dotted; text-decoration-color: var(--sc-hint); text-underline-offset: 3px; }
 .sc-filter-set-heading button { background: var(--sc-control-button-bg); border: 1px solid var(--sc-border); border-radius: 6px; color: var(--sc-ink); cursor: pointer; height: 26px; line-height: 1; padding: 0; width: 26px; }
 .sc-filter-set-heading button:hover { border-color: var(--sc-danger); color: var(--sc-danger); }
 .sc-filter-editor { display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
