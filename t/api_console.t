@@ -5,7 +5,8 @@ use warnings;
 use Test::More;
 use Digest::SHA qw(sha256_hex);
 use Mojo::File qw(path);
-use Mojo::JSON qw(decode_json);
+use Mojo::DOM ();
+use Mojo::JSON qw(decode_json from_json);
 use Selecto::Components::AssetManifest qw(api_console_revision);
 use Mojolicious;
 use Test::Mojo;
@@ -87,6 +88,18 @@ like $importer_page, qr{<meta name="import-end" content="1"></head>},
 like $importer_page,
     qr{<body class="sai-body cgt-host-menu-toolbar"><nav data-host-menu>Menu</nav><main class="sai-app cgt-mojo-page"},
     'host navigation and standard content class wrap the importer';
+
+$page = Selecto::Components::APIConsole->page(
+    base_path => '/api2/load/v1', csrf_token => 'test-csrf-token',
+    links => [{label => 'Privileges & tags', href => '/explorer/privileges?page=load'}],
+);
+is_deeply from_json(Mojo::DOM->new($page)->at('main')->attr('data-links')),
+    [{label => 'Privileges & tags', href => '/explorer/privileges?page=load'}],
+    'header links reach the console as JSON';
+unlike(Selecto::Components::APIConsole->page(base_path => '/api2/load/v1', csrf_token => 'test-csrf-token'),
+    qr{data-links}, 'and are left out without any');
+ok !eval { Selecto::Components::APIConsole->page(base_path => '/api2/load/v1', csrf_token => 'test-csrf-token',
+    links => [{label => 'Away', href => '//outside.example/'}]); 1 }, 'a cross-origin header link is refused';
 
 $page = Selecto::Components::APIConsole->page(
     base_path => '/api2/client/v1',

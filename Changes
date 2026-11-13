@@ -1,6 +1,12 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Host header links. Selecto::Components::Config takes header_links_resolver,
+      called like api_console_resolver, returning [{label, href}] links shown in the
+      Explorer's header actions beside Permalink and API (in private URL mode too).
+      Selecto::Components::APIConsole->page takes links, shown in the console
+      header (Selecto API Console with data-links). Each href must be an absolute
+      same-origin path.
     - The API button works when a detail column is repeated. The canonical API
       refuses two result columns with one name, and the console request copied
       every column. Each repeat, with the same format or another, now gets its own

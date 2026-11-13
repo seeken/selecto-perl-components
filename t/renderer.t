@@ -226,6 +226,40 @@ my $unsafe_api_error = eval {
 like $unsafe_api_error, qr/absolute same-origin path/,
     'an API console resolver cannot emit a cross-origin URL';
 
+my $linked_config = Selecto::Components::Config->new(
+    %{TestSelectoComponents::config()}, id => 'linked-products', path => '/explore/linked-products',
+    header_links_resolver => sub {
+        return [{label => 'Privileges <for> products', href => '/explorer/privileges?page=product&tab=tags'}];
+    },
+);
+my $linked_dom = Mojo::DOM->new(Selecto::Components::Renderer->page({
+    config => $linked_config, state => $api_state, domain => $domain,
+    canonical_url => '/explore/linked-products?q=1',
+}));
+my $header_link = $linked_dom->at('[data-sc-hero-actions] a[data-sc-header-link]');
+ok $header_link, 'a host header link sits in the Explorer header actions';
+is $header_link && $header_link->attr('href'), '/explorer/privileges?page=product&tab=tags', 'with its href';
+like $linked_dom->to_string, qr{href="/explorer/privileges\?page=product&amp;tab=tags"}, 'escaped';
+is $header_link && $header_link->text, 'Privileges <for> products', 'and its label, escaped';
+my $linked_private = Selecto::Components::Renderer->_hero_actions_control({
+    config => $linked_config, state => $api_state, domain => TestSelectoComponents::private_domain(),
+    canonical_url => '/explore/linked-products?filter_value=secret',
+});
+like $linked_private, qr{data-sc-header-link href="/explorer/privileges\?page=product},
+    'a private Explorer keeps the host links, which carry no query state';
+unlike $linked_private, qr{secret}, 'and still exposes no canonical state';
+for my $bad (['//outside.example/', 'a protocol-relative URL'], ['https://outside.example/', 'an absolute URL'],
+        ['/a b', 'a path with a space'], ['/a"b', 'a quote'], [undef, 'no href']) {
+    my ($href, $name) = @$bad;
+    my $bad_config = Selecto::Components::Config->new(
+        %{TestSelectoComponents::config()}, id => 'bad-links', path => '/explore/bad-links',
+        header_links_resolver => sub { [{label => 'Bad', href => $href}] },
+    );
+    ok !eval { $bad_config->header_links; 1 }, "a header link with $name is refused";
+}
+ok !eval { Selecto::Components::Config->new(%{TestSelectoComponents::config()},
+    header_links_resolver => 'nope') }, 'header_links_resolver must be a coderef';
+
 my $theme_controller = bless {}, 'TestSelectoComponents::ThemeController';
 my $theme_resolver_controller;
 my $theme_config = Selecto::Components::Config->new(
