@@ -15,6 +15,7 @@ our @ACTION_REQUESTS;
 our @LOOKUP_REQUESTS;
 our @ELIGIBILITY_REQUESTS;
 our @SAVED_QUERY_REQUESTS;
+our $CHOICE_SOURCE_CALLS = 0;
 our @WEBSOCKET_MESSAGE_CLEANUPS;
 our @SAVED_QUERIES = (
     {name => 'Zulu inventory', url => '/explore/products?q=1&view=detail&field=product_name&limit=25&page=1'},
@@ -348,6 +349,7 @@ sub config {
         ],
         choice_sources => {
             product_note_types => sub {
+                $CHOICE_SOURCE_CALLS++;
                 return [
                     {value => 'internal', label => 'Internal'},
                     {value => 'public', label => 'Public'},

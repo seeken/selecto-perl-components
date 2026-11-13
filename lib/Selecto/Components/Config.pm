@@ -348,7 +348,9 @@ sub localize ($self, $domain, $semantic, $default, $context = undef) {
     );
 }
 
-sub for_request ($self, $controller) {
+# A request's copy. $options{catalog_cache}: catalogs kept from an earlier
+# request on the same connection (an Explorer WebSocket's session).
+sub for_request ($self, $controller, %options) {
     my $copy = bless {%$self}, ref($self);
     $copy->{_localization_controller} = $controller;
     delete $copy->{_resolved_theme};
@@ -358,7 +360,7 @@ sub for_request ($self, $controller) {
     # Catalog construction walks the complete domain and localizes every label.
     # A single model/render cycle asks for the same catalogs through several
     # convenience methods, so keep those immutable results on the request copy.
-    $copy->{_catalog_cache} = {};
+    $copy->{_catalog_cache} = ref($options{catalog_cache}) eq 'HASH' ? $options{catalog_cache} : {};
     $copy->{_i18n_metadata_cache} = {};
     return $copy;
 }

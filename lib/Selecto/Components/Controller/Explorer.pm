@@ -76,8 +76,9 @@ sub _decorate_model ($controller, $model) {
     if ($model->{domain} && $model->{state} && $model->{state}->valid
         && $model->{state}->view eq 'detail') {
         my $ok = eval {
+            # (Choices from a choice_source load with the dialog's form.)
             $model->{available_actions} = Selecto::Components::Actions->available(
-                $model->{config}, $model->{domain}, $controller,
+                $model->{config}, $model->{domain}, $controller, 'preview', undef, defer_choices => 1,
             );
             my %selected = map {
                 my $id = $model->{config}->action_id_from_column($_);

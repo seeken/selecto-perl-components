@@ -10,6 +10,9 @@ use Time::HiRes qw(time);
 # One object per socket. Never retain controllers, engines, domain authorization
 # closures or database handles here. Result values are serialized for isolation.
 has ttl => 30;
+# Field catalogs (Config's per-request catalog cache) kept for the socket's
+# later messages, for at most this many seconds (0: none kept).
+has catalog_ttl => 300;
 has max_bytes => 2_097_152;
 has max_entries => 8;
 has clock => sub { sub { time } };
@@ -23,7 +26,7 @@ has domain => undef;
 
 sub validate_options ($class, $options) {
     die "websocket_session_options must be an object\n" unless ref($options) eq 'HASH';
-    my %bounds = (ttl => [0, 300], max_bytes => [0, 8_388_608], max_entries => [1, 32]);
+    my %bounds = (ttl => [0, 300], max_bytes => [0, 8_388_608], max_entries => [1, 32], catalog_ttl => [0, 3600]);
     for my $key (keys %$options) {
         my $range = $bounds{$key} or die "Unknown Explorer session option: $key\n";
         my $value = $options->{$key};
@@ -39,10 +42,32 @@ sub clear_results ($self) {
     $self->bytes(0);
 }
 
+sub clear_catalogs ($self) {
+    delete @{$self}{qw(catalogs catalogs_until)};
+}
+
+# The catalog cache a message's request configuration starts from
+# (Explorer model catalog_cache). Its entries are keyed by the domain's
+# fingerprint, so a domain the user now sees differently builds new ones; the
+# labels are this socket's user's. Fresh results (a repeated run) keep them;
+# they are emptied when the scope changes or the socket closes, and after
+# catalog_ttl seconds.
+sub catalogs ($self) {
+    return {} unless $self->catalog_ttl;
+    my $now = $self->clock->();
+    if (ref($self->{catalogs}) ne 'HASH' || $now >= ($self->{catalogs_until} // 0)
+            || keys(%{$self->{catalogs}}) > 64) {
+        $self->{catalogs} = {};
+        $self->{catalogs_until} = $now + $self->catalog_ttl;
+    }
+    return $self->{catalogs};
+}
+
 sub bind_scope ($self, $scope) {
     die "Explorer session scope must be a scalar\n" if !defined($scope) || ref($scope);
     if (!defined($self->scope) || $self->scope ne $scope) {
         $self->clear_results;
+        $self->clear_catalogs;
         $self->input(undef);
         $self->scope($scope);
     }

@@ -52,7 +52,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     my %cache_info = (hits => 0, misses => 0);
     my $cache_namespace;
     my $input_supplied = defined $input;
-    my $config = $self->config->for_request($controller);
+    my $config = $self->config->for_request($controller, catalog_cache => $options->{catalog_cache});
     $cache_namespace = $options->{cache_namespace};
     $cache_namespace //= $config->result_cache_namespace->($controller, $config)
         if $config->result_cache_namespace;

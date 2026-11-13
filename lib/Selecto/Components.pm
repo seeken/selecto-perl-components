@@ -291,7 +291,7 @@ sub _routes (
         }
         $controller->inactivity_timeout($websocket_inactivity_timeout);
         my $session = Selecto::Components::ExplorerSession->new(%{$config->websocket_session_options});
-        $controller->on(finish => sub { $session->clear_results; $session->input(undef) });
+        $controller->on(finish => sub { $session->clear_results; $session->clear_catalogs; $session->input(undef) });
         if ($websocket_heartbeat_interval) {
             my $heartbeat_id;
             $heartbeat_id = Mojo::IOLoop->recurring(
@@ -330,6 +330,7 @@ sub _routes (
                 if ($@ || !defined($scope) || ref($scope)) {
                     $denied = 1;
                     $session->clear_results;
+                    $session->clear_catalogs;
                 } else {
                     $session->bind_scope($scope);
                     my $state_input = $session->prepare(\%input, $patch, $refresh);
@@ -338,14 +339,16 @@ sub _routes (
                             request_id => $request_id, session => {resync => 1},
                         }};
                     } else {
+                        my %options = $config->result_cache_namespace ? (
+                            result_cache => $session,
+                            cache_namespace => encode_json([$scope,
+                                Selecto::Components::Explorer::_cache_identity(
+                                    $config->result_cache_namespace->($socket, $config), 'namespace')]),
+                        ) : (defer_count => $config->defer_count);
+                        # (The socket's catalogs, kept from its earlier messages.)
+                        $options{catalog_cache} = $session->catalogs;
                         my $model = Selecto::Components::Controller::Explorer::_decorate_model(
-                            $socket, $explorer->model($socket, $state_input,
-                                $config->result_cache_namespace ? {
-                                    result_cache => $session,
-                                    cache_namespace => encode_json([$scope,
-                                        Selecto::Components::Explorer::_cache_identity(
-                                            $config->result_cache_namespace->($socket, $config), 'namespace')]),
-                                } : {defer_count => $config->defer_count}),
+                            $socket, $explorer->model($socket, $state_input, \%options),
                         );
                         $response_limits = $model->{config}->limits;
                         $model->{selecto_request_id} = $request_id if defined $request_id;
@@ -1043,11 +1046,15 @@ See F<docs/explorer-sessions.md> in the distribution.
 
 =item websocket_session_options
 
-    {ttl => 30, max_bytes => 2_097_152, max_entries => 8}
+    {ttl => 30, max_bytes => 2_097_152, max_entries => 8, catalog_ttl => 300}
 
 These settings bound the per-connection result cache: C<ttl> 0 to 300
 seconds (0 disables caching), C<max_bytes> up to 8 MiB, and C<max_entries>
-1 to 32. See L<Selecto::Components::ExplorerSession>.
+1 to 32. C<catalog_ttl>, 0 to 3600 seconds (0 keeps none), is how long the
+socket keeps its field catalogs for later messages, so a run does not rebuild
+and relocalize them; they are keyed by the domain's fingerprint and dropped
+when the scope changes or the socket closes. See
+L<Selecto::Components::ExplorerSession>.
 
 =item websocket_message_cleanup
 
