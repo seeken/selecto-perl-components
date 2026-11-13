@@ -33,7 +33,7 @@ my @LUCKY_CHARMS_MARKERS = (
     },
 );
 
-sub available ($class, $config, $domain, $controller, $phase = 'preview', $target = undef) {
+sub available ($class, $config, $domain, $controller, $phase = 'preview', $target = undef, %options) {
     my $actions = $domain->actions;
     return [] unless ref($actions) eq 'HASH';
 
@@ -41,7 +41,7 @@ sub available ($class, $config, $domain, $controller, $phase = 'preview', $targe
     for my $id (sort keys %$actions) {
         next unless $config->action_handler($id);
         my $action = $class->_normalize_action(
-            $id, $actions->{$id}, $config, $controller, $domain,
+            $id, $actions->{$id}, $config, $controller, $domain, $options{defer_choices},
         );
         next unless $action && $class->_bulk_enabled($action);
         my $decision = $class->_authorize($config, $controller, $action, $phase, $target);
@@ -53,6 +53,21 @@ sub available ($class, $config, $domain, $controller, $phase = 'preview', $targe
         push @available, $action;
     }
     return \@available;
+}
+
+# Whether action $id takes any input's choices from a choice_source, so its
+# dialog may load its form when it opens (available defer_choices).
+sub defers_choices ($class, $domain, $id) {
+    my $actions = $domain->actions;
+    my $spec = ref($actions) eq 'HASH' ? $actions->{$id} : undef;
+    return 0 unless ref($spec) eq 'HASH';
+    my $sourced = sub ($inputs) {
+        my @inputs = ref($inputs) eq 'ARRAY' ? @$inputs : ref($inputs) eq 'HASH' ? values %$inputs : ();
+        return scalar grep { ref($_) eq 'HASH' && length(_text($_->{choice_source})) } @inputs;
+    };
+    return 1 if $sourced->($spec->{inputs});
+    return scalar grep { ref($_) eq 'HASH' && $sourced->($_->{inputs}) }
+        @{ref($spec->{variants}) eq 'ARRAY' ? $spec->{variants} : []};
 }
 
 sub find ($class, $config, $domain, $controller, $id, $phase = 'preview', $target = undef) {
@@ -245,7 +260,10 @@ sub submitted_inputs ($class, $controller) {
     return \%inputs;
 }
 
-sub _normalize_action ($class, $id, $spec, $config, $controller, $domain) {
+# $defer_choices: leave the choices a choice_source resolves for when the
+# action's dialog opens (form_on_open, its form route); an action whose inputs
+# show without a dialog resolves them anyway.
+sub _normalize_action ($class, $id, $spec, $config, $controller, $domain, $defer_choices = 0) {
     return undef unless ref($spec) eq 'HASH';
     my $action = dclone($spec);
     $action->{id} = "$id";
@@ -259,15 +277,19 @@ sub _normalize_action ($class, $id, $spec, $config, $controller, $domain) {
         {kind => 'action', id => $id, attribute => 'description'},
     );
     $action->{scope} = lc(_text($action->{scope}) || 'row');
-    $action->{inputs} = $class->_normalize_inputs(
-        $action->{inputs}, $config, $controller, $action, $domain,
-        "actions.$id.inputs",
-    );
-    if (exists $action->{variants}) {
+    my $input_specs = $action->{inputs};
+    my $variant_specs = exists($action->{variants}) ? $action->{variants} : undef;
+    my $normalize_inputs = sub ($defer) {
+        $action->{inputs} = $class->_normalize_inputs(
+            $input_specs, $config, $controller, $action, $domain,
+            "actions.$id.inputs", $defer,
+        );
+        return unless defined $variant_specs;
         die "action $id variants must be a non-empty list\n"
-            unless ref($action->{variants}) eq 'ARRAY' && @{$action->{variants}};
+            unless ref($variant_specs) eq 'ARRAY' && @$variant_specs;
         my %seen;
-        for my $variant (@{$action->{variants}}) {
+        $action->{variants} = [map {
+            my $variant = ref($_) eq 'HASH' ? dclone($_) : $_;
             die "action $id has an invalid variant\n"
                 unless ref($variant) eq 'HASH' && _text($variant->{id}) =~ /\A[a-z][a-z0-9_-]*\z/
                     && !$seen{$variant->{id}}++ && ref($variant->{when}) eq 'HASH';
@@ -277,13 +299,21 @@ sub _normalize_action ($class, $id, $spec, $config, $controller, $domain) {
             $variant->{description} = $config->localize($domain, "$prefix.description",
                 _text($variant->{description}), {kind => 'action_variant'});
             $variant->{inputs} = $class->_normalize_inputs(
-                $variant->{inputs}, $config, $controller, $action, $domain, "$prefix.inputs",
+                $variant->{inputs}, $config, $controller, $action, $domain, "$prefix.inputs", $defer,
             );
-        }
-    }
+            $variant;
+        } @$variant_specs];
+    };
+    $normalize_inputs->($defer_choices ? 1 : 0);
     $action->{selection} = $class->_normalize_selection(
         $action->{selection}, $config, $controller, $action, $domain,
     );
+    # Only a dialog's form can load when it opens (toolbar and row dialogs).
+    if ($action->{form_on_open} && ($action->{selection}{mode} eq 'groups'
+            || ($action->{selection}{presentation} // '') !~ /\A(?:toolbar|row_dialog)\z/)) {
+        delete $action->{form_on_open};
+        $normalize_inputs->(0);
+    }
     my $submit_default = _text($action->{submit_label})
         || ($action->{selection}{mode} eq 'groups'
             || $action->{selection}{presentation} ne 'toolbar'
@@ -375,7 +405,7 @@ sub _normalize_row_details ($class, $specs, $config, $domain, $action) {
     return \@details;
 }
 
-sub _normalize_inputs ($class, $specs, $config, $controller, $action, $domain, $prefix) {
+sub _normalize_inputs ($class, $specs, $config, $controller, $action, $domain, $prefix, $defer_choices = 0) {
     my @specs;
     if (ref($specs) eq 'ARRAY') {
         @specs = @$specs;
@@ -464,7 +494,10 @@ sub _normalize_inputs ($class, $specs, $config, $controller, $action, $domain, $
         }
         my $options = $spec->{options};
         my $source = _text($spec->{choice_source});
-        if ($source ne '') {
+        if ($source ne '' && $defer_choices) {
+            $options = [];
+            $action->{form_on_open} = 1;
+        } elsif ($source ne '') {
             my $resolver = $config->choice_source($source);
             $options = $resolver ? $resolver->($controller, $action, $spec) : [];
         }
@@ -899,10 +932,15 @@ L<Selecto::Components::Config> (C<< $config->for_request($c) >>).
 =head2 available
 
     my $actions = Selecto::Components::Actions->available(
-        $config, $domain, $controller, $phase, $target);
+        $config, $domain, $controller, $phase, $target, %options);
 
 The normalized, authorized actions for a phase (C<preview> by default). Each
 carries C<status> (C<enabled> or C<disabled>) and possibly C<status_reason>.
+With C<defer_choices>, an action shown in a dialog (toolbar or row dialog)
+whose inputs take their choices from a C<choice_source> is marked
+C<form_on_open> and its choices are left empty: the Explorer loads its form
+from C<PATH/actions/ID/form> when the dialog opens, so a page does not pay
+for choices nobody opens.
 Hidden actions are left out.
 
 =head2 find

@@ -9,17 +9,22 @@ sub form ($controller, $explorer) {
     my $config = $explorer->config->for_request($controller);
     my $target = Selecto::Components::Actions->canonical_target($config, $controller->every_param('selected_id'));
     my $ids = $target->{ids};
-    return $controller->render(status => 422, json => {ok => 0, message => 'Select exactly one row.'})
-        unless !@{$target->{errors}} && @$ids == 1 && defined($ids->[0]) && length($ids->[0]) && length($ids->[0]) <= 200;
     my $id = $controller->stash('selecto_action_id') // '';
-    return $controller->render(status => 404, json => {ok => 0, message => 'That action form is not available.'})
-        unless $config->action_form_resolvers->{$id};
-    my $resolved;
+    # A form a host resolves for its one row, or one whose choices load with
+    # its dialog (form_on_open), for the rows the dialog was opened on.
+    my $row_form = $config->action_form_resolvers->{$id};
+    return $controller->render(status => 422, json => {ok => 0, message => 'Select exactly one row.'})
+        if $row_form && !(!@{$target->{errors}} && @$ids == 1 && defined($ids->[0]) && length($ids->[0]) && length($ids->[0]) <= 200);
+    my ($resolved, $deferred);
     my $ok = eval {
-        $resolved = Selecto::Components::Actions->find($config,
-            $config->engine($controller)->domain, $controller, $id, 'preview', {ids => $ids});
+        my $domain = $config->engine($controller)->domain;
+        $deferred = !$row_form && Selecto::Components::Actions->defers_choices($domain, $id);
+        $resolved = Selecto::Components::Actions->find($config, $domain, $controller, $id, 'preview', {ids => $ids})
+            if $row_form || $deferred;
         1;
     };
+    return $controller->render(status => 404, json => {ok => 0, message => 'That action form is not available.'})
+        if $ok && !$row_form && !$deferred;
     unless ($ok) {
         $controller->app->log->error("Selecto action form failed: $@");
         return $controller->render(status => 500, json => {ok => 0, message => 'The action form could not be loaded.'});

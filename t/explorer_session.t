@@ -39,6 +39,33 @@ $session->store(one => $raw);
 $session->bind_domain('new-domain');
 is $session->bytes, 0, 'domain changes invalidate results';
 
+# Catalogs for the socket's later messages.
+{
+    my $now = 100;
+    my $session = Selecto::Components::ExplorerSession->new(clock => sub { $now }, catalog_ttl => 60);
+    $session->bind_scope('alice:tenant-one');
+    my $catalogs = $session->catalogs;
+    $catalogs->{built} = 1;
+    is $session->catalogs, $catalogs, 'a later message gets the same catalogs';
+    $now += 60;
+    ok !$session->catalogs->{built}, 'until they expire';
+    $session->catalogs->{built} = 1;
+    $session->bind_scope('alice:tenant-one');
+    ok $session->catalogs->{built}, 'the same scope keeps them';
+    $session->bind_scope('bob:tenant-two');
+    ok !$session->catalogs->{built}, 'another scope does not';
+    $session->catalogs->{built} = 1;
+    $session->clear_results;
+    ok $session->catalogs->{built}, 'fresh results keep them';
+    $session->clear_catalogs;
+    ok !$session->catalogs->{built}, 'until they are cleared';
+    my $none = Selecto::Components::ExplorerSession->new(catalog_ttl => 0);
+    $none->catalogs->{built} = 1;
+    ok !$none->catalogs->{built}, 'catalog_ttl 0 keeps none';
+    ok !eval { Selecto::Components::ExplorerSession->validate_options({catalog_ttl => 3601}); 1 },
+        'catalog_ttl is bounded';
+}
+
 my ($allowed, $actor, $checks) = (1, 'alice', 0);
 my $app = Mojolicious->new;
 $app->secrets(['explorer-session-test']);
@@ -85,4 +112,28 @@ ok decode_json($t->message->[1])->{selecto}{session}{resync}, 'reconnect request
 $t->send_ok({text => encode_json($full)})->message_ok;
 is decode_json($t->message->[1])->{selecto}{session}{revision}, 1, 'full snapshot restores reconnected view';
 $t->finish_ok;
+
+# A socket builds its field catalogs once, not for every message.
+{
+    my $builds = 0;
+    my @builds;
+    no warnings 'redefine';
+    # (_field_html_format runs only while a field catalog is built.)
+    my $original = \&Selecto::Components::Config::_field_html_format;
+    local *Selecto::Components::Config::_field_html_format = sub { $builds++; $original->(@_) };
+    my $run = {headers => {}, q => 1, view => 'detail', field => ['product_name', 'unit_price'], limit => 25, page => 1};
+    $t->websocket_ok('/explore/products/ws');
+    my @contents;
+    for my $id (1 .. 3) {
+        $t->send_ok({text => encode_json({%$run, selecto_request_id => "catalog-$id", render_scope => 'results'})})->message_ok;
+        push @contents, decode_json($t->message->[1])->{content};
+        push @{$builds[$id]}, $builds;
+    }
+    $t->finish_ok;
+    my $after_first = $builds[1][0];
+    ok $after_first > 0, 'the first message builds them';
+    is $builds, $after_first, 'later messages reuse them';
+    s/\d+ ms/N ms/g for @contents;
+    is $contents[2], $contents[1], 'and render the same results';
+}
 done_testing;

@@ -509,6 +509,7 @@ my $action_columns_url = '/explore/products?q=1&view=detail' .
     '&field=product_name&field_alias=&field_format=' .
     '&field=action%3Amark_for_review&field_alias=&field_format=' .
     '&group=category.category_name&measure=count&order=product_name&direction=asc&limit=25&page=1';
+$TestSelectoComponents::CHOICE_SOURCE_CALLS = 0;
 $t->get_ok($action_columns_url)
     ->status_is(200)
     ->element_exists('[data-sc-bulk-actions]')
@@ -529,11 +530,27 @@ $t->get_ok($action_columns_url)
     ->element_exists('#selecto-action-products-mark_for_review-title')
     ->element_exists('form[action="/explore/products/actions/add_product_note"]')
     ->element_exists('form[action="/explore/products/actions/mark_for_review"]')
-    ->element_exists('select[name="action_input_note_type"] option[value="internal"]')
-    ->element_exists('textarea[name="action_input_comment"][maxlength="255"]')
+    # Its choices come from a choice_source: the form loads when the dialog opens.
+    ->element_exists('form[action="/explore/products/actions/add_product_note"]' .
+        '[data-sc-action-form-url="/explore/products/actions/add_product_note/form"][data-sc-action-form-ready="0"]')
+    ->element_exists_not('select[name="action_input_note_type"]')
+    ->element_exists_not('form[action="/explore/products/actions/mark_for_review"][data-sc-action-form-url]')
     ->element_exists('textarea[name="action_input_reason"][maxlength="120"]')
     ->content_like(qr{Action: Add Product Note.*Product Name.*Action: Mark for Review}s)
     ->content_unlike(qr{<th[^>]*>__selecto_action_target</th>});
+is $TestSelectoComponents::CHOICE_SOURCE_CALLS, 0, 'the page did not resolve the choices';
+$t->get_ok('/explore/products/actions/add_product_note/form?selected_id=101&selected_id=102')
+    ->status_is(200)->header_is('Cache-Control' => 'private, no-store')->json_is('/ok' => 1);
+{
+    my $form = Mojo::DOM->new($t->tx->res->json('/html'));
+    ok $form->at('select[name="action_input_note_type"] option[value="internal"]'), 'the opened form has its choices';
+    ok $form->at('textarea[name="action_input_comment"][maxlength="255"]'), 'and its other inputs';
+    is $TestSelectoComponents::CHOICE_SOURCE_CALLS, 1, 'resolved when the dialog opened';
+}
+$t->get_ok('/explore/products/actions/add_product_note/form')->status_is(403)
+    ->json_is('/message' => 'Select at least one row.');
+$t->get_ok('/explore/products/actions/mark_for_review/form?selected_id=101')->status_is(404);
+$t->get_ok($action_columns_url)->status_is(200);
 
 my $csrf_token = $t->tx->res->dom
     ->at('form[action="/explore/products/actions/add_product_note"] input[name="csrf_token"]')

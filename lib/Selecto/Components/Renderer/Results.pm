@@ -156,7 +156,9 @@ sub _bulk_actions ($class, $model) {
 sub _action_dialog ($model, $action, $dialog_id, $dialog_title_id, $single_row = 0) {
     my $config = $model->{config};
     my $id = $action->{id};
-    my $target_form = $single_row && $config->action_form_resolvers->{$id};
+    # Its form loads when it opens: a single row's host-resolved form, or
+    # choices left for then (Actions available defer_choices).
+    my $target_form = ($single_row && $config->action_form_resolvers->{$id}) || $action->{form_on_open};
     my $inputs = $target_form ? '' : _action_inputs($action);
     my $description = length($action->{description} // '')
         ? '<p class="sc-action-description">' . _h($action->{description}) . '</p>' : '';

@@ -1,6 +1,20 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - WebSocket runs keep their field catalogs. A message's request copy of the
+      configuration started with an empty catalog cache, so every run rebuilt
+      and relocalized the catalogs (80 ms a run on lhf Load Detail). The
+      socket's ExplorerSession now keeps them for later messages: keyed by the
+      domain's fingerprint, dropped when the scope changes or the socket
+      closes, and for at most websocket_session_options catalog_ttl seconds
+      (default 300). A run on lhf Load Detail: 231 ms to 173 ms.
+    - Action choices load with their dialog. An action shown in a dialog whose
+      inputs take choices from a choice_source no longer resolves them for
+      every page: Actions->available(..., defer_choices => 1), as the Explorer
+      asks, marks it form_on_open, and its dialog loads the form from
+      PATH/actions/ID/form when it opens (for the rows it was opened on,
+      checked as the action itself is). On lhf Load the Add Event choices cost
+      every page 120 ms.
     - Detail pages count after they show. A page with more rows after it no
       longer waits for its count: it returns with "N rows on this page ·
       counting all matches…" and the browser asks the new count route
