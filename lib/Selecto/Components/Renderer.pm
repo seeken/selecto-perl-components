@@ -204,7 +204,11 @@ sub _hero_actions_control ($class, $model) {
     return '' unless $model->{state} && $model->{domain};
     my $start = '<div id="selecto-hero-actions-' . _h($config->id) .
         '" class="sc-hero-actions" data-sc-hero-actions>';
-    return $start . '<span class="sc-private-mode">Private URL mode</span></div>'
+    my $header_links = join '', map {
+        '<a class="sc-button sc-secondary" data-sc-header-link href="' . _h($_->{href}) . '">' .
+            _h($_->{label}) . '</a>'
+    } @{$config->header_links($model)};
+    return $start . '<span class="sc-private-mode">Private URL mode</span>' . $header_links . '</div>'
         unless $config->query_params_enabled($model->{domain});
     my $export_links = join '', map {
         my ($format, $label) = @$_;
@@ -221,7 +225,7 @@ sub _hero_actions_control ($class, $model) {
         : '';
     return $start . '<a class="sc-button sc-secondary" href="' .
         _h($model->{canonical_url}) . '">Permalink</a>' . $export_options .
-        $class->_api_console_control($model) . '</div>';
+        $class->_api_console_control($model) . $header_links . '</div>';
 }
 
 sub _api_console_control ($class, $model) {

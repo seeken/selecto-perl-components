@@ -113,6 +113,8 @@ code, pre, textarea.sac-request-editor {
 }
 
 .sac-header-actions { flex-wrap: wrap; justify-content: flex-end; gap: .6rem; }
+.sac-header-links { display: contents; }
+.sac-header-links[hidden] { display: none; }
 
 .sac-live {
   display: inline-flex;

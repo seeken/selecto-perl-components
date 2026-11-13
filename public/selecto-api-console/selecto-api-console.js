@@ -1839,6 +1839,16 @@ return {ExplorerIntentError,assertExplorerMetadata,toExplorerDescriptor,toCanoni
     return specs;
   }
 
+  // The host's extra header links (data-links): [{label, href}], each href an
+  // absolute same-origin path.
+  function parseHeaderLinks(value) {
+    let links;
+    try { links = JSON.parse(value || "[]"); } catch (_error) { return []; }
+    if (!Array.isArray(links)) return [];
+    return links.filter((link) => link && typeof link.label === "string" && link.label
+      && typeof link.href === "string" && /^\/(?![\/\\])/.test(link.href));
+  }
+
   class APIConsole {
     constructor(root) {
       this.root = root;
@@ -1846,6 +1856,7 @@ return {ExplorerIntentError,assertExplorerMetadata,toExplorerDescriptor,toCanoni
       this.title = root.dataset.title || standaloneOption("title") || "API Console";
       this.curlAuth = normalizeCurlAuth(root.dataset.curlAuth, standaloneOption("curl_auth"));
       this.csrfToken = String(root.dataset.csrfToken || "");
+      this.links = parseHeaderLinks(root.dataset.links);
       this.domain = null;
       this.manifest = null;
       this.openapi = null;
@@ -2118,6 +2129,7 @@ return {ExplorerIntentError,assertExplorerMetadata,toExplorerDescriptor,toCanoni
             <a class="sac-button sac-secondary" data-sac-domain-link>Domain JSON</a>
             <a class="sac-button sac-secondary" data-sac-openapi-link>OpenAPI</a>
             <a class="sac-button sac-secondary" data-sac-importer-link hidden>Importer</a>
+            <span class="sac-header-links" data-sac-header-links hidden></span>
           </div>
         </header>
         <nav class="sac-tabs" aria-label="API console sections">
@@ -2309,6 +2321,15 @@ return {ExplorerIntentError,assertExplorerMetadata,toExplorerDescriptor,toCanoni
       const importerLink = this.root.querySelector("[data-sac-importer-link]");
       importerLink.href = `${this.base}/import`;
       importerLink.hidden = !this.access.importer;
+      const headerLinks = this.root.querySelector("[data-sac-header-links]");
+      headerLinks.replaceChildren(...this.links.map((link) => {
+        const anchor = document.createElement("a");
+        anchor.className = "sac-button sac-secondary";
+        anchor.href = link.href;
+        anchor.textContent = link.label;
+        return anchor;
+      }));
+      headerLinks.hidden = !this.links.length;
       const surfaceTabs = [["query", this.access.read], ["writes", this.access.write], ["actions", this.access.action]];
       for (const [name, allowed] of surfaceTabs) {
         const tab = this.root.querySelector(`[data-sac-main-tab="${name}"]`);

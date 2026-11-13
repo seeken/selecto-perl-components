@@ -6,9 +6,11 @@ use warnings;
 
 use Mojo::Base -base, -signatures;
 use Mojo::File qw(path);
+use Mojo::JSON qw(to_json);
 use Selecto::Components::Util qw(html_escape);
 use Selecto::Components::ThemeStylesheet ();
 use Selecto::Components::AssetManifest qw(api_console_revision);
+use Selecto::Components::Config ();
 
 my $ASSET_REVISION = api_console_revision();
 
@@ -34,6 +36,7 @@ sub page ($class, %options) {
     my $title = _string($options{title} // 'API Console', 'title');
     my $curl_auth = _curl_auth($options{curl_auth});
     my $csrf_token = _string($options{csrf_token}, 'csrf_token');
+    my $links = Selecto::Components::Config::header_link_list($options{links}, 'links');
     my $presentation = $class->page_presentation(%options);
     my $theme = $presentation->{theme};
     my $shell = $presentation->{page_shell};
@@ -57,7 +60,8 @@ sub page ($class, %options) {
         'data-selecto-api-console data-api-base="' . html_escape($base_path) .
         '" data-title="' . html_escape($title) .
         '" data-curl-auth="' . html_escape($curl_auth) .
-        '" data-csrf-token="' . html_escape($csrf_token) . '">' .
+        '" data-csrf-token="' . html_escape($csrf_token) .
+        (@$links ? '" data-links="' . html_escape(to_json($links)) : '') . '">' .
         '<div class="sac-boot" role="status"><span class="sac-spinner" ' .
         'aria-hidden="true"></span><span>Reading the Selecto domain&hellip;</span></div>' .
         '<noscript><div class="sac-fatal">The Selecto API Console requires JavaScript.</div></noscript>' .

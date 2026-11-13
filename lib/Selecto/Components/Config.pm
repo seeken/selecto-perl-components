@@ -68,6 +68,7 @@ has 'localizer';
 has 'theme_resolver';
 has 'page_shell_resolver';
 has 'api_console_resolver';
+has 'header_links_resolver';
 has 'websocket_message_cleanup';
 has 'websocket_context';
 has 'result_cache_namespace';
@@ -146,6 +147,8 @@ sub new ($class, @args) {
         if defined($self->page_shell_resolver) && ref($self->page_shell_resolver) ne 'CODE';
     die "api_console_resolver must be a coderef\n"
         if defined($self->api_console_resolver) && ref($self->api_console_resolver) ne 'CODE';
+    die "header_links_resolver must be a coderef\n"
+        if defined($self->header_links_resolver) && ref($self->header_links_resolver) ne 'CODE';
     die "websocket_message_cleanup must be a coderef\n"
         if defined($self->websocket_message_cleanup)
             && ref($self->websocket_message_cleanup) ne 'CODE';
@@ -379,6 +382,28 @@ sub api_console_url ($self, $model = undef) {
     die "api_console_resolver must return an absolute same-origin path\n"
         if ref($url) || "$url" !~ m{\A/(?!/)[A-Za-z0-9/_-]+\z};
     return "$url";
+}
+
+# The host's extra links for the Explorer's header actions, beside Permalink
+# and API: [{label, href}], each href an absolute same-origin path.
+sub header_links ($self, $model = undef) {
+    my $resolver = $self->header_links_resolver;
+    return [] unless $resolver;
+    return header_link_list($resolver->($self->{_localization_controller}, $self, $model), 'header_links_resolver');
+}
+
+sub header_link_list ($links, $source) {
+    return [] unless defined $links;
+    die "$source must return an array of links\n" unless ref($links) eq 'ARRAY';
+    return [map {
+        my $link = $_;
+        die "$source links must be objects with a label and href\n"
+            unless ref($link) eq 'HASH' && defined($link->{label}) && !ref($link->{label})
+                && length("$link->{label}") && defined($link->{href}) && !ref($link->{href});
+        die "$source link href must be an absolute same-origin path\n"
+            unless "$link->{href}" =~ m{\A/(?![/\\])[^\s"'<>\\]*\z};
+        {label => "$link->{label}", href => "$link->{href}"}
+    } @$links];
 }
 
 # The validated colours as CSS declarations, e.g. "--sc-brand:#123456".
