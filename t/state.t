@@ -102,6 +102,25 @@ my $unrepresentable_alias = Selecto::Components::State->from_input($config, $dom
 is $unrepresentable_alias->api_query_payload($config, $domain), undef,
     'an Explorer-only presentation label is not silently changed into an API alias';
 
+my $api_repeated_columns = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail',
+    field => ['product_name', 'created_on', 'product_name', 'created_on', 'created_on'],
+    field_format => ['', '', '', 'month', 'month'],
+    order => 'product_name',
+});
+is_deeply $api_repeated_columns->api_query_payload($config, $domain)->{select}, [
+    'product_name',
+    'created_on',
+    {field => 'created_on', alias => 'created_on_2', format => 'month'},
+], 'an exact repeated column is left out, and a repeat with another format gets its own API alias';
+
+my $repeated_alias = Selecto::Components::State->from_input($config, $domain, {
+    q => 1, view => 'detail', field => ['product_name', 'created_on'],
+    field_alias => ['label', 'label'], order => 'product_name',
+});
+is $repeated_alias->api_query_payload($config, $domain), undef,
+    'two columns given one configured alias are not silently renamed';
+
 my $aggregate_api_state = Selecto::Components::State->from_input($config, $domain, {
     q => 1, view => 'aggregate', group => 'category.category_name', measure => 'count',
 });

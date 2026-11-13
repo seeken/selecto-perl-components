@@ -1,6 +1,11 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - The API button works when a detail column is repeated. The canonical API
+      refuses two result columns with one name, and the console request copied
+      every column. An exact repeat is now left out of the request, and a repeat
+      with another format gets its own alias (created_on_2). Columns given the same
+      configured alias still disable the button.
     - A filter added in the browser takes edits made on its promoted card. A
       results-only run re-renders the promoted cards with the server's filter
       instance but keeps the builder, whose new items had none, so the edits were

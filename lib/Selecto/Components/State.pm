@@ -280,7 +280,7 @@ sub api_query_payload ($self, $config, $domain) {
 
     my $detail_map = $config->detail_column_map($domain);
     my $field_map = $config->field_map($domain);
-    my (@select, %nested);
+    my (@select, %nested, %names);
     for my $index (0 .. $#{$self->fields}) {
         my $field = $self->fields->[$index];
         next if $detail_map->{$field}{action_id};
@@ -291,6 +291,23 @@ sub api_query_payload ($self, $config, $domain) {
         # aliases are identifiers. Do not silently change a configured alias.
         return undef if length($alias) && $alias !~ /\A[A-Za-z_][A-Za-z0-9_]*\z/;
         my $format = $column->{format} // '';
+        # The API names each result column by its alias or field path and
+        # refuses two columns with one name, while the Explorer may repeat a
+        # column. An exact repeat adds nothing to an object row, so it is left
+        # out; a repeat with another format gets its own alias. A configured
+        # alias that collides is not silently changed.
+        my $denormalizing = $field_map->{$field}{denormalizing};
+        my ($association) = $denormalizing ? split(/\./, $field, 2) : ('');
+        my $names = $names{$association} //= {};
+        my $name = length($alias) ? $alias : $field;
+        if ($names->{$name}) {
+            return undef if length($alias);
+            next if $names->{"\0$field\0$format"};
+            $alias = _api_repeat_alias($field, $names);
+            $name = $alias;
+        }
+        $names->{$name} = 1;
+        $names->{"\0$field\0$format"} //= 1 unless length($column->{alias} // '');
         my $selection = length($alias) || length($format)
             ? {
                 field => $field,
@@ -298,8 +315,7 @@ sub api_query_payload ($self, $config, $domain) {
                 (length($format) ? (format => $format) : ()),
             }
             : $field;
-        if ($field_map->{$field}{denormalizing}) {
-            my ($association) = split /\./, $field, 2;
+        if ($denormalizing) {
             unless ($nested{$association}) {
                 $nested{$association} = [];
                 push @select, $nested{$association};
@@ -344,6 +360,14 @@ sub api_query_payload ($self, $config, $domain) {
         limit => 0 + $self->limit,
         offset => ($self->page - 1) * $self->limit,
     };
+}
+
+sub _api_repeat_alias ($field, $names) {
+    (my $base = $field) =~ s/[^A-Za-z0-9_]/_/g;
+    $base = "_$base" unless $base =~ /\A[A-Za-z_]/;
+    my $suffix = 2;
+    $suffix++ while $names->{"${base}_$suffix"};
+    return "${base}_$suffix";
 }
 
 sub as_hash ($self) {
