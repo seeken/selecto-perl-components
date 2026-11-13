@@ -293,21 +293,19 @@ sub api_query_payload ($self, $config, $domain) {
         my $format = $column->{format} // '';
         # The API names each result column by its alias or field path and
         # refuses two columns with one name, while the Explorer may repeat a
-        # column. An exact repeat adds nothing to an object row, so it is left
-        # out; a repeat with another format gets its own alias. A configured
-        # alias that collides is not silently changed.
+        # column, with the same format or another. Each repeat gets its own
+        # alias (created_on_2). A configured alias that collides is not
+        # silently changed.
         my $denormalizing = $field_map->{$field}{denormalizing};
         my ($association) = $denormalizing ? split(/\./, $field, 2) : ('');
         my $names = $names{$association} //= {};
         my $name = length($alias) ? $alias : $field;
         if ($names->{$name}) {
             return undef if length($alias);
-            next if $names->{"\0$field\0$format"};
             $alias = _api_repeat_alias($field, $names);
             $name = $alias;
         }
         $names->{$name} = 1;
-        $names->{"\0$field\0$format"} //= 1 unless length($column->{alias} // '');
         my $selection = length($alias) || length($format)
             ? {
                 field => $field,

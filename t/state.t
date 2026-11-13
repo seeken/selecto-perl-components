@@ -111,8 +111,10 @@ my $api_repeated_columns = Selecto::Components::State->from_input($config, $doma
 is_deeply $api_repeated_columns->api_query_payload($config, $domain)->{select}, [
     'product_name',
     'created_on',
+    {field => 'product_name', alias => 'product_name_2'},
     {field => 'created_on', alias => 'created_on_2', format => 'month'},
-], 'an exact repeated column is left out, and a repeat with another format gets its own API alias';
+    {field => 'created_on', alias => 'created_on_3', format => 'month'},
+], 'each repeated column, with the same format or another, gets its own API alias';
 
 my $repeated_alias = Selecto::Components::State->from_input($config, $domain, {
     q => 1, view => 'detail', field => ['product_name', 'created_on'],
