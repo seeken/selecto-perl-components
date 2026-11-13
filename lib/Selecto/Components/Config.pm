@@ -30,6 +30,9 @@ has max_measures   => 10;
 has max_action_rows => 1000;
 has limits => sub { Selecto::Limits->new };
 has show_sql       => 0;
+# A Detail page with more rows after it shows its rows at once and counts the
+# rest afterwards, from the browser (Explorer->count).
+has defer_count    => 1;
 # Hosts can opt in to fetching inactive detail/summary controls on demand.
 has lazy_view_controls => 0;
 has action_handlers => sub { return {} };
@@ -1523,6 +1526,16 @@ IDs, owner IDs and other row-level security inputs, as well as every filter
 value a user typed. B<show_sql must be off in production.> Enable it only in
 trusted development environments. The plugin logs a warning at registration
 when an explorer enables it while the application runs in C<production> mode.
+
+=item defer_count
+
+Defaults to true. A Detail page fetches one row beyond its size, so a page
+that ends the results is its own total. One with more after it would wait for
+a count query; with C<defer_count> the page returns at once ("25 rows on this
+page · counting…") and the browser asks the explorer's C<count> route
+(C<PATH/count> with the page's query) for the total and pagination. It needs
+the query in the URL: with C<query_params> off the page counts first. Set it
+false to count before every such page returns.
 
 =item export_authorizer, max_export_rows
 

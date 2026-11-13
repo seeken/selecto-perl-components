@@ -5,6 +5,7 @@ use Test::More;
 use Test::Mojo;
 use Mojo::JSON qw(decode_json encode_json);
 use Mojo::URL ();
+use Mojo::DOM ();
 use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::DateShortcut ();
@@ -211,7 +212,7 @@ $t->get_ok('/explore/products')
     ->content_like(qr{/selecto-components/selecto-components\.js\?v=\Q@{[asset_revision()]}\E})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
     # Two rows on a page of 25 end the results: their count is the total, no count query.
-    ->content_like(qr{<strong>2</strong> rows matched \x{b7} <strong>1</strong> page \x{b7} <strong>\d+ ms</strong> query time})
+    ->content_like(qr{<strong>2</strong> rows matched \x{b7} <strong>1</strong> page</span> \x{b7} <strong>\d+ ms</strong> query time})
     ->element_count_is('.sc-pagination', 2)
     ->text_is('.sc-pagination-top > span' => 'Page 1 of 1')
     ->element_exists('.sc-pagination-top [data-sc-pagination-status][role="status"][hidden]')
@@ -977,22 +978,39 @@ is $interpolate->('SELECT ?, ?', ["a\\b", [1, 'x']], 'duckdb'),
     q{SELECT 'a\\b', [1, 'x']}, 'DuckDB keeps backslashes literal and writes lists';
 
 {
-    # A full page and the row beyond it: another page follows, so the total is counted.
+    # A full page and the row beyond it: another page follows. The page returns
+    # at once (defer_count) and names the URL that counts the rest.
     local $TestSelectoComponents::Adapter::PAGE_ROWS = 'full';
+    my $count_executions = $TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0;
     $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
         ->status_is(200)
         ->element_exists('.sc-debug-query:nth-of-type(1) code.sc-sql .sc-sql-keyword')
         ->element_exists('.sc-debug-query:nth-of-type(1) button[data-sc-debug-copy-source]')
         ->element_exists('.sc-debug-query:nth-of-type(1) pre[hidden][aria-hidden="true"]')
         ->content_like(qr/12\.50/)
-        ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>5</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
+        ->text_is('[data-sc-result-matched] [data-sc-count-status]' => "counting all matches\x{2026}")
+        ->content_like(qr{<strong>10</strong> rows on this page \x{b7} })
         ->element_count_is('.sc-pagination', 2)
-        ->text_is('.sc-pagination-top > span' => 'Page 1 of 5')
-        ->element_count_is('.sc-pagination-top .sc-page-number', 4)
-        ->element_exists('.sc-pagination-top [aria-current="page"]')
+        ->text_is('.sc-pagination-top > span' => 'Page 1')
         ->element_exists('.sc-pagination-top button[name="page"][value="2"].sc-page-direction')
+        ->text_is('[data-sc-debug-count] strong' => 'deferred')
         ->element_exists('table tbody tr');
+    is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0, $count_executions, 'the page did not count';
     is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->limit_value, 11, 'GET runs the normalized query (and the row beyond its page)';
+    my $count_url = $t->tx->res->dom->at('[data-sc-deferred-count]')->attr('data-sc-deferred-count');
+    like $count_url, qr{\A/explore/products/count\?q=1&view=detail&}, 'the count URL is the page\'s query';
+
+    $t->get_ok($count_url)->status_is(200)->header_is('Cache-Control' => 'no-store')
+        ->json_is('/total_count' => 42)->json_is('/total_pages' => 5)
+        ->json_like('/matched' => qr{<strong>42</strong> rows matched \x{b7} <strong>5</strong> pages})
+        ->json_has('/count_ms');
+    is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $count_executions + 1, 'the count URL counts';
+    my $top = Mojo::DOM->new($t->tx->res->json('/pagination/top'));
+    is $top->at('nav.sc-pagination-top > span')->text, 'Page 1 of 5', 'its pagination knows the pages';
+    is $top->find('.sc-page-number')->size, 4, 'and offers them';
+    ok $top->at('[aria-current="page"]') && $top->at('button[name="page"][value="2"].sc-page-direction'),
+        'from the current one';
+    ok(Mojo::DOM->new($t->tx->res->json('/pagination/bottom'))->at('nav.sc-pagination-bottom'), 'and at the bottom');
     is_deeply $TestSelectoComponents::Adapter::LAST_COUNT_STATEMENT->params, ['12.50'],
         'total count uses the same bound filters as the result query';
     is $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->limit_value, undef,
@@ -1001,6 +1019,10 @@ is $interpolate->('SELECT ?, ?', ["a\\b", [1, 'x']], 'duckdb'),
         'total count removes the page offset';
     is_deeply $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->orders, [],
         'total count drops ordering';
+
+    $t->get_ok('/explore/products/count?q=1&view=aggregate&group=category.category_name&measure=count&limit=10&page=1')
+        ->status_is(422)->json_is('/error' => 'The rows could not be counted.');
+    $t->get_ok('/explore/products/count?q=1&view=detail&field=no_such_field')->status_is(422);
 }
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50&filter_promote_field=unit_price')

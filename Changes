@@ -1,6 +1,18 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Detail pages count after they show. A page with more rows after it no
+      longer waits for its count: it returns with "N rows on this page ·
+      counting all matches…" and the browser asks the new count route
+      (PATH/count, with the page's query; Selecto::Components::Explorer->count)
+      for the total and pagination, which replace the placeholders (a page
+      replaced meanwhile keeps what it has). Config defer_count, default true;
+      with query_params off the page counts first.
+    - A count query runs directly, without a cursor: it returns one row, so
+      Selecto::BoundedQuery takes its direct path (savepoint with timeout,
+      query, rollback). Five round trips instead of thirteen, and PostgreSQL no
+      longer plans it for a cursor's first rows (lhf Load Detail: 1160 ms to
+      334 ms).
     - Detail pages count only when they must. A Detail page fetches one row
       beyond its size, as aggregate pages do: without that row it ends the
       results and its rows give the total, so no count query runs (Query Debug

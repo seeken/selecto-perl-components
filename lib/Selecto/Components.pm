@@ -215,7 +215,7 @@ sub _routes (
         return $controller->render(text => 'This export requires bounded streaming support.', status => 422)
             if $EXPORT_FORMATS{$format};
         my $model = Selecto::Components::Controller::Explorer::_decorate_model($controller, $explorer->model(
-            $controller, undef, {all_rows => $EXPORT_FORMATS{$format} ? 1 : 0},
+            $controller, undef, {all_rows => $EXPORT_FORMATS{$format} ? 1 : 0, defer_count => $config->defer_count},
         ));
         if (!$config->query_params_enabled($model->{domain})
             && length($controller->req->url->query->to_string)) {
@@ -233,6 +233,20 @@ sub _routes (
             $explorer->model($controller, $explorer->input_from_controller($controller)),
         );
         return _render_page($controller, $model);
+    });
+
+    # The total a Detail page left uncounted (defer_count), for the browser to
+    # fill in: its rendered matched rows and pagination.
+    $routes->get($route_path . '/count')->to(cb => sub ($controller) {
+        my $model;
+        unless (eval { $model = $explorer->count($controller); 1 }) {
+            my $error = $@ || 'unknown error';
+            $error =~ s/\s+\z//;
+            $controller->app->log->error("Selecto explorer count failed: $error");
+            return $controller->render(json => {error => 'The rows could not be counted.'}, status => 422);
+        }
+        $controller->res->headers->cache_control('no-store');
+        return $controller->render(json => Selecto::Components::Renderer::Results->deferred_count($model));
     });
 
     $routes->post($route_path . '/controls')->to(cb => sub ($controller) {
@@ -331,7 +345,7 @@ sub _routes (
                                     cache_namespace => encode_json([$scope,
                                         Selecto::Components::Explorer::_cache_identity(
                                             $config->result_cache_namespace->($socket, $config), 'namespace')]),
-                                } : {}),
+                                } : {defer_count => $config->defer_count}),
                         );
                         $response_limits = $model->{config}->limits;
                         $model->{selecto_request_id} = $request_id if defined $request_id;

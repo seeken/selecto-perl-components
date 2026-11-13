@@ -1,11 +1,11 @@
 {
   "package": "@selecto/perl-components-browser",
   "version": "0.1.1",
-  "revision": "0.1.1-62d38249ad4c",
+  "revision": "0.1.1-c37e5acf83ae",
   "api_console_revision": "0.5.0-30268d52ff3a",
   "assets": {
     "selecto-components.css": "8460319be4518c572400faa8575b36980a2da510ab2fa283e6d06b2af50cf45b",
-    "selecto-components.js": "82106816933b284e23444ff5be262a74b98cd031a298ec3af0a991ba858e087c",
+    "selecto-components.js": "b90ac9fa52e563d2375f4085d02559dbd29b07703d0c546dfefa7833f3515c42",
     "canned-page.css": "af0a091ff52d9fbdd0d9d835be1891152833912f6592a5e543109f7ef868683f",
     "canned-page.js": "1914fdce357e1996eb23aed411256a7d3d10a1ad0ee29bc7e6d71d0e7763140c",
     "htmx.min.js": "e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f",

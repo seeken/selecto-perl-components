@@ -115,7 +115,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         my $grid_limit_exceeded = $grid_all_rows
             && @{$raw->{rows}} > $config->max_grid_result_cells ? 1 : 0;
         my $total_count;
-        my ($count_statement, $count_compile_ms, $count_query_ms, $count_cache_hit);
+        my $count_stats = {};
         # A peeked page (QueryBuilder fetched one row beyond it) needs no count query
         # without that row: it is the last page and the total is known. With it,
         # another page follows: an aggregate leaves the total unknown (undef), and
@@ -133,32 +133,14 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             $total_count = scalar @{$raw->{rows}};
         }
         if ($count) {
-            my $count_query = defined($built->{count_selections})
-                ? $prepared->{query}->count_query($built->{count_selections})
-                : $prepared->{query}->count_query;
-            my $count_compile_started = time;
-            my $count_source = $engine->compile($count_query);
-            $count_statement = _count_statement($count_source);
-            $count_compile_ms = _elapsed_ms($count_compile_started);
-            my $count_key = defined($cache_namespace) ? __PACKAGE__->result_cache_key(
-                $count_statement, $cache_namespace, $engine->domain->fingerprint) : undef;
-            $total_count = !$result_cache && defined($count_key) && _wants_cached_count($input)
-                ? _cached_count($controller, $count_key) : undef;
-            if (defined($total_count)) {
-                $count_cache_hit = 1;
-                $count_query_ms = 0;
-            } else {
-                my $count_started = time;
-                my $hits_before_count = $cache_info{hits};
-                my $count_raw = $phase->(count => sub {
-                    _execute($engine, $count_statement, $result_cache, \%cache_info, $cache_namespace, $config);
-                });
-                $count_query_ms = _elapsed_ms($count_started);
-                _validate_result($count_raw, $config->limits);
-                $total_count = _total_count($count_raw);
-                _store_count($controller, $count_key, $total_count) if !$result_cache && defined($count_key);
-                $count_cache_hit = $cache_info{hits} > $hits_before_count ? 1 : 0;
-            }
+            # A Detail page asked to defer its count (defer_count) leaves the total for its
+            # count URL (Explorer->count) unless a reused count is at hand.
+            my $defer = $options->{defer_count} && $built->{count_beyond_page} && !$result_cache
+                && $config->query_params_enabled($engine->domain);
+            (my $counted, $count_stats) = _matched_rows($controller, $engine, $built, $prepared, $config,
+                {input => $input, result_cache => $result_cache, cache_info => \%cache_info,
+                    cache_namespace => $cache_namespace, phase => $phase, defer => $defer});
+            $total_count = $counted;
         }
         my $elapsed_ms = _elapsed_ms($started);
         my $total_pages = $all_rows || $grid_all_rows ? 1
@@ -202,6 +184,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             count => $returned_count,
             total_count => $total_count,
             total_known => defined($total_count) ? 1 : 0,   # an aggregate page with more after it: no
+            ($count_stats->{deferred} ? (count_deferred => 1) : ()),   # Detail: counted after the page
             total_pages => $total_pages,
             has_more => !$all_rows && !$grid_all_rows && $state->page < $total_pages ? 1 : 0,
             all_rows => $all_rows,
@@ -220,10 +203,10 @@ sub model ($self, $controller, $input = undef, $options = undef) {
                         sql => $statement->sql,
                         params => $statement->params,
                     },
-                    (defined($count_statement) ? (
+                    (defined($count_stats->{statement}) ? (
                         count_query => {
-                            sql => $count_statement->sql,
-                            params => $count_statement->params,
+                            sql => $count_stats->{statement}->sql,
+                            params => $count_stats->{statement}->params,
                         },
                     ) : ()),
                     stats => {
@@ -235,12 +218,13 @@ sub model ($self, $controller, $input = undef, $options = undef) {
                         total_pages => $total_pages,
                         page_size => $all_rows || $grid_all_rows
                             ? scalar(@records) : $state->limit,
-                        compile_ms => $compile_ms + ($count_compile_ms // 0),
+                        compile_ms => $compile_ms + ($count_stats->{compile_ms} // 0),
                         data_query_ms => $data_query_ms,
-                        count_compile_ms => $count_compile_ms,
-                        count_query_ms => $count_query_ms,
-                        count_cache_hit => $count_cache_hit,
+                        count_compile_ms => $count_stats->{compile_ms},
+                        count_query_ms => $count_stats->{query_ms},
+                        count_cache_hit => $count_stats->{cache_hit},
                         count_skipped => $built->{peek} && !$count ? 1 : 0,
+                        count_deferred => $count_stats->{deferred} ? 1 : 0,
                         total_ms => $elapsed_ms,
                         setup_ms => $setup_ms,
                         build_ms => $build_ms,
@@ -293,11 +277,13 @@ sub result_cache_key ($class, $statement, $namespace, $domain_fingerprint) {
 # Run a statement, through the result cache when one is supplied. fetch($key)
 # returns {result => {columns, rows}, created_at => epoch} or undef;
 # store($key, {columns, rows}) saves a fresh result.
-sub _execute ($engine, $prepared, $cache, $info, $namespace, $config) {
+sub _execute ($engine, $prepared, $cache, $info, $namespace, $config, %options) {
     my $statement = ref($prepared) eq 'HASH' ? $prepared->{statement} : $prepared;
     my $collections = ref($prepared) eq 'HASH' ? $prepared->{collections} : [];
     # Grid cells are canonical values (PostgreSQL otherwise returns its driver's).
-    my %bounds = (limits => $config->limits, max_rows => $config->max_grid_result_cells + 1,
+    # A statement known to return fewer rows (max_rows: a count's one) runs
+    # directly, without a cursor (Selecto::BoundedQuery).
+    my %bounds = (limits => $config->limits, max_rows => $options{max_rows} // $config->max_grid_result_cells + 1,
         canonical_values => 1, timeout_ms => $config->query_timeout_seconds * 1000);
     return Selecto::BoundedQuery->execute($engine, $prepared, %bounds) unless $cache;
     my $key = __PACKAGE__->result_cache_key($statement, $namespace, $engine->domain->fingerprint);
@@ -345,6 +331,82 @@ sub prepare ($self, $controller, $input = undef) {
 
 sub _elapsed_ms ($started) {
     return int((time - $started) * 1000 + 0.5);
+}
+
+# The rows a page's query matches: [$total, \%stats]. A count reused on this
+# connection (reuse_count) is taken as it is; otherwise the count query runs,
+# unless $options->{defer} leaves it for later ($total undef, stats deferred).
+# Stats: statement, compile_ms, query_ms, cache_hit, deferred.
+sub _matched_rows ($controller, $engine, $built, $prepared, $config, $options) {
+    my $result_cache = $options->{result_cache};
+    my $cache_namespace = $options->{cache_namespace};
+    my %stats;
+    my $count_query = defined($built->{count_selections})
+        ? $prepared->{query}->count_query($built->{count_selections})
+        : $prepared->{query}->count_query;
+    my $compile_started = time;
+    $stats{statement} = _count_statement($engine->compile($count_query));
+    $stats{compile_ms} = _elapsed_ms($compile_started);
+    my $count_key = defined($cache_namespace) ? __PACKAGE__->result_cache_key(
+        $stats{statement}, $cache_namespace, $engine->domain->fingerprint) : undef;
+    my $total = !$result_cache && defined($count_key) && _wants_cached_count($options->{input})
+        ? _cached_count($controller, $count_key) : undef;
+    if (defined $total) {
+        @stats{qw(cache_hit query_ms)} = (1, 0);
+        return ($total, \%stats);
+    }
+    if ($options->{defer}) {
+        $stats{deferred} = 1;
+        return (undef, \%stats);
+    }
+    my $cache_info = $options->{cache_info} // {hits => 0, misses => 0};
+    my $phase = $options->{phase} // sub ($name, $code) { $code->() };
+    my $started = time;
+    my $hits_before = $cache_info->{hits};
+    my $raw = $phase->(count => sub {
+        _execute($engine, $stats{statement}, $result_cache, $cache_info, $cache_namespace, $config, max_rows => 1);
+    });
+    $stats{query_ms} = _elapsed_ms($started);
+    _validate_result($raw, $config->limits);
+    $total = _total_count($raw);
+    _store_count($controller, $count_key, $total) if !$result_cache && defined($count_key);
+    $stats{cache_hit} = $cache_info->{hits} > $hits_before ? 1 : 0;
+    return ($total, \%stats);
+}
+
+# The count a Detail page deferred (Explorer model defer_count): its query,
+# from the request as the page's canonical URL gives it, counted. Returns the
+# model the count response renders: config, domain, state, and result
+# {total_count, total_pages, total_known, count_ms}. Dies for a query the page
+# could not have deferred.
+sub count ($self, $controller) {
+    my $config = $self->config->for_request($controller);
+    my $engine = $config->engine($controller);
+    $config->limits($config->limits->intersect($engine->limits)) if $engine->can('limits');
+    die "Counting later needs the query in the URL\n" unless $config->query_params_enabled($engine->domain);
+    my $input = $self->input_from_controller($controller);
+    my $state = Selecto::Components::State->from_input($config, $engine->domain, $input);
+    die join('; ', @{$state->errors}) . "\n" unless $state->valid;
+    my $built = Selecto::Components::QueryBuilder->build(
+        $config, $engine->domain, $state, {paginate => 1, rollup => _rollup_supported($engine)},
+    );
+    die "Only Detail pages are counted later\n" unless $built->{count_beyond_page};
+    my $prepared = Selecto::BoundedQuery->prepare($engine, $built->{query}, limits => $config->limits);
+    # (Query Debug: the count's own round trips, for the page's count box.)
+    my $trips = $config->show_sql ? Selecto::Components::RoundTrips->start($engine->adapter) : undef;
+    my ($total, $stats) = _matched_rows($controller, $engine, $built, $prepared, $config, {input => $input,
+        ($trips ? (phase => sub ($name, $code) { $trips->during($name, $code) }) : ())});
+    my $total_pages = int(($total + $state->limit - 1) / $state->limit);
+    return {
+        config => $config, domain => $engine->domain, state => $state,
+        canonical_url => $self->canonical_url($state, $engine->domain),
+        result => {
+            total_count => $total, total_known => 1,
+            total_pages => $total_pages < 1 ? 1 : $total_pages,
+            count_ms => $stats->{query_ms},
+            ($trips ? (round_trips => $trips->finish) : ()),
+        },
+    };
 }
 
 sub _wants_cached_count ($input) {

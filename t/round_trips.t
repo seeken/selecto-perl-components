@@ -5,6 +5,7 @@ use utf8;
 use Test::More;
 use Test::Mojo;
 use Mojolicious;
+use Mojo::DOM;
 use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::RoundTrips ();
@@ -142,6 +143,7 @@ subtest 'the Query Debug panel' => sub {
     my $app = Mojolicious->new;
     $app->secrets(['test-only-secret']);
     my $config = TestSelectoComponents::config();
+    $config->{defer_count} = 0;   # (the page counts, so its count's round trips are in the panel)
     $config->{engine_factory} = sub {
         Selecto::Engine->new(domain => TestSelectoComponents::domain(),
             adapter => TestRoundTrips::Adapter->new(dbh => bless({}, 'TestSelectoComponents::DBH')));
@@ -153,12 +155,30 @@ subtest 'the Query Debug panel' => sub {
         ->text_is('.sc-debug-stat:nth-child(12) strong' => '3')
         ->text_like('[data-sc-debug-round-trips]' => qr/\ARound trips: data 2, count 1, other 0 · waiting \d/)
         ->text_like('[data-sc-debug-round-trips]' => qr/sent 98 bytes · received \d+ bytes\z/)
-        ->text_is('.sc-debug-trips > summary' => '3 round trips')
-        ->text_is('.sc-debug-trips li:nth-child(1) .sc-debug-trip-phase' => 'data')
-        ->text_is('.sc-debug-trips li:nth-child(2) code' => 'SELECT 1')
-        ->text_is('.sc-debug-trips li:nth-child(3) .sc-debug-trip-phase' => 'count')
-        ->text_like('.sc-debug-trips li:nth-child(3) .sc-debug-trip-ms' => qr{\A0\.4[89] ms\z});
+        ->text_is('.sc-debug-trips:not([data-sc-debug-count-trips]) > summary' => 'Page round trips: 2')
+        ->text_is('.sc-debug-trips:not([data-sc-debug-count-trips]) li:nth-child(1) .sc-debug-trip-phase' => 'data')
+        ->text_is('.sc-debug-trips:not([data-sc-debug-count-trips]) li:nth-child(2) code' => 'SELECT 1')
+        ->text_is('[data-sc-debug-count-trips] > summary' => 'Count round trips: 1')
+        ->text_is('[data-sc-debug-count-trips] li:nth-child(1) .sc-debug-trip-phase' => 'count')
+        ->text_like('[data-sc-debug-count-trips] li:nth-child(1) .sc-debug-trip-ms' => qr{\A0\.4[89] ms\z});
     ok !$TestRoundTrips::Adapter::DBH->{fh}, 'tracing stops with the model';
+
+    # Deferred, the page leaves a box for its count, and the count route fills it.
+    $config->{defer_count} = 1;
+    $app = Mojolicious->new;
+    $app->secrets(['test-only-secret']);
+    $app->plugin('Selecto::Components' => {explorers => {products => $config}});
+    $t = Test::Mojo->new($app);
+    $t->get_ok('/explore/products?q=1&view=detail&field=product_name&limit=25&page=1')->status_is(200)
+        ->text_is('[data-sc-debug-count-trips] > summary' => "Count round trips: counting after the page\x{2026}")
+        ->element_exists_not('[data-sc-debug-count-trips] li');
+    my $count_url = $t->tx->res->dom->at('[data-sc-deferred-count]')->attr('data-sc-deferred-count');
+    $t->get_ok($count_url)->status_is(200);
+    my $box = Mojo::DOM->new($t->tx->res->json('/count_round_trips'));
+    like $box->at('[data-sc-debug-count-trips] > summary')->text, qr/\ACount round trips: 1 · waiting [\d.]+ ms, after the page\z/,
+        'the count route\'s own round trips';
+    is $box->at('li code')->text, 'SELECT $1::int + 1', 'each with what it sent';
+    ok !$TestRoundTrips::Adapter::DBH->{fh}, 'tracing stops with the count';
 
     $config->{show_sql} = 0;
     $app = Mojolicious->new;

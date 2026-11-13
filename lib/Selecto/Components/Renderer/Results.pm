@@ -20,17 +20,8 @@ sub _results ($class, $model) {
         unless $model->{state}->valid && $model->{result};
     my $result = $model->{result};
     my $heading = $class->heading_for_view($model->{state}->view);
-    # An aggregate page with more after it was not counted (no count query): say what is known.
-    my $counted = !exists($result->{total_known}) || $result->{total_known};
-    my $row_label = ($result->{total_count} // 0) == 1 ? 'row matched' : 'rows matched';
-    my $page_label = $result->{total_pages} == 1 ? 'page' : 'pages';
-    my $matched = $counted
-        ? '<strong>' . _h($result->{total_count}) . '</strong> ' . $row_label .
-          ' · <strong>' . _h($result->{total_pages}) . '</strong> ' . $page_label
-        : '<strong>' . _h($result->{count}) . '</strong> ' . ($result->{count} == 1 ? 'row' : 'rows') .
-          ' on this page · more on the next';
     my $meta = '<div class="sc-result-meta"><div><h2>' . _h($heading) .
-        '</h2>' . $class->_retarget_note($model) . '</div><div>' . $matched .
+        '</h2>' . $class->_retarget_note($model) . '</div><div>' . $class->_matched($model) .
         ' · <strong>' . _h($result->{elapsed_ms}) . ' ms</strong> query time</div></div>';
     my $actions = $model->{state}->view eq 'detail'
         ? $class->_bulk_actions($model) : '';
@@ -51,6 +42,47 @@ sub _results ($class, $model) {
     my $debug = Selecto::Components::Renderer::Debug->_debug_panel($result, $model);
     return $meta . $actions . $grid_warning . $top_pagination . $body .
         $bottom_pagination . $debug;
+}
+
+# How many rows matched. An aggregate page with more after it was not counted
+# (no count query): it says what is known. A Detail page whose count was
+# deferred (Explorer defer_count) says it is counting and names its count URL,
+# which the browser fetches to replace this (deferred_count).
+sub _matched ($class, $model) {
+    my $result = $model->{result};
+    my $counted = !exists($result->{total_known}) || $result->{total_known};
+    my $page_rows = $counted ? '' : '<strong>' . _h($result->{count}) . '</strong> ' .
+        (($result->{count} // 0) == 1 ? 'row' : 'rows') . ' on this page · ';
+    my $html = $counted
+        ? '<strong>' . _h($result->{total_count}) . '</strong> ' .
+          (($result->{total_count} // 0) == 1 ? 'row matched' : 'rows matched') .
+          ' · <strong>' . _h($result->{total_pages}) . '</strong> ' . ($result->{total_pages} == 1 ? 'page' : 'pages')
+        : $result->{count_deferred}
+        ? $page_rows . '<span data-sc-count-status>counting all matches…</span>'
+        : $page_rows . 'more on the next';
+    my $url = $result->{count_deferred} ? $class->_count_url($model) : undef;
+    return '<span data-sc-result-matched' . (defined($url) ? ' data-sc-deferred-count="' . _h($url) . '"' : '') .
+        '>' . $html . '</span>';
+}
+
+sub _count_url ($class, $model) {
+    my $query = Mojo::URL->new($model->{canonical_url} // '')->query->to_string;
+    return length($query) ? $model->{config}->path . '/count?' . $query : undef;
+}
+
+# The count route's answer (Selecto::Components::Explorer->count): the matched
+# rows and both paginations, rendered as the page would have with its total,
+# for the browser to put in place of the deferred ones.
+sub deferred_count ($class, $model) {
+    my $result = $model->{result};
+    return {
+        total_count => 0 + $result->{total_count},
+        total_pages => 0 + $result->{total_pages},
+        matched => $class->_matched($model),
+        pagination => {map { ($_ => $class->_pagination($model, $_)) } qw(top bottom)},
+        ($model->{config}->show_sql ? (count_ms => $result->{count_ms},
+            count_round_trips => Selecto::Components::Renderer::Debug->_debug_count_round_trips($result->{round_trips})) : ()),
+    };
 }
 
 # Says which rows a retargeted result shows, and how to return to root rows
