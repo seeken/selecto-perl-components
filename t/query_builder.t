@@ -184,7 +184,7 @@ like $detail_statement->sql, qr/INNER JOIN "categories"/, 'relationship field pr
 like $detail_statement->sql, qr/"s0"\."unit_price" >= \$1/, 'filter value uses a placeholder';
 like $detail_statement->sql, qr/IN \(\$2, \$3\)/, 'membership values use separate placeholders';
 like $detail_statement->sql, qr/ORDER BY "s0"\."unit_price" DESC/, 'sort field and direction are governed';
-like $detail_statement->sql, qr/LIMIT 25 OFFSET 25\z/, 'page compiles to bounded limit and offset';
+like $detail_statement->sql, qr/LIMIT 26 OFFSET 25\z/, 'page compiles to bounded limit and offset, one row beyond';
 is_deeply $detail_statement->params, ['12.50', 'Tools', 'Produce'], 'values remain out of SQL';
 is_deeply $detail_statement->columns,
     [qw(product_name category__category_name unit_price __selecto_action_target)],

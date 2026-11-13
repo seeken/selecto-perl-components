@@ -518,6 +518,13 @@ th.sc-described { cursor: help; text-decoration: underline dotted; text-decorati
 .sc-debug-params li span { color: var(--sc-accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 750; }
 .sc-debug-params code { color: var(--sc-inline-code); overflow-wrap: anywhere; }
 .sc-debug-no-params { color: var(--sc-muted); font-size: .72rem; margin: 0; }
+.sc-debug-trips { background: var(--sc-subpanel); border: 1px solid var(--sc-debug-border); border-radius: 10px; margin-top: -6px; }
+.sc-debug-trips > summary { color: var(--sc-muted); cursor: pointer; font-size: .72rem; font-weight: 750; padding: 8px 11px; }
+.sc-debug-trips ol { display: grid; gap: 4px; list-style: none; margin: 0; max-height: 320px; overflow: auto; padding: 0 11px 10px; }
+.sc-debug-trips li { align-items: baseline; display: grid; font-size: .72rem; gap: 8px; grid-template-columns: 46px 64px minmax(0, 1fr); }
+.sc-debug-trip-phase { color: var(--sc-accent); font-weight: 750; }
+.sc-debug-trip-ms { color: var(--sc-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+.sc-debug-trips code { color: var(--sc-inline-code); overflow-wrap: anywhere; }
 .sc-note { color: var(--sc-muted); font-size: .8rem; }
 .sc-bulk-actions { background: var(--sc-table-fixed-bg); border-top: 1px solid var(--sc-border); display: flex; flex-wrap: wrap; gap: 10px; padding: 12px 18px; }
 .sc-bulk-action { align-items: center; border: 1px solid var(--sc-border); border-radius: 9px; display: flex; gap: 12px; padding: 8px 10px; }

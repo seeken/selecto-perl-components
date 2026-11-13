@@ -64,21 +64,43 @@ is scalar(@{$streamed_export->{rows}}), 42,
 is_deeply $streamed_export->{columns}, ['Product Name', 'Unit Price'],
     'streaming exports retain semantic column labels';
 
-my $count_cache_controller = TestSelectoComponents::Controller->new;
-my $count_executions = $TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0;
-my $first_count_model = $export_explorer->model($count_cache_controller, {
-    q => 1, view => 'detail', field => ['product_name'], limit => 25, page => 1,
-});
-my $second_count_model = $export_explorer->model($count_cache_controller, {
-    q => 1, view => 'detail', field => ['product_name'], limit => 25, page => 2,
-    reuse_count => 1,
-});
-is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $count_executions + 1,
-    'explicit same-query pagination reuses the exact count on one connection';
-is $second_count_model->{result}{debug}{stats}{count_cache_hit}, 1,
-    'debug statistics distinguish a cached exact count';
-is $first_count_model->{result}{total_count}, $second_count_model->{result}{total_count},
-    'cached pagination preserves the exact matched-row total';
+{
+    local $TestSelectoComponents::Adapter::PAGE_ROWS = 'full';   # (more than a page: counted)
+    my $count_cache_controller = TestSelectoComponents::Controller->new;
+    my $count_executions = $TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0;
+    my $first_count_model = $export_explorer->model($count_cache_controller, {
+        q => 1, view => 'detail', field => ['product_name'], limit => 25, page => 1,
+    });
+    my $second_count_model = $export_explorer->model($count_cache_controller, {
+        q => 1, view => 'detail', field => ['product_name'], limit => 25, page => 2,
+        reuse_count => 1,
+    });
+    is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $count_executions + 1,
+        'explicit same-query pagination reuses the exact count on one connection';
+    is $second_count_model->{result}{debug}{stats}{count_cache_hit}, 1,
+        'debug statistics distinguish a cached exact count';
+    is $first_count_model->{result}{total_count}, $second_count_model->{result}{total_count},
+        'cached pagination preserves the exact matched-row total';
+}
+
+# Detail counts only when its page does not end the results.
+{
+    my $counted = sub {
+        my ($rows, $page) = @_;
+        local $TestSelectoComponents::Adapter::PAGE_ROWS = $rows;
+        my $before = $TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0;
+        my $result = $export_explorer->model(TestSelectoComponents::Controller->new, {
+            q => 1, view => 'detail', field => ['product_name'], limit => 25, page => $page,
+        })->{result};
+        return [$result->{total_count}, $result->{count}, ($TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0) - $before];
+    };
+    is_deeply $counted->(3, 1), [3, 3, 0], 'a first page that ends the results is its own total, uncounted';
+    is_deeply $counted->(3, 2), [28, 3, 0], 'as is a later one: the pages before it and its rows';
+    is_deeply $counted->('full', 1), [42, 25, 1], 'a full page with a row beyond it is counted, the row left out';
+    is_deeply $counted->(25, 1), [25, 25, 0], 'a page exactly full with nothing beyond is not';
+    is_deeply $counted->(0, 2), [42, 0, 1], 'an empty page past the first may lie past the end: counted';
+    is_deeply $counted->(0, 1), [0, 0, 0], 'an empty first page is no rows';
+}
 
 my $domain = TestSelectoComponents::domain();
 my $state = Selecto::Components::State->from_input($config, $domain, {

@@ -47,6 +47,7 @@ lib/Selecto/Components/Renderer/Debug.pm
 lib/Selecto/Components/Renderer/Markup.pm
 lib/Selecto/Components/Renderer/Results.pm
 lib/Selecto/Components/ResponseBudget.pm
+lib/Selecto/Components/RoundTrips.pm
 lib/Selecto/Components/RowActions.pm
 lib/Selecto/Components/State.pm
 lib/Selecto/Components/ThemeStylesheet.pm
@@ -104,6 +105,7 @@ t/readme_quick_start.t
 t/record_editor_secret.t
 t/renderer.t
 t/retarget.t
+t/round_trips.t
 t/route_bridge.t
 t/row_actions.t
 t/security_boundaries.t

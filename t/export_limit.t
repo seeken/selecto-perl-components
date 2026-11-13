@@ -28,8 +28,8 @@ for my $format (qw(csv tsv json xlsx)) {
 $t->get_ok($url)->status_is(200);
 $t->text_is('.sc-export-options > span' => 'Export (up to 5 rows)')
     ->element_exists('.sc-export-options[aria-label="Export (up to 5 rows)"]');
-is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, 10,
-    'a paginated page keeps its own page size';
+is $TestSelectoComponents::Adapter::LAST_DATA_QUERY->limit_value, 11,
+    'a paginated page keeps its own page size (and the row beyond it)';
 
 for my $bad (0, -1, 'many', 10_000_001) {
     my $error = eval { Selecto::Components::Config->new(%{TestSelectoComponents::config()}, id => 'products', max_export_rows => $bad); 1 } ? '' : $@;

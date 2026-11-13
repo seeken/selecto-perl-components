@@ -512,6 +512,10 @@ our (
     $LAST_COMPILED_QUERY, $LAST_DATA_QUERY, $COUNT_EXECUTIONS, $LAST_WRITE, $WRITE_ERROR,
 );
 our $RECORD_PRODUCT_NAME = 'Test Widget';
+# Rows a page query returns (one with a limit). Of the 42 rows matched, 2 by
+# default: a short last page. 'full' returns as many as the query asks for (a
+# page and the row beyond it), so the Explorer counts.
+our $PAGE_ROWS = 2;
 
 sub name { return 'test'; }
 sub bounded_result_statement ($self, $statement, %options) {
@@ -565,7 +569,8 @@ sub execute_query ($self, $statement) {
     my $group_count = $rollup ? scalar(@{$LAST_DATA_QUERY->groups}) : 0;
     my @rows;
     my $row_count = defined($LAST_DATA_QUERY->limit_value)
-        && $LAST_DATA_QUERY->limit_value <= 1000 ? 2 : 42;
+        && $LAST_DATA_QUERY->limit_value <= 1000
+        ? ($PAGE_ROWS eq 'full' ? $LAST_DATA_QUERY->limit_value : $PAGE_ROWS) : 42;
     for my $row_index (1 .. $row_count) {
         my $row = [map {
                 $_ eq '__selecto_rollup_grouping' ? 0
