@@ -100,6 +100,16 @@ is_deeply $streamed_export->{columns}, ['Product Name', 'Unit Price'],
     is_deeply $counted->(25, 1), [25, 25, 0], 'a page exactly full with nothing beyond is not';
     is_deeply $counted->(0, 2), [42, 0, 1], 'an empty page past the first may lie past the end: counted';
     is_deeply $counted->(0, 1), [0, 0, 0], 'an empty first page is no rows';
+
+    local $TestSelectoComponents::Adapter::PAGE_ROWS = 'full';
+    my $before = $TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0;
+    my $deferred = $export_explorer->model(TestSelectoComponents::Controller->new, {
+        q => 1, view => 'detail', field => ['product_name'], limit => 25, page => 1,
+    }, {defer_count => 1})->{result};
+    is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0, $before, 'defer_count leaves the count for later';
+    ok $deferred->{count_deferred} && !$deferred->{total_known} && !defined($deferred->{total_count}),
+        'with the total unknown';
+    is $deferred->{total_pages}, 2, 'and a next page offered';
 }
 
 my $domain = TestSelectoComponents::domain();

@@ -15,7 +15,9 @@ sub _debug_panel ($class, $result, $model) {
         ['Total query time', _debug_ms($stats->{total_ms})],
         ['Data execution', _debug_ms($stats->{data_query_ms})],
         ['Count execution', $stats->{count_cache_hit} ? 'cached'
-            : $stats->{count_skipped} ? 'not needed' : _debug_ms($stats->{count_query_ms})],
+            : $stats->{count_skipped} ? 'not needed'
+            : $stats->{count_deferred} ? 'deferred' : _debug_ms($stats->{count_query_ms}),
+            ' data-sc-debug-count'],
         ['Compilation', _debug_ms($stats->{compile_ms})],
         ['Domain and state', _debug_ms($stats->{setup_ms})],
         ['Query construction', _debug_ms($stats->{build_ms})],
@@ -23,12 +25,12 @@ sub _debug_panel ($class, $result, $model) {
         ['Action and saved-query setup', _debug_ms($stats->{decorate_ms})],
         ['Server model total', _debug_ms($stats->{model_ms})],
         ['Rows returned', _debug_number($stats->{returned_rows})],
-        ['Rows matched', _debug_number($stats->{matched_rows})],
+        ['Rows matched', _debug_number($stats->{matched_rows}), ' data-sc-debug-matched'],
         ['Database round trips', ref($stats->{round_trips}) eq 'HASH'
             ? _debug_number($stats->{round_trips}{total}) : '—'],
     );
     my $cards = join '', map {
-        '<article class="sc-debug-stat"><span>' . _h($_->[0]) . '</span><strong>' .
+        '<article class="sc-debug-stat"' . ($_->[2] // '') . '><span>' . _h($_->[0]) . '</span><strong>' .
             _h($_->[1]) . '</strong></article>'
     } @cards;
     my $metadata = join ' · ', (
@@ -57,13 +59,15 @@ sub _debug_panel ($class, $result, $model) {
         '<div class="sc-debug-body"><div class="sc-debug-stats">' . $cards . '</div>' .
         '<p class="sc-debug-metadata">' . _h($metadata) . '</p>' .
         '<p class="sc-debug-metadata" data-sc-client-performance></p>' .
-        _debug_round_trips($stats->{round_trips}) .
+        _debug_round_trips($stats->{round_trips}, $stats) .
         $queries . '</div></details>';
 }
 
 # The round trips on the Explorer's database handle (Selecto::Components::RoundTrips):
-# a summary line and, folded, each one with its phase, wait and what it sent.
-sub _debug_round_trips ($trips) {
+# a summary line and, folded, the page's (its data and setup) and its count's, each
+# with its phase, wait and what it sent. A count deferred to the count route
+# (Explorer defer_count) leaves a placeholder that its answer replaces.
+sub _debug_round_trips ($trips, $stats = {}) {
     return '' unless ref($trips) eq 'HASH';
     my $phases = ref($trips->{phases}) eq 'HASH' ? $trips->{phases} : {};
     my $summary = join ' · ', (
@@ -73,18 +77,41 @@ sub _debug_round_trips ($trips) {
         'received ' . _debug_number($trips->{received_bytes}) . ' bytes',
     );
     my @listed = grep { ref($_) eq 'HASH' } @{ref($trips->{trips}) eq 'ARRAY' ? $trips->{trips} : []};
-    return '<p class="sc-debug-metadata" data-sc-debug-round-trips>' . _h($summary) . '</p>' unless @listed;
-    my $total = $trips->{total} // scalar(@listed);
+    my $more = ($trips->{total} // 0) > @listed;
+    my @count = grep { ($_->{phase} // '') eq 'count' } @listed;
+    my $count_box = $stats->{count_deferred}
+        ? '<details class="sc-debug-trips" data-sc-debug-count-trips><summary>Count round trips: counting after the page' .
+          "\x{2026}</summary></details>"
+        : @count ? _debug_trip_box('Count round trips', \@count, $phases->{count} // scalar(@count), $more)
+        : '';
+    return '<p class="sc-debug-metadata" data-sc-debug-round-trips>' . _h($summary) . '</p>' .
+        _debug_trip_box('Page round trips', [grep { ($_->{phase} // '') ne 'count' } @listed],
+            ($phases->{data} // 0) + ($phases->{other} // 0), $more) .
+        $count_box;
+}
+
+# The count route's own round trips (Selecto::Components::Explorer->count), in
+# the box the page left for them.
+sub _debug_count_round_trips ($class, $trips) {
+    return '' unless ref($trips) eq 'HASH';
+    my @listed = grep { ref($_) eq 'HASH' } @{ref($trips->{trips}) eq 'ARRAY' ? $trips->{trips} : []};
+    return _debug_trip_box('Count round trips', \@listed, $trips->{total} // scalar(@listed),
+        ($trips->{total} // 0) > @listed,
+        ' · waiting ' . _debug_ms($trips->{wait_ms}) . ', after the page');
+}
+
+sub _debug_trip_box ($title, $listed, $total, $more, $note = '') {
+    return '' unless @$listed || $total;
     my $items = join '', map {
         '<li><span class="sc-debug-trip-phase">' . _h(_debug_text($_->{phase})) . '</span>' .
             '<span class="sc-debug-trip-ms">' . _h(_debug_ms($_->{ms})) . '</span>' .
             '<code>' . _h(_debug_text($_->{command})) . '</code></li>'
-    } @listed;
-    return '<p class="sc-debug-metadata" data-sc-debug-round-trips>' . _h($summary) . '</p>' .
-        '<details class="sc-debug-trips"><summary>' .
-        _h(@listed < $total ? 'First ' . @listed . ' of ' . _debug_number($total) . ' round trips'
-            : _debug_number($total) . ' round trip' . ($total == 1 ? '' : 's')) .
-        '</summary><ol>' . $items . '</ol></details>';
+    } @$listed;
+    my $count = $more && @$listed < $total
+        ? 'first ' . @$listed . ' of ' . _debug_number($total)
+        : _debug_number($total);
+    return '<details class="sc-debug-trips"' . ($title =~ /\ACount/ ? ' data-sc-debug-count-trips' : '') .
+        '><summary>' . _h("$title: $count$note") . '</summary><ol>' . $items . '</ol></details>';
 }
 
 sub _debug_query ($id, $title, $query, $adapter = undef) {

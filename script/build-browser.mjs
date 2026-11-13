@@ -18,6 +18,7 @@ const modules = [
   "row-dialog.js",
   "grid.js",
   "table-headers.js",
+  "deferred-count.js",
   "explorer-session.js",
   "lifecycle.js",
   "picker.js",
