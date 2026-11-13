@@ -84,6 +84,7 @@ subtest 'shared filter values' => sub {
 };
 
 subtest 'result cache keyed by the exact SQL' => sub {
+    local $TestSelectoComponents::Adapter::PAGE_ROWS = 'full';   # (more than a page: counted)
     my $cache = MemoryCache->new;
     my $executions = $TestSelectoComponents::Adapter::COUNT_EXECUTIONS // 0;
     my $first = $explorer->model($controller, $dashboard->input_from_url($saved), {result_cache => $cache});

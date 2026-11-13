@@ -210,13 +210,12 @@ $t->get_ok('/explore/products')
     ->content_like(qr{/selecto-components/selecto-components\.css\?v=\Q@{[asset_revision()]}\E})
     ->content_like(qr{/selecto-components/selecto-components\.js\?v=\Q@{[asset_revision()]}\E})
     ->element_exists_not('.sc-result-meta .sc-eyebrow')
-    ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>2</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
+    # Two rows on a page of 25 end the results: their count is the total, no count query.
+    ->content_like(qr{<strong>2</strong> rows matched \x{b7} <strong>1</strong> page \x{b7} <strong>\d+ ms</strong> query time})
     ->element_count_is('.sc-pagination', 2)
-    ->text_is('.sc-pagination-top > span' => 'Page 1 of 2')
+    ->text_is('.sc-pagination-top > span' => 'Page 1 of 1')
     ->element_exists('.sc-pagination-top [data-sc-pagination-status][role="status"][hidden]')
-    ->element_exists('.sc-pagination-top [aria-current="page"]')
-    ->element_exists('.sc-pagination-top button[name="page"][value="2"].sc-page-number')
-    ->element_exists('.sc-pagination-top button[name="page"][value="2"].sc-page-direction')
+    ->element_exists_not('.sc-pagination-top button[name="page"][value="2"]')
     ->text_is('.sc-table-wrap > table > caption' => 'Query results')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:add_product_note"][data-type="action"]')
     ->text_is('[data-sc-picker-kind="field"] button[data-field="action:add_product_note"] strong' => 'Add Product Note')
@@ -246,7 +245,10 @@ $t->get_ok('/explore/products')
     ->text_is('.sc-debug-panel > summary strong' => 'Query Debug')
     ->text_is('.sc-debug-stat:nth-child(10) span' => 'Rows returned')
     ->text_is('.sc-debug-stat:nth-child(10) strong' => '2')
-    ->text_is('.sc-debug-stat:nth-child(11) strong' => '42')
+    ->text_is('.sc-debug-stat:nth-child(3) strong' => 'not needed')
+    ->text_is('.sc-debug-stat:nth-child(11) strong' => '2')
+    ->text_is('.sc-debug-stat:nth-child(12) strong' => "\x{2014}")
+    ->element_exists_not('[data-sc-debug-round-trips]')
     ->text_is('.sc-debug-query:nth-of-type(1) h4' => 'Generated data query')
     ->element_exists('.sc-debug-query button[data-sc-debug-copy="selecto-debug-data-products"]')
     ->element_exists('.sc-debug-query:nth-of-type(1) code.sc-sql .sc-sql-keyword')
@@ -974,26 +976,32 @@ is $interpolate->('SELECT ? , ?', ["o'k", Mojo::JSON::false], 'mssql'),
 is $interpolate->('SELECT ?, ?', ["a\\b", [1, 'x']], 'duckdb'),
     q{SELECT 'a\\b', [1, 'x']}, 'DuckDB keeps backslashes literal and writes lists';
 
-$t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
-    ->status_is(200)
-    ->element_exists('.sc-debug-query:nth-of-type(1) code.sc-sql .sc-sql-keyword')
-    ->element_exists('.sc-debug-query:nth-of-type(1) button[data-sc-debug-copy-source]')
-    ->element_exists('.sc-debug-query:nth-of-type(1) pre[hidden][aria-hidden="true"]')
-    ->content_like(qr/12\.50/)
-    ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>5</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
-    ->element_count_is('.sc-pagination', 2)
-    ->text_is('.sc-pagination-top > span' => 'Page 1 of 5')
-    ->element_count_is('.sc-pagination-top .sc-page-number', 4)
-    ->element_exists('table tbody tr');
-is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->limit_value, 10, 'GET runs the normalized query';
-is_deeply $TestSelectoComponents::Adapter::LAST_COUNT_STATEMENT->params, ['12.50'],
-    'total count uses the same bound filters as the result query';
-is $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->limit_value, undef,
-    'total count removes the page limit';
-is $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->offset_value, undef,
-    'total count removes the page offset';
-is_deeply $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->orders, [],
-    'total count drops ordering';
+{
+    # A full page and the row beyond it: another page follows, so the total is counted.
+    local $TestSelectoComponents::Adapter::PAGE_ROWS = 'full';
+    $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50')
+        ->status_is(200)
+        ->element_exists('.sc-debug-query:nth-of-type(1) code.sc-sql .sc-sql-keyword')
+        ->element_exists('.sc-debug-query:nth-of-type(1) button[data-sc-debug-copy-source]')
+        ->element_exists('.sc-debug-query:nth-of-type(1) pre[hidden][aria-hidden="true"]')
+        ->content_like(qr/12\.50/)
+        ->content_like(qr{<strong>42</strong> rows matched \x{b7} <strong>5</strong> pages \x{b7} <strong>\d+ ms</strong> query time})
+        ->element_count_is('.sc-pagination', 2)
+        ->text_is('.sc-pagination-top > span' => 'Page 1 of 5')
+        ->element_count_is('.sc-pagination-top .sc-page-number', 4)
+        ->element_exists('.sc-pagination-top [aria-current="page"]')
+        ->element_exists('.sc-pagination-top button[name="page"][value="2"].sc-page-direction')
+        ->element_exists('table tbody tr');
+    is_deeply $TestSelectoComponents::Adapter::LAST_QUERY->limit_value, 11, 'GET runs the normalized query (and the row beyond its page)';
+    is_deeply $TestSelectoComponents::Adapter::LAST_COUNT_STATEMENT->params, ['12.50'],
+        'total count uses the same bound filters as the result query';
+    is $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->limit_value, undef,
+        'total count removes the page limit';
+    is $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->offset_value, undef,
+        'total count removes the page offset';
+    is_deeply $TestSelectoComponents::Adapter::LAST_COUNT_QUERY->orders, [],
+        'total count drops ordering';
+}
 
 $t->get_ok('/explore/products?q=1&view=detail&field=product_name&field=unit_price&group=category.category_name&measure=count&order=unit_price&direction=desc&limit=10&page=1&filter_field=unit_price&filter_op=gte&filter_value=12.50&filter_promote_field=unit_price')
     ->status_is(200)

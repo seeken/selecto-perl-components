@@ -1,6 +1,18 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Detail pages count only when they must. A Detail page fetches one row
+      beyond its size, as aggregate pages do: without that row it ends the
+      results and its rows give the total, so no count query runs (Query Debug
+      shows "not needed"). A page with more after it, or an empty page past the
+      first, is counted as before.
+    - Query Debug counts database round trips. With a DBD::Pg handle the panel
+      shows how many round trips the Explorer made (data, count and other), the
+      time spent waiting on them, the bytes sent and received, and each one with
+      what it sent. They are counted from libpq's protocol trace
+      (Selecto::Components::RoundTrips), so the BEGIN the driver sends with
+      AutoCommit off and the Parse before a second execute are included. Only
+      with show_sql; other adapters show a dash.
     - Host header links. Selecto::Components::Config takes header_links_resolver,
       called like api_console_resolver, returning [{label, href}] links shown in the
       Explorer's header actions beside Permalink and API (in private URL mode too).

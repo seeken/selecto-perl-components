@@ -12,6 +12,7 @@ use Digest::SHA qw(sha256_hex);
 use Scalar::Util qw(blessed looks_like_number);
 use Time::HiRes qw(time);
 use Selecto::Components::QueryBuilder ();
+use Selecto::Components::RoundTrips ();
 use Selecto::Components::State ();
 use Selecto::Components::Util qw(decode_driver_json);
 use Selecto::Statement ();
@@ -57,6 +58,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         if $config->result_cache_namespace;
     _cache_identity($cache_namespace, 'namespace') if $result_cache || defined($cache_namespace);
     my $engine;
+    my $round_trips;
     my $state;
     my $all_rows = 0;
     my $grid_all_rows = 0;
@@ -69,6 +71,9 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     my $ok = eval {
         my $setup_started = time;
         $engine = $config->engine($controller);
+        # (Query Debug: the round trips the rest of the model makes.)
+        $round_trips = Selecto::Components::RoundTrips->start($engine->adapter) if $config->show_sql;
+        my $phase = sub ($name, $code) { $round_trips ? $round_trips->during($name, $code) : $code->() };
         $config->limits($config->limits->intersect($engine->limits)) if $engine->can('limits');
         $result_cache->bind_domain($engine->domain->fingerprint)
             if $result_cache && $result_cache->can('bind_domain');
@@ -102,24 +107,32 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         my $statement = $prepared->{statement};
         my $compile_ms = _elapsed_ms($compile_started);
         my $data_started = time;
-        my $raw = _execute($engine, $prepared, $result_cache, \%cache_info, $cache_namespace, $config);
+        my $raw = $phase->(data => sub {
+            _execute($engine, $prepared, $result_cache, \%cache_info, $cache_namespace, $config);
+        });
         my $data_query_ms = _elapsed_ms($data_started);
         _validate_result($raw, $config->limits);
         my $grid_limit_exceeded = $grid_all_rows
             && @{$raw->{rows}} > $config->max_grid_result_cells ? 1 : 0;
         my $total_count;
         my ($count_statement, $count_compile_ms, $count_query_ms, $count_cache_hit);
-        # Aggregate pages need no count query (QueryBuilder fetched one row beyond the page):
-        # without that row this is the last page and the total is known; with it, another
-        # page follows and the total is left unknown (undef).
+        # A peeked page (QueryBuilder fetched one row beyond it) needs no count query
+        # without that row: it is the last page and the total is known. With it,
+        # another page follows: an aggregate leaves the total unknown (undef), and
+        # Detail (count_beyond_page) counts, as it does for an empty page past the
+        # first, which may lie past the end.
         my $more_pages;
+        my $count = !$built->{peek} && !$all_rows && !$grid_all_rows;
         if ($built->{peek}) {
             $more_pages = @{$raw->{rows}} > $state->limit ? 1 : 0;
             $raw = {%$raw, rows => [@{$raw->{rows}}[0 .. $state->limit - 1]]} if $more_pages;
             $total_count = $more_pages ? undef : ($state->page - 1) * $state->limit + @{$raw->{rows}};
+            $count = $built->{count_beyond_page} && ($more_pages || (!@{$raw->{rows}} && $state->page > 1));
+            $total_count = undef if $count;
         } elsif ($all_rows || $grid_all_rows) {
             $total_count = scalar @{$raw->{rows}};
-        } else {
+        }
+        if ($count) {
             my $count_query = defined($built->{count_selections})
                 ? $prepared->{query}->count_query($built->{count_selections})
                 : $prepared->{query}->count_query;
@@ -137,7 +150,9 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             } else {
                 my $count_started = time;
                 my $hits_before_count = $cache_info{hits};
-                my $count_raw = _execute($engine, $count_statement, $result_cache, \%cache_info, $cache_namespace, $config);
+                my $count_raw = $phase->(count => sub {
+                    _execute($engine, $count_statement, $result_cache, \%cache_info, $cache_namespace, $config);
+                });
                 $count_query_ms = _elapsed_ms($count_started);
                 _validate_result($count_raw, $config->limits);
                 $total_count = _total_count($count_raw);
@@ -225,11 +240,13 @@ sub model ($self, $controller, $input = undef, $options = undef) {
                         count_compile_ms => $count_compile_ms,
                         count_query_ms => $count_query_ms,
                         count_cache_hit => $count_cache_hit,
+                        count_skipped => $built->{peek} && !$count ? 1 : 0,
                         total_ms => $elapsed_ms,
                         setup_ms => $setup_ms,
                         build_ms => $build_ms,
                         transform_ms => $transform_ms,
                         model_ms => _elapsed_ms($model_started),
+                        ($round_trips ? (round_trips => $round_trips->finish) : ()),
                     },
                 },
             ) : ()),

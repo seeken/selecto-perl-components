@@ -60,7 +60,8 @@ is Selecto::Components::Explorer::_public_error('boom', $config), 'The query cou
     ok !$graph->{peek}, 'a graph is left as it was';
     my $detail = Selecto::Components::QueryBuilder->build($config, $domain,
         $state_for->(view => 'detail'));
-    is $detail->{query}->limit_value, 10, 'a detail page fetches just its rows';
+    is $detail->{query}->limit_value, 11, 'a detail page fetches one row beyond its size too';
+    ok $detail->{peek} && $detail->{count_beyond_page}, 'and is counted only when more follow';
 
     # What the page shows with and without a count.
     my $page = sub ($result) { Selecto::Components::Renderer::Results->_results({

@@ -879,7 +879,9 @@ Default false. When true, the Query Debug panel shows the generated data and
 count SQL B<with bound parameters>, which include tenant IDs and other scope
 values. B<Never enable it in production.> The plugin logs a warning at
 registration if it is enabled while the application runs in C<production>
-mode.
+mode. With a PostgreSQL adapter the panel also counts the database round trips
+the Explorer made, from libpq's protocol trace (see
+L<Selecto::Components::RoundTrips>).
 
 =back
 

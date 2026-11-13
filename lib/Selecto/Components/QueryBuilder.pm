@@ -302,12 +302,18 @@ sub _detail ($class, $config, $domain, $state, $options) {
     for my $order (@{$state->orders}) {
         $query = $query->order_by($order->{field}, $order->{direction});
     }
-    $query = $query->limit($state->limit)
+    # One row beyond the page says whether another follows: a page that ends
+    # the results gives the total, and only one with more after it is counted
+    # (Explorer model, peek and count_beyond_page).
+    my $paginate = !exists($options->{paginate}) || $options->{paginate} ? 1 : 0;
+    $query = $query->limit($state->limit + 1)
         ->offset(($state->page - 1) * $state->limit)
-        if !exists($options->{paginate}) || $options->{paginate};
+        if $paginate;
     $query = _with_query_library($query, $domain, $state, $config->limits);
     return {
         query => $query,
+        peek => $paginate,
+        count_beyond_page => 1,
         columns => \@columns,
         query_columns => \@query_columns,
         action_key => $action_key,
