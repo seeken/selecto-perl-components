@@ -14,6 +14,9 @@ use Selecto::Components::WebSocketPolicy;
 
 has workspace => sub { path(__FILE__)->to_abs->dirname->dirname->dirname->dirname->to_string };
 has database_url => sub { $ENV{SELECTO_PERL_STACK_POSTGRES_URL} };
+# An independently authored seed of the same shape may replace the protocol corpus copy.
+has seed_path => sub ($self) { $ENV{SELECTO_PERL_STACK_SEED}
+    // path($self->workspace, 'selecto-protocol/spec/fixtures/detail/pilot-seed.v1.json')->to_string };
 
 sub connection ($self) {
     my $url = Mojo::URL->new($self->database_url // '');
@@ -26,8 +29,7 @@ sub connection ($self) {
 }
 
 sub seed ($self) {
-    my $seed_path = path($self->workspace, 'selecto-protocol/spec/fixtures/detail/pilot-seed.v1.json');
-    return decode_json($seed_path->slurp);
+    return decode_json(path($self->seed_path)->slurp);
 }
 
 sub setup_database ($self) {
@@ -141,15 +143,18 @@ sub startup ($self) {
         $c->render(data => Selecto::Components::APIConsole->page(
             base_path => '/api/items', title => 'Perl PostgreSQL API Console',
             csrf_token => $c->csrf_token,
-            page_shell => {body_start_html => '<nav><a href="/explore/items">Explorer</a> | <a href="/vue">Vue</a></nav>'},
+            page_shell => {body_start_html => '<nav><a href="/explore/items">Explorer</a> | <a href="/vue">Vue</a> | <a href="/react">React</a></nav>'},
         ), format => 'html');
     });
     $protected->get('/')->to(cb => sub ($c) { $c->redirect_to('/explore/items') });
     $protected->get('/vue')->to(cb => sub ($c) { $c->redirect_to('/spa-vue/index.html') });
-    $protected->get('/spa-vue/*file')->to(cb => sub ($c) {
+    $protected->get('/react')->to(cb => sub ($c) { $c->redirect_to('/spa-react/index.html') });
+    # Both SPA builds use the shared canonical adapter against /api/items.
+    my %spa = ('spa-vue' => 'selecto_spa_vue/dist/perl-postgres', 'spa-react' => 'selecto_spa_react/dist/perl-postgres');
+    $protected->get('/:spa/*file' => [spa => [sort keys %spa]])->to(cb => sub ($c) {
         my $file = $c->stash('file');
         return $c->reply->not_found unless $file =~ /\A(?:index\.html|assets\/[A-Za-z0-9_.-]+\.(?:js|css))\z/;
-        my $asset = path($self->workspace, 'selecto_spa_vue/dist/perl-postgres', $file);
+        my $asset = path($self->workspace, $spa{$c->stash('spa')}, $file);
         return $c->reply->not_found unless -f $asset;
         if ($file eq 'index.html') {
             my $html = $asset->slurp;
