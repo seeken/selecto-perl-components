@@ -46,7 +46,8 @@ my $publication = $alpha->tx->res->json->{domains}[0]{publication};
 $beta->get_ok('/api/items/catalog')->status_is(200);
 isnt $beta->tx->res->json->{domains}[0]{publication}, $publication, 'publication changes with the signed-in principal';
 $alpha->get_ok('/api/items/explorer')->status_is(200)->json_is('/domain/fingerprint' => $fingerprint)
-    ->json_is('/domain/publication' => $publication)->json_is('/query/supports/aggregates' => Mojo::JSON::false);
+    ->json_is('/domain/publication' => $publication)->json_is('/query/supports/aggregates' => Mojo::JSON::false)
+    ->json_is('/links/api_console' => '/api/items/console');
 my @ids = map { $_->{path} } @{$alpha->tx->res->json->{fields}};
 is_deeply \@ids, [qw(id name amount active note large_integer due_on)], 'metadata omits hidden fields';
 my $envelope = {format => 'selecto.remote-query', format_version => 1,
