@@ -57,10 +57,18 @@ sub register ($class, $routes, $config, $mounted_path) {
                             manifest => $config->canonical_api_path,
                             explorer_metadata => $config->canonical_api_path . '/explorer'}]})};
             } elsif ($kind eq 'explorer') {
+                my $metadata = $host->explorer_metadata($engine,
+                    id => $config->id, label => $config->title, publication => $publication,
+                    fields => $config->default_fields);
+                # SPA explorers hand their Detail query to the same Console the
+                # HTMX explorer links to (same path rule as Config::api_console_url).
+                if (ref($config->api_console_resolver) eq 'CODE') {
+                    my $console = $config->api_console_resolver->($controller, $config, undef);
+                    $metadata->{links} = {api_console => "$console"} if defined($console) && !ref($console)
+                        && "$console" =~ m{\A/(?!/)[A-Za-z0-9/_-]+\z};
+                }
                 $response = {status => 200, content_type => 'application/json; charset=utf-8',
-                    body => JSON::PP->new->utf8->canonical->encode($host->explorer_metadata($engine,
-                        id => $config->id, label => $config->title, publication => $publication,
-                        fields => $config->default_fields))};
+                    body => JSON::PP->new->utf8->canonical->encode($metadata)};
             } else {
                 $response = $host->request($engine, {method => $controller->req->method,
                     path => $config->canonical_api_path . $kind,
