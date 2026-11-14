@@ -183,7 +183,8 @@ sub startup ($self) {
 }
 
 # The SPA protocol over the same session-scoped engine. Descriptor field ids
-# are the domain paths, as the explorer features document publishes them.
+# follow the SPA convention (source.<path>), as the explorer client's
+# descriptors do, so one SPA request runs unchanged on both transports.
 sub _spa_routes ($self, $routes, $factory) {
     my @compare = qw(equals not_equals greater_than greater_than_or_equal less_than less_than_or_equal between in not_in is_null is_not_null);
     my %operators = (boolean => [qw(equals not_equals is_null is_not_null)], string => [@compare, qw(contains starts_with ends_with)]);
@@ -193,7 +194,7 @@ sub _spa_routes ($self, $routes, $factory) {
         name => 'Perl PostgreSQL Items', source => 'canonical_stack_items',
         capabilities => [qw(detail aggregate graph aggregate_grid)],
         views => [map { +{id => $_, kind => $_, label => ucfirst} } qw(detail aggregate graph)],
-        fields => [map { my $f = $_; +{id => $f->{id}, label => $f->{id}, type => $f->{type} eq 'string' ? 'text' : $f->{type},
+        fields => [map { my $f = $_; +{id => "source.$f->{id}", label => $f->{id}, type => $f->{type} eq 'string' ? 'text' : $f->{type},
             groupable => Mojo::JSON::true, aggregatable => Mojo::JSON::true,
             aggregateFunctions => $aggregates{$f->{type}} // [qw(count count_distinct min max)],
             filterOperators => $operators{$f->{type}} // \@compare} } @{$self->seed->{fields}}]};

@@ -196,6 +196,6 @@ The example stack enables this with `SELECTO_PERL_STACK_EXPLORER=1`
 (`count_exact`, the API Console link, and `SELECTO_PERL_STACK_CLOCK` as the
 trusted clock when set). `SELECTO_PERL_STACK_SPA_ROUTES=1` also mounts the
 `selecto.spa/v1` routes (`Selecto::API::Spa`) at `/api/spa` over the same
-session-scoped engine, with descriptor field ids equal to the domain paths, so
+session-scoped engine, with SPA descriptor field ids (`source.<path>`), so
 one SPA request can be compared on both transports
 (`selecto_web_ui_conformance` `test:canonical`).
