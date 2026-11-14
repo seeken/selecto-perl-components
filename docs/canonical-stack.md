@@ -191,3 +191,11 @@ like `POST .../query`. `clock` is the trusted instant "today" is taken from (an
 RFC 3339 string or a callback receiving the controller; the server clock by
 default); `limits` are the profile's host limits, `max_limit` defaulting to the
 explorer's own.
+
+The example stack enables this with `SELECTO_PERL_STACK_EXPLORER=1`
+(`count_exact`, the API Console link, and `SELECTO_PERL_STACK_CLOCK` as the
+trusted clock when set). `SELECTO_PERL_STACK_SPA_ROUTES=1` also mounts the
+`selecto.spa/v1` routes (`Selecto::API::Spa`) at `/api/spa` over the same
+session-scoped engine, with descriptor field ids equal to the domain paths, so
+one SPA request can be compared on both transports
+(`selecto_web_ui_conformance` `test:canonical`).
