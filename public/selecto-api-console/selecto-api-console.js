@@ -129,7 +129,7 @@ function assertManifest(value) {
     nonEmptyString(route.operation_id, "manifest.route.operation_id");
     nonEmptyString(route.method, "manifest.route.method");
     // Parameterized write/action routes are outside the read client.
-    if (["queryDomain", "getDomain", "getOpenApi", "getExplorerMetadata", "getDomainCatalog", "getRootPredicateFeatures", "getNestedDetailFeatures"].includes(route.operation_id)) safePath(route.path);
+    if (["queryDomain", "getDomain", "getOpenApi", "getExplorerMetadata", "getDomainCatalog", "getRootPredicateFeatures", "getNestedDetailFeatures", "getExplorerFeatures", "queryExplorer"].includes(route.operation_id)) safePath(route.path);
     if (operations.has(route.operation_id)) throw new CanonicalWireError("manifest.routes", "duplicate operation id");
     operations.add(route.operation_id);
   });
@@ -247,6 +247,33 @@ function assertQueryResult(value, fingerprint, query = {}) {
   return value;
 }
 
+function pointerKey(key) { return String(key).replace(/~/g, "~0").replace(/\//g, "~1"); }
+function normalDecimal(text) {
+  let value = text.startsWith("-") ? text.slice(1) : text;
+  const negative = text.startsWith("-");
+  if (value.includes(".")) value = value.replace(/0+$/, "").replace(/\.$/, "");
+  return value === "0" ? "0" : `${negative ? "-" : ""}${value}`;
+}
+/**
+ * Exact numeric codecs: integer and decimal columns that use JSON numbers must
+ * carry plain lexemes that survive IEEE-754 decoding unchanged. Hosts publish
+ * values beyond that range as decimal-string; a lossy lexeme is a wire error,
+ * never a silently rounded display value.
+ */
+function assertExactResultNumbers(value, numberTokens) {
+  if (!numberTokens) return value;
+  const data = value.data;
+  data.rows.forEach((row, i) => data.columns.forEach((column, j) => {
+    if (!["integer", "decimal"].includes(column.type) || column.encoding !== "json") return;
+    const token = numberTokens.get(`/data/rows/${i}/${Array.isArray(row) ? j : pointerKey(column.id)}`);
+    if (token === undefined) return;
+    const exact = column.type === "integer" ? /^-?(?:0|[1-9]\d*)$/.test(token) && Number.isSafeInteger(Number(token))
+      : /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(token) && !/e/i.test(String(Number(token))) && normalDecimal(token) === normalDecimal(String(Number(token)));
+    if (!exact) throw new CanonicalWireError(`rows.${i}.${column.id}`, "inexact numeric lexeme; exact values require decimal-string");
+  }));
+  return value;
+}
+
 function buildRemoteRequest(fingerprint, query, requestId) {
   nonEmptyString(fingerprint, "domain.fingerprint");
   keys(query, ["select", "projection", "view", "filters", "group_by", "segments", "parameters", "order_by", "ordering", "limit", "offset", "timezone", "row_format"], "query");
@@ -274,7 +301,8 @@ function createCanonicalClient(options = {}) {
     if (init.body !== undefined) headers.set("content-type", "application/json");
     new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     const response = await transport(safePath(path), {...init, headers, credentials: "same-origin", redirect: "error"});
-    const payload = await response.arrayBuffer().then((bytes) => parseStrictJSON(new TextDecoder("utf-8", {fatal:true,ignoreBOM:!!selected}).decode(bytes), {maxBytes: selected ? (response.ok ? 262144 : 8192) : Number.POSITIVE_INFINITY, tokens: !!selected})).catch((error) => {
+    const maxBytes = selected?.exact ? Number.POSITIVE_INFINITY : selected ? (response.ok ? 262144 : 8192) : Number.POSITIVE_INFINITY;
+    const payload = await response.arrayBuffer().then((bytes) => parseStrictJSON(new TextDecoder("utf-8", {fatal:true,ignoreBOM:!!selected}).decode(bytes), {maxBytes, tokens: !!selected})).catch((error) => {
       if (error?.name === "AbortError") throw error;
       throw new CanonicalWireError("response", "server did not return JSON");
     });
@@ -294,8 +322,9 @@ function createCanonicalClient(options = {}) {
     async query(manifest, query, requestOptions = {}) {
       assertManifest(manifest);
       const envelope = buildRemoteRequest(requestOptions.fingerprint ?? manifest.domain.fingerprint, query, requestOptions.requestId);
-      const result = await request(routePath(manifest, "queryDomain", "POST"), {method: "POST", body: JSON.stringify(envelope), signal: requestOptions.signal});
+      const result = await request(routePath(manifest, "queryDomain", "POST"), {method: "POST", body: JSON.stringify(envelope), signal: requestOptions.signal}, {exact: true});
       assertQueryResult(result.payload, envelope.domain.fingerprint, query);
+      assertExactResultNumbers(result.payload, result.numberTokens);
       return result.payload;
     },
     async nestedDetailFeatures(manifest, signal) {
@@ -334,6 +363,48 @@ function createCanonicalClient(options = {}) {
       if (parsed.request.format_version === 2) assertRootPredicateResult(result.payload,{fingerprint:parsed.request.domain.fingerprint,query:parsed.request.query,features:requestOptions.features});
       else assertQueryResult(result.payload,parsed.request.domain.fingerprint,parsed.request.query);
       return result.payload;
+    },
+    /** GET getExplorerFeatures; validated and bound to the manifest (and catalog entry when given). */
+    async explorerFeatures(manifest, signal, entry) {
+      assertManifest(manifest);
+      if (!manifest.profiles.includes(EXPLORER_PROFILE)) throw new CanonicalWireError("manifest.profiles", `${EXPLORER_PROFILE} unavailable`);
+      routePath(manifest, "queryExplorer", "POST");
+      return assertExplorerFeatures((await request(routePath(manifest, "getExplorerFeatures", "GET"), {signal})).payload, {manifest, entry});
+    },
+    /** POST queryExplorer with the features-bound envelope; exact numeric lexemes are enforced. */
+    async queryExplorer(manifest, features, query, requestOptions = {}) {
+      const envelope = buildExplorerRequest(features, query, requestOptions.requestId);
+      if (manifest.domain.fingerprint !== features.domain.fingerprint) throw new CanonicalWireError("features.domain.fingerprint", "differs from manifest fingerprint");
+      const result = await request(routePath(manifest, "queryExplorer", "POST"), {method: "POST", body: JSON.stringify(envelope), signal: requestOptions.signal}, {exact: true});
+      assertExplorerResult(result.payload, {features, query, requestId: envelope.request_id});
+      assertExactResultNumbers(result.payload, result.numberTokens);
+      return result.payload;
+    },
+    /**
+     * Full-result download (section 6.5): `format` is one of the advertised
+     * `supports.export` formats; the body is returned as bytes with the media
+     * type and the host's attachment filename. Errors stay native.
+     */
+    async exportExplorer(manifest, features, query, format, requestOptions = {}) {
+      if (!Object.hasOwn(explorerExportMediaTypes, format)) throw new CanonicalWireError("export.format", "unknown export format");
+      if (!features.supports.export.includes(format)) throw new CanonicalWireError("export.format", "export format not advertised");
+      if (!query.export) throw new CanonicalWireError("query.export", "export member required");
+      const envelope = buildExplorerRequest(features, query, requestOptions.requestId);
+      const headers = new Headers(typeof options.headers === "function" ? options.headers() : options.headers);
+      headers.set("accept", explorerExportMediaTypes[format]);
+      headers.set("content-type", "application/json");
+      const response = await transport(safePath(routePath(manifest, "queryExplorer", "POST")), {method: "POST", body: JSON.stringify(envelope), headers, credentials: "same-origin", redirect: "error", signal: requestOptions.signal});
+      const bytes = await response.arrayBuffer();
+      if (!response.ok) {
+        let decoded;
+        try { decoded = parseStrictJSON(new TextDecoder("utf-8", {fatal: true}).decode(bytes), {maxBytes: 8192}); } catch { throw new CanonicalWireError("response", "server did not return JSON"); }
+        throw new CanonicalHttpError(response.status, assertError(decoded));
+      }
+      const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+      if (contentType !== explorerExportMediaTypes[format]) throw new CanonicalWireError("export.content-type", "differs from the requested media type");
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const match = /filename="([^"\\/]{1,200})"/.exec(disposition);
+      return {bytes, contentType, filename: match ? match[1] : undefined};
     },
     request,
   };
@@ -737,12 +808,215 @@ function assertNestedDetailResult(value,{query,features,context,numberTokens}={}
   });});return value;
 }
 
-return {CanonicalWireError,CanonicalHttpError,nestedDetailRefusal,markNestedDetailRefusal,safePath,record,nonEmptyString,integer,keys,assertCatalog,assertManifest,routePath,assertDomain,assertError,assertColumn,assertScalar,assertQueryResult,buildRemoteRequest,createCanonicalClient,assertUnicode,parseStrictJSON,canonicalRootFields,assertRootPredicateFeatures,assertRootScalar,assertRootPredicateQuery,assertTimezone,buildRootPredicateRequest,parseCanonicalRequestText,assertRootPredicateResult,assertNestedDetailFeatures,nestedDetailContext,encodeNestedDetailContext,assertNestedDetailScalar,assertNestedDetailQuery,buildNestedDetailRequest,parseNestedDetailRequestText,assertNestedDetailResult};
+// ---- remote_query.explorer.v1 (selecto.explorer-features v1, explorer-query v1) ----
+
+const EXPLORER_PROFILE = "remote_query.explorer.v1";
+const explorerExportMediaTypes = Object.freeze({csv: "text/csv", tsv: "text/tab-separated-values", json: "application/json", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+const explorerFieldTypes = Object.freeze(["integer", "decimal", "string", "boolean", "date", "naive_datetime", "utc_datetime"]);
+const explorerGroupFormats = Object.freeze(["day", "day_hour", "week", "month", "quarter", "year", "month_of_year", "day_of_month", "day_of_week", "hour"]);
+const explorerAggregates = Object.freeze(["count", "count_distinct", "sum", "avg", "min", "max", "true_count", "false_count", "true_percentage", "bucket_count"]);
+const explorerOperators = ["eq", "ne", "gt", "gte", "lt", "lte", "between", "in", "not_in", "is_null", "not_null", "starts_with", "starts_with_ci", "text_contains", "text_contains_ci", "ends_with", "ends_with_ci", "date_shortcut"];
+const explorerBucketKinds = ["numeric", "year", "elapsed_days", "relative_days"];
+const explorerSupportFlags = ["detail", "aggregate", "graph", "rollup", "grid", "nested", "recursive_filters", "group_formats", "buckets", "boolean_aggregates", "count_exact", "text_ops", "date_shortcuts"];
+const explorerLimitNames = ["max_limit", "max_offset", "max_select", "max_filters", "max_filter_depth", "max_filter_values", "max_orders", "max_group_by", "max_aggregates", "max_groups", "max_result_cells", "max_buckets", "max_export_rows"];
+const explorerServices = ["saved_views", "actions", "canned_pages", "record_editors", "row_refresh", "diagnostics", "localization"];
+const explorerAlias = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+
+function stringArray(value, path, allowed) {
+  array(value, path).forEach((item, i) => { nonEmptyString(item, `${path}.${i}`); if (allowed && !allowed.includes(item)) throw new CanonicalWireError(`${path}.${i}`, `unknown value ${JSON.stringify(item)}`); });
+  if (new Set(value).size !== value.length) throw new CanonicalWireError(path, "duplicate entries");
+  return value;
+}
+
+/**
+ * `selecto.explorer-features` v1 (section 2). Unknown optional members are
+ * ignored; every member a client relies on is checked. With `context` the
+ * document is bound to the manifest fingerprint and the catalog entry's id and
+ * publication (rule 1).
+ */
+function assertExplorerFeatures(value, context = {}) {
+  format(value, "selecto.explorer-features", "features");
+  if (value.profile !== EXPLORER_PROFILE) throw new CanonicalWireError("features.profile", `expected ${EXPLORER_PROFILE}`);
+  assertUnicode(nonEmptyString(value.revision, "features.revision"), "features.revision", 128);
+  record(value.domain, "features.domain");
+  for (const key of ["id", "fingerprint", "publication"]) nonEmptyString(value.domain[key], `features.domain.${key}`);
+  if (context.manifest && context.manifest.domain.fingerprint !== value.domain.fingerprint) throw new CanonicalWireError("features.domain.fingerprint", "differs from manifest fingerprint");
+  if (context.entry && (context.entry.id !== value.domain.id || context.entry.publication !== value.domain.publication)) throw new CanonicalWireError("features.domain", "differs from catalog publication");
+  const supports = record(value.supports, "features.supports");
+  for (const flag of explorerSupportFlags) bool(supports[flag], `features.supports.${flag}`);
+  oneOf(supports.timezones, ["utc", "iana"], "features.supports.timezones");
+  stringArray(supports.export, "features.supports.export", Object.keys(explorerExportMediaTypes));
+  const limits = record(value.limits, "features.limits");
+  for (const name of explorerLimitNames) integer(limits[name], `features.limits.${name}`);
+  if (supports.count_exact) integer(limits.max_count_rows, "features.limits.max_count_rows");
+  const collections = array(value.collections, "features.collections");
+  const collectionIds = new Set();
+  collections.forEach((collection, i) => {
+    const path = `features.collections.${i}`;
+    record(collection, path);
+    for (const key of ["id", "path", "label"]) nonEmptyString(collection[key], `${path}.${key}`);
+    integer(collection.limit, `${path}.limit`);
+    if (collectionIds.has(collection.id)) throw new CanonicalWireError(path, "duplicate collection id");
+    collectionIds.add(collection.id);
+  });
+  const fields = array(value.fields, "features.fields");
+  if (!fields.length) throw new CanonicalWireError("features.fields", "expected published fields");
+  const ids = new Set(), paths = new Set();
+  fields.forEach((field, i) => {
+    const path = `features.fields.${i}`;
+    record(field, path);
+    for (const key of ["id", "path", "label"]) nonEmptyString(field[key], `${path}.${key}`);
+    oneOf(field.type, explorerFieldTypes, `${path}.type`);
+    oneOf(field.encoding, ["json", "string", "decimal-string"], `${path}.encoding`);
+    for (const key of ["nullable", "selectable", "sortable", "filterable", "groupable"]) bool(field[key], `${path}.${key}`);
+    stringArray(field.operators, `${path}.operators`, explorerOperators);
+    stringArray(field.aggregates, `${path}.aggregates`, explorerAggregates);
+    stringArray(field.group_formats, `${path}.group_formats`, explorerGroupFormats);
+    stringArray(field.buckets, `${path}.buckets`, explorerBucketKinds);
+    stringArray(field.date_shortcuts, `${path}.date_shortcuts`);
+    if (field.collection !== null && !collectionIds.has(field.collection)) throw new CanonicalWireError(`${path}.collection`, "unknown collection");
+    if (field.collection !== null && (field.operators.length || field.sortable || field.groupable || field.aggregates.length)) throw new CanonicalWireError(path, "to-many fields are selectable only inside a collection");
+    if (ids.has(field.id) || paths.has(field.path)) throw new CanonicalWireError(path, "duplicate field id or path");
+    ids.add(field.id); paths.add(field.path);
+  });
+  record(value.query_library, "features.query_library");
+  if (value.query_library.segments !== undefined) array(value.query_library.segments, "features.query_library.segments").forEach((segment, i) => {
+    record(segment, `features.query_library.segments.${i}`); nonEmptyString(segment.name, `features.query_library.segments.${i}.name`);
+    array(segment.parameters ?? [], `features.query_library.segments.${i}.parameters`).forEach((parameter, j) => { record(parameter, `features.query_library.segments.${i}.parameters.${j}`); nonEmptyString(parameter.name, `features.query_library.segments.${i}.parameters.${j}.name`); });
+  });
+  record(value.services, "features.services");
+  for (const [name, service] of Object.entries(value.services)) { record(service, `features.services.${name}`); safePath(service.path); }
+  if (value.default !== undefined) record(value.default, "features.default");
+  if (value.links !== undefined) record(value.links, "features.links");
+  return value;
+}
+
+/** The closed `selecto.explorer-query` v1 envelope bound to the features document. */
+function buildExplorerRequest(features, query, requestId) {
+  record(features, "features"); record(features.domain, "features.domain");
+  nonEmptyString(features.domain.fingerprint, "domain.fingerprint");
+  keys(query, ["select", "filters", "group_by", "order_by", "segments", "parameters", "limit", "offset", "timezone", "row_format", "rollup", "complete", "count", "export"], "query");
+  const selected = array(query.select, "query.select");
+  if (!selected.length) throw new CanonicalWireError("query.select", "selection cannot be empty");
+  if (query.limit !== undefined) integer(query.limit, "query.limit");
+  if (query.offset !== undefined) integer(query.offset, "query.offset");
+  if (query.row_format !== undefined) oneOf(query.row_format, ["arrays", "objects"], "query.row_format");
+  if (query.count !== undefined) oneOf(query.count, ["none", "exact"], "query.count");
+  for (const key of ["rollup", "complete"]) if (query[key] !== undefined) bool(query[key], `query.${key}`);
+  if (query.timezone !== undefined) assertTimezone(query.timezone);
+  if (!jsonScalar(query)) throw new CanonicalWireError("query", "must contain finite JSON values");
+  const result = {format: "selecto.explorer-query", format_version: 1, domain: {fingerprint: features.domain.fingerprint}, features: {revision: features.revision}, query};
+  if (requestId !== undefined) { assertUnicode(nonEmptyString(requestId, "request_id"), "request_id", 128); if (requestId.length > 128) throw new CanonicalWireError("request_id", "too long"); result.request_id = requestId; }
+  return result;
+}
+
+const explorerColumnTypes = [...explorerFieldTypes, "collection"];
+function explorerScalar(value, column, path) {
+  if (value === null) { if (!column.nullable) throw new CanonicalWireError(path, "null in non-nullable column"); return; }
+  let valid;
+  if (column.encoding === "decimal-string") valid = typeof value === "string" && (column.type === "integer" ? /^-?(0|[1-9]\d*)$/ : /^-?(0|[1-9]\d*)(\.\d+)?$/).test(value);
+  else if (column.type === "integer") valid = Number.isSafeInteger(value);
+  else if (column.type === "decimal") valid = typeof value === "number" && Number.isFinite(value);
+  else if (column.type === "boolean") valid = typeof value === "boolean";
+  else if (column.type === "date") valid = typeof value === "string" && validDate(value);
+  else if (column.type === "naive_datetime") valid = typeof value === "string" && /^\d{4}-\d{2}-\d{2}[T ](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?$/.test(value) && validDate(value.slice(0, 10));
+  else if (column.type === "utc_datetime") valid = typeof value === "string" && /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value) && validDate(value.slice(0, 10));
+  else valid = typeof value === "string";
+  if (!valid) throw new CanonicalWireError(path, `invalid ${column.type}/${column.encoding} value`);
+}
+
+/**
+ * `selecto.explorer-query-result` v1 (section 4): binding (fingerprint and
+ * features revision), closed column/row shapes, scalar codecs, `row_meta` (one
+ * entry per row, with `group_by` only), `complete` (never `has_more`) and the
+ * requested page. Unknown optional members are ignored.
+ */
+function assertExplorerResult(value, {features, query = {}, requestId} = {}) {
+  record(value, "response");
+  if (value.ok !== true) throw new CanonicalWireError("response.ok", "expected true");
+  const data = record(value.data, "response.data");
+  format(data, "selecto.explorer-query-result", "response.data");
+  if (record(data.domain, "response.data.domain").fingerprint !== features.domain.fingerprint) throw new CanonicalWireError("response.data.domain", "Domain fingerprint drift");
+  if (record(data.features, "response.data.features").revision !== features.revision) throw new CanonicalWireError("response.data.features", "explorer features revision drift");
+  const columns = array(data.columns, "response.data.columns");
+  const ids = new Set();
+  columns.forEach((column, i) => {
+    const path = `columns.${i}`;
+    record(column, path);
+    nonEmptyString(column.id, `${path}.id`); nonEmptyString(column.label, `${path}.label`);
+    oneOf(column.type, explorerColumnTypes, `${path}.type`);
+    oneOf(column.encoding, ["json", "string", "decimal-string"], `${path}.encoding`);
+    bool(column.nullable, `${path}.nullable`);
+    oneOf(column.role, ["field", "group", "aggregate"], `${path}.role`);
+    if (column.role === "aggregate") oneOf(column.aggregate, explorerAggregates, `${path}.aggregate`);
+    if (ids.has(column.id)) throw new CanonicalWireError("columns", "duplicate column id");
+    ids.add(column.id);
+  });
+  const subtables = data.subtables === undefined ? {} : record(data.subtables, "response.data.subtables");
+  for (const column of columns) if (column.type === "collection") {
+    const sub = record(subtables[column.id], `subtables.${column.id}`);
+    stringArray(sub.columns, `subtables.${column.id}.columns`);
+    integer(sub.limit, `subtables.${column.id}.limit`);
+    if (sub.complete !== true) throw new CanonicalWireError(`subtables.${column.id}.complete`, "collections are complete");
+  }
+  const rowFormat = data.row_format ?? "arrays";
+  oneOf(rowFormat, ["arrays", "objects"], "response.data.row_format");
+  if (rowFormat !== (query.row_format ?? "arrays")) throw new CanonicalWireError("response.data.row_format", "does not match request");
+  const rows = array(data.rows, "response.data.rows");
+  const cell = (row, column, j) => rowFormat === "arrays" ? row[j] : row[column.id];
+  rows.forEach((row, i) => {
+    if (rowFormat === "arrays") { if (!Array.isArray(row) || row.length !== columns.length) throw new CanonicalWireError(`rows.${i}`, "row width differs from columns"); }
+    else { record(row, `rows.${i}`); if (Object.keys(row).length !== ids.size || Object.keys(row).some((key) => !ids.has(key))) throw new CanonicalWireError(`rows.${i}`, "row keys differ from columns"); }
+    columns.forEach((column, j) => {
+      const item = cell(row, column, j);
+      if (column.type !== "collection") { explorerScalar(item, column, `rows.${i}.${column.id}`); return; }
+      array(item, `rows.${i}.${column.id}`).forEach((child, k) => {
+        const width = subtables[column.id].columns.length;
+        if (Array.isArray(child) ? child.length !== width : Object.keys(record(child, `rows.${i}.${column.id}.${k}`)).length !== width) throw new CanonicalWireError(`rows.${i}.${column.id}.${k}`, "child width differs from subtable columns");
+      });
+    });
+  });
+  if (integer(data.row_count, "response.data.row_count") !== rows.length) throw new CanonicalWireError("row_count", "differs from returned rows");
+  record(data.page, "response.data.page");
+  integer(data.page.limit, "page.limit"); integer(data.page.offset, "page.offset"); bool(data.page.has_more, "page.has_more");
+  if (!query.export && (rows.length > data.page.limit || (query.limit !== undefined && query.limit !== data.page.limit) || (query.offset ?? 0) !== data.page.offset)) throw new CanonicalWireError("page", "does not match requested page");
+  if (query.complete === true) { if (data.complete !== true || data.page.has_more) throw new CanonicalWireError("response.data.complete", "a complete result never has more rows"); }
+  if (data.total_count !== undefined) integer(data.total_count, "response.data.total_count");
+  if (query.count === "exact" && data.total_count === undefined) throw new CanonicalWireError("response.data.total_count", "exact count requested");
+  const grouped = Array.isArray(query.group_by) && query.group_by.length > 0;
+  if (grouped) {
+    const meta = array(data.row_meta, "response.data.row_meta");
+    if (meta.length !== rows.length) throw new CanonicalWireError("row_meta", "one entry per row required");
+    meta.forEach((entry, i) => {
+      record(entry, `row_meta.${i}`);
+      integer(entry.level, `row_meta.${i}.level`);
+      oneOf(entry.kind, ["detail", "subtotal", "total"], `row_meta.${i}.kind`);
+      if (entry.drilldown === null) return;
+      record(entry.drilldown, `row_meta.${i}.drilldown`);
+      if (!ids.has(entry.drilldown.column)) throw new CanonicalWireError(`row_meta.${i}.drilldown.column`, "unknown column");
+      const filters = array(entry.drilldown.filters, `row_meta.${i}.drilldown.filters`);
+      if (!filters.length) throw new CanonicalWireError(`row_meta.${i}.drilldown.filters`, "expected leaves");
+      filters.forEach((leaf, j) => {
+        const path = `row_meta.${i}.drilldown.filters.${j}`;
+        keys(leaf, ["field", "op", "value", "format"], path);
+        nonEmptyString(leaf.field, `${path}.field`);
+        oneOf(leaf.op, ["eq", "is_null"], `${path}.op`);
+        if (leaf.format !== undefined) oneOf(leaf.format, explorerGroupFormats, `${path}.format`);
+      });
+    });
+  } else if (data.row_meta !== undefined) throw new CanonicalWireError("row_meta", "present only with group_by");
+  if (value.meta !== undefined) { record(value.meta, "response.meta"); if (requestId !== undefined && value.meta.request_id !== undefined && value.meta.request_id !== requestId) throw new CanonicalWireError("response.meta.request_id", "request ID echo mismatch"); }
+  return value;
+}
+
+return {CanonicalWireError,CanonicalHttpError,nestedDetailRefusal,markNestedDetailRefusal,safePath,record,nonEmptyString,integer,keys,assertCatalog,assertManifest,routePath,assertDomain,assertError,assertColumn,assertScalar,assertQueryResult,assertExactResultNumbers,buildRemoteRequest,createCanonicalClient,assertUnicode,parseStrictJSON,canonicalRootFields,assertRootPredicateFeatures,assertRootScalar,assertRootPredicateQuery,assertTimezone,buildRootPredicateRequest,parseCanonicalRequestText,assertRootPredicateResult,assertNestedDetailFeatures,nestedDetailContext,encodeNestedDetailContext,assertNestedDetailScalar,assertNestedDetailQuery,buildNestedDetailRequest,parseNestedDetailRequestText,assertNestedDetailResult,EXPLORER_PROFILE,explorerExportMediaTypes,explorerFieldTypes,explorerGroupFormats,explorerAggregates,assertExplorerFeatures,buildExplorerRequest,assertExplorerResult};
 })();
 global.SelectoExplorerClient = (function() {
 const canonical = global.SelectoCanonicalClient;
 
-const operatorMap = {equals: "eq", not_equals: "ne", greater_than: "gt", greater_than_or_equal: "gte", less_than: "lt", less_than_or_equal: "lte", is_null: "is_null", is_not_null: "is_not_null"};
+// Comparison/null operators are remote_query.v1 base; range/list operators are
+// translated only when the publication's metadata advertises them.
+const operatorMap = {equals: "eq", not_equals: "ne", greater_than: "gt", greater_than_or_equal: "gte", less_than: "lt", less_than_or_equal: "lte", is_null: "is_null", is_not_null: "is_not_null", between: "between", in: "in", not_in: "not_in"};
 const reverseOperators = Object.fromEntries(Object.entries(operatorMap).map(([key, value]) => [value, key]));
 const {record, nonEmptyString, integer, keys, safePath, CanonicalWireError} = canonical;
 
@@ -819,8 +1093,37 @@ function toExplorerDescriptor(metadata) {
     defaults: {selected: metadata.default_select.slice(), orderBy: [], groupBy: [], aggregates: [], rollup: true, preventDenormalization: true},
     release: {schema: "selecto.domain-publication/v1", id: metadata.domain.publication, version: metadata.domain.fingerprint, fingerprint: metadata.domain.fingerprint, status: "published"},
     ...(metadata.links?.api_console ? {artifacts: {apiConsole: metadata.links.api_console}} : {}),
-    metadata: {canonical: {profile: metadata.query.profile, fingerprint: metadata.domain.fingerprint, publication: metadata.domain.publication, supports: {...metadata.query.supports}, limits: {...metadata.query.limits}}},
+    metadata: {canonical: {transport: "canonical", profile: metadata.query.profile, fingerprint: metadata.domain.fingerprint, publication: metadata.domain.publication, supports: {...metadata.query.supports}, limits: {...metadata.query.limits}, services: {...(metadata.services ?? {})}, unsupported: unsupportedExplorerFeatures(metadata)}},
   };
+}
+
+/**
+ * Explorer features of the SPA protocol that this publication does not provide.
+ * Frameworks render this list so absent features are visible, never silently
+ * dropped. Ids are stable: `view.*`, `filters.*`, `fields.*`, `columns.*`,
+ * `operator.*`, `page.*` and `service.*`.
+ */
+function unsupportedExplorerFeatures(metadata) {
+  const supports = metadata.query.supports;
+  const operators = new Set(metadata.query.operators);
+  const richer = "requires the remote_query.explorer.v1 profile";
+  const list = [
+    {id: "view.aggregate", label: "Aggregate view", reason: richer},
+    {id: "view.graph", label: "Graph view", reason: richer},
+    {id: "view.aggregate_grid", label: "Aggregate grid", reason: richer},
+  ];
+  if (!supports.recursive_filters) list.push({id: "filters.groups", label: "OR and nested filter groups", reason: "this publication accepts flat AND filters only"});
+  list.push({id: "fields.joined", label: "Joined fields", reason: "explorer metadata v1 publishes root fields only"});
+  if (!supports.nested) list.push({id: "fields.collections", label: "Nested collection columns", reason: richer});
+  list.push({id: "columns.occurrences", label: "Repeated columns", reason: richer});
+  for (const [spa, op] of [["between", "between"], ["in", "in"], ["not_in", "not_in"], ["contains", "text_contains"], ["starts_with", "starts_with"], ["ends_with", "ends_with"], ["date_shortcut", "date_shortcut"]]) {
+    if (!operators.has(op) || !operatorMap[spa]) list.push({id: `operator.${spa}`, label: `Filter operator ${spa.replaceAll("_", " ")}`, reason: "not advertised by this publication"});
+  }
+  list.push({id: "page.total_rows", label: "Total row count", reason: "no implicit count; paging uses has_more"});
+  for (const [id, label] of [["saved_views", "Saved views"], ["export", "Export"], ["actions", "Actions"], ["canned_pages", "Canned pages"], ["record_editors", "Record editors"], ["row_refresh", "Row refresh"], ["diagnostics", "SQL debug"], ["localization", "Localized descriptors"]]) {
+    if (!Object.hasOwn(metadata.services ?? {}, id)) list.push({id: `service.${id}`, label, reason: "host service not advertised"});
+  }
+  return list;
 }
 
 /** Translate the bounded Detail profile; never discard unsupported semantics. */
@@ -837,11 +1140,21 @@ function toCanonicalQuery(request, metadata) {
   if (request.exportShape !== undefined) refuse("request.exportShape", "export is not available");
   const state = record(request.state, "request.state");
   keys(state, ["selected", "preventDenormalization", "rowClickAction", "fieldConfigs", "orderBy", "groupBy", "groupConfigs", "rollup", "aggregateGrid", "aggregateGridColorize", "aggregateGridColorScale", "columns", "aggregates", "graph", "queryLibrary"], "request.state");
-  for (const key of ["groupBy", "groupConfigs", "aggregates", "graph", "queryLibrary", "aggregateGrid", "aggregateGridColorize", "aggregateGridColorScale"]) if (!isEmpty(state[key])) refuse(`request.state.${key}`, "requires a richer profile");
+  for (const key of ["groupBy", "aggregates", "graph", "queryLibrary", "aggregateGrid", "aggregateGridColorize", "aggregateGridColorScale"]) if (!isEmpty(state[key])) refuse(`request.state.${key}`, "requires a richer profile");
   if (state.preventDenormalization !== undefined && state.preventDenormalization !== true) refuse("request.state.preventDenormalization", "denormalization is unavailable");
   if (state.rowClickAction && state.rowClickAction !== "__default_modal__") refuse("request.state.rowClickAction", "configured row actions are unavailable");
   if (state.columns !== undefined && !isEmpty(state.columns)) refuse("request.state.columns", "repeated/formatted columns require a richer profile");
-  if (!isEmpty(state.fieldConfigs)) refuse("request.state.fieldConfigs", "formatted columns require a richer profile");
+  // Display alias/format are client-only presentation (PHASE0 R08, R09, R36);
+  // anything that changes query semantics (group formats, buckets) is refused.
+  for (const key of ["fieldConfigs", "groupConfigs"]) {
+    if (state[key] === undefined) continue;
+    for (const [id, config] of Object.entries(record(state[key], `request.state.${key}`))) {
+      const extra = Object.keys(record(config, `request.state.${key}.${id}`)).filter((member) => !["alias", "format"].includes(member));
+      if (extra.length) refuse(`request.state.${key}.${id}`, `unsupported members: ${extra.join(", ")}; they change query semantics and require a richer profile`);
+      if (config.alias !== undefined && typeof config.alias !== "string") refuse(`request.state.${key}.${id}.alias`, "expected text", "invalid_query");
+      if (config.format !== undefined && typeof config.format !== "string") refuse(`request.state.${key}.${id}.format`, "expected a display format", "invalid_query");
+    }
+  }
   const byId = new Map(metadata.fields.map((field) => [field.id, field]));
   function field(id, path) {
     const value = byId.get(id);
@@ -858,11 +1171,18 @@ function toCanonicalQuery(request, metadata) {
     const path = `request.filters.items.${index}`;
     if (filter?.items !== undefined || filter?.conjunction !== undefined) refuse(path, "recursive filters require a richer profile");
     keys(filter, ["id", "field", "operator", "value", "valueTo", "promoted", "groupConfig"], path);
-    if (filter.valueTo !== undefined || !isEmpty(filter.groupConfig)) refuse(path, "range/grouping semantics require a richer profile");
+    if (!isEmpty(filter.groupConfig)) refuse(path, "grouping semantics require a richer profile");
     const op = operatorMap[filter.operator];
     if (!op || !metadata.query.operators.includes(op)) refuse(`${path}.operator`, "operator not supported by this profile");
+    if (filter.valueTo !== undefined && op !== "between") refuse(`${path}.valueTo`, "only between carries an end value", "invalid_query");
     const result = {field: field(filter.field, `${path}.field`).path, op};
-    if (!["is_null", "is_not_null"].includes(op)) {
+    if (op === "between") {
+      if (!Object.hasOwn(filter, "value") || !Object.hasOwn(filter, "valueTo")) refuse(path, "between requires value and valueTo", "invalid_query");
+      result.value = filter.value; result.end = filter.valueTo;
+    } else if (op === "in" || op === "not_in") {
+      if (!Array.isArray(filter.value) || !filter.value.length) refuse(`${path}.value`, "a non-empty list is required", "invalid_query");
+      result.value = filter.value;
+    } else if (!["is_null", "is_not_null"].includes(op)) {
       if (!Object.hasOwn(filter, "value")) refuse(`${path}.value`, "a value is required", "invalid_query");
       result.value = filter.value;
     } else if (filter.value !== undefined && filter.value !== null && filter.value !== "") refuse(`${path}.value`, "null test cannot carry a value", "invalid_query");
@@ -975,6 +1295,681 @@ function createExplorerClient(options = {}) {
       const result = await client.query(manifest, query, requestOptions);
       return toExplorerResult(result, request, metadata);
     },
+  };
+}
+
+/**
+ * Chooses a host transport before an explorer mounts. `mode` "spa" and
+ * "canonical" are explicit choices. "auto" asks the host whether it publishes a
+ * canonical domain catalog at `catalogPath` (default `<baseUrl>/catalog`):
+ * "canonical" when it answers a valid `selecto.domain-catalog`, "spa" when the
+ * route is absent (404, 405, 410) or answers something that is not a catalog
+ * (an HTML fallback page). Any other failure (401, 403, 5xx, network, a
+ * malformed catalog) is thrown: a refusing or broken canonical host is never
+ * silently downgraded to the SPA routes.
+ */
+async function selectHostTransport(options = {}) {
+  const {mode = "auto", baseUrl = "/api/v1/selecto", catalogPath, signal} = options;
+  if (mode === "spa" || mode === "canonical") return mode;
+  if (mode !== "auto") throw new TypeError("transport mode must be \"spa\", \"canonical\" or \"auto\"");
+  const path = canonical.safePath(catalogPath ?? `${String(baseUrl).replace(/\/+$/, "")}/catalog`);
+  const headers = new Headers(typeof options.headers === "function" ? options.headers() : options.headers);
+  headers.set("accept", "application/json");
+  const response = await (options.fetch ?? globalThis.fetch)(path, {headers, credentials: "same-origin", redirect: "error", signal});
+  if ([404, 405, 410].includes(response.status)) return "spa";
+  if (!response.ok) throw new canonical.CanonicalHttpError(response.status, {error: {code: "transport_selection_failed", message: `canonical catalog probe failed (${response.status})`}});
+  let body;
+  try { body = JSON.parse(await response.text()); } catch { return "spa"; }
+  if (!body || typeof body !== "object" || body.format !== "selecto.domain-catalog") return "spa";
+  canonical.assertCatalog(body);
+  return "canonical";
+}
+
+/** A result that a newer request on the same channel superseded. UIs treat it as cancellation. */
+class StaleResultError extends Error {
+  constructor(message = "superseded by a newer request") {
+    super(message);
+    this.name = "AbortError";
+    this.code = "stale_result";
+    this.stale = true;
+  }
+}
+
+/**
+ * The Detail strategy: `remote_query.v1` plus `selecto.explorer-metadata` v1.
+ * Profile strategies share this shape so a later `remote_query.explorer.v1`
+ * strategy (features sidecar, explorer-query route) slots in ahead of it:
+ * `accepts(discovery)`, `discover(discovery)` -> context with `binding`,
+ * `describe(context)`, `translate(request, context)`, `run(client, context,
+ * query, options)` and `toResponse(envelope, request, context)`.
+ */
+const detailProfile = Object.freeze({
+  id: "remote_query.v1",
+  accepts({manifest, entry}) { return manifest.profiles.includes("remote_query.v1") && typeof entry.explorer_metadata === "string"; },
+  async discover({client, entry, manifest, canonicalDomain, signal}) {
+    const metadata = assertExplorerMetadata(await client.metadata(entry.explorer_metadata, signal), manifest, entry, canonicalDomain);
+    return {profile: "remote_query.v1", entry, manifest, canonicalDomain, metadata,
+      binding: {fingerprint: metadata.domain.fingerprint, publication: metadata.domain.publication}};
+  },
+  describe(context) { return toExplorerDescriptor(context.metadata); },
+  translate(request, context) { return toCanonicalQuery(request, context.metadata); },
+  run(client, context, query, options) { return client.query(context.manifest, query, options); },
+  toResponse(envelope, request, context) { return toExplorerResult(envelope, request, context.metadata); },
+});
+
+// ---- remote_query.explorer.v1 strategy (harness docs/remote_query_explorer.md 6.6) ----
+
+const explorerOperatorMap = {equals: "eq", not_equals: "ne", greater_than: "gt", greater_than_or_equal: "gte", less_than: "lt", less_than_or_equal: "lte", between: "between", in: "in", not_in: "not_in", contains: "text_contains", starts_with: "starts_with", ends_with: "ends_with", date_shortcut: "date_shortcut", is_null: "is_null", is_not_null: "not_null"};
+const explorerReverseOperators = Object.fromEntries(Object.entries(explorerOperatorMap).map(([spa, op]) => [op, spa]));
+const explorerFunctionLabel = {count: "Count", count_distinct: "Distinct count", sum: "Sum", avg: "Average", min: "Min", max: "Max", true_count: "True count", false_count: "False count", true_percentage: "True percentage"};
+const explorerGroupFormatIds = new Set(["day", "day_hour", "week", "month", "quarter", "year", "month_of_year", "day_of_month", "day_of_week", "hour"]);
+const explorerBucketFormats = {buckets: "numeric", age_buckets: "elapsed_days", custom_buckets: "relative_days", year_buckets: "year"};
+const explorerBucketAggregates = {buckets: "numeric", age_buckets: "elapsed_days"};
+const explorerServiceLabels = [["saved_views", "Saved views"], ["actions", "Actions"], ["canned_pages", "Canned pages"], ["record_editors", "Record editors"], ["row_refresh", "Row refresh"], ["diagnostics", "SQL debug"], ["localization", "Localized descriptors"]];
+
+/**
+ * The SPA field id of a published field: `source.<path>` for root fields and
+ * the path for association fields (`customer.name`, `lines.sku`), the SPA
+ * descriptor convention every transport uses, so saved and shared states
+ * keep resolving when a host moves between the SPA routes, Detail and
+ * explorer.v1. Wire paths are always taken from the features document.
+ */
+function spaFieldId(field) {
+  return field.path.includes(".") ? field.path : `source.${field.path}`;
+}
+function spaFieldType(type) {
+  return type === "string" ? "text" : type === "naive_datetime" || type === "utc_datetime" ? "datetime" : type;
+}
+function explorerAliasFor(text, used) {
+  let base = String(text).replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 56) || "c";
+  if (!/^[A-Za-z_]/.test(base)) base = `c_${base}`.slice(0, 56);
+  let alias = base, n = 1;
+  while (used.has(alias)) alias = `${base}_${++n}`;
+  used.add(alias);
+  return alias;
+}
+
+/**
+ * The SPA bucket text grammar (`bucketRanges`) as a section 5.3 bucket spec:
+ * `a-b`, `a+`, `-b`, `n`, `*\/n` (steps for numeric and year buckets) and, for
+ * relative day buckets, `today`, `yesterday`, `tomorrow`. Labels are the text
+ * of each part. Hosts only ever see the structured form.
+ */
+function parseBucketRanges(text, kind, options = {}) {
+  if (typeof text !== "string" || !text.trim()) refuse("bucketRanges", "bucket ranges are required", "invalid_query");
+  const value = text.trim();
+  const step = /^\*\/([1-9]\d{0,8})$/.exec(value);
+  if (step) {
+    if (options.allowStep === false || !["numeric", "year"].includes(kind)) refuse("bucketRanges", "step buckets apply to numeric and year buckets only", "invalid_query");
+    return {kind, step: Number(step[1])};
+  }
+  const ranges = value.split(",").map((part) => part.trim()).map((part) => {
+    if (kind === "relative_days" && ["today", "yesterday", "tomorrow"].includes(part)) {
+      const day = {today: 0, yesterday: -1, tomorrow: 1}[part];
+      return {min: day, max: day, label: part};
+    }
+    let match;
+    if ((match = /^(\d{1,15})$/.exec(part))) return {min: Number(match[1]), max: Number(match[1]), label: part};
+    if ((match = /^(\d{1,15})-(\d{1,15})$/.exec(part))) {
+      const [min, max] = [Number(match[1]), Number(match[2])];
+      if (min > max) refuse("bucketRanges", `range ${part} is reversed`, "invalid_query");
+      return {min, max, label: part};
+    }
+    if ((match = /^(\d{1,15})\+$/.exec(part))) return {min: Number(match[1]), label: part};
+    if ((match = /^-(\d{1,15})$/.exec(part))) return {max: Number(match[1]), label: part};
+    refuse("bucketRanges", `unrecognized bucket range ${JSON.stringify(part)}`, "invalid_query");
+  });
+  const labels = new Set(ranges.map((range) => range.label));
+  if (labels.size !== ranges.length || labels.has("Other")) refuse("bucketRanges", "bucket labels must be unique and not Other", "invalid_query");
+  if (options.maxBuckets !== undefined && ranges.length > options.maxBuckets) refuse("bucketRanges", `at most ${options.maxBuckets} ranges are allowed`, "invalid_query");
+  return {kind, ranges};
+}
+
+/** Explorer features of the SPA protocol that this explorer.v1 host does not promise. */
+function unsupportedExplorerV1Features(features) {
+  const supports = features.supports;
+  const list = [];
+  const flag = (on, id, label, reason = "not advertised by this host's explorer features") => { if (!on) list.push({id, label, reason}); };
+  flag(supports.aggregate, "view.aggregate", "Aggregate view");
+  flag(supports.graph, "view.graph", "Graph view");
+  flag(supports.grid, "view.aggregate_grid", "Aggregate grid");
+  flag(supports.rollup, "aggregate.rollup", "Rollup subtotals");
+  flag(supports.recursive_filters, "filters.groups", "OR and nested filter groups");
+  flag(supports.nested, "fields.collections", "Nested collection columns");
+  flag(supports.group_formats, "group.formats", "Date group formats");
+  flag(supports.buckets, "group.buckets", "Bucket groups and bucket measures");
+  flag(supports.boolean_aggregates, "aggregate.boolean", "True/false counts and percentages");
+  flag(supports.text_ops, "operator.text", "Text filter operators (contains, starts with, ends with)");
+  flag(supports.date_shortcuts, "operator.date_shortcut", "Date shortcut filters");
+  flag(supports.count_exact, "page.total_rows", "Total row count", "no exact count; paging uses has_more");
+  flag(supports.export.length > 0, "service.export", "Export");
+  list.push({id: "group.text_prefix", label: "Text prefix groups", reason: "not part of remote_query.explorer.v1"});
+  list.push({id: "graph.series_planning", label: "Host-planned graph series and transforms", reason: "series are built in the browser from the aggregate rows"});
+  for (const [id, label] of explorerServiceLabels) if (!Object.hasOwn(features.services ?? {}, id)) list.push({id: `service.${id}`, label, reason: "host service not advertised"});
+  return list;
+}
+
+/** The SPA domain descriptor for an explorer.v1 features document (hook `describe`). */
+function toExplorerV1Descriptor(features) {
+  canonical.assertExplorerFeatures(features);
+  const supports = features.supports;
+  const collections = new Map(features.collections.map((collection) => [collection.id, collection]));
+  const fields = features.fields.filter((field) => field.collection === null || supports.nested).map((field) => {
+    const aggregateFunctions = field.aggregates.filter((name) => name !== "bucket_count" && (supports.boolean_aggregates || !name.startsWith("true_") && name !== "false_count"));
+    if (supports.buckets) for (const [spa, kind] of Object.entries(explorerBucketAggregates)) if (field.buckets.includes(kind)) aggregateFunctions.push(spa);
+    const descriptor = {id: spaFieldId(field), label: field.label, type: spaFieldType(field.type), encoding: field.encoding,
+      selectable: field.selectable, sortable: field.sortable, groupable: field.groupable, aggregatable: aggregateFunctions.length > 0,
+      aggregateFunctions, filterOperators: field.operators.map((op) => explorerReverseOperators[op]).filter(Boolean)};
+    if (field.description) descriptor.metadata = {description: field.description};
+    if (Array.isArray(field.choices)) descriptor.choices = field.choices;
+    if (field.picker_hidden === true) descriptor.pickerHidden = true;
+    if (field.collection !== null) {
+      const collection = collections.get(field.collection);
+      descriptor.relationship = {path: [collection.path], cardinality: "many", collectionId: collection.id, collectionLabel: collection.label, targetSchema: collection.id, field: field.path.slice(collection.path.length + 1)};
+    }
+    return descriptor;
+  });
+  const byPath = new Map(features.fields.map((field) => [field.path, spaFieldId(field)]));
+  const id = (path) => byPath.get(path) ?? path;
+  const views = [];
+  if (supports.detail) views.push({id: "detail", kind: "detail", label: "Detail"});
+  if (supports.aggregate) views.push({id: "aggregate", kind: "aggregate", label: "Aggregate"});
+  if (supports.graph) views.push({id: "graph", kind: "graph", label: "Graph"});
+  const capabilities = views.map((view) => view.id);
+  if (supports.grid) capabilities.push("aggregate_grid");
+  if (supports.export.length) capabilities.push("export");
+  const segments = features.query_library.segments ?? [];
+  if (segments.length) capabilities.push("query_library");
+  const protocolFeatures = ["column_occurrences", "null_handling_auto"];
+  if (features.fields.some((field) => field.operators.includes("not_in"))) protocolFeatures.push("not_in");
+  if (supports.boolean_aggregates) protocolFeatures.push("true_percentage");
+  if (supports.grid) protocolFeatures.push("grid_colorize");
+  if (supports.grid && supports.export.length) protocolFeatures.push("grid_export");
+  if (features.links?.api_console) protocolFeatures.push("api_console");
+  const defaults = features.default ?? {};
+  const descriptor = {
+    schema: "selecto.spa.domain-descriptor/v1", schemaVersion: 1,
+    id: features.domain.id, name: features.label ?? features.domain.id, source: features.label ?? features.domain.id,
+    capabilities, protocolFeatures, fields, views,
+    defaults: {selected: (defaults.select ?? []).filter((path) => typeof path === "string").map(id), orderBy: (defaults.order_by ?? []).map((order) => ({field: id(order.field), direction: order.direction ?? "asc"})),
+      groupBy: (defaults.group_by ?? []).filter((path) => typeof path === "string").map(id), aggregates: [], rollup: defaults.rollup !== false, preventDenormalization: true},
+    release: {schema: "selecto.domain-publication/v1", id: features.domain.publication, version: features.domain.fingerprint, fingerprint: features.domain.fingerprint, status: "published"},
+    metadata: {canonical: {transport: "canonical", profile: canonical.EXPLORER_PROFILE, fingerprint: features.domain.fingerprint, publication: features.domain.publication, revision: features.revision,
+      supports: {...supports, export: [...supports.export]}, limits: {...features.limits}, services: {...features.services}, unsupported: unsupportedExplorerV1Features(features)}},
+  };
+  if (segments.length) descriptor.queryLibrary = {
+    segments: segments.map((segment) => ({id: segment.name, label: segment.label ?? segment.name, parameters: (segment.parameters ?? []).map((parameter) => ({id: parameter.name, label: parameter.label ?? parameter.name, type: parameter.type ?? "string", required: parameter.required === true}))})),
+    views: (features.query_library.views ?? []).map((view) => ({id: view.name, label: view.label ?? view.name, segments: [...(view.segments ?? [])], preset: {selected: descriptor.defaults.selected.slice(), orderBy: []}})),
+  };
+  if (features.links?.api_console) descriptor.artifacts = {apiConsole: features.links.api_console};
+  return descriptor;
+}
+
+function explorerFilterValue(value, field, path) {
+  if (field.type === "integer") {
+    if (Number.isSafeInteger(value)) return value;
+    if (typeof value === "string" && /^-?(0|[1-9]\d*)$/.test(value.trim()) && Number.isSafeInteger(Number(value.trim()))) return Number(value.trim());
+    refuse(path, "expected an integer within the exact JSON number range", "invalid_query");
+  }
+  if (field.type === "decimal") {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && /^-?\d{1,30}(\.\d{1,30})?$/.test(value.trim())) return value.trim();
+    refuse(path, "expected a decimal number", "invalid_query");
+  }
+  if (field.type === "boolean") {
+    if (typeof value === "boolean") return value;
+    if (value === "true" || value === "false") return value === "true";
+    refuse(path, "expected true or false", "invalid_query");
+  }
+  if (typeof value !== "string" || (value === "" && field.type !== "string")) refuse(path, "expected a text value", "invalid_query");
+  if (field.type === "naive_datetime" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return `${value}:00`;
+  return value;
+}
+
+/**
+ * The SPA query request as a section 3 query plus the column plan that maps the
+ * explorer result back onto SPA column ids (hook `translate`). Everything the
+ * features document does not promise is refused here, before any request.
+ */
+function planExplorerV1Query(request, features, options = {}) {
+  // Shape errors in the SPA request are the request's (invalid_query), not
+  // wire errors of the host.
+  try { return planExplorerV1(request, features, options); }
+  catch (error) { throw error instanceof CanonicalWireError ? new ExplorerIntentError(error.path, error.message.replace(/^[^:]*: /, ""), "invalid_query") : error; }
+}
+function planExplorerV1(request, features, options) {
+  keys(request, ["schema", "domainId", "view", "state", "filters", "page", "presentation", "publication", "exportShape"], "request");
+  if (request.schema !== "selecto.spa.query-request/v1") refuse("request.schema", "unknown SPA request version", "invalid_query");
+  if (request.domainId !== features.domain.id) refuse("request.domainId", "does not match publication", "invalid_query");
+  if (request.publication !== undefined) {
+    keys(request.publication, ["fingerprint", "publication"], "request.publication");
+    if (request.publication.fingerprint !== features.domain.fingerprint || (request.publication.publication !== undefined && request.publication.publication !== features.domain.publication)) refuse("request.publication", "publication changed; reload the domain", "stale_domain_fingerprint");
+  }
+  const supports = features.supports, limits = features.limits;
+  const view = request.view;
+  if (!["detail", "aggregate", "graph"].includes(view) || !supports[view]) refuse("request.view", `the ${view} view is not available on this host`);
+  const state = record(request.state, "request.state");
+  keys(state, ["selected", "preventDenormalization", "rowClickAction", "fieldConfigs", "orderBy", "groupBy", "groupConfigs", "rollup", "aggregateGrid", "aggregateGridColorize", "aggregateGridColorScale", "columns", "aggregates", "graph", "queryLibrary"], "request.state");
+  if (state.rowClickAction && state.rowClickAction !== "__default_modal__") refuse("request.state.rowClickAction", "configured row actions are unavailable");
+  const byId = new Map(features.fields.map((field) => [spaFieldId(field), field]));
+  const field = (id, path) => { const value = byId.get(id); if (!value) refuse(path, `unresolved field ${JSON.stringify(id)}`, "invalid_field"); return value; };
+  const query = {select: [], row_format: "arrays"};
+  const columns = [];
+  const used = new Set();
+
+  // Filters: the SPA tree as ANDed nodes; empty groups are dropped (Spa.pm).
+  let leaves = 0;
+  function node(item, depth, path) {
+    if (item && typeof item === "object" && Object.hasOwn(item, "items")) {
+      keys(item, ["conjunction", "items", "id"], path);
+      // SPA nesting depth, before single-member groups collapse (Spa.pm _group).
+      if (depth > limits.max_filter_depth) refuse(path, `filters nest deeper than ${limits.max_filter_depth} groups`, "invalid_query");
+      if (!["and", "or"].includes(item.conjunction ?? "and") || !Array.isArray(item.items)) refuse(path, "invalid filter group", "invalid_query");
+      const parts = item.items.map((child, i) => node(child, depth + 1, `${path}.items.${i}`)).filter(Boolean);
+      if (!parts.length) return null;
+      if (parts.length === 1) return parts[0];
+      if (!supports.recursive_filters) refuse(path, "OR and nested filter groups are not available on this host");
+      return {[(item.conjunction ?? "and") === "or" ? "any" : "all"]: parts};
+    }
+    keys(item, ["id", "field", "operator", "value", "valueTo", "promoted", "groupConfig"], path);
+    if (++leaves > limits.max_filters) refuse("request.filters", `more than ${limits.max_filters} filters`, "invalid_query");
+    const target = field(item.field, `${path}.field`);
+    if (!target.filterable && !(item.groupConfig?.groupFormat)) refuse(`${path}.field`, "field is not filterable", "invalid_field");
+    const config = item.groupConfig && !isEmpty(item.groupConfig) ? record(item.groupConfig, `${path}.groupConfig`) : null;
+    if (config) {
+      // A drilldown on a formatted group: the derived-group leaf (3.3).
+      const extra = Object.keys(config).filter((key) => !["groupFormat", "alias", "format"].includes(key));
+      if (extra.length || !explorerGroupFormatIds.has(config.groupFormat)) refuse(`${path}.groupConfig`, "only date group formats can be drilled into on this profile");
+      if (!["equals", "is_null"].includes(item.operator)) refuse(`${path}.operator`, "a group drilldown compares with equals or is null", "invalid_query");
+      if (item.operator === "is_null") return {field: target.path, format: config.groupFormat, op: "is_null"};
+      if (typeof item.value !== "string") refuse(`${path}.value`, "a formatted group value is text", "invalid_query");
+      return {field: target.path, format: config.groupFormat, op: "eq", value: item.value};
+    }
+    const op = explorerOperatorMap[item.operator];
+    if (!op || !target.operators.includes(op)) refuse(`${path}.operator`, `operator ${item.operator} is not available for ${target.label}`);
+    if (item.valueTo !== undefined && item.valueTo !== null && item.valueTo !== "" && op !== "between") refuse(`${path}.valueTo`, "only between carries an end value", "invalid_query");
+    const leaf = {field: target.path, op};
+    if (op === "between") {
+      leaf.value = explorerFilterValue(item.value, target, `${path}.value`);
+      leaf.end = explorerFilterValue(item.valueTo, target, `${path}.valueTo`);
+    } else if (op === "in" || op === "not_in") {
+      const values = Array.isArray(item.value) ? item.value : typeof item.value === "string" ? item.value.split(",").map((part) => part.trim()).filter(Boolean) : null;
+      if (!values?.length) refuse(`${path}.value`, "a non-empty list is required", "invalid_query");
+      if (values.length > limits.max_filter_values) refuse(`${path}.value`, `at most ${limits.max_filter_values} values`, "invalid_query");
+      leaf.value = values.map((value, i) => explorerFilterValue(value, target, `${path}.value.${i}`));
+    } else if (op === "date_shortcut") {
+      if (!target.date_shortcuts.includes(item.value)) refuse(`${path}.value`, "unknown date shortcut", "invalid_query");
+      leaf.value = item.value;
+    } else if (op !== "is_null" && op !== "not_null") {
+      leaf.value = explorerFilterValue(item.value, target, `${path}.value`);
+    } else if (item.value !== undefined && item.value !== null && item.value !== "") refuse(`${path}.value`, "null test cannot carry a value", "invalid_query");
+    return leaf;
+  }
+  const root = node(record(request.filters, "request.filters"), 0, "request.filters");
+  query.filters = !root ? [] : Object.hasOwn(root, "all") ? root.all : [root];
+
+  if (state.queryLibrary !== undefined && !isEmpty(state.queryLibrary)) {
+    keys(state.queryLibrary, ["view", "segments", "parameters"], "request.state.queryLibrary");
+    const known = new Set((features.query_library.segments ?? []).map((segment) => segment.name));
+    const names = [...new Set([...(state.queryLibrary.segments ?? []), ...((features.query_library.views ?? []).find((item) => item.name === state.queryLibrary.view)?.segments ?? [])])];
+    if (state.queryLibrary.view !== undefined && !(features.query_library.views ?? []).some((item) => item.name === state.queryLibrary.view)) refuse("request.state.queryLibrary.view", "unknown query library view", "invalid_query");
+    names.forEach((name) => { if (!known.has(name)) refuse("request.state.queryLibrary.segments", `unknown segment ${JSON.stringify(name)}`, "invalid_query"); });
+    if (names.length) query.segments = names;
+    if (state.queryLibrary.parameters !== undefined && !isEmpty(state.queryLibrary.parameters)) query.parameters = {...record(state.queryLibrary.parameters, "request.state.queryLibrary.parameters")};
+  }
+  if (request.presentation !== undefined) {
+    keys(request.presentation, ["timezone", "locale"], "request.presentation");
+    if (request.presentation.timezone !== undefined) query.timezone = canonical.assertTimezone(request.presentation.timezone);
+  }
+  keys(request.page, ["number", "size"], "request.page");
+  if (!Number.isSafeInteger(request.page.number) || request.page.number < 1) refuse("request.page.number", "expected a page number of at least 1", "invalid_query");
+  if (!Number.isSafeInteger(request.page.size) || request.page.size < 1) refuse("request.page.size", "expected a page size of at least 1", "invalid_query");
+  const pageLimit = request.page.size, pageOffset = (request.page.number - 1) * request.page.size;
+  const zone = query.timezone ?? "UTC";
+  const instant = (target, path) => { if (target.type === "utc_datetime" && supports.timezones === "utc" && zone !== "UTC") refuse(path, "this host converts instants to UTC only"); };
+
+  let grid = false, rollup = false, groupIds = [], aggregateIds = [];
+  if (view === "detail") {
+    if (state.preventDenormalization === false && features.fields.some((item) => item.collection !== null)) refuse("request.state.preventDenormalization", "denormalized to-many rows are unavailable; collections are nested");
+    if (!Array.isArray(state.selected) || !state.selected.length || new Set(state.selected).size !== state.selected.length) refuse("request.state.selected", "expected unique non-empty fields", "invalid_query");
+    let occurrences = state.selected.map((id) => ({field: id}));
+    if (state.columns !== undefined && !isEmpty(state.columns)) {
+      if (!Array.isArray(state.columns)) refuse("request.state.columns", "expected an array", "invalid_query");
+      const distinct = [...new Set(state.columns.map((column) => record(column, "request.state.columns").field))];
+      if (distinct.length !== state.selected.length || distinct.some((id, i) => id !== state.selected[i])) refuse("request.state.columns", "columns must list the selected fields", "invalid_query");
+      occurrences = state.columns;
+    }
+    const count = new Map();
+    const nested = new Map();
+    for (const occurrence of occurrences) {
+      keys(occurrence, ["field", "alias", "format"], "request.state.columns");
+      const target = field(occurrence.field, "request.state.selected");
+      if (target.collection !== null && !supports.nested) refuse("request.state.selected", "nested collection columns are not available on this host");
+      if (!target.selectable) refuse("request.state.selected", `${target.label} is not selectable`, "invalid_field");
+      const label = typeof occurrence.alias === "string" && occurrence.alias.trim() ? occurrence.alias : target.label;
+      if (target.collection !== null) {
+        let slot = nested.get(target.collection);
+        if (!slot) {
+          const collection = features.collections.find((item) => item.id === target.collection);
+          slot = {children: [], column: {kind: "collection", collection, wire: null, spa: {id: collection.id, label: collection.label, type: "nested", nestedFields: []}}};
+          nested.set(target.collection, slot);
+          query.select.push(slot.children);
+          slot.column.wire = collection.path;
+          columns.push(slot.column);
+        }
+        if (slot.children.includes(target.path)) continue;
+        slot.children.push(target.path);
+        slot.column.spa.nestedFields.push({id: spaFieldId(target), key: spaFieldId(target), label, type: spaFieldType(target.type), encoding: target.encoding, nullable: target.nullable});
+        continue;
+      }
+      const n = (count.get(spaFieldId(target)) ?? 0) + 1;
+      count.set(spaFieldId(target), n);
+      const wire = n === 1 && !used.has(target.path) ? target.path : explorerAliasFor(`${target.path}_${n}`, used);
+      used.add(wire);
+      query.select.push(wire === target.path ? target.path : {field: target.path, alias: wire});
+      const spa = {id: n === 1 ? spaFieldId(target) : `${spaFieldId(target)}~${n}`, label, type: spaFieldType(target.type), encoding: target.encoding};
+      if (typeof occurrence.format === "string") spa.format = occurrence.format;
+      if (n > 1) Object.assign(spa, {field: spaFieldId(target), occurrence: n});
+      columns.push({kind: "field", field: target, wire, spa});
+    }
+    if (!Array.isArray(state.orderBy)) refuse("request.state.orderBy", "expected an array", "invalid_query");
+    query.order_by = state.orderBy.map((order, i) => {
+      keys(order, ["field", "direction"], `request.state.orderBy.${i}`);
+      const target = field(order.field, `request.state.orderBy.${i}.field`);
+      if (!target.sortable) refuse(`request.state.orderBy.${i}.field`, `${target.label} is not sortable`, "invalid_field");
+      return {field: target.path, direction: sortDirection(order, `request.state.orderBy.${i}.direction`)};
+    });
+    query.limit = pageLimit; query.offset = pageOffset;
+    if (supports.count_exact && !options.export) query.count = "exact";
+  } else {
+    const groupBy = state.groupBy ?? [];
+    if (!Array.isArray(groupBy) || new Set(groupBy).size !== groupBy.length) refuse("request.state.groupBy", "expected unique group fields", "invalid_query");
+    if (groupBy.length > limits.max_group_by) refuse("request.state.groupBy", `at most ${limits.max_group_by} groups`, "invalid_query");
+    const aggregates = state.aggregates ?? [];
+    if (!Array.isArray(aggregates)) refuse("request.state.aggregates", "expected an array", "invalid_query");
+    if (!groupBy.length && !aggregates.length) refuse("request.state", "choose a group or an aggregate", "invalid_query");
+    const groupConfigs = state.groupConfigs ?? {};
+    groupIds = groupBy;
+    const groupEntries = groupBy.map((id, i) => {
+      const target = field(id, `request.state.groupBy.${i}`);
+      if (!target.groupable) refuse(`request.state.groupBy.${i}`, `${target.label} cannot be grouped`, "invalid_field");
+      const config = groupConfigs[id] ?? {};
+      const spa = {id, label: typeof config.alias === "string" && config.alias.trim() ? config.alias : target.label, type: spaFieldType(target.type), encoding: target.encoding};
+      if (typeof config.format === "string") spa.format = config.format;
+      const format = config.groupFormat;
+      if (!format) { used.add(target.path); return {entry: target.path, wire: target.path, column: {kind: "group", field: target, wire: target.path, spa}}; }
+      const alias = explorerAliasFor(`${target.path}_${format}`, used);
+      if (explorerGroupFormatIds.has(format)) {
+        if (!supports.group_formats || !target.group_formats.includes(format)) refuse(`request.state.groupConfigs.${id}.groupFormat`, `grouping by ${format} is not available for ${target.label}`);
+        instant(target, `request.state.groupConfigs.${id}`);
+        Object.assign(spa, {type: "text", encoding: "string"}); delete spa.format;
+        return {entry: {field: target.path, alias, format}, wire: alias, column: {kind: "group", field: target, wire: alias, format, spa}};
+      }
+      const kind = explorerBucketFormats[format];
+      if (!kind) refuse(`request.state.groupConfigs.${id}.groupFormat`, `group format ${format} is not part of remote_query.explorer.v1`);
+      if (!supports.buckets || !target.buckets.includes(kind)) refuse(`request.state.groupConfigs.${id}.groupFormat`, `${format} are not available for ${target.label}`);
+      instant(target, `request.state.groupConfigs.${id}`);
+      Object.assign(spa, {type: "text", encoding: "string"}); delete spa.format;
+      return {entry: {field: target.path, alias, buckets: parseBucketRanges(config.bucketRanges, kind, {maxBuckets: limits.max_buckets})}, wire: alias, column: {kind: "group", field: target, wire: alias, bucket: true, spa}};
+    });
+    if (groupEntries.length) query.group_by = groupEntries.map((group) => group.entry);
+    for (const group of groupEntries) { query.select.push(typeof group.entry === "string" ? group.entry : {group: group.wire}); columns.push(group.column); }
+    if (aggregates.length > limits.max_aggregates) refuse("request.state.aggregates", `at most ${limits.max_aggregates} measures`, "invalid_query");
+    const spaIds = new Set(groupBy);
+    for (const [i, item] of aggregates.entries()) {
+      keys(item, ["field", "function", "alias", "format", "ignoreNulls", "bucketRanges"], `request.state.aggregates.${i}`);
+      const target = field(item.field, `request.state.aggregates.${i}.field`);
+      const explicit = typeof item.alias === "string" && item.alias !== "";
+      const id = explicit ? item.alias : `${item.function}_${item.field.replace(/\./g, "_")}`;
+      if (spaIds.has(id) || byId.has(id)) refuse(`request.state.aggregates.${i}.alias`, "duplicate aggregate alias", "invalid_query");
+      spaIds.add(id); aggregateIds.push({id, function: item.function});
+      const bucketKind = explorerBucketAggregates[item.function];
+      if (bucketKind) {
+        if (!supports.buckets || !target.buckets.includes(bucketKind)) refuse(`request.state.aggregates.${i}.function`, `${item.function} are not available for ${target.label}`);
+        instant(target, `request.state.aggregates.${i}`);
+        const spec = parseBucketRanges(item.bucketRanges, bucketKind, {allowStep: false, maxBuckets: limits.max_buckets});
+        const alias = explorerAliasFor(id, used);
+        query.select.push({aggregate: "bucket_count", field: target.path, alias, buckets: spec});
+        const prefix = explicit ? item.alias : target.label;
+        spec.ranges.forEach((range, n) => {
+          const text = item.function === "age_buckets" ? (range.label === "1" ? "1 day" : `${range.label} days`) : range.label;
+          columns.push({kind: "aggregate", wire: `${alias}__bucket_${n + 1}`, spa: {id: `${id}__bucket_${n + 1}`, label: `${prefix}: ${text}`, type: "integer", encoding: "json"}});
+        });
+        continue;
+      }
+      const name = item.function;
+      if (!explorerFunctionLabel[name] || !target.aggregates.includes(name)) refuse(`request.state.aggregates.${i}.function`, `${name} is not available for ${target.label}`);
+      if (name.startsWith("true_") || name === "false_count") { if (!supports.boolean_aggregates) refuse(`request.state.aggregates.${i}.function`, "boolean aggregates are not available on this host"); }
+      const alias = explorerAliasFor(id, used);
+      const selection = {aggregate: name, field: target.path, alias};
+      if (item.ignoreNulls !== undefined && item.ignoreNulls !== false) {
+        if (name !== "sum" || (item.ignoreNulls !== true && item.ignoreNulls !== "auto")) refuse(`request.state.aggregates.${i}.ignoreNulls`, "null handling applies to sums only", "invalid_query");
+        selection.ignore_nulls = "auto";
+      }
+      query.select.push(selection);
+      const spa = {id, label: explicit ? item.alias : `${explorerFunctionLabel[name]} of ${target.label}`, type: ["count", "count_distinct", "true_count", "false_count"].includes(name) ? "integer" : ["avg", "true_percentage"].includes(name) ? "decimal" : spaFieldType(target.type)};
+      if (typeof item.format === "string") spa.format = item.format;
+      columns.push({kind: "aggregate", wire: alias, spa});
+    }
+    if (query.select.length > limits.max_select) refuse("request.state", `at most ${limits.max_select} result columns`, "invalid_query");
+    grid = view === "aggregate" && state.aggregateGrid === true;
+    if (grid) {
+      if (!supports.grid) refuse("request.state.aggregateGrid", "the aggregate grid is not available on this host");
+      if (groupBy.length !== 2 || aggregates.length !== 1 || explorerBucketAggregates[aggregates[0].function]) refuse("request.state.aggregateGrid", "the grid needs two groups and one measure", "invalid_query");
+    }
+    rollup = view === "aggregate" && !grid && groupBy.length > 0 && state.rollup !== false;
+    if (rollup && !supports.rollup) rollup = false;
+    // Sorts name a group or a measure; a rollup keeps group-path order (6.1).
+    const orderBy = Array.isArray(state.orderBy) ? state.orderBy : [];
+    orderBy.forEach((order, i) => sortDirection(order ?? {}, `request.state.orderBy.${i}.direction`));
+    const wireFor = new Map([...columns.filter((column) => column.kind === "group").map((column) => [column.spa.id, column.wire]), ...columns.filter((column) => column.kind === "aggregate").map((column) => [column.spa.id, column.wire])]);
+    query.order_by = rollup ? [] : orderBy.filter((order) => wireFor.has(order?.field)).slice(0, limits.max_orders).map((order) => ({field: wireFor.get(order.field), direction: order.direction === "desc" ? "desc" : "asc"}));
+    if (groupBy.length) {
+      if (rollup) query.rollup = true;
+      if (grid) { query.complete = true; query.limit = Math.min(limits.max_groups, limits.max_limit); query.offset = 0; }
+      else { query.limit = pageLimit; query.offset = pageOffset; if (!rollup && supports.count_exact && !options.export) query.count = "exact"; }
+    } else { query.limit = pageLimit; query.offset = pageOffset; }
+  }
+  if (query.select.length > limits.max_select) refuse("request.state", `at most ${limits.max_select} result columns`, "invalid_query");
+  if (!options.export && query.limit > limits.max_limit) refuse("request.page.size", `at most ${limits.max_limit} rows per page`, "invalid_query");
+  if (!options.export && query.offset > limits.max_offset) refuse("request.page", `pages beyond row ${limits.max_offset} are unavailable`, "invalid_query");
+  if (!query.filters.length) delete query.filters;
+  if (!query.order_by?.length) delete query.order_by;
+  if (options.export) {
+    const shape = request.exportShape ?? "rows";
+    if (!["rows", "grid"].includes(shape)) refuse("request.exportShape", "unknown export shape", "invalid_query");
+    if (shape === "grid" && !grid) refuse("request.exportShape", "the grid shape exports the aggregate grid", "invalid_query");
+    delete query.count; delete query.complete; delete query.limit; delete query.offset;
+    if (shape === "grid") delete query.rollup;
+    query.export = {all_rows: true, shape};
+  } else if (request.exportShape !== undefined) refuse("request.exportShape", "export shapes apply to downloads only", "invalid_query");
+  return {query, columns, view, grid, rollup, groupIds, aggregateIds, page: {number: request.page.number, size: request.page.size}};
+}
+
+/** `translate` for remote_query.explorer.v1: the query object only. */
+function toExplorerV1Query(request, features, options = {}) { return planExplorerV1Query(request, features, options).query; }
+
+function sortDirection(order, path) {
+  const direction = order.direction ?? "asc";
+  if (direction !== "asc" && direction !== "desc") refuse(path, "sort direction must be asc or desc", "invalid_query");
+  return direction;
+}
+
+function explorerGridColor(rows, measure, scale) {
+  const values = rows.map((row) => row[measure]).map((value) => typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN).filter(Number.isFinite);
+  const positive = values.filter((value) => value > 0);
+  return {scale: scale === "log" ? "log" : "linear", measure, minimum: values.length ? Math.min(...values) : null, maximum: values.length ? Math.max(...values) : null, minimumPositive: positive.length ? Math.min(...positive) : null};
+}
+
+/** `toResponse`: the explorer result as a `selecto.spa.query-response/v1` (6.6). */
+function toExplorerV1Response(envelope, request, features) {
+  const plan = planExplorerV1Query(request, features);
+  canonical.assertExplorerResult(envelope, {features, query: plan.query});
+  const data = envelope.data;
+  if (data.columns.length !== plan.columns.length) throw new CanonicalWireError("response.columns", "result columns differ from the requested selection");
+  const byPath = new Map(features.fields.map((field) => [field.path, field]));
+  const spaColumnFor = new Map();
+  const columns = plan.columns.map((column, i) => {
+    const wire = data.columns[i];
+    if (wire.id !== column.wire) throw new CanonicalWireError(`response.columns.${i}`, "column differs from the requested selection");
+    const spa = {...column.spa};
+    if (column.kind !== "collection") {
+      if (!column.bucket && !column.format) spa.type = spaFieldType(wire.type);
+      spa.encoding = wire.encoding;
+    }
+    spaColumnFor.set(wire.id, spa.id);
+    return spa;
+  });
+  const rows = data.rows.map((row) => Object.fromEntries(plan.columns.map((column, i) => {
+    const value = Array.isArray(row) ? row[i] : row[data.columns[i].id];
+    if (column.kind !== "collection") return [columns[i].id, value];
+    const children = data.subtables[data.columns[i].id].columns;
+    return [columns[i].id, value.map((child) => Object.fromEntries(columns[i].nestedFields.map((nestedField, j) => [nestedField.id, Array.isArray(child) ? child[j] : child[children[j]]])))];
+  })));
+  const response = {schema: "selecto.spa.query-response/v1", columns, rows,
+    page: {...plan.page, ...(data.total_count !== undefined ? {totalRows: data.total_count} : {})},
+    metadata: {canonical: {profile: canonical.EXPLORER_PROFILE, fingerprint: features.domain.fingerprint, publication: features.domain.publication, revision: features.revision, hasMore: data.page.has_more, ...(data.complete ? {complete: true} : {})}}};
+  if (Array.isArray(data.row_meta)) response.rowMeta = data.row_meta.map((meta) => ({rollupLevel: meta.level, rollupKind: meta.kind,
+    drilldowns: meta.drilldown === null ? [] : [{columnId: spaColumnFor.get(meta.drilldown.column) ?? meta.drilldown.column,
+      constraints: meta.drilldown.filters.map((leaf) => {
+        const target = byPath.get(leaf.field);
+        if (!target) throw new CanonicalWireError("response.row_meta", "drilldown names an unpublished field");
+        return {field: spaFieldId(target), operator: leaf.op === "is_null" ? "is_null" : "equals", ...(leaf.op === "eq" ? {value: leaf.value} : {}), ...(leaf.format ? {groupConfig: {groupFormat: leaf.format}} : {})};
+      })}]}));
+  if (plan.grid && request.state.aggregateGridColorize === true) response.gridColor = explorerGridColor(rows, columns[2].id, request.state.aggregateGridColorScale);
+  return response;
+}
+
+/**
+ * The `remote_query.explorer.v1` strategy, ahead of `detailProfile`: features
+ * are discovered (GET getExplorerFeatures) and bound to the manifest
+ * fingerprint, the catalog publication and the features revision; every
+ * explorer view runs through POST queryExplorer.
+ */
+const explorerProfile = Object.freeze({
+  id: canonical.EXPLORER_PROFILE,
+  accepts({manifest}) {
+    return manifest.profiles.includes(canonical.EXPLORER_PROFILE) && ["getExplorerFeatures", "queryExplorer"].every((operation) => manifest.routes.some((route) => route.operation_id === operation));
+  },
+  async discover({client, entry, manifest, canonicalDomain, signal}) {
+    const features = await client.explorerFeatures(manifest, signal, entry);
+    return {profile: canonical.EXPLORER_PROFILE, entry, manifest, canonicalDomain, features,
+      binding: {fingerprint: features.domain.fingerprint, publication: features.domain.publication, revision: features.revision}};
+  },
+  describe(context) { return toExplorerV1Descriptor(context.features); },
+  translate(request, context) { return toExplorerV1Query(request, context.features); },
+  run(client, context, query, options) { return client.queryExplorer(context.manifest, context.features, query, options); },
+  toResponse(envelope, request, context) { return toExplorerV1Response(envelope, request, context.features); },
+  async export(client, context, request, format, options) {
+    const query = toExplorerV1Query(request, context.features, {export: true});
+    if (!context.features.supports.export.includes(format)) refuse("export", `${format} export is not available on this host`);
+    return client.exportExplorer(context.manifest, context.features, query, format, options);
+  },
+});
+
+/**
+ * One `SelectoHostAdapter`-shaped object for every framework (Vue, React,
+ * Angular, Svelte and their wrappers). Discovery (catalog -> manifest ->
+ * domain -> profile metadata) is refreshed for every call and never cached
+ * across requests. `getDomain`/`listDomains` bind each domain to the
+ * publication the UI loaded; `execute` refuses drift from that binding (or from
+ * the request's own `publication`) before any query, and the host refuses a
+ * stale fingerprint with 409. With `supersede: "domain"` (single-explorer
+ * pages) a new `execute` aborts the previous in-flight one on the same domain;
+ * an older result that still arrives is suppressed with `StaleResultError`.
+ * Unsupported explorer features are listed on the descriptor at
+ * `metadata.canonical.unsupported`; unsupported intent is refused explicitly.
+ */
+function createCanonicalHostAdapter(options = {}) {
+  const {profiles = [explorerProfile, detailProfile], supersede = false, ...clientOptions} = options;
+  if (!Array.isArray(profiles) || !profiles.length) throw new TypeError("At least one canonical profile strategy is required");
+  if (![false, "domain", "adapter"].includes(supersede)) throw new TypeError("supersede must be false, \"domain\" or \"adapter\"");
+  const client = canonical.createCanonicalClient(clientOptions);
+  const explorer = createExplorerClient(clientOptions);
+  const bindings = new Map();
+  const sequences = new Map();
+  const inflight = new Map();
+
+  async function discover(id, signal) {
+    const catalog = await client.catalog(signal);
+    const entry = catalog.domains.find((domain) => domain.id === id);
+    if (!entry) refuse("domainId", "domain is unavailable in the current publication", "operation_forbidden");
+    const manifest = await client.manifest(entry.manifest, signal);
+    const strategy = profiles.find((profile) => profile.accepts({entry, manifest}));
+    if (!strategy) refuse("domainId", "the host advertises no supported canonical explorer profile", "operation_unsupported");
+    const canonicalDomain = await client.domain(manifest, signal);
+    return {strategy, context: await strategy.discover({client, entry, manifest, canonicalDomain, signal})};
+  }
+  function describe(id, {strategy, context}) {
+    const descriptor = strategy.describe(context);
+    bindings.set(id, {profile: context.profile, ...context.binding});
+    return descriptor;
+  }
+  // The live discovery must match the publication, profile and features
+  // revision the UI loaded; drift is refused before any query (visible re-bind).
+  async function bound(request, signal) {
+    const {strategy, context} = await discover(request.domainId, signal);
+    const loaded = bindings.get(request.domainId);
+    if (loaded && loaded.profile !== context.profile) refuse("request", "the host's explorer profile changed; reload the domain", "stale_domain_fingerprint");
+    if (loaded && loaded.revision !== undefined && loaded.revision !== context.binding.revision) refuse("request", "the host's explorer features changed; reload the domain", "stale_explorer_features");
+    const publication = request.publication ?? (loaded ? {fingerprint: loaded.fingerprint, publication: loaded.publication} : undefined);
+    const effective = publication ? {...request, publication} : request;
+    if (!loaded) bindings.set(request.domainId, {profile: context.profile, ...context.binding});
+    return {strategy, context, effective};
+  }
+  function channel(request, requestOptions) {
+    if (requestOptions.channel !== undefined) return String(requestOptions.channel);
+    return supersede === "adapter" ? "*" : supersede === "domain" ? `domain:${request.domainId}` : null;
+  }
+
+  return {
+    transport: "canonical",
+    profiles: profiles.map((profile) => profile.id),
+    /** The publication identity a domain is bound to, as loaded by the UI. */
+    binding(id) { const value = bindings.get(id); return value ? {...value} : undefined; },
+    async listDomains(requestOptions = {}) {
+      const catalog = await client.catalog(requestOptions.signal);
+      return Promise.all(catalog.domains.map(async (entry) => describe(entry.id, await discover(entry.id, requestOptions.signal))));
+    },
+    async getDomain(id, requestOptions = {}) { return describe(id, await discover(id, requestOptions.signal)); },
+    async execute(request, requestOptions = {}) {
+      const key = channel(request, requestOptions);
+      const sequence = (sequences.get(key) ?? 0) + 1;
+      if (key !== null) {
+        sequences.set(key, sequence);
+        inflight.get(key)?.abort(new StaleResultError());
+      }
+      const controller = new AbortController();
+      const relay = () => controller.abort(requestOptions.signal.reason);
+      if (requestOptions.signal?.aborted) relay();
+      else requestOptions.signal?.addEventListener("abort", relay, {once: true});
+      if (key !== null) inflight.set(key, controller);
+      try {
+        const {strategy, context, effective} = await bound(request, controller.signal);
+        const query = strategy.translate(effective, context);
+        const envelope = await strategy.run(client, context, query, {signal: controller.signal, requestId: requestOptions.requestId});
+        if (key !== null && sequences.get(key) !== sequence) throw new StaleResultError();
+        if (controller.signal.aborted) throw controller.signal.reason ?? new StaleResultError("request cancelled");
+        return strategy.toResponse(envelope, effective, context);
+      } finally {
+        requestOptions.signal?.removeEventListener("abort", relay);
+        if (key !== null && inflight.get(key) === controller) inflight.delete(key);
+      }
+    },
+    /**
+     * Full-result download through the bound profile (explorer.v1 `export`):
+     * `{data: Blob, filename, contentType}`. Profiles without export refuse.
+     */
+    async export(request, format, requestOptions = {}) {
+      const {strategy, context, effective} = await bound(request, requestOptions.signal);
+      if (typeof strategy.export !== "function") refuse("export", "export requires the remote_query.explorer.v1 profile");
+      const result = await strategy.export(client, context, effective, format, {signal: requestOptions.signal, requestId: requestOptions.requestId});
+      return {data: new Blob([result.bytes], {type: result.contentType}), filename: result.filename ?? `${request.domainId}-export.${format}`, contentType: result.contentType};
+    },
+    getRootPredicateContext: explorer.getRootPredicateContext,
+    executeRootPredicateIntent: explorer.executeRootPredicateIntent,
+    getNestedDetailContext: explorer.getNestedDetailContext,
+    executeNestedDetailIntent: explorer.executeNestedDetailIntent,
   };
 }
 
@@ -1199,7 +2194,7 @@ function toNestedDetailExplorerResult(envelope,intent,context) {
   return {schema:"selecto.spa.query-response/v1",columns,rows,page:{number:Math.floor(intent.offset/intent.limit)+1,size:intent.limit},metadata:{canonical:{profile:"canonical_nested_detail.v1",fingerprint:intent.binding.fingerprint,publication:intent.binding.publication,hasMore:envelope.data.page.has_more,nestedContext:canonical.nestedDetailContext(features),completeChildren:true}}};
 }
 
-return {ExplorerIntentError,assertExplorerMetadata,toExplorerDescriptor,toCanonicalQuery,toExplorerResult,createExplorerClient,rootPredicateBinding,assertRootPredicateIntent,toRootPredicateQuery,parseRootPredicateState,encodeRootPredicateState,decodeRootPredicateState,validateRootPredicateFeaturesAndMap,toRootPredicateExplorerResult,flatSnapshotToRequest,nestedDetailBinding,createNestedDetailIntent,assertNestedDetailIntent,toNestedDetailQuery,parseNestedDetailState,encodeNestedDetailState,decodeNestedDetailState,nestedDetailConsoleHref,toNestedDetailExplorerResult};
+return {ExplorerIntentError,assertExplorerMetadata,toExplorerDescriptor,unsupportedExplorerFeatures,toCanonicalQuery,toExplorerResult,createExplorerClient,selectHostTransport,StaleResultError,detailProfile,spaFieldId,parseBucketRanges,unsupportedExplorerV1Features,toExplorerV1Descriptor,planExplorerV1Query,toExplorerV1Query,toExplorerV1Response,explorerProfile,createCanonicalHostAdapter,rootPredicateBinding,assertRootPredicateIntent,toRootPredicateQuery,parseRootPredicateState,encodeRootPredicateState,decodeRootPredicateState,validateRootPredicateFeaturesAndMap,toRootPredicateExplorerResult,flatSnapshotToRequest,nestedDetailBinding,createNestedDetailIntent,assertNestedDetailIntent,toNestedDetailQuery,parseNestedDetailState,encodeNestedDetailState,decodeNestedDetailState,nestedDetailConsoleHref,toNestedDetailExplorerResult};
 })();
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 (function (global) {
