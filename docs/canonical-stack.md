@@ -173,3 +173,14 @@ Go certificates and failed collection attempts remain historical evidence.
 The current peer is Elixir. These native certificates and eight HTTP/Vue checks
 remain separate from formal transport/SPA qualification. See workspace
 `STATUS.md` for the current gaps and exact reports.
+
+## Explorer queries
+
+Add `canonical_explorer => {clock => ..., count_exact => 1, limits => {...}}` to
+serve `remote_query.explorer.v1` from the same base: `GET .../explorer-features`
+and `POST .../explorer-query` (`Selecto::API::Explorer`), advertised in the
+manifest. The POST needs the session's `X-CSRF-Token` and a same-origin request,
+like `POST .../query`. `clock` is the trusted instant "today" is taken from (an
+RFC 3339 string or a callback receiving the controller; the server clock by
+default); `limits` are the profile's host limits, `max_limit` defaulting to the
+explorer's own.

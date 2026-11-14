@@ -78,6 +78,11 @@ has 'result_cache_namespace';
 has [qw(canonical_api_path canonical_authorizer canonical_publication)];
 has canonical_publish_domain => 0;
 has canonical_field_encodings => sub { {} };
+# Opt-in remote_query.explorer.v1 routes (Selecto::API::Explorer) on the
+# canonical base: {clock, count_exact, limits, collection_limit, supports,
+# services, links}. clock is an RFC 3339 instant or a callback returning one
+# (default: the server's current time).
+has 'canonical_explorer';
 has websocket_mode => 'protected';
 has websocket_enabled => 1;
 has websocket_session_options => sub { {} };
@@ -102,6 +107,14 @@ sub new ($class, @args) {
         for my $callback (qw(canonical_authorizer canonical_publication)) {
             die "$callback must be a host callback\n" unless ref($self->$callback) eq 'CODE';
         }
+    }
+    if (defined $self->canonical_explorer) {
+        die "canonical_explorer requires canonical_api_path\n" unless defined $self->canonical_api_path;
+        my $explorer = $self->canonical_explorer;
+        die "canonical_explorer must be an object of explorer host options\n" unless ref($explorer) eq 'HASH';
+        my %allowed = map { ($_ => 1) } qw(clock count_exact limits collection_limit supports services links);
+        my @unknown = sort grep { !$allowed{$_} } keys %$explorer;
+        die "canonical_explorer has unknown options: @unknown\n" if @unknown;
     }
     die "default_limit must be a positive integer\n"
         unless $self->default_limit =~ /\A\d+\z/ && $self->default_limit > 0;
