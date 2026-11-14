@@ -11,12 +11,20 @@ use Selecto;
 use Selecto::Components;
 use Selecto::Components::APIConsole;
 use Selecto::Components::WebSocketPolicy;
+use Selecto::API::Spa;
 
 has workspace => sub { path(__FILE__)->to_abs->dirname->dirname->dirname->dirname->to_string };
 has database_url => sub { $ENV{SELECTO_PERL_STACK_POSTGRES_URL} };
 # An independently authored seed of the same shape may replace the protocol corpus copy.
 has seed_path => sub ($self) { $ENV{SELECTO_PERL_STACK_SEED}
     // path($self->workspace, 'selecto-protocol/spec/fixtures/detail/pilot-seed.v1.json')->to_string };
+# SELECTO_PERL_STACK_EXPLORER=1 also serves remote_query.explorer.v1 on the
+# canonical base (canonical_explorer; SELECTO_PERL_STACK_CLOCK pins "today").
+# SELECTO_PERL_STACK_SPA_ROUTES=1 mounts the selecto.spa/v1 routes
+# (Selecto::API::Spa) at /api/spa as a reference: the same SPA request runs on
+# both transports against the same session-scoped engine.
+has explorer => sub { ($ENV{SELECTO_PERL_STACK_EXPLORER} // '') eq '1' };
+has spa_routes => sub { ($ENV{SELECTO_PERL_STACK_SPA_ROUTES} // '') eq '1' };
 
 sub connection ($self) {
     my $url = Mojo::URL->new($self->database_url // '');
@@ -135,8 +143,12 @@ sub startup ($self) {
             canonical_publication => sub ($c, $engine) {
                 return 'publication:' . hmac_sha256_hex(encode_json([$c->session('actor'), $engine->domain->fingerprint]), $self->secrets->[0]);
             }, canonical_field_encodings => {large_integer => 'decimal-string'},
+            ($self->explorer ? (canonical_explorer => {count_exact => 1,
+                links => {api_console => '/api/items/console'},
+                ($ENV{SELECTO_PERL_STACK_CLOCK} ? (clock => $ENV{SELECTO_PERL_STACK_CLOCK}) : ())}) : ()),
         }},
     });
+    $self->_spa_routes($protected, $factory) if $self->spa_routes;
     $protected->get('/api/items/console')->to(cb => sub ($c) {
         return $c->redirect_to('/session')
             unless ($c->session('actor') // '') =~ /\A(?:alpha|beta)\z/;
@@ -167,6 +179,33 @@ sub startup ($self) {
             return $c->render(data => $html, format => 'html');
         }
         return $c->reply->file($asset);
+    });
+}
+
+# The SPA protocol over the same session-scoped engine. Descriptor field ids
+# are the domain paths, as the explorer features document publishes them.
+sub _spa_routes ($self, $routes, $factory) {
+    my @compare = qw(equals not_equals greater_than greater_than_or_equal less_than less_than_or_equal between in not_in is_null is_not_null);
+    my %operators = (boolean => [qw(equals not_equals is_null is_not_null)], string => [@compare, qw(contains starts_with ends_with)]);
+    my %aggregates = (integer => [qw(count count_distinct sum avg min max)], decimal => [qw(count count_distinct sum avg min max)],
+        boolean => [qw(count count_distinct)]);
+    my $descriptor = {schema => 'selecto.spa.domain-descriptor/v1', schemaVersion => 1, id => 'items',
+        name => 'Perl PostgreSQL Items', source => 'canonical_stack_items',
+        capabilities => [qw(detail aggregate graph aggregate_grid)],
+        views => [map { +{id => $_, kind => $_, label => ucfirst} } qw(detail aggregate graph)],
+        fields => [map { my $f = $_; +{id => $f->{id}, label => $f->{id}, type => $f->{type} eq 'string' ? 'text' : $f->{type},
+            groupable => Mojo::JSON::true, aggregatable => Mojo::JSON::true,
+            aggregateFunctions => $aggregates{$f->{type}} // [qw(count count_distinct min max)],
+            filterOperators => $operators{$f->{type}} // \@compare} } @{$self->seed->{fields}}]};
+    my $spa = Selecto::API::Spa->new(base_path => '/api/spa', domains => [{descriptor => $descriptor,
+        domain => $self->domain, engine => sub ($c) { $factory->($c) }}]);
+    $routes->any([qw(GET POST)] => '/api/spa/*spa_path')->to(cb => sub ($c) {
+        return $c->render(status => 403, json => {error => 'Request refused'})
+            if $c->req->method eq 'POST' && !(Selecto::Components::WebSocketPolicy::valid_csrf($c, $c->req->headers->header('X-CSRF-Token'))
+                && Selecto::Components::WebSocketPolicy::same_origin($c));
+        my $response = $spa->request({method => $c->req->method, path => $c->req->url->path->to_string,
+            body => $c->req->json, context => $c});
+        $c->render(status => $response->{status}, json => $response->{json});
     });
 }
 
