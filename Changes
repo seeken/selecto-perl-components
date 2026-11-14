@@ -1,6 +1,10 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - canonical_explorer (explorer host options) adds remote_query.explorer.v1
+      to the canonical base: GET explorer-features and POST explorer-query over
+      Selecto::API::Explorer, advertised in the manifest, with the query
+      route's X-CSRF-Token and same-origin rules on the POST.
     - WebSocket runs keep their field catalogs. A message's request copy of the
       configuration started with an empty catalog cache, so every run rebuilt
       and relocalized the catalogs (80 ms a run on lhf Load Detail). The
