@@ -38,6 +38,13 @@ authentication; the example refuses production mode. Override the listener
 with `SELECTO_PERL_STACK_HTTP_PORT`. Vue assets are served from its sibling
 `dist/perl-postgres` directory; rebuild after changing the Vue source.
 
+The same session also serves the React, Angular, Svelte and Solid explorers at
+`/react`, `/angular`, `/svelte` and `/solid`, each from its sibling
+`selecto_spa_<name>/dist/perl-postgres` (`npm run build:canonical` in that
+repository). All of them use the shared canonical adapter against `/api/items`
+and receive the CSRF meta tag. `selecto_web_ui_conformance`'s `test:canonical`
+drives each of them against this stack.
+
 The Explorer's **API** button opens `/api/items/console` in a new tab and
 hands over its current Detail query. You can also open that path directly
 after signing in. It serves the shared packaged API Console with the current

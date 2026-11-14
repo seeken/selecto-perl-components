@@ -143,17 +143,21 @@ sub startup ($self) {
         $c->render(data => Selecto::Components::APIConsole->page(
             base_path => '/api/items', title => 'Perl PostgreSQL API Console',
             csrf_token => $c->csrf_token,
-            page_shell => {body_start_html => '<nav><a href="/explore/items">Explorer</a> | <a href="/vue">Vue</a> | <a href="/react">React</a></nav>'},
+            page_shell => {body_start_html => '<nav><a href="/explore/items">Explorer</a> | ' . join(' | ', map { qq{<a href="/$_">\u$_</a>} } qw(vue react angular svelte solid)) . '</nav>'},
         ), format => 'html');
     });
     $protected->get('/')->to(cb => sub ($c) { $c->redirect_to('/explore/items') });
-    $protected->get('/vue')->to(cb => sub ($c) { $c->redirect_to('/spa-vue/index.html') });
-    $protected->get('/react')->to(cb => sub ($c) { $c->redirect_to('/spa-react/index.html') });
-    # Both SPA builds use the shared canonical adapter against /api/items.
-    my %spa = ('spa-vue' => 'selecto_spa_vue/dist/perl-postgres', 'spa-react' => 'selecto_spa_react/dist/perl-postgres');
+    # Every SPA build uses the shared canonical adapter against /api/items
+    # (selecto_spa_<name>: npm run build:canonical, dist/perl-postgres).
+    my @spa = qw(vue react angular svelte solid);
+    my %spa = map { ("spa-$_" => "selecto_spa_$_/dist/perl-postgres") } @spa;
+    for my $name (@spa) {
+        $protected->get("/$name")->to(cb => sub ($c) { $c->redirect_to("/spa-$name/index.html") });
+    }
     $protected->get('/:spa/*file' => [spa => [sort keys %spa]])->to(cb => sub ($c) {
         my $file = $c->stash('file');
-        return $c->reply->not_found unless $file =~ /\A(?:index\.html|assets\/[A-Za-z0-9_.-]+\.(?:js|css))\z/;
+        # Vite builds emit assets/; Angular emits hashed bundles beside index.html.
+        return $c->reply->not_found unless $file =~ /\A(?:index\.html|(?:assets\/)?[A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:js|css))\z/;
         my $asset = path($self->workspace, $spa{$c->stash('spa')}, $file);
         return $c->reply->not_found unless -f $asset;
         if ($file eq 'index.html') {
