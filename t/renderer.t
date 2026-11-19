@@ -618,6 +618,31 @@ is_deeply [map { $_->{value} } @{$sparse_year_grid->{columns}}],
     [qw(2024 2025 2026)],
     'a sparse grid sorts all collected years instead of retaining encounter order';
 
+my $sparse_state_built = {
+    aggregate_grid => 1,
+    columns => [
+        {key => 'origin_state', field => 'origin.state', label => 'Origin', type => 'string'},
+        {key => 'destination_state', field => 'destination.state', label => 'Destination', type => 'string'},
+        {key => 'count', label => 'Rows', type => 'integer', measure => 1},
+    ],
+};
+my $sparse_state_records = [map {
+    {origin_state => $_->[0], destination_state => $_->[1], count => 1, __selecto_rollup_level => 2}
+} ['AB', 'ON'], ['AB', 'QC'], ['AL', 'FL'], ['AL', 'GA'], ['AR', 'TX'], ['AR', undef], ['MI', 'al']];
+my $sparse_state_grid = Selecto::Components::Explorer::_aggregate_grid_data(
+    $grid_state, $sparse_state_built, $sparse_state_records,
+    [map { [[], []] } @$sparse_state_records],
+);
+is_deeply [map { $_->{value} } @{$sparse_state_grid->{columns}}],
+    ['al', 'FL', 'GA', 'ON', 'QC', 'TX', undef],
+    'a sparse grid sorts plain text column values, ignoring case, with empty last';
+is_deeply [map { $_->{value} } @{$sparse_state_grid->{rows}}], [qw(AB AL AR MI)],
+    'plain text rows keep the same order as the columns';
+is_deeply [map { $_->{value} } @{Selecto::Components::Explorer::_sort_grid_entries([
+    {value => 10}, {value => 9}, {value => 100},
+], {type => 'integer'})}], [9, 10, 100],
+    'plain numeric grid axes sort numerically, not as text';
+
 my $grid_result = {
     %$grid_built,
     grid_data => $grid_data,

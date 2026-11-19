@@ -718,13 +718,23 @@ sub _sort_grid_entries ($entries, $column) {
     my $lexical = $format =~ /\A(?:iso8601|rfc3339_millis|day|time|day_hour|week|iso_week|iso_week_date|month|quarter)\z/
         || ((!length($format) || $format eq 'default') && $type =~ /(?:date|time)/i);
     my $timezone = $format eq 'timezone_offset' ? 1 : 0;
-    return [@$entries] unless $has_sort_key || $numeric || $lexical || $timezone;
+    # Plain values sort too: a column axis is collected across rows, so its
+    # encounter order is not the query's order.
+    my $plain = !($has_sort_key || $numeric || $lexical || $timezone);
+    $numeric ||= $plain && $type =~ /\A(?:integer|bigint|smallint|numeric|decimal|float|double|real|money)/i;
     return [sort {
         !defined($a->{value}) <=> !defined($b->{value})
-            || _compare_grid_entry_values(
-                $a, $b, $has_sort_key, $numeric, $timezone,
-            )
+            || ($plain && !$numeric
+                ? _compare_grid_entry_text($a->{value}, $b->{value})
+                : _compare_grid_entry_values(
+                    $a, $b, $has_sort_key, $numeric, $timezone,
+                ))
     } @$entries];
+}
+
+sub _compare_grid_entry_text ($left, $right) {
+    return 0 unless defined($left) && defined($right);
+    return fc("$left") cmp fc("$right") || "$left" cmp "$right";
 }
 
 sub _compare_grid_entry_values ($left, $right, $has_sort_key, $numeric, $timezone) {
