@@ -2853,6 +2853,61 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     return Object.keys(value).filter((key) => !allowed.includes(key));
   }
 
+  const GOVERNED_WRITE_PROPERTIES = [
+    "operation", "assignments", "filters", "expected_count", "returning",
+    "conflict_target", "upsert_update_fields", "relationships",
+  ];
+
+  function resolveSchemaRef(openapi, schema, depth = 0) {
+    if (!isPlainObject(schema)) return {};
+    if (depth > 8 || typeof schema.$ref !== "string") return schema;
+    const match = /^#\/components\/schemas\/([^/]+)$/.exec(schema.$ref);
+    const schemas = openapi && openapi.components && openapi.components.schemas;
+    return match && isPlainObject(schemas) ? resolveSchemaRef(openapi, schemas[match[1]], depth + 1) : {};
+  }
+
+  // Host-declared write properties beyond the governed contract, such as an
+  // order's vehicles: the write request schema's other top-level properties.
+  // x-selecto-operations limits one to some operations; x-selecto-examples
+  // gives an example value per operation.
+  function writeExtensionSpecs(openapi, path) {
+    const operation = openapi && openapi.paths && openapi.paths[path] && openapi.paths[path].post;
+    const content = operation && operation.requestBody && operation.requestBody.content;
+    const body = resolveSchemaRef(openapi, content && content["application/json"]
+      ? content["application/json"].schema : {$ref: "#/components/schemas/SelectoWrite"});
+    const properties = isPlainObject(body.properties) ? body.properties : {};
+    return Object.keys(properties).filter((name) => !GOVERNED_WRITE_PROPERTIES.includes(name)
+      && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)).map((name) => {
+      const schema = resolveSchemaRef(openapi, properties[name]);
+      const operations = schema["x-selecto-operations"];
+      return {
+        name, schema,
+        boolean: schema.type === "boolean",
+        description: typeof schema.description === "string" ? schema.description : "",
+        operations: Array.isArray(operations) ? operations.filter((value) => typeof value === "string") : null,
+      };
+    });
+  }
+
+  function schemaExample(openapi, schema, operation, depth = 0) {
+    const resolved = resolveSchemaRef(openapi, schema);
+    const examples = resolved["x-selecto-examples"];
+    if (isPlainObject(examples) && examples[operation] !== undefined) return JSON.parse(JSON.stringify(examples[operation]));
+    if (resolved.example !== undefined) return JSON.parse(JSON.stringify(resolved.example));
+    if (depth > 6) return null;
+    const alternatives = resolved.oneOf || resolved.anyOf;
+    if (Array.isArray(alternatives) && alternatives.length) return schemaExample(openapi, alternatives[0], operation, depth + 1);
+    if (resolved.type === "array") return [schemaExample(openapi, resolved.items, operation, depth + 1)];
+    if (resolved.type === "object" || isPlainObject(resolved.properties)) {
+      return Object.fromEntries(Object.keys(resolved.properties || {}).map((name) => [
+        name, schemaExample(openapi, resolved.properties[name], operation, depth + 1),
+      ]));
+    }
+    if (resolved.type === "boolean") return true;
+    if (resolved.type === "integer" || resolved.type === "number") return 0;
+    return resolved.type === "string" ? "" : null;
+  }
+
   function operationHeaderSpecs(openapi, path, method = "post") {
     const pathSpec = openapi && openapi.paths && openapi.paths[path];
     if (!isPlainObject(pathSpec)) return [];
@@ -2964,7 +3019,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       this.writeState = {
         operation: "", assignments: {}, included: {}, filters: [],
         expectedCount: 1, returning: [], conflictTarget: [], updateFields: [],
-        relationships: {}, headers: {},
+        relationships: {}, headers: {}, extensions: {},
         rawDirty: false,
         response: null,
       };
@@ -3577,6 +3632,17 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       return operationHeaderSpecs(this.openapi, this.writePath);
     }
 
+    writeExtensions(operation = this.writeState.operation) {
+      if (!["insert", "update", "upsert"].includes(operation)) return [];
+      return writeExtensionSpecs(this.openapi, this.writePath)
+        .filter((spec) => !spec.operations || spec.operations.includes(operation));
+    }
+
+    writeExtensionExample(spec, operation = this.writeState.operation) {
+      if (spec.boolean) return "true";
+      return JSON.stringify(schemaExample(this.openapi, spec.schema, operation), null, 2);
+    }
+
     writeFieldsForOperation(fields, fieldContract, operation) {
       const permission = ["insert", "upsert"].includes(operation) ? "insertable" : "updatable";
       return fields.filter((field) => {
@@ -3746,6 +3812,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       }
 
       this.renderWriteRelationships(container);
+      this.renderWriteExtensions(container);
 
       if (["update", "delete"].includes(this.writeState.operation)) {
         const filterHeading = element("div", "sac-card-heading sac-mutation-subheading");
@@ -3888,6 +3955,41 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         appendOptions(returning, this.relationshipFields(spec).map((field) => ({value: field.name, label: field.label})), "");
         Array.from(returning.options).forEach((option) => (option.selected = (state.returning || []).includes(option.value)));
         fieldset.append(returningLabel, returning);
+        container.append(fieldset);
+      });
+    }
+
+    renderWriteExtensions(container) {
+      const specs = this.writeExtensions();
+      if (!specs.length) return;
+      container.append(element("span", "sac-label", "Additional request properties"));
+      const extensions = this.writeState.extensions || (this.writeState.extensions = {});
+      specs.forEach((spec) => {
+        const state = extensions[spec.name] || (extensions[spec.name] = {included: false, text: ""});
+        const fieldset = element("fieldset", "sac-write-relationship sac-write-extension");
+        const legend = element("legend", "");
+        const include = element("input", "");
+        include.type = "checkbox";
+        include.checked = Boolean(state.included);
+        include.dataset.sacWriteExtensionInclude = spec.name;
+        legend.append(include, document.createTextNode(" "), element("code", "", spec.name));
+        fieldset.append(legend);
+        if (spec.description) fieldset.append(element("p", "sac-help", spec.description));
+        let input;
+        if (spec.boolean) {
+          input = element("select", "");
+          appendOptions(input, [{value: "true", label: "true"}, {value: "false", label: "false"}], state.text || "true");
+        } else {
+          input = element("textarea", "sac-request-editor");
+          input.spellcheck = false;
+          input.rows = Math.min(14, Math.max(4, String(state.text).split("\n").length + 1));
+          input.value = state.text;
+          input.placeholder = this.writeExtensionExample(spec);
+        }
+        input.setAttribute("aria-label", spec.name);
+        input.disabled = !state.included;
+        input.dataset.sacWriteExtension = spec.name;
+        fieldset.append(input);
         container.append(fieldset);
       });
     }
@@ -5302,14 +5404,23 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     writeStateFromPayload(payload) {
       if (!isPlainObject(payload)) throw new Error("The write request must be a JSON object.");
-      const unknown = onlyKeys(payload, [
-        "operation", "assignments", "filters", "expected_count", "returning",
-        "conflict_target", "upsert_update_fields", "relationships",
-      ]);
-      if (unknown.length) throw new Error(`Unsupported write properties: ${unknown.join(", ")}.`);
       if (typeof payload.operation !== "string" || !this.writeOperations().includes(payload.operation)) {
         throw new Error("Choose an enabled write operation.");
       }
+      const extensionSpecs = this.writeExtensions(payload.operation);
+      const unknown = onlyKeys(payload, [
+        ...GOVERNED_WRITE_PROPERTIES, ...extensionSpecs.map((spec) => spec.name),
+      ]);
+      if (unknown.length) throw new Error(`Unsupported write properties: ${unknown.join(", ")}.`);
+      const extensions = {};
+      extensionSpecs.forEach((spec) => {
+        if (payload[spec.name] === undefined) return;
+        if (spec.boolean && typeof payload[spec.name] !== "boolean") throw new Error(`${spec.name} must be true or false.`);
+        extensions[spec.name] = {
+          included: true,
+          text: spec.boolean ? String(payload[spec.name]) : JSON.stringify(payload[spec.name], null, 2),
+        };
+      });
 
       const operation = payload.operation;
       const fields = new Map(this.rootFields().map((field) => [field.name, field]));
@@ -5336,6 +5447,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         updateFields: [],
         relationships: {},
         headers: Object.assign({}, this.writeState.headers || {}),
+        extensions,
         rawDirty: false,
         response: null,
       };
@@ -5558,6 +5670,19 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         if (state.returning && state.returning.length) related[name].returning = state.returning.slice();
       });
       if (Object.keys(related).length) payload.relationships = related;
+      this.writeExtensions(operation).forEach((spec) => {
+        const state = (this.writeState.extensions || {})[spec.name];
+        if (!state || !state.included) return;
+        if (spec.boolean) {
+          payload[spec.name] = state.text !== "false";
+          return;
+        }
+        try {
+          payload[spec.name] = JSON.parse(state.text);
+        } catch (error) {
+          errors.push(`${spec.name} must be valid JSON.`);
+        }
+      });
       return {payload, errors};
     }
 
@@ -6015,6 +6140,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         this.writeState.operation = target.value;
         this.writeState.assignments = {};
         this.writeState.included = {};
+        this.writeState.extensions = {};
         this.writeState.conflictTarget = [];
         this.writeState.updateFields = [];
         if (["update", "delete"].includes(target.value) && !this.writeState.filters.length) {
@@ -6042,6 +6168,18 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (target.matches("[data-sac-write-include]")) {
         this.writeState.included[target.dataset.sacWriteInclude] = target.checked;
         return this.mutationFormChanged("write", true);
+      }
+      if (target.matches("[data-sac-write-extension-include]")) {
+        const name = target.dataset.sacWriteExtensionInclude;
+        const state = this.writeState.extensions[name];
+        const spec = this.writeExtensions().find((candidate) => candidate.name === name);
+        state.included = target.checked;
+        if (state.included && !state.text && spec) state.text = this.writeExtensionExample(spec);
+        return this.mutationFormChanged("write", true);
+      }
+      if (target.matches("[data-sac-write-extension]")) {
+        this.writeState.extensions[target.dataset.sacWriteExtension].text = target.value;
+        return this.mutationFormChanged("write", false);
       }
       if (target.matches("[data-sac-write-returning]")) {
         this.writeState.returning = Array.from(target.selectedOptions).map((option) => option.value);
@@ -6152,6 +6290,10 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       }
       if (target.matches("[data-sac-write-header]")) {
         this.writeState.headers[target.dataset.sacWriteHeader] = target.value;
+        return this.mutationFormChanged("write", false);
+      }
+      if (target.matches("[data-sac-write-extension]")) {
+        this.writeState.extensions[target.dataset.sacWriteExtension].text = target.value;
         return this.mutationFormChanged("write", false);
       }
       if (target.matches("[data-sac-write-relationship-field]")) {
@@ -6722,6 +6864,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     fieldRoleAllowed,
     initialFilterOperator,
     operationHeaderSpecs,
+    writeExtensionSpecs,
+    schemaExample,
     downloadFilename,
     initialSurfaceTab,
     pathWithDownloadFilename,
