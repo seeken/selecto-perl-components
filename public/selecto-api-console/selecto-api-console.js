@@ -2858,18 +2858,25 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     "conflict_target", "upsert_update_fields", "relationships",
   ];
 
+  // A $ref's sibling keywords (OpenAPI 3.1), such as a property's own
+  // description or x-selecto-examples, take precedence over its target's.
   function resolveSchemaRef(openapi, schema, depth = 0) {
     if (!isPlainObject(schema)) return {};
     if (depth > 8 || typeof schema.$ref !== "string") return schema;
     const match = /^#\/components\/schemas\/([^/]+)$/.exec(schema.$ref);
     const schemas = openapi && openapi.components && openapi.components.schemas;
-    return match && isPlainObject(schemas) ? resolveSchemaRef(openapi, schemas[match[1]], depth + 1) : {};
+    const target = match && isPlainObject(schemas) ? resolveSchemaRef(openapi, schemas[match[1]], depth + 1) : {};
+    const siblings = Object.assign({}, schema);
+    delete siblings.$ref;
+    return Object.assign({}, target, siblings);
   }
 
   // Host-declared write properties beyond the governed contract, such as an
   // order's vehicles: the write request schema's other top-level properties.
   // x-selecto-operations limits one to some operations; x-selecto-examples
-  // gives an example value per operation.
+  // gives an example value per operation, x-selecto-example-choices
+  // labelled examples of its alternative forms, and x-selecto-replaces the
+  // root fields it is given instead of (an origin for orig_id).
   function writeExtensionSpecs(openapi, path) {
     const operation = openapi && openapi.paths && openapi.paths[path] && openapi.paths[path].post;
     const content = operation && operation.requestBody && operation.requestBody.content;
@@ -2880,11 +2887,16 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)).map((name) => {
       const schema = resolveSchemaRef(openapi, properties[name]);
       const operations = schema["x-selecto-operations"];
+      const choices = schema["x-selecto-example-choices"];
+      const replaces = schema["x-selecto-replaces"];
       return {
         name, schema,
         boolean: schema.type === "boolean",
         description: typeof schema.description === "string" ? schema.description : "",
         operations: Array.isArray(operations) ? operations.filter((value) => typeof value === "string") : null,
+        choices: Array.isArray(choices) ? choices.filter((choice) => isPlainObject(choice)
+          && typeof choice.label === "string" && choice.label && choice.value !== undefined) : [],
+        replaces: Array.isArray(replaces) ? replaces.filter((value) => typeof value === "string") : [],
       };
     });
   }
@@ -3638,6 +3650,46 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         .filter((spec) => !spec.operations || spec.operations.includes(operation));
     }
 
+    // Required root fields that host properties can be given instead of
+    // (orig_id, origin_key or origin): field name to those properties.
+    writeAlternatives(operation = this.writeState.operation) {
+      const fieldContract = this.domain && this.domain.writes && this.domain.writes.fields || {};
+      const alternatives = new Map();
+      this.writeExtensions(operation).forEach((spec) => spec.replaces.forEach((name) => {
+        if (!writeFieldRequired(fieldContract[name], operation)) return;
+        if (!alternatives.has(name)) alternatives.set(name, []);
+        alternatives.get(name).push(spec);
+      }));
+      return alternatives;
+    }
+
+    // The form chosen for a field with alternatives: the field itself unless
+    // one of its properties is included.
+    writeAlternativeChoice(name, specs) {
+      const extensions = this.writeState.extensions || {};
+      const chosen = specs.find((spec) => extensions[spec.name] && extensions[spec.name].included);
+      return chosen ? chosen.name : name;
+    }
+
+    chooseWriteAlternative(name, choice) {
+      const specs = this.writeAlternatives().get(name) || [];
+      const extensions = this.writeState.extensions || (this.writeState.extensions = {});
+      this.writeState.included[name] = choice === name;
+      specs.forEach((spec) => {
+        const state = extensions[spec.name] || (extensions[spec.name] = {included: false, text: ""});
+        state.included = spec.name === choice;
+        if (state.included && !state.text) state.text = this.writeExtensionExample(spec);
+      });
+    }
+
+    chooseWriteExtensionExample(name, index) {
+      const spec = this.writeExtensions().find((candidate) => candidate.name === name);
+      const choice = spec && spec.choices[Number(index)];
+      if (!choice || index === "") return;
+      const extensions = this.writeState.extensions || (this.writeState.extensions = {});
+      extensions[name] = {included: true, text: JSON.stringify(choice.value, null, 2)};
+    }
+
     writeExtensionExample(spec, operation = this.writeState.operation) {
       if (spec.boolean) return "true";
       return JSON.stringify(schemaExample(this.openapi, spec.schema, operation), null, 2);
@@ -3784,7 +3836,12 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (this.writeState.operation !== "delete") {
         container.append(element("span", "sac-label", "Assignments"));
         const list = element("div", "sac-mutation-fields");
+        const alternatives = this.writeAlternatives();
         writable.forEach((field) => {
+          if (alternatives.has(field.name)) {
+            list.append(this.writeAlternativesControl(field, alternatives.get(field.name)));
+            return;
+          }
           const rule = fieldContract[field.name];
           const required = writeFieldRequired(rule, this.writeState.operation);
           if (required) this.writeState.included[field.name] = true;
@@ -3959,8 +4016,50 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       });
     }
 
+    // One required field and the properties it can be given as, with a
+    // picker for which form the request uses.
+    writeAlternativesControl(field, specs) {
+      const choice = this.writeAlternativeChoice(field.name, specs);
+      if (choice === field.name) this.writeState.included[field.name] = true;
+      const title = field.label.replace(/\s+id$/i, "") || field.label;
+      const fieldset = element("fieldset", "sac-write-relationship sac-write-alternatives");
+      fieldset.append(element("legend", "", `${title} *`));
+      fieldset.append(element("small", "sac-required-field",
+        `One of these is required for ${this.writeState.operation}`));
+      const picker = element("div", "sac-write-alternative-picker");
+      picker.setAttribute("role", "radiogroup");
+      picker.setAttribute("aria-label", `${title}: give one of`);
+      [field.name].concat(specs.map((spec) => spec.name)).forEach((name) => {
+        const option = element("label", "");
+        const radio = element("input", "");
+        radio.type = "radio";
+        radio.name = `sac-write-alternative-${field.name}`;
+        radio.value = name;
+        radio.checked = name === choice;
+        radio.dataset.sacWriteAlternative = field.name;
+        option.append(radio, element("code", "", name));
+        picker.append(option);
+      });
+      fieldset.append(picker);
+      if (choice === field.name) {
+        const row = element("label", "sac-mutation-field");
+        const copy = element("span", "");
+        copy.append(element("strong", "", field.label), element("code", "", field.name));
+        row.append(copy, this.writeValueControl(field, this.writeState.assignments[field.name], {
+          dataset: {sacWriteField: field.name}, required: true,
+        }));
+        fieldset.append(row);
+      } else {
+        const spec = specs.find((candidate) => candidate.name === choice);
+        fieldset.append(...this.writeExtensionControls(spec, this.writeState.extensions[spec.name]));
+      }
+      return fieldset;
+    }
+
     renderWriteExtensions(container) {
-      const specs = this.writeExtensions();
+      const grouped = new Set([].concat(...Array.from(this.writeAlternatives().values()))
+        .map((spec) => spec.name));
+      const specs = this.writeExtensions().filter((spec) => !grouped.has(spec.name));
       if (!specs.length) return;
       container.append(element("span", "sac-label", "Additional request properties"));
       const extensions = this.writeState.extensions || (this.writeState.extensions = {});
@@ -3973,25 +4072,38 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         include.checked = Boolean(state.included);
         include.dataset.sacWriteExtensionInclude = spec.name;
         legend.append(include, document.createTextNode(" "), element("code", "", spec.name));
-        fieldset.append(legend);
-        if (spec.description) fieldset.append(element("p", "sac-help", spec.description));
-        let input;
-        if (spec.boolean) {
-          input = element("select", "");
-          appendOptions(input, [{value: "true", label: "true"}, {value: "false", label: "false"}], state.text || "true");
-        } else {
-          input = element("textarea", "sac-request-editor");
-          input.spellcheck = false;
-          input.rows = Math.min(14, Math.max(4, String(state.text).split("\n").length + 1));
-          input.value = state.text;
-          input.placeholder = this.writeExtensionExample(spec);
-        }
-        input.setAttribute("aria-label", spec.name);
-        input.disabled = !state.included;
-        input.dataset.sacWriteExtension = spec.name;
-        fieldset.append(input);
+        fieldset.append(legend, ...this.writeExtensionControls(spec, state));
         container.append(fieldset);
       });
+    }
+
+    // A write property's description, example picker and value control.
+    writeExtensionControls(spec, state) {
+      const controls = [];
+      if (spec.description) controls.push(element("p", "sac-help", spec.description));
+      let input;
+      if (spec.boolean) {
+        input = element("select", "");
+        appendOptions(input, [{value: "true", label: "true"}, {value: "false", label: "false"}], state.text || "true");
+      } else {
+        input = element("textarea", "sac-request-editor");
+        input.spellcheck = false;
+        input.rows = Math.min(14, Math.max(4, String(state.text).split("\n").length + 1));
+        input.value = state.text;
+        input.placeholder = this.writeExtensionExample(spec);
+      }
+      input.setAttribute("aria-label", spec.name);
+      input.disabled = !state.included;
+      input.dataset.sacWriteExtension = spec.name;
+      if (spec.choices.length && !spec.boolean) {
+        const choice = element("select", "");
+        choice.setAttribute("aria-label", `${spec.name} example`);
+        choice.dataset.sacWriteExtensionChoice = spec.name;
+        appendOptions(choice, spec.choices.map((item, index) => ({value: String(index), label: item.label})), "", "Fill with an example…");
+        controls.push(choice);
+      }
+      controls.push(input);
+      return controls;
     }
 
     actionInputControl(spec, value, dataset) {
@@ -5559,17 +5671,35 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       const permission = ["insert", "upsert"].includes(operation) ? "insertable" : "updatable";
       if (operation !== "delete") {
         payload.assignments = {};
+        // Fields an included host property is given instead of (origin for
+        // orig_id): not required, and left out while blank.
+        const replacedBy = new Map();
+        this.writeExtensions(operation).forEach((spec) => {
+          const state = (this.writeState.extensions || {})[spec.name];
+          if (state && state.included) spec.replaces.forEach((name) => replacedBy.set(name, spec.name));
+        });
+        const alternatives = this.writeAlternatives(operation);
         this.rootFields().forEach((field) => {
           const rule = contract.fields && contract.fields[field.name];
+          if (replacedBy.has(field.name)) return;
           if (writeFieldRequired(rule, operation) && writeRequiredValueMissing(
             this.writeState.included[field.name], this.writeState.assignments[field.name],
           )) {
-            errors.push(`${field.label} (${field.name}) is required for ${operation}.`);
+            const names = [field.name].concat((alternatives.get(field.name) || []).map((spec) => spec.name));
+            errors.push(names.length > 1
+              ? `${field.label} (${field.name}) is required for ${operation}: give one of ${names.join(", ")}.`
+              : `${field.label} (${field.name}) is required for ${operation}.`);
           }
         });
         Object.keys(this.writeState.included).filter((name) => this.writeState.included[name]).forEach((name) => {
           const field = fields.get(name);
           const rule = contract.fields && contract.fields[name];
+          if (replacedBy.has(name)) {
+            if (!writeRequiredValueMissing(true, this.writeState.assignments[name])) {
+              errors.push(`Give ${name} or ${replacedBy.get(name)}, not both.`);
+            }
+            return;
+          }
           if (!field || !rule || !rule[permission]) {
             errors.push(`${name} is not writable for ${operation}.`);
             return;
@@ -6167,6 +6297,14 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       }
       if (target.matches("[data-sac-write-include]")) {
         this.writeState.included[target.dataset.sacWriteInclude] = target.checked;
+        return this.mutationFormChanged("write", true);
+      }
+      if (target.matches("[data-sac-write-alternative]")) {
+        this.chooseWriteAlternative(target.dataset.sacWriteAlternative, target.value);
+        return this.mutationFormChanged("write", true);
+      }
+      if (target.matches("[data-sac-write-extension-choice]")) {
+        this.chooseWriteExtensionExample(target.dataset.sacWriteExtensionChoice, target.value);
         return this.mutationFormChanged("write", true);
       }
       if (target.matches("[data-sac-write-extension-include]")) {

@@ -527,6 +527,12 @@ code, pre, textarea.sac-request-editor {
 }
 .sac-write-relationship legend { padding: 0 .35rem; font-weight: 700; }
 .sac-write-relationship legend input { width: auto; min-height: 0; }
+.sac-write-alternatives { grid-column: 1 / -1; display: grid; gap: .5rem; }
+.sac-write-alternatives .sac-required-field { margin-top: 0; }
+.sac-write-alternatives .sac-mutation-field { grid-template-columns: minmax(8rem, .8fr) minmax(10rem, 1fr); }
+.sac-write-alternative-picker { display: flex; flex-wrap: wrap; gap: .35rem .9rem; }
+.sac-write-alternative-picker label { display: inline-flex; align-items: center; gap: .3rem; cursor: pointer; }
+.sac-card .sac-write-alternative-picker input[type="radio"] { width: auto; min-height: 0; margin: 0; }
 .sac-mutation-subheading { margin-top: 1.25rem; margin-bottom: .5rem; }
 .sac-write-filter { display: grid; grid-template-columns: 1fr .65fr 1fr auto; gap: .35rem; }
 .sac-write-filter .sac-icon-button { width: 2.55rem; height: 2.55rem; }
