@@ -721,7 +721,9 @@ sub _sort_grid_entries ($entries, $column) {
     # Plain values sort too: a column axis is collected across rows, so its
     # encounter order is not the query's order.
     my $plain = !($has_sort_key || $numeric || $lexical || $timezone);
-    $numeric ||= $plain && $type =~ /\A(?:integer|bigint|smallint|numeric|decimal|float|double|real|money)/i;
+    # PostgreSQL money arrives formatted for its locale (such as $1,234.00),
+    # not as a number, so it sorts as text like any other plain value.
+    $numeric ||= $plain && $type =~ /\A(?:integer|bigint|smallint|numeric|decimal|float|double|real)/i;
     return [sort {
         !defined($a->{value}) <=> !defined($b->{value})
             || ($plain && !$numeric
@@ -734,7 +736,9 @@ sub _sort_grid_entries ($entries, $column) {
 
 sub _compare_grid_entry_text ($left, $right) {
     return 0 unless defined($left) && defined($right);
-    return fc("$left") cmp fc("$right") || "$left" cmp "$right";
+    # Empty text goes last, beside missing values.
+    return !length("$left") <=> !length("$right")
+        || fc("$left") cmp fc("$right") || "$left" cmp "$right";
 }
 
 sub _compare_grid_entry_values ($left, $right, $has_sort_key, $numeric, $timezone) {

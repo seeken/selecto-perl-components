@@ -628,13 +628,13 @@ my $sparse_state_built = {
 };
 my $sparse_state_records = [map {
     {origin_state => $_->[0], destination_state => $_->[1], count => 1, __selecto_rollup_level => 2}
-} ['AB', 'ON'], ['AB', 'QC'], ['AL', 'FL'], ['AL', 'GA'], ['AR', 'TX'], ['AR', undef], ['MI', 'al']];
+} ['AB', 'ON'], ['AB', 'QC'], ['AL', 'FL'], ['AL', 'GA'], ['AR', 'TX'], ['AR', undef], ['MI', 'al'], ['MI', '']];
 my $sparse_state_grid = Selecto::Components::Explorer::_aggregate_grid_data(
     $grid_state, $sparse_state_built, $sparse_state_records,
     [map { [[], []] } @$sparse_state_records],
 );
 is_deeply [map { $_->{value} } @{$sparse_state_grid->{columns}}],
-    ['al', 'FL', 'GA', 'ON', 'QC', 'TX', undef],
+    ['al', 'FL', 'GA', 'ON', 'QC', 'TX', '', undef],
     'a sparse grid sorts plain text column values, ignoring case, with empty last';
 is_deeply [map { $_->{value} } @{$sparse_state_grid->{rows}}], [qw(AB AL AR MI)],
     'plain text rows keep the same order as the columns';
@@ -642,6 +642,10 @@ is_deeply [map { $_->{value} } @{Selecto::Components::Explorer::_sort_grid_entri
     {value => 10}, {value => 9}, {value => 100},
 ], {type => 'integer'})}], [9, 10, 100],
     'plain numeric grid axes sort numerically, not as text';
+is_deeply [map { $_->{value} } @{Selecto::Components::Explorer::_sort_grid_entries([
+    {value => '$999.00'}, {value => '$1,234.00'}, {value => '$999.00'}, {value => '-$5.00'},
+], {type => 'money'})}], ['$1,234.00', '$999.00', '$999.00', '-$5.00'],
+    'locale-formatted money axes sort consistently as text';
 
 my $grid_result = {
     %$grid_built,
