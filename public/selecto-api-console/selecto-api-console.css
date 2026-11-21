@@ -654,3 +654,10 @@ code, pre, textarea.sac-request-editor {
 .sac-nested-schema { margin-top: .4rem; font-weight: normal; }
 .sac-table-wrap .sac-nested-scalar { white-space: pre-wrap; }
 .sac-table-wrap .sac-nested-header, .sac-table-wrap .sac-nested-schema th, .sac-table-wrap .sac-nested-results th { text-transform: none; }
+
+/* Aggregate results: subtotal and total rows, and the groups they leave out. */
+.sac-subtotal-row td { font-weight: 600; }
+.sac-total-row td { font-weight: 700; border-top: 2px solid currentColor; }
+.sac-rolled-up { font-style: italic; opacity: .7; }
+.sac-aggregate-sets { display: flex; flex-wrap: wrap; gap: .4rem 1rem; margin: .5rem 0; }
+.sac-aggregate-sets label { display: inline-flex; align-items: center; gap: .35rem; }

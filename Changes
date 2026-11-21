@@ -1,6 +1,10 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - API Console: an Aggregates query profile on hosts that enable
+      canonical_explorer. It builds grouped aggregate queries from the
+      explorer features document, with rollup, cube and grouping-set
+      subtotals, and marks subtotal and total rows in the result table.
     - The aggregate grid shows a Total column, a Total row and a grand total
       on adapters with the cube capability. The grid query then groups with
       CUBE instead of ROLLUP; the totals are the database's aggregates, not

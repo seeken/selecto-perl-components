@@ -2971,6 +2971,37 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       && typeof link.href === "string" && /^\/(?![\/\\])/.test(link.href));
   }
 
+  const AGGREGATE_FUNCTIONS = ["count", "count_distinct", "sum", "avg", "min", "max", "true_count", "false_count", "true_percentage"];
+  const AGGREGATE_LABELS = {count: "Count", count_distinct: "Distinct count", sum: "Sum", avg: "Average", min: "Minimum", max: "Maximum",
+    true_count: "True count", false_count: "False count", true_percentage: "True percentage"};
+
+  // A selecto.explorer-features v1 document that offers grouped aggregates.
+  function usableAggregateFeatures(document) {
+    return isPlainObject(document) && document.format === "selecto.explorer-features" && document.format_version === 1
+      && document.profile === "remote_query.explorer.v1" && isPlainObject(document.domain)
+      && typeof document.domain.fingerprint === "string" && typeof document.revision === "string"
+      && Array.isArray(document.fields) && isPlainObject(document.supports) && document.supports.aggregate === true;
+  }
+
+  // Every combination of `count` group positions, most detailed first, ending with the grand total ([]).
+  function aggregateSetChoices(count) {
+    const sets = [];
+    for (let mask = (1 << count) - 1; mask >= 0; mask--) {
+      const set = [];
+      for (let position = 0; position < count; position++) if (mask & (1 << (count - 1 - position))) set.push(position);
+      sets.push(set);
+    }
+    return sets.sort((left, right) => right.length - left.length);
+  }
+
+  // Whether a result row holds the group shown in `column`. A rollup row holds
+  // its first `level` groups; cube and grouping-set rows name theirs.
+  function aggregateRowHolds(meta, column, columns) {
+    if (Array.isArray(meta.groups)) return meta.groups.includes(column.id);
+    const position = columns.filter((candidate) => candidate.role === "group").findIndex((candidate) => candidate.id === column.id);
+    return position >= 0 && position < meta.level;
+  }
+
   class APIConsole {
     constructor(root) {
       this.root = root;
@@ -3090,6 +3121,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
             } catch (error) { this.nestedAvailabilityError = error.message; this.nestedAvailabilityRefusal = this.nestedDiscoveryFailure(error); }
           }
         }
+        await this.discoverAggregates();
         this.resourceDateFormats = discovery.resourceDateFormats || {values: [], defaultValue: ""};
         this.state.responseFormat = this.queryResponseFormats[0].id;
         this.state.responseFilename = suggestedDownloadFilename(
@@ -3353,7 +3385,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
                 </div>
                 <div class="sac-import-message" data-sac-import-message hidden></div>
                 ${this.remoteMode ? `<div class="sac-root-controls">
-                  <label>Query profile<select aria-label="Query profile" data-sac-root-mode><option value="flat">Flat Detail (v1)</option><option value="root" ${this.rootPredicateContext ? "" : "disabled"}>Recursive root predicates (v2)</option><option value="nested" ${this.nestedDetailContext ? "" : "disabled"}>Complete nested Detail (v1)</option></select></label>
+                  <label>Query profile<select aria-label="Query profile" data-sac-root-mode><option value="flat">Flat Detail (v1)</option><option value="root" ${this.rootPredicateContext ? "" : "disabled"}>Recursive root predicates (v2)</option><option value="nested" ${this.nestedDetailContext ? "" : "disabled"}>Complete nested Detail (v1)</option><option value="aggregate" ${this.aggregateFeatures ? "" : "disabled"}>Aggregates (explorer v1)</option></select></label>
                   <p data-sac-root-availability>${this.rootPredicateContext ? "Recursive root predicates available; opt in explicitly." : "Recursive root predicates unavailable on this publication."}</p>
                   <p data-sac-nested-availability></p>
                   <details><summary>Root predicate state</summary><label>Root predicate state<textarea aria-label="Root predicate state" data-sac-root-state spellcheck="false"></textarea></label>
@@ -3366,6 +3398,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
                   </details>
                 </div>` : ""}
                 <section class="sac-nested-builder" data-sac-nested-builder hidden></section>
+                <section class="sac-nested-builder sac-aggregate-builder" data-sac-aggregate-builder hidden></section>
                 <textarea class="sac-request-editor" spellcheck="false" aria-label="Query request" data-sac-request></textarea>
                 <div class="sac-run-row"><p>All fields and identifiers are validated against the published domain.</p><button type="button" class="sac-button" data-sac-cancel-query hidden>Cancel query</button><button type="button" class="sac-button sac-primary" data-sac-run><span data-sac-run-label>Run query</span></button></div>
               </section>
@@ -4939,13 +4972,18 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       const method = this.root.querySelector("[data-sac-query-method-badge]"); if (method && nested) method.textContent = "POST";
       const builder = this.root.querySelector(".sac-builder"); if (builder) builder.hidden = this.queryProfile !== "flat";
       const panel = this.root.querySelector("[data-sac-nested-builder]"); if (panel) panel.hidden = !nested;
-      const actions = this.root.querySelector("[data-sac-post-editor-actions]"); if (actions) actions.hidden = this.queryProfile === "root";
+      const aggregate = this.root.querySelector("[data-sac-aggregate-builder]"); if (aggregate) aggregate.hidden = this.queryProfile !== "aggregate";
+      const actions = this.root.querySelector("[data-sac-post-editor-actions]"); if (actions) actions.hidden = this.queryProfile === "root" || this.queryProfile === "aggregate";
       if (nested) this.renderNestedBuilder();
     }
 
     async selectQueryProfile(value, fresh = false) {
-      if (!["flat", "root", "nested"].includes(value)) throw new Error("Unknown query profile.");
+      if (!["flat", "root", "nested", "aggregate"].includes(value)) throw new Error("Unknown query profile.");
       this.retainProfileDraft();
+      if (this.queryProfile === "aggregate" && value !== "aggregate") {
+        // An incomplete aggregate draft disables Run; other profiles decide for themselves.
+        const run = this.root.querySelector("[data-sac-run]"); if (run) run.disabled = false;
+      }
       if (fresh) delete this.profileDrafts[value];
       if (fresh && value === "nested") this.nestedInitialError = null;
       this.cancelQuery();
@@ -4976,6 +5014,17 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
           this.updateCurl(); return;
         }
         return this.selectRootMode("root");
+      }
+      if (value === "aggregate") {
+        if (!this.aggregateFeatures) throw new Error("Aggregates are unavailable on this publication.");
+        if (!this.aggregateState || fresh) this.aggregateState = this.newAggregateState();
+        this.state.rawDirty = Boolean(saved?.rawDirty);
+        this.renderAggregateBuilder();
+        if (saved?.rawDirty) this.root.querySelector("[data-sac-request]").value = saved.raw;
+        else this.syncAggregateRequest();
+        const edited = this.root.querySelector("[data-sac-edited]"); if (edited) edited.hidden = !this.state.rawDirty;
+        this.setImportMessage("Aggregate queries use the explorer profile of this publication.", "success");
+        this.updateCurl(); return;
       }
       if (saved) {
         this.root.querySelector("[data-sac-request]").value = saved.raw;
@@ -5297,6 +5346,10 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     }
 
     syncRequest(force) {
+      if (this.queryProfile === "aggregate") {
+        if (!this.state.rawDirty || force) this.syncAggregateRequest();
+        return;
+      }
       if (this.queryProfile === "nested") {
         if (this.state.rawDirty && !force) return;
         try { this.syncNestedRequest(); }
@@ -5351,6 +5404,12 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     }
 
     updateCurl() {
+      if (this.queryProfile === "aggregate") {
+        const editor = this.root.querySelector("[data-sac-request]");
+        const target = this.root.querySelector("[data-sac-curl]");
+        if (target) target.textContent = this.curlCommand(this.aggregateQueryPath, editor ? editor.value : "");
+        return;
+      }
       if (this.queryProfile !== "nested" && this.state.queryMethod === "get" && this.resourcePath) {
         const model = this.buildResourceRequest();
         const target = this.root.querySelector("[data-sac-curl]");
@@ -6160,6 +6219,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     }
 
     onClick(event) {
+      const aggregateAction = event.target.closest("[data-sac-aggregate-action]");
+      if (aggregateAction) return this.aggregateAction(aggregateAction);
       const nestedAction = event.target.closest("[data-sac-nested-action]");
       if (nestedAction) return this.nestedAction(nestedAction);
       if (event.target.closest("[data-sac-nested-new]")) {
@@ -6261,6 +6322,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     onChange(event) {
       const target = event.target;
+      if (target.matches("[data-sac-aggregate-control]")) return this.aggregateControl(target);
       if (target.matches("[data-sac-nested-control]")) return this.nestedControl(target);
       if (target.matches("[data-sac-query-method]")) {
         this.setQueryMethod(target.value);
@@ -6417,6 +6479,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     onInput(event) {
       const target = event.target;
+      if (target.matches("[data-sac-aggregate-control]") && target.tagName === "INPUT" && target.type !== "checkbox") return this.aggregateControl(target);
       if (target.matches("[data-sac-nested-control]") && target.tagName === "INPUT") return this.nestedControl(target);
       if (target.matches("[data-sac-resource-id]")) {
         this.state.resourceId = target.value;
@@ -6574,6 +6637,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     }
 
     async run() {
+      if (this.queryProfile === "aggregate") return this.runAggregate();
       if (this.queryProfile !== "nested" && this.state.queryMethod === "get" && this.resourcePath) {
         return this.runResource();
       }
@@ -6728,6 +6792,268 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         button.classList.remove("is-running");
         this.root.querySelector("[data-sac-run-label]").textContent = "Run query";
         if (cancel) cancel.hidden = true;
+      }
+    }
+
+    // ---- Aggregates: grouped queries over the publication's explorer profile ----
+
+    async discoverAggregates() {
+      const routes = Array.isArray(this.manifest?.routes) ? this.manifest.routes : [];
+      const features = routes.find((route) => route.operation_id === "getExplorerFeatures" && route.method === "GET");
+      const query = routes.find((route) => route.operation_id === "queryExplorer" && route.method === "POST");
+      const sameOrigin = (path) => typeof path === "string" && path.startsWith(`${this.base}/`) && !path.includes("//") && !path.includes("..");
+      if (!features || !query || !sameOrigin(features.path) || !sameOrigin(query.path)) return;
+      try {
+        const document = await this.fetchJSON(features.path);
+        if (!usableAggregateFeatures(document)) return;
+        this.aggregateFeatures = document;
+        this.aggregateQueryPath = query.path;
+      } catch (_error) {
+        // The publication offers no aggregates to this caller; the profile stays disabled.
+      }
+    }
+
+    newAggregateState() {
+      const limits = this.aggregateFeatures.limits || {};
+      return {groupBy: [], aggregates: [{fn: "count", field: "", alias: "count"}], grouping: "none", sets: [],
+        limit: Math.min(100, limits.max_limit || 100), offset: 0};
+    }
+
+    aggregateGroupFields() {
+      return this.aggregateFeatures.fields.filter((field) => field.groupable && !field.collection);
+    }
+
+    aggregateMeasureFields(fn) {
+      return this.aggregateFeatures.fields.filter((field) => !field.collection && Array.isArray(field.aggregates) && field.aggregates.includes(fn));
+    }
+
+    aggregateFunctions() {
+      const offered = new Set(["count"]);
+      this.aggregateFeatures.fields.forEach((field) => (field.aggregates || []).forEach((fn) => offered.add(fn)));
+      offered.delete("bucket_count");
+      return AGGREGATE_FUNCTIONS.filter((fn) => offered.has(fn));
+    }
+
+    aggregateGroupingModes() {
+      const supports = this.aggregateFeatures.supports || {};
+      return [{value: "none", label: "No subtotals"},
+        ...(supports.rollup ? [{value: "rollup", label: "Rollup: subtotals down the group order"}] : []),
+        ...(supports.cube ? [{value: "cube", label: "Cube: subtotals for every combination"}] : []),
+        ...(supports.grouping_sets ? [{value: "sets", label: "Grouping sets: choose the combinations"}] : [])];
+    }
+
+    // The explorer-query envelope for the current aggregate draft, or the reasons it cannot be sent.
+    buildAggregateRequest() {
+      const state = this.aggregateState, features = this.aggregateFeatures, limits = features.limits || {};
+      const errors = [];
+      const groupable = new Map(this.aggregateGroupFields().map((field) => [field.id, field]));
+      const groups = state.groupBy.filter((id) => groupable.has(id));
+      if (new Set(groups).size !== groups.length) errors.push("A field can be grouped only once.");
+      if (limits.max_group_by && groups.length > limits.max_group_by) errors.push(`At most ${limits.max_group_by} groups are allowed.`);
+      const aliases = new Set(groups);
+      const select = groups.slice();
+      state.aggregates.forEach((aggregate, index) => {
+        const label = `Aggregate ${index + 1}`;
+        const alias = String(aggregate.alias || "").trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) errors.push(`${label} needs a name of letters, digits and underscores.`);
+        else if (aliases.has(alias)) errors.push(`${label} repeats the name ${alias}.`);
+        aliases.add(alias);
+        if (aggregate.fn !== "count" && !aggregate.field) errors.push(`${label} needs a field.`);
+        if (aggregate.field && !this.aggregateMeasureFields(aggregate.fn).some((field) => field.id === aggregate.field)) {
+          errors.push(`${label}: ${aggregate.fn} is not offered for ${aggregate.field}.`);
+        }
+        select.push({aggregate: aggregate.fn, ...(aggregate.field ? {field: aggregate.field} : {}), alias});
+      });
+      if (!state.aggregates.length) errors.push("Add at least one aggregate.");
+      if (limits.max_aggregates && state.aggregates.length > limits.max_aggregates) errors.push(`At most ${limits.max_aggregates} aggregates are allowed.`);
+      const query = {select};
+      if (groups.length) query.group_by = groups;
+      if (state.grouping !== "none") {
+        if (!groups.length) errors.push("Subtotals need at least one group.");
+        else if (state.grouping === "rollup") query.rollup = true;
+        else if (state.grouping === "cube") query.cube = true;
+        else {
+          const sets = aggregateSetChoices(groups.length).filter((set) => state.sets.includes(set.join(",")));
+          const used = new Set(sets.flat());
+          if (!sets.length) errors.push("Choose at least one grouping set.");
+          else if (used.size !== groups.length) errors.push("Every group must appear in a chosen grouping set.");
+          query.grouping_sets = sets;
+        }
+      }
+      const limit = Number(state.limit), offset = Number(state.offset);
+      if (!Number.isInteger(limit) || limit < 1 || (limits.max_limit && limit > limits.max_limit)) errors.push(`Limit must be 1 to ${limits.max_limit || "the host maximum"}.`);
+      if (!Number.isInteger(offset) || offset < 0 || (limits.max_offset !== undefined && offset > limits.max_offset)) errors.push("Offset is out of range.");
+      if (groups.length) { query.limit = limit; if (offset) query.offset = offset; }
+      return {errors, request: {format: "selecto.explorer-query", format_version: 1,
+        domain: {fingerprint: features.domain.fingerprint}, features: {revision: features.revision}, query}};
+    }
+
+    syncAggregateRequest() {
+      const model = this.buildAggregateRequest();
+      const editor = this.root.querySelector("[data-sac-request]");
+      if (editor) { editor.readOnly = false; editor.value = JSON.stringify(model.request, null, 2); }
+      this.state.rawDirty = false;
+      const edited = this.root.querySelector("[data-sac-edited]"); if (edited) edited.hidden = true;
+      const run = this.root.querySelector("[data-sac-run]"); if (run) run.disabled = model.errors.length > 0;
+      this.setImportMessage(model.errors.join(" "), model.errors.length ? "error" : "");
+      this.updateCurl();
+      return model;
+    }
+
+    aggregateChanged(mutator) {
+      mutator(this.aggregateState);
+      this.cancelQuery(); this.state.response = null; this.clearQueryResult();
+      this.renderAggregateBuilder();
+      this.syncAggregateRequest();
+    }
+
+    renderAggregateBuilder() {
+      const target = this.root.querySelector("[data-sac-aggregate-builder]");
+      if (!target || !this.aggregateFeatures || !this.aggregateState) return;
+      target.replaceChildren();
+      const state = this.aggregateState;
+      const button = (text, action, index) => {
+        const node = element("button", "sac-text-button", text); node.type = "button";
+        node.dataset.sacAggregateAction = action; if (index !== undefined) node.dataset.index = String(index);
+        return node;
+      };
+      const selector = (label, name, values, selected, index) => {
+        const wrapper = element("label", "", label), select = element("select", "");
+        select.setAttribute("aria-label", label); select.dataset.sacAggregateControl = name;
+        if (index !== undefined) select.dataset.index = String(index);
+        appendOptions(select, values, selected); wrapper.append(select); return wrapper;
+      };
+      const input = (label, name, value, type, index) => {
+        const wrapper = element("label", "", label), node = element("input", "");
+        node.type = type; node.value = String(value); node.setAttribute("aria-label", label);
+        node.dataset.sacAggregateControl = name; if (index !== undefined) node.dataset.index = String(index);
+        wrapper.append(node); return wrapper;
+      };
+      target.append(element("h2", "", "Aggregates"), element("p", "sac-help", "Group rows and summarise them. Subtotals come from the database, one grouped query for each combination."));
+      const groupFields = this.aggregateGroupFields();
+      const labelOf = new Map(groupFields.map((field) => [field.id, field.label]));
+      target.append(element("h3", "", "Group by"), selector("Add group", "add-group",
+        [{value: "", label: "Choose a field"}, ...groupFields.filter((field) => !state.groupBy.includes(field.id)).map((field) => ({value: field.id, label: field.label}))], ""));
+      const groups = element("ol", "sac-nested-selected");
+      state.groupBy.forEach((id, index) => {
+        const row = element("li", "", labelOf.get(id) || id);
+        row.append(button("Up", "group-up", index), button("Down", "group-down", index), button("Remove", "group-remove", index));
+        groups.append(row);
+      });
+      target.append(groups);
+      target.append(element("h3", "", "Aggregates"), button("Add aggregate", "aggregate-add"));
+      const functions = this.aggregateFunctions().map((fn) => ({value: fn, label: AGGREGATE_LABELS[fn] || fn}));
+      state.aggregates.forEach((aggregate, index) => {
+        const row = element("div", "sac-nested-filter");
+        const fields = this.aggregateMeasureFields(aggregate.fn).map((field) => ({value: field.id, label: field.label}));
+        row.append(selector("Function", "aggregate-fn", functions, aggregate.fn, index),
+          selector("Field", "aggregate-field", [{value: "", label: aggregate.fn === "count" ? "All rows" : "Choose a field"}, ...fields], aggregate.field, index),
+          input("Name", "aggregate-alias", aggregate.alias, "text", index), button("Remove", "aggregate-remove", index));
+        target.append(row);
+      });
+      target.append(element("h3", "", "Subtotals"), selector("Subtotal rows", "grouping", this.aggregateGroupingModes(), state.grouping));
+      if (state.grouping === "sets" && state.groupBy.length) {
+        const list = element("div", "sac-aggregate-sets");
+        aggregateSetChoices(state.groupBy.length).forEach((set) => {
+          const key = set.join(","), wrapper = element("label", "sac-check"), box = element("input", "");
+          box.type = "checkbox"; box.checked = state.sets.includes(key);
+          box.dataset.sacAggregateControl = "set"; box.dataset.set = key;
+          wrapper.append(box, element("span", "", set.length ? set.map((position) => labelOf.get(state.groupBy[position]) || state.groupBy[position]).join(" + ") : "Grand total"));
+          list.append(wrapper);
+        });
+        target.append(list);
+      }
+      const paging = element("div", "sac-inline-controls");
+      paging.append(input("Limit", "limit", state.limit, "number"), input("Offset", "offset", state.offset, "number"));
+      target.append(paging);
+    }
+
+    aggregateControl(target) {
+      const name = target.dataset.sacAggregateControl, index = Number(target.dataset.index);
+      if (name === "aggregate-alias" || name === "limit" || name === "offset") {
+        // Typing must not rebuild the control being typed into.
+        if (name === "aggregate-alias") this.aggregateState.aggregates[index].alias = target.value;
+        else this.aggregateState[name] = target.value === "" ? "" : Number(target.value);
+        this.cancelQuery(); this.state.response = null; this.clearQueryResult();
+        return this.syncAggregateRequest();
+      }
+      this.aggregateChanged((state) => {
+        if (name === "add-group" && target.value) { state.groupBy.push(target.value); state.sets = []; }
+        else if (name === "aggregate-fn") {
+          const aggregate = state.aggregates[index]; aggregate.fn = target.value;
+          if (!this.aggregateMeasureFields(aggregate.fn).some((field) => field.id === aggregate.field)) aggregate.field = "";
+        }
+        else if (name === "aggregate-field") state.aggregates[index].field = target.value;
+        else if (name === "grouping") { state.grouping = target.value; if (target.value !== "sets") state.sets = []; }
+        else if (name === "set") {
+          const key = target.dataset.set;
+          state.sets = target.checked ? [...new Set([...state.sets, key])] : state.sets.filter((set) => set !== key);
+        }
+      });
+    }
+
+    aggregateAction(target) {
+      const action = target.dataset.sacAggregateAction, index = Number(target.dataset.index);
+      this.aggregateChanged((state) => {
+        const move = (to) => { if (to >= 0 && to < state.groupBy.length) { const [id] = state.groupBy.splice(index, 1); state.groupBy.splice(to, 0, id); state.sets = []; } };
+        if (action === "group-up") move(index - 1);
+        else if (action === "group-down") move(index + 1);
+        else if (action === "group-remove") { state.groupBy.splice(index, 1); state.sets = []; if (!state.groupBy.length) state.grouping = "none"; }
+        else if (action === "aggregate-add") {
+          const taken = new Set(state.aggregates.map((aggregate) => aggregate.alias));
+          let alias = "count", number = 2;
+          while (taken.has(alias)) alias = `count_${number++}`;
+          state.aggregates.push({fn: "count", field: "", alias});
+        }
+        else if (action === "aggregate-remove") state.aggregates.splice(index, 1);
+      });
+    }
+
+    async runAggregate() {
+      const editor = this.root.querySelector("[data-sac-request]");
+      let request;
+      try {
+        request = JSON.parse(editor.value);
+      } catch (error) {
+        this.setStatus("Invalid request JSON", "error", error);
+        this.showLocalError(error.message, error);
+        return;
+      }
+      const button = this.root.querySelector("[data-sac-run]");
+      button.disabled = true; button.classList.add("is-running");
+      this.root.querySelector("[data-sac-run-label]").textContent = "Running…";
+      this.setStatus("Running query", "running");
+      const started = performance.now();
+      this.queryController?.abort();
+      const sequence = this.querySequence = (this.querySequence || 0) + 1;
+      const controller = this.queryController = new AbortController();
+      const cancel = this.root.querySelector("[data-sac-cancel-query]");
+      if (cancel) cancel.hidden = false;
+      try {
+        const response = await fetch(this.aggregateQueryPath, {
+          method: "POST", credentials: "same-origin",
+          headers: {"Content-Type": "application/json", Accept: "application/json", "X-CSRF-Token": this.csrfToken},
+          body: JSON.stringify(request), signal: controller.signal,
+        });
+        const text = await response.text();
+        let payload;
+        try { payload = text ? JSON.parse(text) : null; }
+        catch (_error) { payload = {ok: false, error: {code: "invalid_response", message: text || "Empty response", details: {}}}; }
+        if (sequence !== this.querySequence) return;
+        this.state.response = payload; this.nestedResult = null;
+        this.renderResponse(payload);
+        this.setStatus(`${response.status} ${response.statusText} · ${Math.round(performance.now() - started)} ms`, response.ok ? "success" : "error");
+      } catch (error) {
+        if (sequence !== this.querySequence) return;
+        this.state.response = {ok: false, error: {code: error.name === "AbortError" ? "cancelled" : "network_error", message: error.message, details: {}}};
+        this.renderResponse(this.state.response);
+        this.setStatus(error.message, "error", error);
+      } finally {
+        if (sequence === this.querySequence) {
+          button.disabled = false; button.classList.remove("is-running");
+          this.root.querySelector("[data-sac-run-label]").textContent = "Run query";
+          if (cancel) cancel.hidden = true;
+        }
       }
     }
 
@@ -6886,11 +7212,18 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
           tr.append(th);
         });
         head.append(tr);
-        rows.forEach((row) => {
-          const resultRow = element("tr", "");
-          columns.forEach((column, index) => resultRow.append(
-            element("td", "", renderValue(rowValue(row, column, index)))
-          ));
+        const rowMeta = this.queryProfile === "aggregate" && Array.isArray(data.row_meta) ? data.row_meta : [];
+        rows.forEach((row, rowIndex) => {
+          const kind = rowMeta[rowIndex] && rowMeta[rowIndex].kind;
+          const resultRow = element("tr", kind === "total" ? "sac-total-row" : kind === "subtotal" ? "sac-subtotal-row" : "");
+          if (kind) resultRow.dataset.sacRowKind = kind;
+          columns.forEach((column, index) => {
+            const value = rowValue(row, column, index);
+            // In a subtotal or total row a group the row leaves out is not a NULL value.
+            const leftOut = kind && kind !== "detail" && value === null && column.role === "group"
+              && !aggregateRowHolds(rowMeta[rowIndex], column, columns);
+            resultRow.append(element("td", leftOut ? "sac-rolled-up" : "", leftOut ? (kind === "total" ? "Total" : "All") : renderValue(value)));
+          });
           body.append(resultRow);
         });
       } else {
@@ -6992,6 +7325,9 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     DATE_SHORTCUTS,
     associationIsMany,
     collectFields,
+    aggregateSetChoices,
+    aggregateRowHolds,
+    usableAggregateFeatures,
     collectFilterFields,
     fieldSignature,
     pickTone,
