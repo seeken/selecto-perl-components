@@ -803,7 +803,11 @@ sub _summary_pivot_table ($class, $result, $model) {
                 : ' class="sc-rollup-row sc-rollup-detail" data-rollup-level="' . _h($level) . '"';
         my $row_id = $id . '-r' . $index;
         my $cells = '';
+        # A subtotal or Total row's label spans the row-group columns it
+        # leaves empty, so the row reads as one heading with no gaps.
+        my $spans_from = $result->{rollup} && $level < @groups ? ($level ? $level - 1 : 0) : undef;
         for my $group_index (0 .. $#groups) {
+            last if defined($spans_from) && $group_index > $spans_from;
             my $column = $groups[$group_index];
             my $content = '';
             if ($result->{rollup} && $level == 0) {
@@ -819,7 +823,11 @@ sub _summary_pivot_table ($class, $result, $model) {
             }
             # The row's own header: the cell that names it.
             my $names_row = $result->{rollup} ? $group_index == ($level ? $level - 1 : 0) : $group_index == $#groups;
-            $cells .= $names_row ? '<th scope="row" id="' . $row_id . '">' . $content . '</th>' : '<td>' . $content . '</td>';
+            my $span = defined($spans_from) && @groups - $group_index > 1
+                ? ' colspan="' . (@groups - $group_index) . '"' : '';
+            $cells .= $names_row
+                ? '<th scope="row" id="' . $row_id . '"' . $span . '>' . $content . '</th>'
+                : '<td>' . $content . '</td>';
         }
         # What this row holds: one value per row group it keeps.
         my @held = map { $record->{$_->{drilldown_key} // $_->{key}} } @groups[0 .. $level - 1];

@@ -34,9 +34,17 @@ my @cleanup;
 END { eval { $_->do("DROP TABLE IF EXISTS $table") } for @cleanup }
 
 sub text_of { my $text = $_[0]->all_text; $text =~ s/\s+//g; return $text }
+# A subtotal or Total row's label spans the row-group columns it leaves
+# empty; spread it back out so cells keep their positions.
+sub cells_of {
+    return map {
+        my $span = ($_->attr('scope') // '') eq 'row' ? $_->attr('colspan') // 1 : 1;
+        (text_of($_), ('') x ($span - 1));
+    } @{$_[0]->children};
+}
 sub rows_of {
     my ($dom, $selector) = @_;
-    return [map { join '|', map { text_of($_) } @{$_->children} } @{$dom->find($selector)}];
+    return [map { join '|', cells_of($_) } @{$dom->find($selector)}];
 }
 
 my @groups = (group => [qw(origin destination days)], group_alias => ['', '', ''],
@@ -127,6 +135,10 @@ for my $backend (qw(sqlite postgresql)) {
         is_deeply \%got, \%expected, 'cells, row totals, rollup subtotals, column totals and the grand total';
         is $dom->find('.sc-pivot-table tbody tr.sc-rollup-subtotal')->size, 2, 'subtotal rows keep their marking';
         is $dom->find('.sc-pivot-table tbody tr.sc-rollup-total')->size, 1, 'and so does the total row';
+        is_deeply [map { $_->attr('colspan') } @{$dom->find('.sc-pivot-table tbody tr.sc-rollup-subtotal > th, .sc-pivot-table tbody tr.sc-rollup-total > th')}],
+            [2, 2, 2], 'subtotal and Total labels span the row-group columns';
+        is $dom->find('.sc-pivot-table tbody tr.sc-rollup-subtotal > td:first-child, .sc-pivot-table tbody tr.sc-rollup-total > td:first-child')
+            ->grep(sub { text_of($_) eq '' })->size, 0, 'so those rows leave no empty group cell';
         is $dom->find('.sc-pivot-table tbody form.sc-drilldown-form')->size, 6, 'each row keeps its drilldown control';
 
         subtest 'accessibility' => sub {
@@ -175,7 +187,7 @@ for my $backend (qw(sqlite postgresql)) {
             for my $page (@pages) {
                 my $origin = '';
                 for my $row (@{$page->find('.sc-pivot-table tbody tr')}) {
-                    my @cells = map { text_of($_) } @{$row->children};
+                    my @cells = cells_of($row);
                     if (($row->attr('class') // '') =~ /sc-rollup-continued/) {
                         $continued++;
                         ($origin = $cells[0]) =~ s/\(continued\)\z//;

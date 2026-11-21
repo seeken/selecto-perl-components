@@ -1,6 +1,8 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - In the summary pivot, a subtotal or Total row's label spans the row-group
+      columns it leaves empty, so those rows have no blank group cells.
     - Month buckets: a date group format whose ranges are calendar months
       ago, such as 12-6, 5-3, 2, 1, 0 (either order within a range). Each
       bucket is labelled by its months, "Nov 2025 - May 2026" or "Sep 2026",
