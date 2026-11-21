@@ -1031,7 +1031,7 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
             'name="group_exclude_missing" value="' . _h($field->{path}) . '"' .
             ($item_config->{exclude_missing} ? ' checked' : '') .
             ' aria-label="Leave out rows with no ' . _h($field->{label}) . '"><span>Leave out rows with no value</span>' .
-            '<small>For buckets, values outside the ranges as well. Adds a filter, so totals leave them out too.</small></label>';
+            '<small>Adds a filter, so totals leave them out too. Bucket ranges already leave out everything outside them.</small></label>';
     } elsif ($kind eq 'measure') {
         my $function = $item_config->{function} // $field->{default_function} // 'count';
         my $functions = join '', map {
@@ -1216,12 +1216,16 @@ sub _group_filter_list ($class, $state, $by_path) {
     my @filters = @{$state->group_filters};
     return '' unless @filters;
     return '<div class="sc-group-filters" data-sc-group-filters><p class="sc-picker-hint">From Group By. ' .
-        'Clear the option in the group to remove one.</p>' . join('', map {
+        'A group bucketed by ranges keeps to its ranges; clear the option in a group to remove another.</p>' . join('', map {
             my $field = $by_path->{$_->{from_group}} // $by_path->{$_->{field}};
-            '<article class="sc-filter-set-item sc-group-filter" data-sc-group-filter="' . _h($_->{from_group}) .
+            # A range filter stays while the group has its ranges; the others
+            # go when their box is cleared (data-sc-group-filter).
+            '<article class="sc-filter-set-item sc-group-filter" ' .
+            ($_->{ranges} ? 'data-sc-group-range-filter' : 'data-sc-group-filter') . '="' . _h($_->{from_group}) .
             '"><div class="sc-filter-set-heading"><span><strong>' . _h($field ? $field->{label} : $_->{from_group}) .
-            '</strong><small>' . ($_->{grouped} ? 'is in a bucket' : 'has a value') .
-            ' &middot; from Group By</small></span></div></article>'
+            '</strong><small>' . ($_->{ranges} ? 'is in one of its ranges &middot; from the group\'s buckets'
+                : ($_->{grouped} ? 'is in a bucket' : 'has a value') . ' &middot; from Group By') .
+            '</small></span></div></article>'
         } @filters) . '</div>';
 }
 

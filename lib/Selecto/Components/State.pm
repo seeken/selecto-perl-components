@@ -165,20 +165,34 @@ sub valid ($self) { return @{$self->errors} ? 0 : 1; }
 # level) names the whole query's groups in filter_groups, so every part
 # leaves out the same rows.
 #
-# A group bucketed by ranges asked for those ranges and nothing else, so for
-# it the option keeps only the values inside a range: a grouped condition
+# A group bucketed by ranges asked for those ranges and nothing else, so it
+# always keeps only the values inside a range: a grouped condition
 # that the bucket is not "Other", which is what a bucket calls both a missing
 # value and one outside every range.
 sub group_filters ($self, $field_map = undef) {
     return [map {
         my $group = $_;
         my $dimension = $field_map ? ($field_map->{$group} // {})->{dimension} : undef;
-        my $format = ($self->group_configs->{$group} // {})->{format} // '';
-        !$dimension && $format =~ /\A(?:buckets|age_buckets|custom_buckets|year_buckets)\z/
-            ? {field => $group, op => 'ne', value => 'Other', value_end => '', grouped => 1, from_group => $group}
-            : {field => $dimension ? $dimension->{key_field} : $group, op => 'not_null', value => '',
-                value_end => '', from_group => $group}
-    } grep { ($self->group_configs->{$_} // {})->{exclude_missing} } @{$self->filter_groups // $self->groups}];
+        my $group_config = $self->group_configs->{$group} // {};
+        my $format = $group_config->{format} // '';
+        my $bucketed = !$dimension && $format =~ /\A(?:buckets|age_buckets|custom_buckets|year_buckets)\z/;
+        # Ranges are the report's layout, so they filter without being asked;
+        # stepped buckets (*/10) cover every value and filter only on request.
+        my $ranged = $bucketed && _ranged_buckets($group_config);
+        !$ranged && !$group_config->{exclude_missing} ? ()
+            : $bucketed
+                ? {field => $group, op => 'ne', value => 'Other', value_end => '', grouped => 1, from_group => $group,
+                    ($ranged ? (ranges => 1) : ())}
+                : {field => $dimension ? $dimension->{key_field} : $group, op => 'not_null', value => '',
+                    value_end => '', from_group => $group}
+    } @{$self->filter_groups // $self->groups}];
+}
+
+sub _ranged_buckets ($group_config) {
+    require Selecto::Components::BucketParser;
+    my $input = $group_config->{bucket_ranges};
+    return 0 if defined Selecto::Components::BucketParser->increment($input);
+    return @{Selecto::Components::BucketParser->parse($input)} ? 1 : 0;
 }
 
 # The explicitly chosen row grain, whose fields the pickers offer. An

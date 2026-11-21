@@ -634,7 +634,9 @@ sub _predicate_values ($expression) {
 }
 
 sub _walk ($expression, $values) {
-    return unless ref($expression) && $expression->isa('Selecto::Expression');
+    require Scalar::Util;
+    # A bucket in a predicate carries its specification, a plain hash.
+    return unless Scalar::Util::blessed($expression) && $expression->isa('Selecto::Expression');
     if ($expression->kind eq 'literal') {
         push @$values, $expression->arguments->[0];
         return;

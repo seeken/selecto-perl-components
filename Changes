@@ -1,9 +1,11 @@
 Revision history for Selecto-Components
 
 Unreleased
-    - Leave out rows with no value, on a group bucketed by ranges, now keeps
-      only values inside a range: the Other bucket (missing and out of range)
-      goes, from rows, columns and totals.
+    - A group bucketed by ranges keeps to its ranges: values outside every
+      range, and missing values, no longer appear as an Other bucket in rows,
+      columns, graphs or totals. Add a range such as 21+ to include more.
+      This changes existing reports whose ranges do not cover every value.
+      Stepped buckets (*/10) are unchanged.
     - A pivot shows every range of a bucketed column group as a column, in the
       order given, even when nothing falls in it.
     - The summary pivot names the group shown as columns in a header row

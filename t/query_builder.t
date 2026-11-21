@@ -638,8 +638,10 @@ like $multi_measure_statement->sql,
     'one-level bucket rollups sort the grand total separately from data NULL buckets';
 unlike $multi_measure_statement->sql, qr/ORDER BY CASE/,
     'the rollup outer sort does not rebuild the parameterized bucket expression';
-is scalar(@{$multi_measure_statement->params}), 9,
+# Nine for the selections, and the 'Other' that the group's ranges leave out.
+is scalar(@{$multi_measure_statement->params}), 10,
     'ordered bucket rollups do not duplicate their bound bucket parameters';
+like $multi_measure_statement->sql, qr/ WHERE .*<> \$\d+/s, 'a group bucketed by ranges keeps to its ranges';
 is_deeply [map { $_->{label} } @{$multi_measure->{columns}}],
     ['Price band', 'Products', 'Price counts: 0-10', '11+'],
     'multiple measures and expanded bucket columns preserve configured display order';

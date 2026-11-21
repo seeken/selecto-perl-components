@@ -241,9 +241,9 @@ for my $backend (qw(sqlite postgresql)) {
                 ['Origin', 'Destination', '5-9', '40-50', '10-20', '21+', 'Total'], 'the empty range has its column';
             is_deeply texts($t->tx->res->dom, '.sc-pivot-grid tbody tr.sc-grid-total-row > *'),
                 [qw(Total 160 125 3), '—', '—', '—', qw(270 210 2 300 250 1 730 585 6)], 'with nothing in it';
-            $t->get_ok('/loads' => form => {%ranged, group_bucket_ranges => ['', '', '5-9, 40-50, 10-20'], group_exclude_missing => 'days'})->status_is(200);
+            $t->get_ok('/loads' => form => {%ranged, group_bucket_ranges => ['', '', '5-9, 40-50, 10-20']})->status_is(200);
             is_deeply texts($t->tx->res->dom, '.sc-pivot-grid thead tr:nth-child(1) > th'),
-                ['Origin', 'Destination', '5-9', '40-50', '10-20', 'Total'], 'a bucketed group can leave out what is outside its ranges';
+                ['Origin', 'Destination', '5-9', '40-50', '10-20', 'Total'], 'ranges leave out what is outside them';
             is_deeply texts($t->tx->res->dom, '.sc-pivot-grid tbody tr.sc-grid-total-row > *'),
                 [qw(Total 160 125 3), '—', '—', '—', qw(270 210 2 430 335 5)];
         };

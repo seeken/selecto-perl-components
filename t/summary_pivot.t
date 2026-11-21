@@ -302,16 +302,20 @@ for my $backend (qw(sqlite postgresql)) {
                 measure => [qw(price loads)], limit => 25, page => 1);
             my $heads = sub { [map { text_of($_) } @{$_[0]->find('.sc-pivot-table thead tr:nth-child(2) > th')}] };
             my $all = $get->('/loads', @ranged, pivot_column => 'days');
-            is_deeply $heads->($all), ['5-9', '40-50', '10-20', 'Other'],
-                'every range is a column, in the order given, even with nothing in it';
-            is rows_of($all, '.sc-pivot-table tbody tr')->[0], 'Total|180|4|—|—|270|2|300|1|750|7', 'an empty range has no values';
+            is_deeply $heads->($all), ['5-9', '40-50', '10-20'],
+                'every range is a column, in the order given, even with nothing in it, and there is no Other';
+            is rows_of($all, '.sc-pivot-table tbody tr')->[0], 'Total|180|4|—|—|270|2|450|6', 'an empty range has no values';
+            is $all->find('input[name="group_exclude_missing"][checked]')->size, 0, 'without any box ticked';
+            unlike $all->to_string, qr/[?&;]group_exclude_missing=/;
+            my $stepped = $get->('/loads', @ranged, group_bucket_ranges => ['', '*/10'], pivot_column => 'days');
+            is rows_of($stepped, '.sc-pivot-table tbody tr')->[0] =~ s/.*\|(\d+\|\d+)\z/$1/r, '750|7', 'stepped buckets leave nothing out';
+            ok !$stepped->at('[data-sc-group-range-filter]');
 
-            my $in = $get->('/loads', @ranged, pivot_column => 'days', group_exclude_missing => 'days');
-            is_deeply $heads->($in), ['5-9', '40-50', '10-20'], 'the option on a bucketed group leaves out what is outside the ranges';
+            my $in = $all;
             is_deeply rows_of($in, '.sc-pivot-table tbody tr'),
                 ['Total|180|4|—|—|270|2|450|6', 'MI|160|3|—|—|200|1|360|4', 'OH|20|1|—|—|70|1|90|2'],
                 'and the totals leave it out as well';
-            like $in->at('[data-sc-group-filter="days"]')->all_text, qr/is in a bucket/, 'the filter list says so';
+            like $in->at('[data-sc-group-range-filter="days"]')->all_text, qr/is in one of its ranges/, 'the filter list says so';
             my %drill;
             push @{$drill{$_->attr('name')}}, $_->attr('value') for @{$in->find('form.sc-pivot-drill-form input[type="hidden"]')};
             my $ids = sub { [sort { $a <=> $b } map { text_of($_) } @{$t->tx->res->dom->find('.sc-results tbody tr td:first-child')}] };
@@ -324,7 +328,7 @@ for my $backend (qw(sqlite postgresql)) {
             like $t->tx->res->dom->at('.sc-results tbody')->all_text, qr/No rows matched/, 'and an empty one to no rows';
 
             my $plain = $get->('/loads', @ranged, group => 'days', group_alias => '', group_format => 'buckets',
-                group_bucket_ranges => '5-9, 40-50, 10-20', group_exclude_missing => 'days');
+                group_bucket_ranges => '5-9, 40-50, 10-20');
             is_deeply [sort @{rows_of($plain, '.sc-results tbody tr')}], ['10-20|270|2', '5-9|180|4', 'Total|450|6'],
                 'the plain summary leaves them out too';
         };
