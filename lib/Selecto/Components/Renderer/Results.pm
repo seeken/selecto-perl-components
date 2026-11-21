@@ -39,12 +39,27 @@ sub _results ($class, $model) {
         : $model->{state}->view eq 'aggregate' && $model->{state}->aggregate_grid
             && !$result->{grid_data}
         ? '<div class="sc-grid-warning" role="status">Grid view requires exactly two Group By fields and one Aggregate.' .
-          (@{$model->{state}->groups} >= 2 && @{$model->{state}->measures} >= 1 && !defined($model->{state}->aggregate_grid_column)
+          (@{$model->{state}->groups} >= 2 && @{$model->{state}->measures} >= 1 && !defined($model->{state}->pivot_column)
             ? ' For more, mark one Group By as Show as columns.' : '') . '</div>'
         : '';
-    my $body = $result->{grid_limit_exceeded} ? ''
+    # One group shown as columns in the summary table.
+    my $pivot = $result->{pivot_data};
+    my $pivot_limit = $pivot ? $pivot->{limit} : undef;
+    $grid_warning = '<div class="sc-grid-warning" role="status">' . ($pivot_limit->{kind} eq 'columns'
+        ? 'Showing this group as columns needs more than ' . _h($pivot_limit->{limit}) .
+          ' columns. Add filters or show a lower-cardinality group as columns.'
+        : 'This page needs more than ' . _h($pivot_limit->{limit}) .
+          ' display cells. Show fewer rows per page, add filters, or show a lower-cardinality group as columns.') .
+        '</div>' if $pivot_limit;
+    $grid_warning = '<div class="sc-grid-warning" role="status">Show as columns needs at least one other Group By ' .
+        'and one Aggregate. The table below has every group as rows.</div>'
+        if !$pivot && !$result->{grid_data} && !$result->{graph} && !length($grid_warning)
+            && $model->{state}->view eq 'aggregate' && !$model->{state}->aggregate_grid
+            && defined($model->{state}->pivot_column);
+    my $body = $result->{grid_limit_exceeded} || $pivot_limit ? ''
         : $result->{graph} ? $class->_graph($result, $model)
         : $result->{grid_data} ? $class->_grid($result, $model)
+        : $pivot ? $class->_summary_pivot_table($result, $model)
         : $class->_table($result, $model);
     my $top_pagination = $class->_pagination($model, 'top');
     my $bottom_pagination = $class->_pagination($model, 'bottom');
@@ -696,6 +711,147 @@ sub _grid ($class, $result, $model) {
         ' and ' . _h($grid->{column_axis}{label}) . '</caption><thead><tr>' .
         $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>' .
         '<noscript><p class="sc-note">Choose cells and submit with Show selected details.</p></noscript></form>';
+}
+
+# The summary table with one group shown as columns. Its rows are the summary
+# table's own: the row groups with their rollup subtotal and total rows, in
+# the same order, on the same pages, with the same drilldown controls. Each
+# column value heads one sub-column per measure, and a last Total group holds
+# each row's totals across every column. A value or a column header opens the
+# Detail view for the row's values and that column's value.
+sub _summary_pivot_table ($class, $result, $model) {
+    my $pivot = $result->{pivot_data};
+    my @groups = grep { !$_->{measure} && !$_->{action_id} } @{$result->{columns}};
+    my @measures = @{$pivot->{measures}};
+    my @columns = @{$pivot->{columns}};
+    my @row_indexes = @{$pivot->{row_indexes}};
+    my $column_group = $pivot->{column_index};
+    my $group_count = @row_indexes + 1;
+
+    my $method = $model->{config}->query_params_enabled($model->{domain}) ? 'get' : 'post';
+    my $selection_pairs = $pivot->{selection_pairs} // [];
+    my $id = 'scp' . substr(Digest::MD5::md5_hex(Mojo::Util::encode('UTF-8', to_json($selection_pairs))), 0, 8);
+    # One form carries the query; each value is a button of it that adds the
+    # row's values and the column's value, as a grid selection does.
+    my $form = '<form id="' . $id . '-drill" class="sc-pivot-drill-form" action="' . _h($model->{config}->path) .
+        '" method="' . $method . '" hx-ws:send>';
+    for (my $index = 0; $index < @$selection_pairs; $index += 2) {
+        $form .= _hidden($selection_pairs->[$index], $selection_pairs->[$index + 1]);
+    }
+    $form .= '</form>';
+    my $drill = sub ($name, $selection, $label_html, $described) {
+        return '<button class="sc-drilldown-value sc-pivot-drilldown-value" type="submit" form="' . $id .
+            '-drill" name="' . $name . '" value="' . _h(to_json($selection)) . '" aria-label="Show details for ' .
+            _h($described) . '">' . $label_html . '</button>';
+    };
+    my @measure_classes = map { _numeric_measure_class($_, $model) ? ' class="sc-numeric-measure"' : '' } @measures;
+
+    my $top = join '', map {
+        my $group = $groups[$_];
+        my $described = defined($group->{description}) && length($group->{description});
+        '<th scope="col" rowspan="2" id="' . $id . '-g' . $_ . '"' .
+            ($described ? ' class="sc-described" title="' . _h($group->{description}) . '"' : '') .
+            '>' . _h($group->{label}) . '</th>'
+    } 0 .. $#groups;
+    my $sub = '';
+    for my $index (0 .. $#columns) {
+        my $column = $columns[$index];
+        $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id . '-c' . $index . '">' .
+            $drill->('grid_axis', {axis => $column_group, value => $column->{selection_value}},
+                _html_display($pivot->{column_axis}, $column->{value}, 1),
+                $pivot->{column_axis}{label} . ' ' . _display_group($column->{value})) . '</th>';
+        $sub .= join '', map {
+            '<th scope="col" id="' . $id . '-c' . $index . 'm' . $_ . '"' . $measure_classes[$_] . '>' .
+                _h($measures[$_]{label}) . '</th>'
+        } 0 .. $#measures;
+    }
+    $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id . '-ct">Total</th>';
+    $sub .= join '', map {
+        '<th scope="col" id="' . $id . '-ctm' . $_ . '"' . $measure_classes[$_] . '>' . _h($measures[$_]{label}) . '</th>'
+    } 0 .. $#measures;
+
+    my $rows = '';
+    for my $index (0 .. $#{$result->{records}}) {
+        my $record = $result->{records}[$index];
+        my $continued = $result->{rollup} && $record->{__selecto_rollup_continued};
+        my $level = $result->{rollup} ? $record->{__selecto_rollup_level} : scalar(@groups);
+        my $row_class = !$result->{rollup} ? ''
+            : $continued
+                ? ' class="sc-rollup-row sc-rollup-continued" data-rollup-level="' .
+                    _h($level) . '" data-rollup-continued="1"'
+            : $level == 0 ? ' class="sc-rollup-row sc-rollup-total" data-rollup-level="0"'
+            : $level < @groups
+                ? ' class="sc-rollup-row sc-rollup-subtotal" data-rollup-level="' . _h($level) . '"'
+                : ' class="sc-rollup-row sc-rollup-detail" data-rollup-level="' . _h($level) . '"';
+        my $row_id = $id . '-r' . $index;
+        my $cells = '';
+        for my $group_index (0 .. $#groups) {
+            my $column = $groups[$group_index];
+            my $content = '';
+            if ($result->{rollup} && $level == 0) {
+                $content = $group_index == 0 ? '<span class="sc-rollup-total-label">Total</span>' : '';
+            } elsif (!$result->{rollup} || $group_index == $level - 1) {
+                my $label_html = _html_display($column, $record->{$column->{key}}, 1);
+                my $pairs = $result->{drilldowns}[$index][$group_index];
+                $label_html = '<span class="sc-rollup-continued-label">' . $label_html .
+                    ' <span>(continued)</span></span>' if $continued;
+                $content = $pairs
+                    ? $class->_drilldown_control($model, $pairs, $label_html, $group_index + 1)
+                    : $label_html;
+            }
+            # The row's own header: the cell that names it.
+            my $names_row = $result->{rollup} ? $group_index == ($level ? $level - 1 : 0) : $group_index == $#groups;
+            $cells .= $names_row ? '<th scope="row" id="' . $row_id . '">' . $content . '</th>' : '<td>' . $content . '</td>';
+        }
+        # What this row holds: one value per row group it keeps.
+        my @held = map { $record->{$_->{drilldown_key} // $_->{key}} } @groups[0 .. $level - 1];
+        my $row_label = $level ? join(', ', map { _display_group($record->{$_->{key}}) } @groups[0 .. $level - 1]) : 'Total';
+        my $row_cells = $pivot->{cells_for}->($record);
+        for my $column_number (0 .. $#columns) {
+            my $column = $columns[$column_number];
+            my $values = $row_cells->{$column->{key}};
+            my ($name, $selection);
+            if ($level == @groups) {
+                my @all;
+                @all[@row_indexes] = @held;
+                $all[$column_group] = $column->{selection_value};
+                $#all = $group_count - 1;
+                ($name, $selection) = (grid_cell => \@all);
+            } elsif ($level) {
+                ($name, $selection) = (grid_axis => {
+                    axes => [@row_indexes[0 .. $level - 1], $column_group],
+                    values => [@held, $column->{selection_value}],
+                });
+            } else {
+                ($name, $selection) = (grid_axis => {axis => $column_group, value => $column->{selection_value}});
+            }
+            for my $measure_index (0 .. $#measures) {
+                my $headers = ' headers="' . $row_id . ' ' . $id . '-c' . $column_number . ' ' .
+                    $id . '-c' . $column_number . 'm' . $measure_index . '"';
+                my $content = $continued ? '<span class="sc-rollup-continued-measure">-</span>'
+                    : !$values ? '—'
+                    : $drill->($name, $selection,
+                        _html_display($measures[$measure_index], $values->{$measures[$measure_index]{key}}),
+                        $row_label . ', ' . _display_group($column->{value}));
+                $cells .= '<td' . $measure_classes[$measure_index] . $headers . '>' . $content . '</td>';
+            }
+        }
+        for my $measure_index (0 .. $#measures) {
+            my $measure = $measures[$measure_index];
+            $cells .= '<td' . $measure_classes[$measure_index] . ' headers="' . $row_id . ' ' . $id . '-ct ' .
+                $id . '-ctm' . $measure_index . '">' .
+                ($continued ? '<span class="sc-rollup-continued-measure">-</span>'
+                    : '<strong>' . _html_display($measure, $record->{$measure->{key}}) . '</strong>') . '</td>';
+        }
+        $rows .= '<tr' . $row_class . '>' . $cells . '</tr>';
+    }
+    my $column_count = @groups + (@columns + 1) * @measures;
+    $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count . '">No rows matched this query.</td></tr>';
+    return $form . '<div class="sc-table-wrap"><table class="sc-pivot-table">' .
+        '<caption class="sc-visually-hidden">' . _h(join(', ', map { $_->{label} } @measures)) . ' by ' .
+        _h(join(', ', map { $_->{label} } @groups)) . ' across ' . _h($pivot->{column_axis}{label}) .
+        '</caption><thead><tr>' . $top . '</tr><tr>' . $sub . '</tr></thead><tbody>' . $rows .
+        '</tbody></table></div>';
 }
 
 # The grid with several row groups or several measures: the column group's

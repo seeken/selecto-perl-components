@@ -62,7 +62,7 @@ for my $view (qw(aggregate graph)) {
     ok $choice, "$view: a group has the Show as columns choice";
     is $dom->find('[data-sc-picker-kind="group"] [data-sc-group-grid-column][hidden]')->size, $view eq 'aggregate' ? 0 : 1,
         $view eq 'aggregate' ? 'aggregate: it is shown' : 'graph: it is hidden';
-    is $choice->at('input[type="checkbox"][name="grid_column"]')->attr('value'), 'region', "$view: it names its group";
+    is $choice->at('input[type="checkbox"][name="pivot_column"]')->attr('value'), 'region', "$view: it names its group";
 }
 
 done_testing;

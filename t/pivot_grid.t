@@ -197,7 +197,7 @@ for my $backend (qw(sqlite postgresql)) {
             $t->get_ok('/loads' => form => {@pivot, grid_column => 'nowhere'})->status_is(422);
             $t->get_ok('/loads' => form => {@pivot, grid_column => [qw(days origin)]})->status_is(422);
             $t->get_ok('/loads' => form => {@pivot, grid_column => 'days'})->status_is(200);
-            like $t->tx->res->body, qr/[?&;]grid_column=days(?:&|")/, 'grid_column is carried in generated links';
+            like $t->tx->res->body, qr/[?&;]pivot_column=days(?:&|")/, 'the old grid_column spelling is read and written back as pivot_column';
 
             # The web export refuses every grid; a host exports one from its model.
             my $controller = $app->build_controller;
@@ -205,13 +205,13 @@ for my $backend (qw(sqlite postgresql)) {
             my %input = @pivot;
             my $model = $explorer->model($controller, {%input, grid_column => 'days'});
             ok $model->{state}->valid && $model->{result}{grid_data}{pivot}, 'a pivot model';
-            is $model->{state}->aggregate_grid_column, 'days', 'the state carries the column group';
+            is $model->{state}->pivot_column, 'days', 'the state carries the column group';
             $some_state //= $model->{state};
             my %pairs = @{$model->{state}->query_pairs};
-            is $pairs{grid_column}, 'days', 'and writes it back as grid_column';
+            is $pairs{pivot_column}, 'days', 'and writes it back as pivot_column';
             my $again = $explorer->model($controller, Selecto::Components::Dashboard->new->input_from_url(
                 $explorer->canonical_url($model->{state}, $model->{domain})));
-            is $again->{state}->aggregate_grid_column, 'days', 'a saved view URL restores it';
+            is $again->{state}->pivot_column, 'days', 'a saved view URL restores it';
             ok $again->{result}{grid_data}{pivot}, 'and renders the same pivot';
 
             my @lines = map { s/"//gr } split /\r?\n/, $explorer->export($model, 'csv');   # every field is quoted
@@ -222,7 +222,7 @@ for my $backend (qw(sqlite postgresql)) {
             ok length($explorer->export($model, 'xlsx')) > 1000, 'the workbook builds';
 
             $t->get_ok('/loads' => form => {@pivot, grid_column => 'days', view => 'graph'})->status_is(200);
-            unlike $t->tx->res->body, qr/[?&;]grid_column=/, 'the choice belongs to the aggregate grid only';
+            unlike $t->tx->res->body, qr/[?&;](?:grid|pivot)_column=/, 'the choice belongs to the aggregate view only';
         };
     };
 }

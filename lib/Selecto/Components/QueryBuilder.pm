@@ -335,6 +335,29 @@ sub _detail ($class, $config, $domain, $state, $options) {
 
 sub _aggregate ($class, $config, $domain, $state, $options) {
     my $field_map = $config->field_map($domain, $state->retarget);
+    # The summary table with one group shown as columns: the table itself is
+    # the ordinary summary of the other groups (its rollup rows, order and
+    # pages, with measures that are each row's total across the columns), and
+    # the cells under each column value are fetched for the page shown
+    # (pivot_cells). The grid has its own pivot below.
+    if ($state->view eq 'aggregate' && !$state->aggregate_grid && defined($state->pivot_column)
+        && !$options->{pivot_part} && @{$state->groups} >= 2 && @{$state->measures}) {
+        require Selecto::Components::State;
+        my $rows_state = Selecto::Components::State->new(
+            %{$state->as_hash},
+            groups => [grep { $_ ne $state->pivot_column } @{$state->groups}],
+            filter_groups => [@{$state->groups}],
+            pivot_column => undef,
+        );
+        my $built = $class->_aggregate($config, $domain, $rows_state, {%$options, pivot_part => 1});
+        my ($column_index) = grep { $state->groups->[$_] eq $state->pivot_column } 0 .. $#{$state->groups};
+        $built->{pivot} = {
+            column_field => $state->pivot_column,
+            column_index => $column_index,
+            row_indexes => [grep { $_ != $column_index } 0 .. $#{$state->groups}],
+        };
+        return $built;
+    }
     # Subtotal rows need the adapter's GROUP BY ROLLUP; callers pass
     # rollup => 0 for adapters without it, which then group plainly.
     my $rollup = $state->view eq 'aggregate' && @{$state->groups}
@@ -487,11 +510,11 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         push @selections, $expression->as($measure_key);
     }
     my @columns = (@group_columns, @measure_columns);
-    # The grid pivots one group into columns. A group marked with grid_column
+    # The grid pivots one group into columns. A group marked with pivot_column
     # may do that for any number of row groups and measures; without one, the
     # grid is the original shape: two groups, the second across, one measure.
     my $grid_column_field = $state->view eq 'aggregate' && $state->aggregate_grid
-        ? $state->aggregate_grid_column : undef;
+        ? $state->pivot_column : undef;
     my ($grid_column_index) = defined($grid_column_field)
         ? grep { $group_columns[$_]{field} eq $grid_column_field } 0 .. $#group_columns : ();
     my $aggregate_grid = $state->view eq 'aggregate' && $state->aggregate_grid
@@ -549,6 +572,42 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         rollup_key => $rollup ? $rollup_key : undef,
         group_count => scalar(@groups),
     };
+}
+
+# The cells of a summary pivot at one rollup level: the first $level row
+# groups and the column group, grouped plainly, for the given row keys only.
+# $keys is a list of rows, each a list of {field, value, grouped} for its row
+# groups; level 0 takes none and returns every column value with the whole
+# result's measures, which are both the column list and the Total row.
+sub pivot_cells ($class, $config, $domain, $state, $level, $keys = undef) {
+    my $column_field = $state->pivot_column;
+    my @row_groups = grep { $_ ne $column_field } @{$state->groups};
+    require Selecto::Components::State;
+    my $cells_state = Selecto::Components::State->new(
+        %{$state->as_hash},
+        groups => [@row_groups[0 .. $level - 1], $column_field],
+        filter_groups => [@{$state->groups}],
+        pivot_column => undef,
+        page => 1,
+    );
+    my $built = $class->_aggregate($config, $domain, $cells_state, {paginate => 0, rollup => 0, pivot_part => 1});
+    if ($level > 0) {
+        my $field_map = $config->field_map($domain, $state->retarget);
+        my @alternatives = map {
+            my @conditions = map {
+                my $type = ($field_map->{$_->{field}} // {})->{type};
+                my $operand = $_->{grouped}
+                    ? _group_expression({field => $_->{field}, type => $type}, $state->group_configs->{$_->{field}} // {})
+                    : _temporal_expression($_->{field}, $type);
+                defined($_->{value}) ? Selecto::Expression->eq($operand, "$_->{value}")
+                    : Selecto::Expression->is_null($operand)
+            } @$_;
+            @conditions == 1 ? $conditions[0] : Selecto::Expression->all(\@conditions)
+        } @$keys;
+        $built->{query} = $built->{query}->where(
+            @alternatives == 1 ? $alternatives[0] : Selecto::Expression->any(\@alternatives));
+    }
+    return $built;
 }
 
 sub _measure_expression ($measure, $config) {
@@ -708,6 +767,14 @@ sub _with_filters ($query, $state, $config, $domain) {
         } @clause_order;
         push @expressions, @alternatives == 1
             ? $alternatives[0] : Selecto::Expression->any(\@alternatives);
+    }
+    if ($state->view ne 'detail') {
+        # A group that leaves out rows with no value filters them out, so
+        # subtotals and totals leave them out as well.
+        my $group_map = $config->field_map($domain, $state->retarget);
+        push @expressions, map {
+            Selecto::Expression->not_null(_temporal_expression($_->{field}, ($group_map->{$_->{field}} // {})->{type}))
+        } @{$state->group_filters($group_map)};
     }
     return $query unless @expressions;
     return $query->where(@expressions == 1 ? $expressions[0] : Selecto::Expression->all(\@expressions));

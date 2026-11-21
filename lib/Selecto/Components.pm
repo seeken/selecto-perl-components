@@ -1186,7 +1186,8 @@ one numbered clause are ANDed, and clauses are ORed.
 =item * C<order> and C<direction>, C<limit> and C<page>
 
 =item * C<aggregate_grid>, C<aggregate_grid_colorize>,
-C<aggregate_grid_color_scale>, C<grid_column> and C<row_click_action>
+C<aggregate_grid_color_scale>, C<pivot_column> (also read as C<grid_column>,
+its first name), repeated C<group_exclude_missing> and C<row_click_action>
 
 =item * C<grid_cell> and C<grid_axis>, a grid selection handed to the Detail
 view: a cell is a JSON array with one value per group, in group order; an
@@ -1283,7 +1284,7 @@ correct there too. Total cells are read-only and are not part of a grid
 selection.
 
 The grid shows one group across and the others down. With two groups and one
-measure the second group is across. C<grid_column=E<lt>group fieldE<gt>>, set
+measure the second group is across. C<pivot_column=E<lt>group fieldE<gt>>, set
 by B<Show as columns> in a Group By item's Configure panel, names the group to
 put across instead, and then the grid takes any number of row groups and
 measures: each column value heads one sub-column per measure, and a Total
@@ -1297,6 +1298,34 @@ clicked. L<Selecto::Components::Explorer/export> of a pivot model flattens the
 header to C<< <column value> · <measure label> >>. A measure's series settings
 (style, axis, stack group, colour and opacity) appear only in the Graph view;
 they stay in the form elsewhere, so they survive a change of view.
+
+B<Show as columns> works in the summary table too (the aggregate view with
+the grid off). The other groups stay rows exactly as the summary table shows
+them, with its rollup subtotal rows, its order, its pages and its drilldown
+controls. Each column value heads one sub-column per measure, and a last
+Total group holds each row's totals across every column. C<limit> counts
+rows. The rows of a page come from the ordinary summary query of the row
+groups; one more grouped query lists the column values over the whole result,
+and one for each rollup level on the page fetches that page's cells. So every
+page has the same columns, and subtotals and totals never depend on the page.
+More column values than C<max_grid_columns>, or more cells on a page than
+C<max_grid_result_cells> (rows times columns and Total, times measures), are
+refused with a message naming the limit. A value or a column header opens the
+Detail view for the row's values and that column's value. It needs at least
+one other Group By; alone, the table stays as it is, with a note.
+L<Selecto::Components::Explorer/export> of such a model has one column per
+column value and measure, headed C<< <column value> · <measure label> >>, and
+includes the subtotal and total rows. The streamed web export refuses it, as
+it refuses a grid.
+
+B<Leave out rows with no value>, in a Group By item's Configure panel
+(C<group_exclude_missing=E<lt>group fieldE<gt>>, repeatable), filters out the
+rows where that group's field is null, in the summary table, the pivot, the
+grid and the graph. It is a filter, so subtotals and totals leave those rows
+out as well, and a Total always equals the sum of what is shown. It is listed
+under the filters as coming from the group, and goes when the group is
+removed or the box is cleared. For a bucketed group it leaves out only missing
+values, not values outside the ranges.
 
 =head1 SECURITY
 

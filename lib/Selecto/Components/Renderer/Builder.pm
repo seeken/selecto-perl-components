@@ -860,7 +860,7 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         } else {
             $config_controls = _picker_config_controls(
                 $options{config}, $kind, $field, $item_config, $options{date_formats}, $state->view,
-                $state->aggregate_grid_column,
+                $state->pivot_column,
             );
         }
         '<article class="sc-picker-set-item" draggable="true" data-sc-picker-set-item data-field="' .
@@ -1004,15 +1004,21 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
                 '<option value="0"' . ($item_config->{exclude_articles} ? '' : ' selected') .
                 '>Keep articles</option></select></label>';
         }
-        # One group may become the columns of the aggregate grid; the others
-        # are its rows. It means nothing in a graph, so it shows only in the
-        # aggregate view and stays in the form otherwise.
+        # One group may become the columns of the aggregate view, table or
+        # grid; the others are its rows. It means nothing in a graph, so it
+        # shows only in the aggregate view and stays in the form otherwise.
         $controls .= '<label class="sc-option-check" data-sc-group-grid-column' .
-            ($view eq 'aggregate' ? '' : ' hidden') . '><input type="checkbox" name="grid_column" value="' .
+            ($view eq 'aggregate' ? '' : ' hidden') . '><input type="checkbox" name="pivot_column" value="' .
             _h($field->{path}) . '" data-sc-grid-column-choice' .
             (($grid_column // '') eq $field->{path} ? ' checked' : '') .
-            ' aria-label="Show ' . _h($field->{label}) . ' as grid columns"><span>Show as columns</span>' .
-            '<small>In the aggregate grid. The other groups become rows.</small></label>';
+            ' aria-label="Show ' . _h($field->{label}) . ' as columns"><span>Show as columns</span>' .
+            '<small>The other groups become rows, with every aggregate under each column.</small></label>' .
+            # A filter, not a hidden row: totals leave those rows out as well.
+            '<label class="sc-option-check" data-sc-group-exclude-missing><input type="checkbox" ' .
+            'name="group_exclude_missing" value="' . _h($field->{path}) . '"' .
+            ($item_config->{exclude_missing} ? ' checked' : '') .
+            ' aria-label="Leave out rows with no ' . _h($field->{label}) . '"><span>Leave out rows with no value</span>' .
+            '<small>Adds a filter, so totals leave them out too.</small></label>';
     } elsif ($kind eq 'measure') {
         my $function = $item_config->{function} // $field->{default_function} // 'count';
         my $functions = join '', map {
@@ -1185,8 +1191,24 @@ sub _filter_picker ($class, $state, $catalog, $config, $root_label = 'Main recor
         '<span data-sc-filter-set-count>' . scalar(@ordinary_filters) . '</span></div>' .
         '<p class="sc-picker-hint">Set filters are combined with AND.</p>' .
         '<div class="sc-picker-list sc-filter-set" data-sc-filter-set aria-label="Set filters">' .
-        $set_items . '</div></section></div></fieldset>';
+        $set_items . '</div>' . $class->_group_filter_list($state, \%by_path) . '</section></div></fieldset>';
     return $class->_filter_clause_picker($state, \%by_path, $config) . $ordinary_picker;
+}
+
+# Filters that a Group By adds itself (Leave out rows with no value). They are
+# listed with the filters so it is clear why rows are missing, and are changed
+# where they are set: in the group's Configure panel.
+sub _group_filter_list ($class, $state, $by_path) {
+    return '' if $state->view eq 'detail';
+    my @filters = @{$state->group_filters};
+    return '' unless @filters;
+    return '<div class="sc-group-filters" data-sc-group-filters><p class="sc-picker-hint">From Group By. ' .
+        'Clear the option in the group to remove one.</p>' . join('', map {
+            my $field = $by_path->{$_->{from_group}} // $by_path->{$_->{field}};
+            '<article class="sc-filter-set-item sc-group-filter" data-sc-group-filter="' . _h($_->{from_group}) .
+            '"><div class="sc-filter-set-heading"><span><strong>' . _h($field ? $field->{label} : $_->{from_group}) .
+            '</strong><small>has a value &middot; from Group By</small></span></div></article>'
+        } @filters) . '</div>';
 }
 
 sub _filter_clause_picker ($class, $state, $by_path, $config) {

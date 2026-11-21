@@ -168,6 +168,18 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             $state, $built, \@records, $drilldowns,
             $config->max_grid_result_cells, $config->max_grid_columns,
         );
+        # One group shown as columns in the summary table: the page's rows
+        # are in hand; fetch the cells under each column value for them.
+        my $pivot_data = $built->{pivot} ? _summary_pivot(
+            $config, $engine, $state, $built, \@records, sub ($query) {
+                my $part = Selecto::BoundedQuery->prepare($engine, $query, limits => $config->limits);
+                my $rows = $phase->(data => sub {
+                    _execute($engine, $part, $result_cache, \%cache_info, $cache_namespace, $config);
+                });
+                _validate_result($rows, $config->limits);
+                return $rows;
+            },
+        ) : undef;
         my $grid_limit;
         if (ref($grid_data) eq 'HASH' && $grid_data->{limit_exceeded}) {
             $grid_limit_exceeded = 1;
@@ -182,6 +194,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             drilldowns => $drilldowns,
             graph_axis_drilldowns => $graph_axis_drilldowns,
             (defined($grid_data) ? (grid_data => $grid_data) : ()),
+            (defined($pivot_data) ? (pivot_data => $pivot_data) : ()),
             grid_limit_exceeded => $grid_limit_exceeded,
             ($grid_limit ? (grid_limit => $grid_limit) : ()),
             count => $returned_count,
@@ -602,6 +615,7 @@ sub _drilldown_for_group_indexes ($state, $groups, $record, $indexes, $grain = u
             promoted => 1,
         };
     }
+    push @filters, @{_group_filter_inputs($state, $groups, \@filters)};
     my $drilldown = Selecto::Components::State->new(
         %{$state->as_hash},
         view => 'detail',
@@ -785,14 +799,113 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
     };
 }
 
+# The cells of a summary pivot for one page. The page's rows come from the
+# ordinary summary query of the row groups, so their order, rollup rows and
+# paging are the summary table's own, and their measures are each row's total
+# across the columns. Here: one grouped query for the column values (which is
+# also the Total row's cells, over the whole result), and one for each rollup
+# level the page shows, restricted to that page's rows. Every page therefore
+# has the same columns, and totals never depend on the page.
+sub _summary_pivot ($config, $engine, $state, $built, $records, $run) {
+    my $plan = $built->{pivot};
+    my @groups = grep { !$_->{measure} && !$_->{action_id} } @{$built->{columns} // []};
+    my @measures = grep { $_->{measure} } @{$built->{columns} // []};
+    my $records_of = sub ($raw) {
+        return [map { my %record; @record{@{$raw->{columns}}} = @$_; \%record } @{$raw->{rows}}];
+    };
+    my $key_of = sub ($record, $columns) {
+        encode_json([map {
+            my $value = $record->{$_->{drilldown_key} // $_->{key}};
+            [defined($value) ? 1 : 0, defined($value) ? "$value" : '']
+        } @$columns]);
+    };
+    my $measured = sub ($record, $from) {
+        +{map { ($measures[$_]{key} => $record->{$from->[$_]{key}}) } 0 .. $#measures}
+    };
+
+    # Level 0: every column value, with the whole result's measures.
+    my $top = Selecto::Components::QueryBuilder->pivot_cells($config, $engine->domain, $state, 0);
+    my ($column_axis) = grep { !$_->{measure} } @{$top->{columns}};
+    my @top_measures = grep { $_->{measure} } @{$top->{columns}};
+    my (@columns, %cells);
+    for my $record (@{$records_of->($run->($top->{query}))}) {
+        my $key = $key_of->($record, [$column_axis]);
+        push @columns, {
+            key => $key,
+            value => $record->{$column_axis->{key}},
+            (defined($column_axis->{sort_key}) ? (sort_value => $record->{$column_axis->{sort_key}}) : ()),
+            selection_value => $record->{$column_axis->{drilldown_key} // $column_axis->{key}},
+        };
+        $cells{0}{'[]'}{$key} = $measured->($record, \@top_measures);
+    }
+    @columns = @{_sort_grid_entries(\@columns, $column_axis)};
+    return {limit => {kind => 'columns', limit => $config->max_grid_columns}}
+        if @columns > $config->max_grid_columns;
+    my @shown = grep { !$_->{__selecto_rollup_continued} } @$records;
+    my $rendered = @shown * (@columns + 1) * @measures;
+    return {limit => {kind => 'cells', limit => $config->max_grid_result_cells}}
+        if $rendered > $config->max_grid_result_cells;
+
+    # The page's rows by rollup level; a plain (no rollup) summary has one level.
+    my %by_level;
+    for my $record (@shown) {
+        my $level = $built->{rollup} ? $record->{__selecto_rollup_level} : scalar(@groups);
+        next unless $level;
+        $by_level{$level}{$key_of->($record, [@groups[0 .. $level - 1]])} //= [map {
+            {field => $_->{drilldown_field} // $_->{field},
+                value => $record->{$_->{drilldown_key} // $_->{key}},
+                grouped => exists($_->{drilldown_grouped}) ? $_->{drilldown_grouped}
+                    : (length($_->{format} // '') && ($_->{format} // '') ne 'default' ? 1 : 0)}
+        } @groups[0 .. $level - 1]];
+    }
+    for my $level (sort { $a <=> $b } keys %by_level) {
+        my $part = Selecto::Components::QueryBuilder->pivot_cells(
+            $config, $engine->domain, $state, $level, [values %{$by_level{$level}}],
+        );
+        my @part_groups = grep { !$_->{measure} } @{$part->{columns}};
+        my $part_column = pop @part_groups;
+        my @part_measures = grep { $_->{measure} } @{$part->{columns}};
+        for my $record (@{$records_of->($run->($part->{query}))}) {
+            $cells{$level}{$key_of->($record, \@part_groups)}{$key_of->($record, [$part_column])}
+                = $measured->($record, \@part_measures);
+        }
+    }
+    return {
+        column_axis => $column_axis,
+        column_index => $plan->{column_index},
+        row_indexes => $plan->{row_indexes},
+        columns => \@columns,
+        measures => \@measures,
+        # The cells of one page row: {column key => {measure key => value}}.
+        cells_for => sub ($record) {
+            return {} if $record->{__selecto_rollup_continued};
+            my $level = $built->{rollup} ? $record->{__selecto_rollup_level} : scalar(@groups);
+            return $cells{$level}{$key_of->($record, [@groups[0 .. $level - 1]])} // {};
+        },
+        selection_pairs => _grid_selection_pairs($state),
+    };
+}
+
+# A group that leaves out rows with no value does so in the summary. The
+# Detail view a summary row opens has no groups, so it gets the same
+# condition as an ordinary filter, unless the row already fixes that field.
+sub _group_filter_inputs ($state, $groups, $filters) {
+    my %key_field = map { ($_->{field} => $_->{drilldown_field} // $_->{field}) } @{$groups // []};
+    my %fixed = map { ($_->{field} => 1) } grep { ($_->{op} // '') =~ /\A(?:eq|not_null)\z/ && !$_->{grouped} } @$filters;
+    return [map {
+        my $field = $key_field{$_->{from_group}} // $_->{field};
+        $fixed{$field} ? () : {field => $field, op => 'not_null', value => '', value_end => '', grouped => 0}
+    } @{$state->group_filters}];
+}
+
 sub _grid_selection_pairs ($state) {
+    my @kept = map { { %$_ } } grep { !defined($_->{clause}) } @{$state->filters};
     my $detail = Selecto::Components::State->new(
         %{$state->as_hash},
         view => 'detail',
         aggregate_grid => 0,
         aggregate_grid_colorize => 0,
-        filters => [map { { %$_ } }
-            grep { !defined($_->{clause}) } @{$state->filters}],
+        filters => [@kept, @{_group_filter_inputs($state, undef, \@kept)}],
         page => 1,
         errors => [],
     );
@@ -944,6 +1057,7 @@ sub stream_export ($self, $controller, $format) {
     # Grids need the bounded matrix transformation; their fallback export is
     # deliberately capped by max_grid_result_cells.
     die "Aggregate grid exports require a bounded job\n" if $built->{aggregate_grid};
+    die "Pivot exports require a bounded job\n" if $built->{pivot};
     _cap_export($config, $built);
     my $budget = Selecto::Components::ExportBudget->new($config, $engine, $controller);
     my $stream = $engine->stream($built->{query}, fetch_size => EXPORT_FETCH_ROWS, bounded => 1,
@@ -1041,6 +1155,7 @@ sub xlsx_file_export ($self, $controller) {
         {paginate => 0, rollup => _rollup_supported($engine), cube => _cube_supported($engine), grouping_sets => _grouping_sets_supported($engine)},
     );
     die "Aggregate grid exports require a bounded job\n" if $built->{aggregate_grid};
+    die "Pivot exports require a bounded job\n" if $built->{pivot};
     _cap_export($config, $built);
     my $budget = Selecto::Components::ExportBudget->new($config, $engine, $controller);
     my $spool = File::Temp->newdir('selecto-xlsx-XXXXXX', TMPDIR => 1, CLEANUP => 1);
@@ -1287,6 +1402,8 @@ sub _export_columns ($model) {
 
 sub _export_dataset ($model) {
     my $grid = $model->{result}{grid_data};
+    return _summary_pivot_export_dataset($model)
+        if !$grid && $model->{result}{pivot_data} && !$model->{result}{pivot_data}{limit};
     return ([ _export_columns($model) ], $model->{result}{records}) unless $grid;
     return _pivot_export_dataset($grid) if $grid->{pivot};
 
@@ -1357,6 +1474,39 @@ sub _pivot_export_dataset ($grid) {
     } @{$grid->{rows}};
     push @records, $record->(['Total', map { '' } 1 .. $#{$grid->{row_axes}}],
         $totals->{columns}, $totals->{grand}) if $totals && @records;
+    return (\@columns, \@records);
+}
+
+# A summary pivot as a flat table: the row groups, then one column per column
+# value and measure headed "<column value> · <measure label>", then the row
+# totals. Subtotal and total rows are included, as the table shows them.
+sub _summary_pivot_export_dataset ($model) {
+    my $result = $model->{result};
+    my $pivot = $result->{pivot_data};
+    my @groups = grep { !$_->{measure} && !$_->{action_id} } @{$result->{columns}};
+    my @measures = @{$pivot->{measures}};
+    my @columns = map { {key => $_->{key}, label => $_->{label}} } @groups;
+    my @value_columns;
+    for my $column_index (0 .. $#{$pivot->{columns}}) {
+        push @value_columns, map { {
+            key => "__selecto_pivot_${column_index}_$_",
+            label => _grid_export_label($pivot->{columns}[$column_index]{value}) . " \x{b7} " . $measures[$_]{label},
+            column => $pivot->{columns}[$column_index]{key}, measure => $measures[$_]{key},
+        } } 0 .. $#measures;
+    }
+    push @columns, (map { {key => $_->{key}, label => $_->{label}} } @value_columns),
+        map { {key => "__selecto_pivot_total_$_", label => "Total \x{b7} " . $measures[$_]{label}} } 0 .. $#measures;
+    my @records;
+    for my $record (@{$result->{records}}) {
+        next if $record->{__selecto_rollup_continued};
+        my $level = $result->{rollup} ? $record->{__selecto_rollup_level} : scalar(@groups);
+        my %row = map { ($groups[$_]{key} => $_ < $level ? $record->{$groups[$_]{key}} : undef) } 0 .. $#groups;
+        $row{$groups[0]{key}} = 'Total' if $result->{rollup} && $level == 0;
+        my $cells = $pivot->{cells_for}->($record);
+        $row{$_->{key}} = ($cells->{$_->{column}} // {})->{$_->{measure}} for @value_columns;
+        $row{"__selecto_pivot_total_$_"} = $record->{$measures[$_]{key}} for 0 .. $#measures;
+        push @records, \%row;
+    }
     return (\@columns, \@records);
 }
 

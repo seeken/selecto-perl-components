@@ -121,3 +121,4 @@ xt/pod.t
 t/explorer_count_generated.t
 t/measure_graph_controls.t
 t/pivot_grid.t
+t/summary_pivot.t

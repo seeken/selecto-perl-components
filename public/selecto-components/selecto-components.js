@@ -3036,18 +3036,36 @@
     gridColumn.setAttribute("data-sc-group-grid-column", "");
     var gridColumnBox = document.createElement("input");
     gridColumnBox.type = "checkbox";
-    gridColumnBox.name = "grid_column";
+    gridColumnBox.name = "pivot_column";
     gridColumnBox.value = "";
     gridColumnBox.setAttribute("data-sc-grid-column-choice", "");
-    gridColumnBox.setAttribute("aria-label", "Show " + label + " as grid columns");
+    gridColumnBox.setAttribute("aria-label", "Show " + label + " as columns");
     gridColumn.appendChild(gridColumnBox);
     var gridColumnText = document.createElement("span");
     gridColumnText.textContent = "Show as columns";
     gridColumn.appendChild(gridColumnText);
     var gridColumnHelp = document.createElement("small");
-    gridColumnHelp.textContent = "In the aggregate grid. The other groups become rows.";
+    gridColumnHelp.textContent = "The other groups become rows, with every aggregate under each column.";
     gridColumn.appendChild(gridColumnHelp);
     grid.appendChild(gridColumn);
+
+    // Leaving out rows with no value is a filter on the group's field.
+    var excludeMissing = document.createElement("label");
+    excludeMissing.className = "sc-option-check";
+    excludeMissing.setAttribute("data-sc-group-exclude-missing", "");
+    var excludeMissingBox = document.createElement("input");
+    excludeMissingBox.type = "checkbox";
+    excludeMissingBox.name = "group_exclude_missing";
+    excludeMissingBox.value = "";
+    excludeMissingBox.setAttribute("aria-label", "Leave out rows with no " + label);
+    excludeMissing.appendChild(excludeMissingBox);
+    var excludeMissingText = document.createElement("span");
+    excludeMissingText.textContent = "Leave out rows with no value";
+    excludeMissing.appendChild(excludeMissingText);
+    var excludeMissingHelp = document.createElement("small");
+    excludeMissingHelp.textContent = "Adds a filter, so totals leave them out too.";
+    excludeMissing.appendChild(excludeMissingHelp);
+    grid.appendChild(excludeMissing);
   }
 
   function appendMeasureConfig(grid, type, label, selected) {
@@ -3183,6 +3201,8 @@
     item.querySelectorAll("[data-sc-group-grid-column]").forEach(function (node) { node.hidden = viewName !== "aggregate"; });
     var gridColumnChoice = item.querySelector("[data-sc-grid-column-choice]");
     if (gridColumnChoice && !gridColumnChoice.value) gridColumnChoice.value = item.dataset.field || "";
+    var excludeMissingChoice = item.querySelector('[data-sc-group-exclude-missing] input');
+    if (excludeMissingChoice && !excludeMissingChoice.value) excludeMissingChoice.value = item.dataset.field || "";
     var groupFormat = item.querySelector("[data-sc-group-format]");
     if (groupFormat) {
       var buckets = /^(?:buckets|age_buckets|custom_buckets|year_buckets)$/.test(groupFormat.value);
@@ -3927,6 +3947,14 @@
       refreshFilterBadge(builder);
     } else if (event.target.matches("[data-sc-group-format], [data-sc-measure-function], [data-sc-measure-transform]")) {
       syncPickerConfig(event.target.closest("[data-sc-picker-set-item]"));
+    } else if (event.target.matches("[data-sc-group-exclude-missing] input")) {
+      // The filter a group adds goes when its box is cleared; a newly ticked
+      // one is listed once the query is applied.
+      if (!event.target.checked) {
+        builder.querySelectorAll("[data-sc-group-filter]").forEach(function (node) {
+          if (node.dataset.scGroupFilter === event.target.value) node.remove();
+        });
+      }
     } else if (event.target.matches("[data-sc-grid-column-choice]")) {
       // At most one group is the grid's columns.
       if (event.target.checked) {

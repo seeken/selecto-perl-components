@@ -1,6 +1,23 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Show as columns in the summary table. A Group By marked Show as columns
+      now pivots the paged aggregate table as well as the grid: the other
+      groups stay rows with their rollup subtotals, order, pages and
+      drilldowns, each column value heads one sub-column per measure, and a
+      Total group holds each row's totals. Every page has the same columns
+      and whole-result totals: a page's rows come from the ordinary summary
+      query, and its cells from one grouped query per rollup level shown,
+      plus one for the column values. Values and column headers drill to
+      Detail on the row values and the column value. Explorer->export
+      flattens the header and keeps subtotal and total rows. The parameter is
+      now pivot_column; grid_column is still read. max_grid_columns and
+      max_grid_result_cells bound it. A summary without the parameter, the
+      grid and the graph render as before.
+    - Leave out rows with no value: a checkbox on each Group By
+      (group_exclude_missing=<group field>) that filters out rows where the
+      group's field is null, in every aggregate layout. Totals leave them
+      out too. It is listed with the filters as coming from the group.
     - Aggregate grid: one Group By can be marked "Show as columns"
       (grid_column=<group field>), and the grid then takes any number of row
       groups and measures. Each column value heads one sub-column per

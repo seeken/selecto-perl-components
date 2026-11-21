@@ -17,12 +17,12 @@ use Selecto::Query ();
 use Selecto::QueryLibrary ();
 use Selecto::Components::InputBudget ();
 
-has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale aggregate_grid_column row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column filter_groups row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group graph_palette graph_category_field graph_category_value graph_category_format graph_category_color aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale grid_column row_click_action field field_alias field_format filter_field filter_op filter_value filter_values_json filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
-        group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
+        q query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group graph_palette graph_category_field graph_category_value graph_category_format graph_category_color aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column grid_column row_click_action field field_alias field_format filter_field filter_op filter_value filter_values_json filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
+        group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles group_exclude_missing
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_fill_opacity measure_transform measure_transform_window
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
         order direction limit page
@@ -100,7 +100,7 @@ sub from_input ($class, $config, $domain, $input) {
         $config, $domain, $input, $config->field_map($domain, $retarget), $valid_fields,
         $query_library, \@errors, $retarget,
     );
-    my $aggregate_grid_column = _parse_grid_column($aggregate_grid, $input, $valid_groups, \@errors);
+    my $pivot_column = _parse_pivot_column($view, $input, $valid_groups, \@errors);
     my ($limit, $page) = _parse_pagination($config, $input, $view, \@errors);
     my $filters = _parse_filters(
         $config, $input, $config->filter_map($domain, $grain),
@@ -120,7 +120,7 @@ sub from_input ($class, $config, $domain, $input) {
         aggregate_grid => $aggregate_grid,
         aggregate_grid_colorize => $aggregate_grid_colorize,
         aggregate_grid_color_scale => $aggregate_grid_color_scale,
-        aggregate_grid_column => $aggregate_grid_column,
+        pivot_column => $pivot_column,
         row_click_action => $row_click_action,
         fields => $valid_fields,
         field_configs => $field_configs,
@@ -151,6 +151,21 @@ sub from_input ($class, $config, $domain, $input) {
 }
 
 sub valid ($self) { return @{$self->errors} ? 0 : 1; }
+
+# Filters a Group By asks for itself: "leave out rows with no value" is a
+# not_null condition on the group's field, so every total leaves those rows
+# out too. They follow the group and are never written as filter parameters.
+# A query built for part of the groups (a pivot's rows, or its cells at one
+# level) names the whole query's groups in filter_groups, so every part
+# leaves out the same rows.
+sub group_filters ($self, $field_map = undef) {
+    return [map {
+        my $group = $_;
+        my $dimension = $field_map ? ($field_map->{$group} // {})->{dimension} : undef;
+        {field => $dimension ? $dimension->{key_field} : $group, op => 'not_null', value => '',
+            value_end => '', from_group => $group}
+    } grep { ($self->group_configs->{$_} // {})->{exclude_missing} } @{$self->filter_groups // $self->groups}];
+}
 
 # The explicitly chosen row grain, whose fields the pickers offer. An
 # automatic retarget keeps the root pickers.
@@ -187,9 +202,9 @@ sub query_pairs ($self) {
         push @pairs, aggregate_grid => 1;
         push @pairs, aggregate_grid_colorize => 1 if $self->aggregate_grid_colorize;
         push @pairs, aggregate_grid_color_scale => $self->aggregate_grid_color_scale;
-        push @pairs, grid_column => $self->aggregate_grid_column
-            if defined($self->aggregate_grid_column);
     }
+    push @pairs, pivot_column => $self->pivot_column
+        if $self->view eq 'aggregate' && defined($self->pivot_column);
     push @pairs, row_click_action => $self->row_click_action
         if defined($self->row_click_action) && length($self->row_click_action);
     for my $index (0 .. $#{$self->fields}) {
@@ -230,6 +245,8 @@ sub query_pairs ($self) {
             group_prefix_length => $column->{prefix_length} // 2,
             group_exclude_articles => $column->{exclude_articles} ? 1 : 0;
     }
+    push @pairs, group_exclude_missing => $_
+        for grep { ($self->group_configs->{$_} // {})->{exclude_missing} } @{$self->groups};
     for my $index (0 .. $#{$self->measures}) {
         my $measure = $self->measures->[$index];
         my $measure_config = ($self->measure_config_list // [])->[$index]
@@ -386,7 +403,7 @@ sub as_hash ($self) {
         aggregate_grid => $self->aggregate_grid,
         aggregate_grid_colorize => $self->aggregate_grid_colorize,
         aggregate_grid_color_scale => $self->aggregate_grid_color_scale,
-        aggregate_grid_column => $self->aggregate_grid_column,
+        pivot_column => $self->pivot_column,
         row_click_action => $self->row_click_action,
         fields => [@{$self->fields}],
         field_configs => { map { $_ => { %{$self->field_configs->{$_}} } } keys %{$self->field_configs} },
@@ -446,21 +463,22 @@ sub _parse_aggregate_grid ($view, $input) {
     return ($enabled, $colorize, $scale);
 }
 
-# The group shown as the grid's columns (grid_column=<group field>). Every
-# other group is a row dimension. Without it a grid of two groups uses the
-# second as its columns, as it always has.
-sub _parse_grid_column ($enabled, $input, $groups, $errors) {
-    return undef unless $enabled;
-    my @requested = grep { length } map { _scalar($_) } @{_values($input, 'grid_column')};
+# The group shown as columns in the aggregate view (pivot_column=<group field>;
+# grid_column is the same thing under its first name). Every other group is a
+# row dimension. It applies to the summary table and to the grid alike.
+sub _parse_pivot_column ($view, $input, $groups, $errors) {
+    return undef unless $view eq 'aggregate';
+    my @requested = grep { length } map { _scalar($_) }
+        @{_values($input, 'pivot_column')}, @{_values($input, 'grid_column')};
     return undef unless @requested;
     my %seen;
     @requested = grep { !$seen{$_}++ } @requested;
     if (@requested > 1) {
-        push @$errors, 'Only one group can be shown as the grid columns.';
+        push @$errors, 'Only one group can be shown as columns.';
         return undef;
     }
     unless (grep { $_ eq $requested[0] } @$groups) {
-        push @$errors, 'The grid column must be one of the selected groups.';
+        push @$errors, 'The group shown as columns must be one of the selected groups.';
         return undef;
     }
     return $requested[0];
@@ -542,6 +560,8 @@ sub _parse_groups ($config, $domain, $input, $field_map, $view, $configured, $er
     my $group_bucket_ranges = _values($input, 'group_bucket_ranges');
     my $group_prefix_lengths = _values($input, 'group_prefix_length');
     my $group_exclude_articles = _values($input, 'group_exclude_articles');
+    # Named by group field, not by position: an unticked box sends nothing.
+    my %exclude_missing = map { (_scalar($_) => 1) } @{_values($input, 'group_exclude_missing')};
     $group_values = [@{$config->resolved_default_group($domain, $rows_of)}]
         if !$configured && !grep { length(_scalar($_)) } @$group_values;
     my @valid_groups;
@@ -597,6 +617,7 @@ sub _parse_groups ($config, $domain, $input, $field_map, $view, $configured, $er
                 bucket_ranges => $bucket_ranges,
                 prefix_length => 0 + $prefix_length,
                 exclude_articles => $exclude_articles,
+                ($exclude_missing{$group} ? (exclude_missing => 1) : ()),
             };
         }
     }

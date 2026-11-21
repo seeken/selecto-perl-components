@@ -572,6 +572,14 @@
       refreshFilterBadge(builder);
     } else if (event.target.matches("[data-sc-group-format], [data-sc-measure-function], [data-sc-measure-transform]")) {
       syncPickerConfig(event.target.closest("[data-sc-picker-set-item]"));
+    } else if (event.target.matches("[data-sc-group-exclude-missing] input")) {
+      // The filter a group adds goes when its box is cleared; a newly ticked
+      // one is listed once the query is applied.
+      if (!event.target.checked) {
+        builder.querySelectorAll("[data-sc-group-filter]").forEach(function (node) {
+          if (node.dataset.scGroupFilter === event.target.value) node.remove();
+        });
+      }
     } else if (event.target.matches("[data-sc-grid-column-choice]")) {
       // At most one group is the grid's columns.
       if (event.target.checked) {
