@@ -1,6 +1,11 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Month buckets: a date group format whose ranges are calendar months
+      ago, such as 12-6, 5-3, 2, 1, 0 (either order within a range). Each
+      bucket is labelled by its months, "Nov 2025 - May 2026" or "Sep 2026",
+      and rows, pivot columns and grid columns follow the ranges' order.
+      Needs selecto-perl with month_ranges (pinned in ci/beep.json).
     - Pivot tables mark where each column group starts, so the groups are
       set apart by a divider, with a stronger one before Total.
     - A group bucketed by ranges keeps to its ranges: values outside every

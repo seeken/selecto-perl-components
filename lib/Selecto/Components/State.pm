@@ -175,7 +175,7 @@ sub group_filters ($self, $field_map = undef) {
         my $dimension = $field_map ? ($field_map->{$group} // {})->{dimension} : undef;
         my $group_config = $self->group_configs->{$group} // {};
         my $format = $group_config->{format} // '';
-        my $bucketed = !$dimension && $format =~ /\A(?:buckets|age_buckets|custom_buckets|year_buckets)\z/;
+        my $bucketed = !$dimension && Selecto::Components::BucketParser->group_kind($format);
         # Ranges are the report's layout, so they filter without being asked;
         # stepped buckets (*/10) cover every value and filter only on request.
         my $ranged = $bucketed && _ranged_buckets($group_config);
@@ -628,10 +628,7 @@ sub _parse_groups ($config, $domain, $input, $field_map, $view, $configured, $er
                 $format = '';
             }
             my $bucket_ranges = _trim($group_bucket_ranges->[$index]);
-            my $bucket_kind = $format eq 'buckets' ? 'numeric_ranges'
-                : $format eq 'age_buckets' ? 'elapsed_days_ranges'
-                : $format eq 'custom_buckets' ? 'date_relative_ranges'
-                : $format eq 'year_buckets' ? 'year_ranges' : '';
+            my $bucket_kind = Selecto::Components::BucketParser->group_kind($format);
             if (length($bucket_kind)
                 && !Selecto::Components::BucketParser->valid($bucket_ranges, $bucket_kind)) {
                 push @$errors, 'A group bucket range is not available.';

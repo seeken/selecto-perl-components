@@ -3,6 +3,7 @@ package Selecto::Components::Renderer::Builder;
 use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(to_json);
 use Mojo::URL ();
+use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
 use Selecto::Components::QueryLibrary ();
 use Selecto::Components::RowActions ();
@@ -985,13 +986,14 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
                 '<option value="' . _h($value) . '"' . ($value eq $format ? ' selected' : '') . '>' .
                     _h($text) . '</option>'
             } @{$config->group_formats($field->{type})};
-            my $bucket_visible = $format =~ /\A(?:buckets|age_buckets|custom_buckets|year_buckets)\z/;
+            my $bucket_visible = Selecto::Components::BucketParser->group_kind($format) ? 1 : 0;
             my $prefix_visible = $format eq 'text_prefix';
             $controls .= '<label>Format<select name="group_format" data-sc-group-format aria-label="Group format for ' .
                 _h($field->{label}) . '">' . $format_options . '</select></label>' .
                 '<label data-sc-group-buckets' . ($bucket_visible ? '' : ' hidden') . '>Bucket ranges' .
                 '<input name="group_bucket_ranges" value="' . _h($item_config->{bucket_ranges} // '') .
-                '" placeholder="1, 2-5, 6-14, 15+ or */10" aria-label="Bucket ranges for ' .
+                '" placeholder="' . ($format eq 'month_buckets' ? 'Months ago: 12-6, 5-3, 2, 1, 0' : '1, 2-5, 6-14, 15+ or */10') .
+                '" aria-label="Bucket ranges for ' .
                 _h($field->{label}) . '"></label>' .
                 '<label data-sc-group-prefix' . ($prefix_visible ? '' : ' hidden') . '>Prefix length' .
                 '<input type="number" min="1" max="10" name="group_prefix_length" value="' .

@@ -1298,6 +1298,7 @@ sub group_formats ($self, $type) {
         [age_buckets => 'Age buckets'],
         [custom_buckets => 'Relative date buckets'],
         [year_buckets => 'Year buckets'],
+        [month_buckets => 'Month buckets'],
     ] if $self->temporal_type($type);
     return [[default => 'Default'], [buckets => 'Buckets']] if $self->numeric_type($type);
     return [[default => 'Default'], [text_prefix => 'Text prefix']]

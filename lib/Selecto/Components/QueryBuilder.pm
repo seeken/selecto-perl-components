@@ -674,11 +674,7 @@ sub _group_expression ($column, $config) {
     my $format = $config->{format} // '';
     my $field = _temporal_expression($column->{field}, $column->{source_type} // $column->{type});
     return $field unless length($format) && $format ne 'default';
-    if ($format eq 'buckets' || $format eq 'age_buckets'
-        || $format eq 'custom_buckets' || $format eq 'year_buckets') {
-        my $kind = $format eq 'buckets' ? 'numeric_ranges'
-            : $format eq 'age_buckets' ? 'elapsed_days_ranges'
-            : $format eq 'custom_buckets' ? 'date_relative_ranges' : 'year_ranges';
+    if (my $kind = Selecto::Components::BucketParser->group_kind($format)) {
         my $specification = Selecto::Components::BucketParser->specification(
             $config->{bucket_ranges}, $kind
         );
@@ -700,10 +696,7 @@ sub _group_expression ($column, $config) {
 # (*/10) by their lower bound. Text order would put 10-20 before 5-9.
 sub _bucket_order ($config) {
     my $format = $config->{format} // '';
-    return () unless $format =~ /\A(?:buckets|age_buckets|custom_buckets|year_buckets)\z/;
-    my $kind = $format eq 'buckets' ? 'numeric_ranges'
-        : $format eq 'age_buckets' ? 'elapsed_days_ranges'
-        : $format eq 'custom_buckets' ? 'date_relative_ranges' : 'year_ranges';
+    my $kind = Selecto::Components::BucketParser->group_kind($format) or return ();
     my $specification = Selecto::Components::BucketParser->specification($config->{bucket_ranges}, $kind);
     return () unless ref($specification) eq 'HASH';
     return (bucket_order => 'lower_bound') unless ref($specification->{ranges}) eq 'ARRAY';
@@ -716,10 +709,19 @@ sub _bucket_order ($config) {
 
 sub _group_natural_order_expression ($column, $config) {
     my $format = $config->{format} // '';
-    return undef unless $format eq 'day_of_week';
     my $field = _temporal_expression(
         $column->{field}, $column->{source_type} // $column->{type},
     );
+    # Month labels read as text out of order; their ranges, in the order
+    # given, are the order. The same bucket labelled by rank sorts that way.
+    if ($format eq 'month_buckets') {
+        my $specification = Selecto::Components::BucketParser->specification($config->{bucket_ranges}, 'month_ranges');
+        return undef unless $specification;
+        my $rank = 0;
+        return Selecto::Expression->bucket($field, {%$specification,
+            ranges => [map { {%$_, label => sprintf('%04d', $rank++)} } @{$specification->{ranges}}]});
+    }
+    return undef unless $format eq 'day_of_week';
     return Selecto::Expression->datetime_format($field, 'day_of_week_num');
 }
 

@@ -2968,7 +2968,8 @@
       return [["", "Default"]].concat(dateFormats).concat([
         ["age_buckets", "Age buckets"],
         ["custom_buckets", "Relative date buckets"],
-        ["year_buckets", "Year buckets"]
+        ["year_buckets", "Year buckets"],
+        ["month_buckets", "Month buckets"]
       ]);
     }
     if (numericFilterType(type)) return [["", "Default"], ["buckets", "Buckets"]];
@@ -3246,8 +3247,13 @@
     if (excludeMissingChoice && !excludeMissingChoice.value) excludeMissingChoice.value = item.dataset.field || "";
     var groupFormat = item.querySelector("[data-sc-group-format]");
     if (groupFormat) {
-      var buckets = /^(?:buckets|age_buckets|custom_buckets|year_buckets)$/.test(groupFormat.value);
+      var buckets = /^(?:buckets|age_buckets|custom_buckets|year_buckets|month_buckets)$/.test(groupFormat.value);
       item.querySelectorAll("[data-sc-group-buckets]").forEach(function (node) { node.hidden = !buckets; });
+      var rangesInput = item.querySelector('input[name="group_bucket_ranges"]');
+      if (rangesInput) {
+        rangesInput.placeholder = groupFormat.value === "month_buckets"
+          ? "Months ago: 12-6, 5-3, 2, 1, 0" : "1, 2-5, 6-14, 15+ or */10";
+      }
       item.querySelectorAll("[data-sc-group-prefix]").forEach(function (node) {
         node.hidden = groupFormat.value !== "text_prefix";
       });

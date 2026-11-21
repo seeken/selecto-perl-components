@@ -1319,6 +1319,14 @@ column value and measure, headed C<< <column value> · <measure label> >>, and
 includes the subtotal and total rows. The streamed web export refuses it, as
 it refuses a grid.
 
+B<Month buckets>, a date group format, takes ranges of calendar months ago:
+C<12-6, 5-3, 2, 1, 0> groups the months from a year ago to six months ago,
+five to three months ago, then two months ago, last month and this month.
+Each bucket is labelled by its months (C<Nov 2025 - May 2026>, C<Sep 2026>),
+and rows and columns follow the order the ranges were given. C<13+> and
+C<-1> are open ends. The months are counted from the database's current
+date; the labels from the server's.
+
 B<Show Total columns>, beside B<Show as columns> on the group shown as
 columns, is on by default. C<pivot_totals=0> turns the pivot's Total column
 group off, in the summary table and in the grid; the parameter is left out
