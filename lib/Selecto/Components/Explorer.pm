@@ -96,7 +96,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         my $build_started = time;
         my $built = Selecto::Components::QueryBuilder->build(
             $config, $engine->domain, $state,
-            {paginate => !$all_rows, rollup => _rollup_supported($engine)}
+            {paginate => !$all_rows, rollup => _rollup_supported($engine), cube => _cube_supported($engine)}
         );
         _cap_export($config, $built) if $all_rows;
         my $build_ms = _elapsed_ms($build_started);
@@ -388,7 +388,7 @@ sub count ($self, $controller) {
     my $state = Selecto::Components::State->from_input($config, $engine->domain, $input);
     die join('; ', @{$state->errors}) . "\n" unless $state->valid;
     my $built = Selecto::Components::QueryBuilder->build(
-        $config, $engine->domain, $state, {paginate => 1, rollup => _rollup_supported($engine)},
+        $config, $engine->domain, $state, {paginate => 1, rollup => _rollup_supported($engine), cube => _cube_supported($engine)},
     );
     die "Only Detail pages are counted later\n" unless $built->{count_beyond_page};
     my $prepared = Selecto::BoundedQuery->prepare($engine, $built->{query}, limits => $config->limits);
@@ -479,6 +479,10 @@ sub _rollup_supported ($engine) {
     return $engine->adapter->supports('rollup') ? 1 : 0;
 }
 
+sub _cube_supported ($engine) {
+    return $engine->adapter->supports('cube') ? 1 : 0;
+}
+
 sub _prepare_rollup_records ($built, $records) {
     return unless $built->{rollup};
     my $group_count = $built->{group_count};
@@ -488,7 +492,7 @@ sub _prepare_rollup_records ($built, $records) {
         my $mask = $record->{$rollup_key};
         die "aggregate rollup returned invalid grouping metadata\n"
             unless defined($mask) && !ref($mask) && "$mask" =~ /\A\d+\z/
-                && $mask <= $maximum_mask && (($mask & ($mask + 1)) == 0);
+                && $mask <= $maximum_mask && ($built->{cube} || (($mask & ($mask + 1)) == 0));
         my $rolled_up = 0;
         my $remaining = 0 + $mask;
         while ($remaining) {
@@ -496,6 +500,9 @@ sub _prepare_rollup_records ($built, $records) {
             $remaining >>= 1;
         }
         $record->{__selecto_rollup_level} = $group_count - $rolled_up;
+        # In a cube a row may keep a later dimension and drop an earlier one,
+        # so its level alone does not say which dimensions it has.
+        $record->{__selecto_grouping_mask} = 0 + $mask if $built->{cube};
     }
 }
 
@@ -550,6 +557,10 @@ sub _drilldowns ($state, $built, $records, $grain = undef) {
     for my $record (@$records) {
         my $available_levels = $built->{rollup}
             ? $record->{__selecto_rollup_level} : scalar(@groups);
+        # A cube row that drops an earlier dimension has no prefix to drill
+        # into; the grid builds the drilldowns of its totals itself.
+        my $mask = $record->{__selecto_grouping_mask} // 0;
+        $available_levels = 0 if $mask & ($mask + 1);
         my @row_drilldowns;
         for my $group_index (0 .. $available_levels - 1) {
             push @row_drilldowns, _drilldown_for_group_indexes(
@@ -627,10 +638,22 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
 
     my (@rows, @columns);
     my (%seen_row, %seen_column, %cells);
+    my (%row_totals, %column_totals, $grand_total);
     my $maximum_positive;
     for my $record_index (0 .. $#$records) {
         my $record = $records->[$record_index];
         next if $record->{__selecto_rollup_continued};
+        if ($built->{cube} && ($record->{__selecto_rollup_level} // -1) < 2) {
+            # Mask bits follow the dimensions, first dimension highest: 1 drops
+            # the column dimension (a row total), 2 the row dimension (a
+            # column total), 3 both (the grand total).
+            my $mask = $record->{__selecto_grouping_mask};
+            my $total = {value => $record->{$measures[0]{key}}};
+            if ($mask == 1) { $row_totals{_grid_value_key($record->{$groups[0]{key}})} = $total }
+            elsif ($mask == 2) { $column_totals{_grid_value_key($record->{$groups[1]{key}})} = $total }
+            else { $grand_total = $total }
+            next;
+        }
         next unless ($record->{__selecto_rollup_level} // -1) == 2;
 
         my $row_value = $record->{$groups[0]{key}};
@@ -688,6 +711,9 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
         columns => \@columns,
         cells => \%cells,
         maximum_positive => $maximum_positive,
+        ($built->{cube} ? (totals => {
+            rows => \%row_totals, columns => \%column_totals, grand => $grand_total,
+        }) : ()),
         selection_pairs => _grid_selection_pairs($state),
     };
 }
@@ -824,7 +850,7 @@ sub stream_export ($self, $controller, $format) {
     die join('; ', @{$state->errors}) . "\n" unless $state->valid;
     my $built = Selecto::Components::QueryBuilder->build(
         $config, $engine->domain, $state,
-        {paginate => 0, rollup => _rollup_supported($engine)},
+        {paginate => 0, rollup => _rollup_supported($engine), cube => _cube_supported($engine)},
     );
     # Grids need the bounded matrix transformation; their fallback export is
     # deliberately capped by max_grid_result_cells.
@@ -923,7 +949,7 @@ sub xlsx_file_export ($self, $controller) {
     die join('; ', @{$state->errors}) . "\n" unless $state->valid;
     my $built = Selecto::Components::QueryBuilder->build(
         $config, $engine->domain, $state,
-        {paginate => 0, rollup => _rollup_supported($engine)},
+        {paginate => 0, rollup => _rollup_supported($engine), cube => _cube_supported($engine)},
     );
     die "Aggregate grid exports require a bounded job\n" if $built->{aggregate_grid};
     _cap_export($config, $built);

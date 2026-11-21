@@ -1,6 +1,10 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - The aggregate grid shows a Total column, a Total row and a grand total
+      on adapters with the cube capability. The grid query then groups with
+      CUBE instead of ROLLUP; the totals are the database's aggregates, not
+      sums of the visible cells. Needs a selecto-perl with group_by_cube.
     - canonical_explorer (explorer host options) adds remote_query.explorer.v1
       to the canonical base: GET explorer-features and POST explorer-query over
       Selecto::API::Explorer, advertised in the manifest, with the query

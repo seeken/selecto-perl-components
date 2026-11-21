@@ -590,6 +590,16 @@ sub _grid ($class, $result, $model) {
                 _h(_display_group($column->{value})) . '"><span>' .
                 _html_display($grid->{column_axis}, $column->{value}, 1) . '</span></label></th>'
         } @{$grid->{columns}});
+    my $totals = $grid->{totals};
+    my $measure_class = _numeric_measure_class($grid->{measure}, $model) ? ' sc-numeric-measure' : '';
+    # A total cell. Its value comes from the database, not from adding the
+    # visible cells, so averages and distinct counts are right as well.
+    my $total_cell = sub ($total, $kind) {
+        return '<td class="sc-grid-total sc-grid-total-' . $kind . $measure_class . '"><strong>' .
+            (ref($total) eq 'HASH' ? _html_display($grid->{measure}, $total->{value}) : '—') .
+            '</strong></td>';
+    };
+    $head .= '<th scope="col" class="sc-grid-total-heading">Total</th>' if $totals;
 
     my $rows = '';
     my $row_index = 0;
@@ -639,9 +649,15 @@ sub _grid ($class, $result, $model) {
                 '</span><span class="sc-grid-cell-selected" aria-hidden="true">&#10003;</span></label></td>';
             $current_column++;
         }
+        $cells .= $total_cell->($totals->{rows}{$row->{key}}, 'row') if $totals;
         $rows .= '<tr>' . $cells . '</tr>';
     }
-    my $column_count = 1 + scalar(@{$grid->{columns}});
+    if ($totals && $rows) {
+        $rows .= '<tr class="sc-grid-total-row"><th scope="row" class="sc-grid-total-heading">Total</th>' .
+            join('', map { $total_cell->($totals->{columns}{$_->{key}}, 'column') } @{$grid->{columns}}) .
+            $total_cell->($totals->{grand}, 'grand') . '</tr>';
+    }
+    my $column_count = 1 + scalar(@{$grid->{columns}}) + ($totals ? 1 : 0);
     $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count .
         '">No rows matched this query.</td></tr>';
     my $max_cells = $model->{config}->max_grid_cells;

@@ -38,9 +38,15 @@ sub _retargeted ($query, $path) {
     my $retargeted = $query->retarget($path)
         ->select(map { _rerooted($_, $path) } @{$query->selections});
     my @groups = map { _rerooted($_, $path) } @{$query->groups};
-    $retargeted = $query->grouping_mode eq 'rollup'
-        ? $retargeted->group_by_rollup(\@groups) : $retargeted->group_by(\@groups)
-        if @groups;
+    if (@groups) {
+        my $mode = $query->grouping_mode;
+        # The rerooted groups keep their order, so declared sets keep their positions.
+        $retargeted = $mode eq 'rollup' ? $retargeted->group_by_rollup(\@groups)
+            : $mode eq 'cube' ? $retargeted->group_by_cube(\@groups)
+            : $mode eq 'grouping_sets'
+                ? $retargeted->group_by_grouping_sets(map { [@groups[@$_]] } @{$query->grouping_sets})
+            : $retargeted->group_by(\@groups);
+    }
     $retargeted = $retargeted->order_by(_rerooted($_->[0], $path), $_->[1]) for @{$query->orders};
     $retargeted = $retargeted->limit($query->limit_value) if defined $query->limit_value;
     $retargeted = $retargeted->offset($query->offset_value) if defined $query->offset_value;
@@ -489,7 +495,12 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
     push @selections, Selecto::Expression->grouping(\@groups)->as($rollup_key) if $rollup;
     my $query = Selecto::Query->new->select(@selections);
     my $peek = 0;
-    $query = $rollup ? $query->group_by_rollup(\@groups) : $query->group_by(\@groups);
+    # The grid is a matrix of two dimensions. A cube adds what a rollup lacks
+    # there: a total for every column as well as for every row. Callers pass
+    # cube => 1 only for adapters that support it.
+    my $cube = $rollup && $aggregate_grid && $options->{cube} ? 1 : 0;
+    $query = $cube ? $query->group_by_cube(\@groups)
+        : $rollup ? $query->group_by_rollup(\@groups) : $query->group_by(\@groups);
     $query = _with_filters($query, $state, $config, $domain);
     $query = $query->order_by($_, 'asc') for @group_orders;
     if ($aggregate_grid) {
@@ -512,6 +523,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         graph => $state->view eq 'graph' ? 1 : 0,
         aggregate_grid => $aggregate_grid,
         rollup => $rollup,
+        cube => $cube,
         rollup_key => $rollup ? $rollup_key : undef,
         group_count => scalar(@groups),
     };

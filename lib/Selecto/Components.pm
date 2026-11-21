@@ -1260,8 +1260,13 @@ C<text_contains>, C<starts_with> and C<ends_with>, plus C<_ci>
 (case-insensitive) variants; C<%> and C<_> are matched literally. Date fields
 add allowlisted shortcuts such as C<today>, C<this_month>, C<qtd> and
 C<last_30_days>, which resolve to bound, half-open ranges. Subtotals and
-grand totals need the adapter's C<GROUP BY ROLLUP>. On adapters without it,
-such as SQLite, MySQL and SQL Server, Aggregate views group plainly.
+grand totals need the adapter's C<rollup> capability; on adapters without it
+Aggregate views group plainly. On adapters with the C<cube> capability
+(PostgreSQL, DuckDB and SQLite) the aggregate grid also shows a Total column,
+a Total row and a grand total. These are the database's own aggregates over
+each row, column and the whole grid, so an average or a distinct count is
+correct there too. Total cells are read-only and are not part of a grid
+selection.
 
 =head1 SECURITY
 
