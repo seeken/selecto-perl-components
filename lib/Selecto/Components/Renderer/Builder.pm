@@ -860,7 +860,7 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         } else {
             $config_controls = _picker_config_controls(
                 $options{config}, $kind, $field, $item_config, $options{date_formats}, $state->view,
-                $state->pivot_column,
+                $state->pivot_column, $state->pivot_totals // 1,
             );
         }
         '<article class="sc-picker-set-item" draggable="true" data-sc-picker-set-item data-field="' .
@@ -946,7 +946,7 @@ sub _grouped_picker_items ($fields, $root_label, $render) {
     } sort { !length($a) ? -1 : !length($b) ? 1 : lc($a) cmp lc($b) } keys %groups;
 }
 
-sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats, $view = '', $grid_column = undef) {
+sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats, $view = '', $grid_column = undef, $pivot_totals = 1) {
     return _hidden('field_alias', '') . _hidden('field_format', '')
         if $kind eq 'field' && $field->{type} eq 'action';
     my $alias = $item_config->{alias} // '';
@@ -1013,6 +1013,19 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
             (($grid_column // '') eq $field->{path} ? ' checked' : '') .
             ' aria-label="Show ' . _h($field->{label}) . ' as columns"><span>Show as columns</span>' .
             '<small>The other groups become rows, with every aggregate under each column.</small></label>' .
+            # Belongs to the group shown as columns: the others keep it hidden
+            # and disabled, so only that one is sent. The hidden 0 says "off"
+            # when the box is clear.
+            do {
+                my $is_column = $view eq 'aggregate' && ($grid_column // '') eq $field->{path};
+                my $off = $is_column ? '' : ' disabled';
+                '<label class="sc-option-check" data-sc-group-pivot-totals' . ($is_column ? '' : ' hidden') .
+                    '><input type="hidden" name="pivot_totals" value="0"' . $off .
+                    '><input type="checkbox" name="pivot_totals" value="1"' . $off .
+                    (!$is_column || $pivot_totals ? ' checked' : '') .
+                    ' aria-label="Show Total columns"><span>Show Total columns</span>' .
+                    '<small>A last group of columns with each row\'s totals.</small></label>'
+            } .
             # A filter, not a hidden row: totals leave those rows out as well.
             '<label class="sc-option-check" data-sc-group-exclude-missing><input type="checkbox" ' .
             'name="group_exclude_missing" value="' . _h($field->{path}) . '"' .

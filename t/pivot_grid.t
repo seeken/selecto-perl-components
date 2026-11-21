@@ -75,6 +75,7 @@ for my $backend (qw(sqlite postgresql)) {
         $app->plugin('Selecto::Components' => {websocket_mode => 'public', explorers => {
             loads => {%explorer},
             narrow => {%explorer, path => '/narrow', max_grid_columns => 2},
+            shown => {%explorer, path => '/shown', show_sql => 1},
         }});
         my $t = Test::Mojo->new($app);
 
@@ -185,6 +186,54 @@ for my $backend (qw(sqlite postgresql)) {
                 ->text_like('.sc-grid-warning' => qr/exactly two Group By fields and one Aggregate\. For more, mark one Group By as Show as columns\./);
         };
 
+        subtest 'the Total columns can be turned off' => sub {
+            $t->get_ok('/loads' => form => {@pivot, pivot_column => 'days', pivot_totals => 0})->status_is(200);
+            my $off = $t->tx->res->dom;
+            is_deeply texts($off, '.sc-pivot-grid thead tr:nth-child(1) > th'),
+                ['Origin', 'Destination', '5-9', '10-20', '21+'], 'no Total column group';
+            is_deeply texts($off, '.sc-pivot-grid thead tr:nth-child(2) > th'), [('Price', 'Pay', 'Count') x 3];
+            is_deeply texts($off, '.sc-pivot-grid tbody tr:nth-child(1) > *'),
+                [qw(MI OH 110 85 2 200 150 1), '—', '—', '—'], 'the cells are unchanged';
+            is_deeply texts($off, '.sc-pivot-grid tbody tr:nth-child(2) > *'),
+                [qw(MI TX 50 40 1), '—', '—', '—', qw(300 250 1)];
+            is_deeply texts($off, '.sc-pivot-grid tbody tr.sc-grid-total-row > *'),
+                [qw(Total 160 125 3 270 210 2 300 250 1)], 'the Total row stays, without the grand total';
+            like $off->to_string, qr/[?&;]pivot_totals=0(?:&|")/, 'the setting is carried in generated links';
+            unlike $dom->at('.sc-results')->to_string, qr/pivot_totals/, 'and left out when on';
+
+            my $controller = $app->build_controller;
+            my $explorer = $controller->selecto_components_explorer('loads');
+            my $model = $explorer->model($controller, {@pivot, pivot_column => 'days', pivot_totals => 0});
+            my $shown = $controller->selecto_components_explorer('shown');
+            my $sql_on = $shown->model($controller, {@pivot, pivot_column => 'days'})->{result}{sql};
+            my $sql_off = $shown->model($controller, {@pivot, pivot_column => 'days', pivot_totals => 0})->{result}{sql};
+            cmp_ok length($sql_off), '<', length($sql_on), 'the query leaves out the grouping sets only the Total columns need';
+            if ($backend eq 'postgresql') {
+                like $sql_on, qr/GROUPING SETS \(.*\(\s*\)\)/s, 'with them: the grand total set';
+                unlike $sql_off, qr/GROUPING SETS \(.*\(\s*\)\)/s, 'without them: none';
+            }
+            my $again = $explorer->model($controller, Selecto::Components::Dashboard->new->input_from_url(
+                $explorer->canonical_url($model->{state}, $model->{domain})));
+            is $again->{state}->pivot_totals, 0, 'a saved view URL restores it';
+            ok !$again->{result}{grid_data}{total_columns}, 'and the grid has no Total columns again';
+            my @lines = map { s/"//gr } split /\r?\n/, $explorer->export($model, 'csv');
+            is $lines[0], join(',', 'Origin', 'Destination', map { my $c = $_; map { "$c \x{b7} $_" } qw(Price Pay Count) } '5-9', '10-20', '21+'),
+                'export has no Total columns';
+            is $lines[1], 'MI,OH,110,85,2,200,150,1,,,', 'a row without its totals';
+            is $lines[-1], 'Total,,160,125,3,270,210,2,300,250,1', 'the total row';
+
+            # Two groups, one measure: with a column group the option applies;
+            # without one the grid keeps its Total column.
+            my @two = (q => 1, view => 'aggregate', aggregate_grid => 1, field => 'id',
+                group => [qw(origin destination)], measure => 'loads', limit => 25, page => 1);
+            $t->get_ok('/loads' => form => {@two, pivot_totals => 0})->status_is(200);
+            is_deeply texts($t->tx->res->dom, '.sc-aggregate-grid thead th'), ['Origin/Destination', 'OH', 'TX', 'Total'],
+                'a grid without a column group keeps its Total column';
+            $t->get_ok('/loads' => form => {@two, pivot_column => 'destination', pivot_totals => 0})->status_is(200);
+            is_deeply texts($t->tx->res->dom, '.sc-aggregate-grid thead th'), ['Origin/Destination', 'OH', 'TX'];
+            is_deeply texts($t->tx->res->dom, '.sc-aggregate-grid tbody tr > *'), [qw(MI 3 2 OH), '—', qw(1 Total 3 3)];
+        };
+
         subtest 'limits refuse and say why' => sub {
             $t->get_ok('/narrow' => form => {@pivot, grid_column => 'days'})->status_is(200)
                 ->element_exists_not('table.sc-aggregate-grid')
@@ -242,6 +291,10 @@ subtest 'rendered cells are counted with measures and totals' => sub {
     is_deeply $data->(17, 50), {limit_exceeded => 1, limit => {kind => 'cells', limit => 17}}, 'and not seventeen';
     is_deeply $data->(100, 1), {limit_exceeded => 1, limit => {kind => 'columns', limit => 1}}, 'the column limit is checked first';
     is $data->(100, 50)->{totals}{grand}{values}{m2}, 2, 'totals carry every measure';
+    # Without the Total columns: (2 rows + total) x 2 columns x 2 measures = 12.
+    $built->{grid}{total_columns} = 0;
+    ok !$data->(12, 50)->{limit_exceeded}, 'twelve cells fit once the Total columns are off';
+    ok $data->(11, 50)->{limit_exceeded}, 'and not eleven';
 };
 
 plan skip_all => 'no database driver is available' unless $ran;

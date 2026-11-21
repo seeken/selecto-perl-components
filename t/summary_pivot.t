@@ -83,6 +83,7 @@ for my $backend (qw(sqlite postgresql)) {
             loads => {%explorer},
             narrow => {%explorer, path => '/narrow', max_grid_columns => 2},
             small => {%explorer, path => '/small', max_grid_result_cells => 100},
+            shown => {%explorer, path => '/shown', show_sql => 1},
         }});
         my $t = Test::Mojo->new($app);
         my $get = sub {
@@ -230,6 +231,65 @@ for my $backend (qw(sqlite postgresql)) {
             ok scalar(grep { $_ eq 'MI,OH,110,85,2,200,150,1,,,,310,235,3' } @lines), 'a detail row with its full key';
             $t->get_ok('/loads' => form => {@summary, limit => 25, pivot_column => 'days', format => 'csv'});
             isnt $t->tx->res->code, 200, 'the streamed web export refuses a pivot, as it refuses a grid';
+        };
+
+        subtest 'the Total columns can be turned off' => sub {
+            my $off = $get->('/loads', @summary, limit => 25, pivot_column => 'days', pivot_totals => 0);
+            is_deeply [map { text_of($_) } @{$off->find('.sc-pivot-table thead tr:nth-child(1) > th')}],
+                ['Origin', 'Destination', '5-9', '10-20', '21+'], 'no Total column group';
+            is_deeply [map { text_of($_) } @{$off->find('.sc-pivot-table thead tr:nth-child(2) > th')}],
+                [('Price', 'Pay', 'Count') x 3], 'and no sub-columns for it';
+            is_deeply rows_of($off, '.sc-pivot-table tbody tr'),
+                [map { join '|', (split /\|/, $_, -1)[0 .. 10] } @$rows],
+                'every other cell is unchanged, with the subtotal and total rows';
+            unlike $off->at('.sc-results')->to_string, qr/-ctm?\d*"/, 'no cell names a Total header';
+            like $off->to_string, qr/[?&;]pivot_totals=0(?:&|")/, 'the setting is carried in generated links';
+            is $off->find('[data-sc-group-pivot-totals]:not([hidden]) input[type="checkbox"][name="pivot_totals"]:not([checked]):not([disabled])')->size,
+                1, 'the box of the group shown as columns is clear';
+            is $off->find('input[name="pivot_totals"]:not([disabled])')->size, 2, 'and only that group sends the setting';
+
+            is $dom->find('[data-sc-group-pivot-totals]:not([hidden]) input[type="checkbox"][name="pivot_totals"][checked]:not([disabled])')->size,
+                1, 'Show Total columns is ticked by default, in the panel of the group shown as columns';
+            unlike $dom->at('.sc-results')->to_string, qr/pivot_totals/, 'and left out of the links when on';
+            my $on = $get->('/loads', @summary, limit => 25, pivot_column => 'days', pivot_totals => [0, 1]);
+            is_deeply rows_of($on, '.sc-pivot-table tbody tr'), $rows, 'the form\'s ticked box renders as before';
+            my $plain_off = $get->('/loads', q => 1, view => 'aggregate', field => 'id', group => [qw(origin destination)],
+                measure => [qw(price pay loads)], limit => 25, page => 1, pivot_totals => 0);
+            is_deeply rows_of($plain_off, '.sc-results tbody tr'), $plain_rows, 'it means nothing without a column group';
+            unlike $plain_off->to_string, qr/[?&;]pivot_totals=/;
+
+            my $page = $get->('/loads', @summary, limit => 2, page => 2, pivot_column => 'days', pivot_totals => 0);
+            my $with = $get->('/loads', @summary, limit => 2, page => 2, pivot_column => 'days');
+            is_deeply rows_of($page, '.sc-pivot-table tbody tr'),
+                [map { join '|', (split /\|/, $_, -1)[0 .. 10] } @{rows_of($with, '.sc-pivot-table tbody tr')}],
+                'paging is the same';
+            my %drill;
+            push @{$drill{$_->attr('name')}}, $_->attr('value') for @{$off->find('form.sc-pivot-drill-form input[type="hidden"]')};
+            $t->get_ok('/loads' => form => {%drill, grid_axis => '{"axis":2,"value":"5-9"}'})->status_is(200);
+            is_deeply [sort map { text_of($_) } @{$t->tx->res->dom->find('.sc-results tbody tr td:first-child')}], [1, 3, 6, 7],
+                'a column header drills as before';
+
+            # 8 rows x 3 columns x 4 measures = 96, where Total made it 128.
+            $get->('/small', @summary, measure => [qw(price pay loads price)], limit => 25, pivot_column => 'destination', pivot_totals => 0);
+            ok $t->tx->res->dom->at('table.sc-pivot-table'), 'a pivot refused for its cells fits without the Total columns';
+
+            my $controller = $app->build_controller;
+            my $explorer = $controller->selecto_components_explorer('loads');
+            my $model = $explorer->model($controller, {@summary, limit => 25, pivot_column => 'days', pivot_totals => 0});
+            is $model->{state}->pivot_totals, 0;
+            my $shown = $controller->selecto_components_explorer('shown');
+            like $shown->model($controller, {@summary, limit => 25, pivot_column => 'days'})->{result}{sql},
+                qr/\bSUM\(/, 'the rows query computes the totals when they are shown';
+            unlike $shown->model($controller, {@summary, limit => 25, pivot_column => 'days', pivot_totals => 0})->{result}{sql},
+                qr/\bSUM\(/, 'and not when they are off';
+            my $again = $explorer->model($controller, Selecto::Components::Dashboard->new->input_from_url(
+                $explorer->canonical_url($model->{state}, $model->{domain})));
+            is $again->{state}->pivot_totals, 0, 'a saved view URL restores it';
+            my @lines = map { s/"//gr } split /\r?\n/, $explorer->export($model, 'csv');
+            is $lines[0], join(',', 'Origin', 'Destination', map { my $c = $_; map { "$c \x{b7} $_" } qw(Price Pay Count) } '5-9', '10-20', '21+'),
+                'export has no Total columns';
+            ok scalar(grep { $_ eq 'Total,,180,135,4,270,210,2,300,250,1' } @lines), 'and keeps the total row';
+            ok scalar(grep { $_ eq 'MI,,160,125,3,200,150,1,300,250,1' } @lines), 'and the subtotal rows';
         };
 
         subtest 'leave out rows with no value' => sub {

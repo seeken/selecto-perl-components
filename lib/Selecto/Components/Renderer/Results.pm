@@ -632,7 +632,8 @@ sub _grid ($class, $result, $model) {
             (ref($total) eq 'HASH' ? _html_display($grid->{measure}, $total->{value}) : '—') .
             '</strong></td>';
     };
-    $head .= '<th scope="col" class="sc-grid-total-heading">Total</th>' if $totals;
+    my $total_columns = $totals && ($grid->{total_columns} // 1);
+    $head .= '<th scope="col" class="sc-grid-total-heading">Total</th>' if $total_columns;
 
     my $rows = '';
     my $row_index = 0;
@@ -682,15 +683,15 @@ sub _grid ($class, $result, $model) {
                 '</span><span class="sc-grid-cell-selected" aria-hidden="true">&#10003;</span></label></td>';
             $current_column++;
         }
-        $cells .= $total_cell->($totals->{rows}{$row->{key}}, 'row') if $totals;
+        $cells .= $total_cell->($totals->{rows}{$row->{key}}, 'row') if $total_columns;
         $rows .= '<tr>' . $cells . '</tr>';
     }
     if ($totals && $rows) {
         $rows .= '<tr class="sc-grid-total-row"><th scope="row" class="sc-grid-total-heading">Total</th>' .
             join('', map { $total_cell->($totals->{columns}{$_->{key}}, 'column') } @{$grid->{columns}}) .
-            $total_cell->($totals->{grand}, 'grand') . '</tr>';
+            ($total_columns ? $total_cell->($totals->{grand}, 'grand') : '') . '</tr>';
     }
-    my $column_count = 1 + scalar(@{$grid->{columns}}) + ($totals ? 1 : 0);
+    my $column_count = 1 + scalar(@{$grid->{columns}}) + ($total_columns ? 1 : 0);
     $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count .
         '">No rows matched this query.</td></tr>';
     my $max_cells = $model->{config}->max_grid_cells;
@@ -765,10 +766,11 @@ sub _summary_pivot_table ($class, $result, $model) {
                 _h($measures[$_]{label}) . '</th>'
         } 0 .. $#measures;
     }
-    $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id . '-ct">Total</th>';
+    my $totals = ($pivot->{totals} // 1) ? 1 : 0;
+    $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id . '-ct">Total</th>' if $totals;
     $sub .= join '', map {
         '<th scope="col" id="' . $id . '-ctm' . $_ . '"' . $measure_classes[$_] . '>' . _h($measures[$_]{label}) . '</th>'
-    } 0 .. $#measures;
+    } $totals ? 0 .. $#measures : ();
 
     my $rows = '';
     for my $index (0 .. $#{$result->{records}}) {
@@ -836,7 +838,7 @@ sub _summary_pivot_table ($class, $result, $model) {
                 $cells .= '<td' . $measure_classes[$measure_index] . $headers . '>' . $content . '</td>';
             }
         }
-        for my $measure_index (0 .. $#measures) {
+        for my $measure_index ($totals ? 0 .. $#measures : ()) {
             my $measure = $measures[$measure_index];
             $cells .= '<td' . $measure_classes[$measure_index] . ' headers="' . $row_id . ' ' . $id . '-ct ' .
                 $id . '-ctm' . $measure_index . '">' .
@@ -845,7 +847,7 @@ sub _summary_pivot_table ($class, $result, $model) {
         }
         $rows .= '<tr' . $row_class . '>' . $cells . '</tr>';
     }
-    my $column_count = @groups + (@columns + 1) * @measures;
+    my $column_count = @groups + (@columns + $totals) * @measures;
     $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count . '">No rows matched this query.</td></tr>';
     return $form . '<div class="sc-table-wrap"><table class="sc-pivot-table">' .
         '<caption class="sc-visually-hidden">' . _h(join(', ', map { $_->{label} } @measures)) . ' by ' .
@@ -919,7 +921,8 @@ sub _pivot_grid ($class, $result, $model) {
                 _h($measures[$_]{label}) . '</th>'
         } 0 .. $#measures;
     }
-    if ($totals) {
+    my $total_columns = $totals && ($grid->{total_columns} // 1);
+    if ($total_columns) {
         $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id .
             '-ct" class="sc-grid-total-heading">Total</th>';
         $sub .= join '', map {
@@ -1002,7 +1005,7 @@ sub _pivot_grid ($class, $result, $model) {
             }
             $current_column++;
         }
-        $cells .= $total_cells->($totals->{rows}{$row->{key}}, 'row', $headers, $id . '-ct') if $totals;
+        $cells .= $total_cells->($totals->{rows}{$row->{key}}, 'row', $headers, $id . '-ct') if $total_columns;
         $rows .= '<tr>' . $cells . '</tr>';
     }
     if ($totals && $rows) {
@@ -1013,9 +1016,9 @@ sub _pivot_grid ($class, $result, $model) {
             join('', map {
                 $total_cells->($totals->{columns}{$_->{key}}, 'column', $total_id, $id . '-c' . $column++)
             } @{$grid->{columns}}) .
-            $total_cells->($totals->{grand}, 'grand', $total_id, $id . '-ct') . '</tr>';
+            ($total_columns ? $total_cells->($totals->{grand}, 'grand', $total_id, $id . '-ct') : '') . '</tr>';
     }
-    my $column_count = @row_axes + (@{$grid->{columns}} + ($totals ? 1 : 0)) * @measures;
+    my $column_count = @row_axes + (@{$grid->{columns}} + ($total_columns ? 1 : 0)) * @measures;
     $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count .
         '">No rows matched this query.</td></tr>';
     my $max_cells = $model->{config}->max_grid_cells;

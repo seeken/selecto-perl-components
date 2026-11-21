@@ -1187,7 +1187,8 @@ one numbered clause are ANDed, and clauses are ORed.
 
 =item * C<aggregate_grid>, C<aggregate_grid_colorize>,
 C<aggregate_grid_color_scale>, C<pivot_column> (also read as C<grid_column>,
-its first name), repeated C<group_exclude_missing> and C<row_click_action>
+its first name), C<pivot_totals>, repeated C<group_exclude_missing> and
+C<row_click_action>
 
 =item * C<grid_cell> and C<grid_axis>, a grid selection handed to the Detail
 view: a cell is a JSON array with one value per group, in group order; an
@@ -1317,6 +1318,16 @@ L<Selecto::Components::Explorer/export> of such a model has one column per
 column value and measure, headed C<< <column value> · <measure label> >>, and
 includes the subtotal and total rows. The streamed web export refuses it, as
 it refuses a grid.
+
+B<Show Total columns>, beside B<Show as columns> on the group shown as
+columns, is on by default. C<pivot_totals=0> turns the pivot's Total column
+group off, in the summary table and in the grid; the parameter is left out
+when on. Off, the Total columns are neither rendered, exported nor queried:
+the summary's rows query selects no aggregates, and the grid's query drops
+the row-total and grand-total grouping sets. The Total row, and the summary's
+subtotal rows, stay. C<max_grid_result_cells> counts only what is rendered,
+so a pivot refused with its Total columns may fit without them. A grid with no
+group shown as columns keeps its Total column.
 
 B<Leave out rows with no value>, in a Group By item's Configure panel
 (C<group_exclude_missing=E<lt>group fieldE<gt>>, repeatable), filters out the

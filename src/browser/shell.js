@@ -328,6 +328,7 @@
     root.querySelectorAll("[data-sc-group-grid-column]").forEach(function (node) {
       node.hidden = view !== "aggregate";
     });
+    syncPivotTotals(root, view);
     syncGraphStateCopies(root, graphActive);
     var limitLabel = root.querySelector("[data-sc-limit-label]");
     if (limitLabel) limitLabel.textContent = graphActive ? "Points" : "Rows";

@@ -587,6 +587,8 @@
           if (box !== event.target) box.checked = false;
         });
       }
+      var chosenView = builder.querySelector('input[name="view"]:checked');
+      syncPivotTotals(builder, chosenView ? chosenView.value : "");
     } else if (event.target.matches("[data-sc-measure-color-auto], [data-sc-measure-color-picker]")) {
       syncMeasureColor(event.target.closest("[data-sc-picker-set-item]"), event.target);
     }

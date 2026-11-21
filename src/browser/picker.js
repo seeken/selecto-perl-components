@@ -392,6 +392,33 @@
     gridColumn.appendChild(gridColumnHelp);
     grid.appendChild(gridColumn);
 
+    // The pivot's Total columns: sent only by the group shown as columns.
+    var pivotTotals = document.createElement("label");
+    pivotTotals.className = "sc-option-check";
+    pivotTotals.setAttribute("data-sc-group-pivot-totals", "");
+    pivotTotals.hidden = true;
+    var pivotTotalsOff = document.createElement("input");
+    pivotTotalsOff.type = "hidden";
+    pivotTotalsOff.name = "pivot_totals";
+    pivotTotalsOff.value = "0";
+    pivotTotalsOff.disabled = true;
+    pivotTotals.appendChild(pivotTotalsOff);
+    var pivotTotalsBox = document.createElement("input");
+    pivotTotalsBox.type = "checkbox";
+    pivotTotalsBox.name = "pivot_totals";
+    pivotTotalsBox.value = "1";
+    pivotTotalsBox.checked = true;
+    pivotTotalsBox.disabled = true;
+    pivotTotalsBox.setAttribute("aria-label", "Show Total columns");
+    pivotTotals.appendChild(pivotTotalsBox);
+    var pivotTotalsText = document.createElement("span");
+    pivotTotalsText.textContent = "Show Total columns";
+    pivotTotals.appendChild(pivotTotalsText);
+    var pivotTotalsHelp = document.createElement("small");
+    pivotTotalsHelp.textContent = "A last group of columns with each row's totals.";
+    pivotTotals.appendChild(pivotTotalsHelp);
+    grid.appendChild(pivotTotals);
+
     // Leaving out rows with no value is a filter on the group's field.
     var excludeMissing = document.createElement("label");
     excludeMissing.className = "sc-option-check";
@@ -409,6 +436,18 @@
     excludeMissingHelp.textContent = "Adds a filter, so totals leave them out too.";
     excludeMissing.appendChild(excludeMissingHelp);
     grid.appendChild(excludeMissing);
+  }
+
+  // Show Total columns appears, and is sent, only for the group shown as
+  // columns in the aggregate view.
+  function syncPivotTotals(root, viewName) {
+    root.querySelectorAll("[data-sc-group-pivot-totals]").forEach(function (node) {
+      var item = node.closest("[data-sc-picker-set-item]");
+      var choice = item && item.querySelector("[data-sc-grid-column-choice]");
+      var active = viewName === "aggregate" && !!choice && choice.checked;
+      node.hidden = !active;
+      node.querySelectorAll("input").forEach(function (input) { input.disabled = !active; });
+    });
   }
 
   function appendMeasureConfig(grid, type, label, selected) {
@@ -544,6 +583,7 @@
     item.querySelectorAll("[data-sc-group-grid-column]").forEach(function (node) { node.hidden = viewName !== "aggregate"; });
     var gridColumnChoice = item.querySelector("[data-sc-grid-column-choice]");
     if (gridColumnChoice && !gridColumnChoice.value) gridColumnChoice.value = item.dataset.field || "";
+    syncPivotTotals(item, viewName);
     var excludeMissingChoice = item.querySelector('[data-sc-group-exclude-missing] input');
     if (excludeMissingChoice && !excludeMissingChoice.value) excludeMissingChoice.value = item.dataset.field || "";
     var groupFormat = item.querySelector("[data-sc-group-format]");

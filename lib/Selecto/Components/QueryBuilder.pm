@@ -349,12 +349,16 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             filter_groups => [@{$state->groups}],
             pivot_column => undef,
         );
-        my $built = $class->_aggregate($config, $domain, $rows_state, {%$options, pivot_part => 1});
+        # Without the Total columns the rows query only finds the page's rows.
+        my $totals = ($state->pivot_totals // 1) ? 1 : 0;
+        my $built = $class->_aggregate($config, $domain, $rows_state,
+            {%$options, pivot_part => 1, measure_values => $totals});
         my ($column_index) = grep { $state->groups->[$_] eq $state->pivot_column } 0 .. $#{$state->groups};
         $built->{pivot} = {
             column_field => $state->pivot_column,
             column_index => $column_index,
             row_indexes => [grep { $_ != $column_index } 0 .. $#{$state->groups}],
+            totals => $totals,
         };
         return $built;
     }
@@ -428,6 +432,8 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         }
     }
     my @selections = (@group_selections, @group_sort_selections);
+    # measure_values => 0 describes the measures without selecting them.
+    my $measure_values = $options->{measure_values} // 1;
     my @measure_columns;
     my %measure_occurrence;
     for my $measure_index (0 .. $#{$state->measures}) {
@@ -475,11 +481,10 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                         behavior => 'flow',
                     },
                 };
-                push @selections, $expression->as($key);
+                push @selections, $expression->as($key) if $measure_values;
             }
             next;
         }
-        my $expression = _measure_expression($measure, $measure_config);
         my $label = length($alias) ? $alias : _measure_label($measure, $function, $field_map);
         push @measure_columns, {
             key => $measure_key,
@@ -507,7 +512,8 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                     ? (behavior => $measure_config->{behavior}) : ()),
             },
         };
-        push @selections, $expression->as($measure_key);
+        push @selections, _measure_expression($measure, $measure_config)->as($measure_key)
+            if $measure_values;
     }
     my @columns = (@group_columns, @measure_columns);
     # The grid pivots one group into columns. A group marked with pivot_column
@@ -536,11 +542,16 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
     # total). For two groups that is exactly a cube. Callers pass cube and
     # grouping_sets only for adapters that support them; without the one a
     # grid needs it keeps its rollup query and shows no totals.
-    my $cube = $rollup && $aggregate_grid && @groups == 2 && $options->{cube} ? 1 : 0;
+    # A pivot without its Total columns needs neither the row totals nor the
+    # grand total: only the cells and the Total row.
+    my $total_columns = defined($grid_column_field) && !($state->pivot_totals // 1) ? 0 : 1;
+    my $cube = $rollup && $aggregate_grid && @groups == 2 && $options->{cube}
+        && ($total_columns || !$options->{grouping_sets}) ? 1 : 0;
     my $grid_sets = $rollup && $aggregate_grid && !$cube && $options->{grouping_sets} ? 1 : 0;
     $query = $cube ? $query->group_by_cube(\@groups)
         : $grid_sets ? $query->group_by_grouping_sets(
-            [@groups], [@groups[@grid_row_indexes]], [$groups[$grid_column_index]], [])
+            [@groups], ($total_columns ? [@groups[@grid_row_indexes]] : ()),
+            [$groups[$grid_column_index]], ($total_columns ? [] : ()))
         : $rollup ? $query->group_by_rollup(\@groups) : $query->group_by(\@groups);
     $query = _with_filters($query, $state, $config, $domain);
     $query = $query->order_by($_, 'asc') for @group_orders;
@@ -568,6 +579,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         cube => $cube || $grid_sets ? 1 : 0,
         ($aggregate_grid ? (grid => {
             column => $grid_column_index, rows => \@grid_row_indexes, totals => $cube || $grid_sets ? 1 : 0,
+            total_columns => $total_columns,
         }) : ()),
         rollup_key => $rollup ? $rollup_key : undef,
         group_count => scalar(@groups),

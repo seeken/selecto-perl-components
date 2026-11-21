@@ -1,6 +1,12 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Show Total columns: a checkbox beside Show as columns, on by default.
+      pivot_totals=0 leaves the Total column group out of the summary pivot
+      and the grid pivot, their exports and their queries; the Total row and
+      the subtotal rows stay. The parameter is left out when on, so existing
+      links render as before. max_grid_result_cells counts only the cells
+      rendered. A grid with no group shown as columns keeps its Total column.
     - Show as columns in the summary table. A Group By marked Show as columns
       now pivots the paged aggregate table as well as the grid: the other
       groups stay rows with their rollup subtotals, order, pages and

@@ -666,6 +666,8 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
     # The original shape keeps its original rules and rendering.
     my $pivot = @row_indexes > 1 || @measures > 1 ? 1 : 0;
     my $totals = $plan->{totals} && $built->{cube} ? 1 : 0;
+    # The Total row may stand without the Total columns.
+    my $total_columns = $totals && ($plan->{total_columns} // 1) ? 1 : 0;
 
     # Grouping mask bits follow the groups, first group highest; a set bit
     # means the row leaves that group out.
@@ -696,8 +698,9 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
             next unless $totals && defined $mask;
             my $values = $measured->($record);
             my $total = {value => $values->{$measures[0]{key}}, values => $values};
-            if ($mask == $column_bit) { $row_totals{$key_of->($record, @row_indexes)} = $total }
-            elsif ($mask == $row_bits) { $column_totals{$key_of->($record, $column_index)} = $total }
+            if ($mask == $row_bits) { $column_totals{$key_of->($record, $column_index)} = $total }
+            elsif (!$total_columns) { }
+            elsif ($mask == $column_bit) { $row_totals{$key_of->($record, @row_indexes)} = $total }
             elsif ($mask == ($row_bits | $column_bit)) { $grand_total = $total }
             next;
         }
@@ -771,7 +774,7 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
         return {limit_exceeded => 1, limit => {kind => 'columns', limit => $maximum_columns}}
             if defined($maximum_columns) && @columns > $maximum_columns;
         # Everything the table renders: each measure in each cell, with totals.
-        my $rendered = (@rows + $totals) * (@columns + $totals) * @measures;
+        my $rendered = (@rows + $totals) * (@columns + $total_columns) * @measures;
         return {limit_exceeded => 1, limit => {kind => 'cells', limit => $maximum_cells}}
             if defined($maximum_cells) && $rendered > $maximum_cells;
     } else {
@@ -795,6 +798,7 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
         ($totals ? (totals => {
             rows => \%row_totals, columns => \%column_totals, grand => $grand_total,
         }) : ()),
+        total_columns => $total_columns,
         selection_pairs => _grid_selection_pairs($state),
     };
 }
@@ -842,7 +846,8 @@ sub _summary_pivot ($config, $engine, $state, $built, $records, $run) {
     return {limit => {kind => 'columns', limit => $config->max_grid_columns}}
         if @columns > $config->max_grid_columns;
     my @shown = grep { !$_->{__selecto_rollup_continued} } @$records;
-    my $rendered = @shown * (@columns + 1) * @measures;
+    my $totals = ($plan->{totals} // 1) ? 1 : 0;
+    my $rendered = @shown * (@columns + $totals) * @measures;
     return {limit => {kind => 'cells', limit => $config->max_grid_result_cells}}
         if $rendered > $config->max_grid_result_cells;
 
@@ -876,6 +881,7 @@ sub _summary_pivot ($config, $engine, $state, $built, $records, $run) {
         row_indexes => $plan->{row_indexes},
         columns => \@columns,
         measures => \@measures,
+        totals => $totals,
         # The cells of one page row: {column key => {measure key => value}}.
         cells_for => sub ($record) {
             return {} if $record->{__selecto_rollup_continued};
@@ -1451,7 +1457,7 @@ sub _pivot_export_dataset ($grid) {
             };
         }
     }
-    if ($totals) {
+    if ($totals && ($grid->{total_columns} // 1)) {
         push @value_columns, map { {
             key => "__selecto_grid_total_$_", label => "Total \x{b7} " . $measures[$_]{label},
             total => 1, measure => $measures[$_]{key},
@@ -1494,8 +1500,10 @@ sub _summary_pivot_export_dataset ($model) {
             column => $pivot->{columns}[$column_index]{key}, measure => $measures[$_]{key},
         } } 0 .. $#measures;
     }
+    my $totals = ($pivot->{totals} // 1) ? 1 : 0;
     push @columns, (map { {key => $_->{key}, label => $_->{label}} } @value_columns),
-        map { {key => "__selecto_pivot_total_$_", label => "Total \x{b7} " . $measures[$_]{label}} } 0 .. $#measures;
+        map { {key => "__selecto_pivot_total_$_", label => "Total \x{b7} " . $measures[$_]{label}} }
+            $totals ? 0 .. $#measures : ();
     my @records;
     for my $record (@{$result->{records}}) {
         next if $record->{__selecto_rollup_continued};
@@ -1504,7 +1512,7 @@ sub _summary_pivot_export_dataset ($model) {
         $row{$groups[0]{key}} = 'Total' if $result->{rollup} && $level == 0;
         my $cells = $pivot->{cells_for}->($record);
         $row{$_->{key}} = ($cells->{$_->{column}} // {})->{$_->{measure}} for @value_columns;
-        $row{"__selecto_pivot_total_$_"} = $record->{$measures[$_]{key}} for 0 .. $#measures;
+        $row{"__selecto_pivot_total_$_"} = $record->{$measures[$_]{key}} for $totals ? 0 .. $#measures : ();
         push @records, \%row;
     }
     return (\@columns, \@records);
