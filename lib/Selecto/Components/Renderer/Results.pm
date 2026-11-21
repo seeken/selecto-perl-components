@@ -747,14 +747,21 @@ sub _summary_pivot_table ($class, $result, $model) {
     };
     my @measure_classes = map { _numeric_measure_class($_, $model) ? ' class="sc-numeric-measure"' : '' } @measures;
 
-    my $top = join '', map {
+    # Three header rows: the group shown as columns by name, its values, and
+    # the measures under each. Row groups span all three, Total the first two.
+    my $axis = $pivot->{column_axis};
+    my $axis_described = defined($axis->{description}) && length($axis->{description});
+    my $head = join '', map {
         my $group = $groups[$_];
         my $described = defined($group->{description}) && length($group->{description});
-        '<th scope="col" rowspan="2" id="' . $id . '-g' . $_ . '"' .
+        '<th scope="col" rowspan="3" id="' . $id . '-g' . $_ . '"' .
             ($described ? ' class="sc-described" title="' . _h($group->{description}) . '"' : '') .
             '>' . _h($group->{label}) . '</th>'
     } 0 .. $#groups;
-    my $sub = '';
+    $head .= '<th scope="colgroup" colspan="' . (@columns * @measures) . '" id="' . $id . '-ca" class="sc-pivot-axis-heading' .
+        ($axis_described ? ' sc-described" title="' . _h($axis->{description}) : '') . '">' . _h($axis->{label}) . '</th>'
+        if @columns;
+    my ($top, $sub) = ('', '');
     for my $index (0 .. $#columns) {
         my $column = $columns[$index];
         $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id . '-c' . $index . '">' .
@@ -767,7 +774,7 @@ sub _summary_pivot_table ($class, $result, $model) {
         } 0 .. $#measures;
     }
     my $totals = ($pivot->{totals} // 1) ? 1 : 0;
-    $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id . '-ct">Total</th>' if $totals;
+    $head .= '<th scope="colgroup" rowspan="2" colspan="' . scalar(@measures) . '" id="' . $id . '-ct">Total</th>' if $totals;
     $sub .= join '', map {
         '<th scope="col" id="' . $id . '-ctm' . $_ . '"' . $measure_classes[$_] . '>' . _h($measures[$_]{label}) . '</th>'
     } $totals ? 0 .. $#measures : ();
@@ -828,7 +835,7 @@ sub _summary_pivot_table ($class, $result, $model) {
                 ($name, $selection) = (grid_axis => {axis => $column_group, value => $column->{selection_value}});
             }
             for my $measure_index (0 .. $#measures) {
-                my $headers = ' headers="' . $row_id . ' ' . $id . '-c' . $column_number . ' ' .
+                my $headers = ' headers="' . $row_id . ' ' . $id . '-ca ' . $id . '-c' . $column_number . ' ' .
                     $id . '-c' . $column_number . 'm' . $measure_index . '"';
                 my $content = $continued ? '<span class="sc-rollup-continued-measure">-</span>'
                     : !$values ? '—'
@@ -852,7 +859,7 @@ sub _summary_pivot_table ($class, $result, $model) {
     return $form . '<div class="sc-table-wrap"><table class="sc-pivot-table">' .
         '<caption class="sc-visually-hidden">' . _h(join(', ', map { $_->{label} } @measures)) . ' by ' .
         _h(join(', ', map { $_->{label} } @groups)) . ' across ' . _h($pivot->{column_axis}{label}) .
-        '</caption><thead><tr>' . $top . '</tr><tr>' . $sub . '</tr></thead><tbody>' . $rows .
+        '</caption><thead><tr>' . $head . '</tr><tr>' . $top . '</tr><tr>' . $sub . '</tr></thead><tbody>' . $rows .
         '</tbody></table></div>';
 }
 

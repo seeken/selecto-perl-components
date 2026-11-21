@@ -164,12 +164,20 @@ sub valid ($self) { return @{$self->errors} ? 0 : 1; }
 # A query built for part of the groups (a pivot's rows, or its cells at one
 # level) names the whole query's groups in filter_groups, so every part
 # leaves out the same rows.
+#
+# A group bucketed by ranges asked for those ranges and nothing else, so for
+# it the option keeps only the values inside a range: a grouped condition
+# that the bucket is not "Other", which is what a bucket calls both a missing
+# value and one outside every range.
 sub group_filters ($self, $field_map = undef) {
     return [map {
         my $group = $_;
         my $dimension = $field_map ? ($field_map->{$group} // {})->{dimension} : undef;
-        {field => $dimension ? $dimension->{key_field} : $group, op => 'not_null', value => '',
-            value_end => '', from_group => $group}
+        my $format = ($self->group_configs->{$group} // {})->{format} // '';
+        !$dimension && $format =~ /\A(?:buckets|age_buckets|custom_buckets|year_buckets)\z/
+            ? {field => $group, op => 'ne', value => 'Other', value_end => '', grouped => 1, from_group => $group}
+            : {field => $dimension ? $dimension->{key_field} : $group, op => 'not_null', value => '',
+                value_end => '', from_group => $group}
     } grep { ($self->group_configs->{$_} // {})->{exclude_missing} } @{$self->filter_groups // $self->groups}];
 }
 
@@ -1047,7 +1055,7 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
             push @$errors, 'A filter operator is not available.';
             next;
         }
-        if ($group_filter && (!$valid_group_field{$field} || ($op ne 'eq' && $op ne 'is_null'))) {
+        if ($group_filter && (!$valid_group_field{$field} || ($op ne 'eq' && $op ne 'ne' && $op ne 'is_null'))) {
             push @$errors, 'An aggregate drilldown filter is not available.';
             next;
         }

@@ -1031,7 +1031,7 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
             'name="group_exclude_missing" value="' . _h($field->{path}) . '"' .
             ($item_config->{exclude_missing} ? ' checked' : '') .
             ' aria-label="Leave out rows with no ' . _h($field->{label}) . '"><span>Leave out rows with no value</span>' .
-            '<small>Adds a filter, so totals leave them out too.</small></label>';
+            '<small>For buckets, values outside the ranges as well. Adds a filter, so totals leave them out too.</small></label>';
     } elsif ($kind eq 'measure') {
         my $function = $item_config->{function} // $field->{default_function} // 'count';
         my $functions = join '', map {
@@ -1220,7 +1220,8 @@ sub _group_filter_list ($class, $state, $by_path) {
             my $field = $by_path->{$_->{from_group}} // $by_path->{$_->{field}};
             '<article class="sc-filter-set-item sc-group-filter" data-sc-group-filter="' . _h($_->{from_group}) .
             '"><div class="sc-filter-set-heading"><span><strong>' . _h($field ? $field->{label} : $_->{from_group}) .
-            '</strong><small>has a value &middot; from Group By</small></span></div></article>'
+            '</strong><small>' . ($_->{grouped} ? 'is in a bucket' : 'has a value') .
+            ' &middot; from Group By</small></span></div></article>'
         } @filters) . '</div>';
 }
 

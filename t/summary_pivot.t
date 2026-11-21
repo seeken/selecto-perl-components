@@ -103,9 +103,11 @@ for my $backend (qw(sqlite postgresql)) {
         ok $dom->at('table.sc-pivot-table'), 'the summary table is pivoted';
         ok !$dom->at('table.sc-aggregate-grid'), 'and it is not the grid';
         is_deeply [map { text_of($_) } @{$dom->find('.sc-pivot-table thead tr:nth-child(1) > th')}],
-            ['Origin', 'Destination', '5-9', '10-20', '21+', 'Total'],
-            'row groups, bucket columns in the order the ranges were given, then Total';
+            ['Origin', 'Destination', 'Days', 'Total'], 'row groups, the group shown as columns by name, then Total';
+        is $dom->at('.sc-pivot-table thead th.sc-pivot-axis-heading')->attr('colspan'), 9, 'its name spans its columns';
         is_deeply [map { text_of($_) } @{$dom->find('.sc-pivot-table thead tr:nth-child(2) > th')}],
+            ['5-9', '10-20', '21+'], 'bucket columns in the order the ranges were given';
+        is_deeply [map { text_of($_) } @{$dom->find('.sc-pivot-table thead tr:nth-child(3) > th')}],
             [('Price', 'Pay', 'Count') x 4], 'one sub-column per measure under each';
 
         my $rows = rows_of($dom, '.sc-pivot-table tbody tr');
@@ -128,13 +130,14 @@ for my $backend (qw(sqlite postgresql)) {
         is $dom->find('.sc-pivot-table tbody form.sc-drilldown-form')->size, 6, 'each row keeps its drilldown control';
 
         subtest 'accessibility' => sub {
-            is $dom->find('.sc-pivot-table thead tr:nth-child(1) > th[scope="colgroup"][colspan="3"]')->size, 4;
-            is $dom->find('.sc-pivot-table thead tr:nth-child(1) > th[scope="col"][rowspan="2"]')->size, 2;
+            is $dom->find('.sc-pivot-table thead tr:nth-child(2) > th[scope="colgroup"][colspan="3"]')->size, 3;
+            is $dom->find('.sc-pivot-table thead tr:nth-child(1) > th[scope="colgroup"][colspan="3"][rowspan="2"]')->size, 1, 'Total';
+            is $dom->find('.sc-pivot-table thead tr:nth-child(1) > th[scope="col"][rowspan="3"]')->size, 2;
             is $dom->find('.sc-pivot-table tbody th[scope="row"]')->size, 7, 'each row has a header cell';
             my %header = map { ($_->attr('id') => text_of($_)) } @{$dom->find('.sc-pivot-table th[id]')};
             my ($row) = grep { text_of($_) =~ /\A\|?OH110/ || text_of($_) =~ /OH11085/ } @{$dom->find('.sc-pivot-table tbody tr')};
             my $cell = $row->find('td[headers]')->[1];
-            is_deeply [map { $header{$_} } split ' ', $cell->attr('headers')], [qw(OH 5-9 Pay)],
+            is_deeply [map { $header{$_} } split ' ', $cell->attr('headers')], [qw(OH Days 5-9 Pay)],
                 'a cell names its row, its column value and its measure';
         };
 
@@ -235,9 +238,9 @@ for my $backend (qw(sqlite postgresql)) {
 
         subtest 'the Total columns can be turned off' => sub {
             my $off = $get->('/loads', @summary, limit => 25, pivot_column => 'days', pivot_totals => 0);
-            is_deeply [map { text_of($_) } @{$off->find('.sc-pivot-table thead tr:nth-child(1) > th')}],
-                ['Origin', 'Destination', '5-9', '10-20', '21+'], 'no Total column group';
-            is_deeply [map { text_of($_) } @{$off->find('.sc-pivot-table thead tr:nth-child(2) > th')}],
+            is_deeply [map { text_of($_) } @{$off->find('.sc-pivot-table thead tr > th')}[0 .. 5]],
+                ['Origin', 'Destination', 'Days', '5-9', '10-20', '21+'], 'no Total column group';
+            is_deeply [map { text_of($_) } @{$off->find('.sc-pivot-table thead tr:nth-child(3) > th')}],
                 [('Price', 'Pay', 'Count') x 3], 'and no sub-columns for it';
             is_deeply rows_of($off, '.sc-pivot-table tbody tr'),
                 [map { join '|', (split /\|/, $_, -1)[0 .. 10] } @$rows],
@@ -290,6 +293,40 @@ for my $backend (qw(sqlite postgresql)) {
                 'export has no Total columns';
             ok scalar(grep { $_ eq 'Total,,180,135,4,270,210,2,300,250,1' } @lines), 'and keeps the total row';
             ok scalar(grep { $_ eq 'MI,,160,125,3,200,150,1,300,250,1' } @lines), 'and the subtotal rows';
+        };
+
+        subtest 'bucket ranges are the layout' => sub {
+            # 30 days is outside every range, and nothing falls in 40-50.
+            my @ranged = (q => 1, view => 'aggregate', field => 'id', group => [qw(origin days)], group_alias => ['', ''],
+                group_format => ['', 'buckets'], group_bucket_ranges => ['', '5-9, 40-50, 10-20'],
+                measure => [qw(price loads)], limit => 25, page => 1);
+            my $heads = sub { [map { text_of($_) } @{$_[0]->find('.sc-pivot-table thead tr:nth-child(2) > th')}] };
+            my $all = $get->('/loads', @ranged, pivot_column => 'days');
+            is_deeply $heads->($all), ['5-9', '40-50', '10-20', 'Other'],
+                'every range is a column, in the order given, even with nothing in it';
+            is rows_of($all, '.sc-pivot-table tbody tr')->[0], 'Total|180|4|—|—|270|2|300|1|750|7', 'an empty range has no values';
+
+            my $in = $get->('/loads', @ranged, pivot_column => 'days', group_exclude_missing => 'days');
+            is_deeply $heads->($in), ['5-9', '40-50', '10-20'], 'the option on a bucketed group leaves out what is outside the ranges';
+            is_deeply rows_of($in, '.sc-pivot-table tbody tr'),
+                ['Total|180|4|—|—|270|2|450|6', 'MI|160|3|—|—|200|1|360|4', 'OH|20|1|—|—|70|1|90|2'],
+                'and the totals leave it out as well';
+            like $in->at('[data-sc-group-filter="days"]')->all_text, qr/is in a bucket/, 'the filter list says so';
+            my %drill;
+            push @{$drill{$_->attr('name')}}, $_->attr('value') for @{$in->find('form.sc-pivot-drill-form input[type="hidden"]')};
+            my $ids = sub { [sort { $a <=> $b } map { text_of($_) } @{$t->tx->res->dom->find('.sc-results tbody tr td:first-child')}] };
+            $t->get_ok('/loads' => form => {%drill, grid_axis => '{"axis":0,"value":"MI"}'})->status_is(200)
+                or diag explain(\%drill), $t->tx->res->dom->find('.sc-error, [role=alert]')->map('all_text')->join('; ');
+            is_deeply $ids->(), [1, 2, 3, 6], 'a drill to Detail leaves the same rows out';
+            $t->get_ok('/loads' => form => {%drill, grid_axis => '{"axis":1,"value":"5-9"}'})->status_is(200);
+            is_deeply $ids->(), [1, 3, 6, 7], 'a column header drills to its bucket';
+            $t->get_ok('/loads' => form => {%drill, grid_axis => '{"axis":1,"value":"40-50"}'})->status_is(200);
+            like $t->tx->res->dom->at('.sc-results tbody')->all_text, qr/No rows matched/, 'and an empty one to no rows';
+
+            my $plain = $get->('/loads', @ranged, group => 'days', group_alias => '', group_format => 'buckets',
+                group_bucket_ranges => '5-9, 40-50, 10-20', group_exclude_missing => 'days');
+            is_deeply [sort @{rows_of($plain, '.sc-results tbody tr')}], ['10-20|270|2', '5-9|180|4', 'Total|450|6'],
+                'the plain summary leaves them out too';
         };
 
         subtest 'leave out rows with no value' => sub {

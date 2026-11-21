@@ -234,6 +234,20 @@ for my $backend (qw(sqlite postgresql)) {
             is_deeply texts($t->tx->res->dom, '.sc-aggregate-grid tbody tr > *'), [qw(MI 3 2 OH), '—', qw(1 Total 3 3)];
         };
 
+        subtest 'every bucket range is a column' => sub {
+            my %ranged = (@pivot, group_bucket_ranges => ['', '', '5-9, 40-50, 10-20, 21+'], pivot_column => 'days');
+            $t->get_ok('/loads' => form => \%ranged)->status_is(200);
+            is_deeply texts($t->tx->res->dom, '.sc-pivot-grid thead tr:nth-child(1) > th'),
+                ['Origin', 'Destination', '5-9', '40-50', '10-20', '21+', 'Total'], 'the empty range has its column';
+            is_deeply texts($t->tx->res->dom, '.sc-pivot-grid tbody tr.sc-grid-total-row > *'),
+                [qw(Total 160 125 3), '—', '—', '—', qw(270 210 2 300 250 1 730 585 6)], 'with nothing in it';
+            $t->get_ok('/loads' => form => {%ranged, group_bucket_ranges => ['', '', '5-9, 40-50, 10-20'], group_exclude_missing => 'days'})->status_is(200);
+            is_deeply texts($t->tx->res->dom, '.sc-pivot-grid thead tr:nth-child(1) > th'),
+                ['Origin', 'Destination', '5-9', '40-50', '10-20', 'Total'], 'a bucketed group can leave out what is outside its ranges';
+            is_deeply texts($t->tx->res->dom, '.sc-pivot-grid tbody tr.sc-grid-total-row > *'),
+                [qw(Total 160 125 3), '—', '—', '—', qw(270 210 2 430 335 5)];
+        };
+
         subtest 'limits refuse and say why' => sub {
             $t->get_ok('/narrow' => form => {@pivot, grid_column => 'days'})->status_is(200)
                 ->element_exists_not('table.sc-aggregate-grid')

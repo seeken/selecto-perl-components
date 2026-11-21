@@ -761,6 +761,18 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
         }
     }
 
+    if ($plan->{explicit}) {
+        my $group = $groups[$column_index];
+        for my $label (_bucket_labels($group)) {
+            my $record = {$group->{key} => $label};
+            my $key = $key_of->($record, $column_index);
+            next if $seen_column{$key}++;
+            push @columns, {
+                key => $key, value => $label, selection_value => $label,
+                drilldown => _drilldown_for_group_indexes($state, \@groups, $record, [$column_index]),
+            };
+        }
+    }
     my @row_orders = map { _grid_entry_order($groups[$_]) } @row_indexes;
     @rows = sort {
         my $order = 0;
@@ -842,6 +854,13 @@ sub _summary_pivot ($config, $engine, $state, $built, $records, $run) {
         };
         $cells{0}{'[]'}{$key} = $measured->($record, \@top_measures);
     }
+    for my $label (_bucket_labels($column_axis)) {
+        my $key = $key_of->({$column_axis->{key} => $label}, [$column_axis]);
+        next if $cells{0}{'[]'}{$key};
+        push @columns, {key => $key, value => $label, selection_value => $label};
+        $cells{0}{'[]'}{$key} = undef;
+    }
+    delete $cells{0}{'[]'}{$_} for grep { !defined $cells{0}{'[]'}{$_} } keys %{$cells{0}{'[]'}};
     @columns = @{_sort_grid_entries(\@columns, $column_axis)};
     return {limit => {kind => 'columns', limit => $config->max_grid_columns}}
         if @columns > $config->max_grid_columns;
@@ -898,10 +917,24 @@ sub _summary_pivot ($config, $engine, $state, $built, $records, $run) {
 sub _group_filter_inputs ($state, $groups, $filters) {
     my %key_field = map { ($_->{field} => $_->{drilldown_field} // $_->{field}) } @{$groups // []};
     my %fixed = map { ($_->{field} => 1) } grep { ($_->{op} // '') =~ /\A(?:eq|not_null)\z/ && !$_->{grouped} } @$filters;
+    # A row that already names its bucket is inside the ranges.
+    my %bucket_fixed = map { ($_->{field} => 1) } grep { ($_->{op} // '') eq 'eq' && $_->{grouped} } @$filters;
     return [map {
         my $field = $key_field{$_->{from_group}} // $_->{field};
-        $fixed{$field} ? () : {field => $field, op => 'not_null', value => '', value_end => '', grouped => 0}
+        $_->{grouped}
+            ? ($bucket_fixed{$_->{field}} ? ()
+                : {field => $_->{field}, op => 'ne', value => $_->{value}, value_end => '', grouped => 1})
+            : $fixed{$field} ? () : {field => $field, op => 'not_null', value => '', value_end => '', grouped => 0}
     } @{$state->group_filters}];
+}
+
+# The labels of a group bucketed by ranges, in the order the ranges were
+# given. A pivot shows each as a column whether or not any row falls in it:
+# the ranges are the report's layout.
+sub _bucket_labels ($axis) {
+    my $rank = $axis->{bucket_order};
+    return () unless ref($rank) eq 'HASH';
+    return sort { $rank->{$a} <=> $rank->{$b} } keys %$rank;
 }
 
 sub _grid_selection_pairs ($state) {

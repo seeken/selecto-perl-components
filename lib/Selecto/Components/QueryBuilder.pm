@@ -580,6 +580,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         ($aggregate_grid ? (grid => {
             column => $grid_column_index, rows => \@grid_row_indexes, totals => $cube || $grid_sets ? 1 : 0,
             total_columns => $total_columns,
+            explicit => defined($grid_column_field) ? 1 : 0,
         }) : ()),
         rollup_key => $rollup ? $rollup_key : undef,
         group_count => scalar(@groups),
@@ -785,7 +786,11 @@ sub _with_filters ($query, $state, $config, $domain) {
         # subtotals and totals leave them out as well.
         my $group_map = $config->field_map($domain, $state->retarget);
         push @expressions, map {
-            Selecto::Expression->not_null(_temporal_expression($_->{field}, ($group_map->{$_->{field}} // {})->{type}))
+            my $type = ($group_map->{$_->{field}} // {})->{type};
+            $_->{grouped}
+                ? Selecto::Expression->ne(_group_expression({field => $_->{field}, type => $type},
+                    $state->group_configs->{$_->{field}} // {}), $_->{value})
+                : Selecto::Expression->not_null(_temporal_expression($_->{field}, $type))
         } @{$state->group_filters($group_map)};
     }
     return $query unless @expressions;

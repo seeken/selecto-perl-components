@@ -1335,8 +1335,13 @@ rows where that group's field is null, in the summary table, the pivot, the
 grid and the graph. It is a filter, so subtotals and totals leave those rows
 out as well, and a Total always equals the sum of what is shown. It is listed
 under the filters as coming from the group, and goes when the group is
-removed or the box is cleared. For a bucketed group it leaves out only missing
-values, not values outside the ranges.
+removed or the box is cleared. For a group bucketed by ranges it keeps only
+the values inside a range, so the bucket C<Other> (missing values and values
+outside every range) goes: C<1-10, 11-20> then shows nothing of 21 and over.
+
+A pivot shows the group shown as columns by name above its values. When that
+group is bucketed by ranges, every range is a column, in the order given,
+whether or not any row falls in it.
 
 =head1 SECURITY
 

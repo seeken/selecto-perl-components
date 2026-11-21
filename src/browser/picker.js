@@ -433,7 +433,7 @@
     excludeMissingText.textContent = "Leave out rows with no value";
     excludeMissing.appendChild(excludeMissingText);
     var excludeMissingHelp = document.createElement("small");
-    excludeMissingHelp.textContent = "Adds a filter, so totals leave them out too.";
+    excludeMissingHelp.textContent = "For buckets, values outside the ranges as well. Adds a filter, so totals leave them out too.";
     excludeMissing.appendChild(excludeMissingHelp);
     grid.appendChild(excludeMissing);
   }
