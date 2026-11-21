@@ -1,6 +1,8 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Pivot tables mark where each column group starts, so the groups are
+      set apart by a divider, with a stronger one before Total.
     - A group bucketed by ranges keeps to its ranges: values outside every
       range, and missing values, no longer appear as an Other bucket in rows,
       columns, graphs or totals. Add a range such as 21+ to include more.

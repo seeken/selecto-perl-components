@@ -439,6 +439,11 @@ th.sc-described { cursor: help; text-decoration: underline dotted; text-decorati
 .sc-table-wrap tr:hover .sc-nested-table td { background: var(--sc-table-subtotal-bg); }
 .sc-nested-empty { color: var(--sc-muted); display: inline-block; font-size: .78rem; padding: 6px 8px; }
 .sc-rollup-total-label { color: var(--sc-muted); font-style: italic; }
+/* Pivots: a divider before each column group, a stronger one before Total.
+   Inset shadows, not borders, so the line stays with sticky header cells. */
+.sc-table-wrap .sc-pivot-group-start { box-shadow: inset 2px 0 0 var(--sc-border); padding-left: 20px; }
+.sc-table-wrap .sc-pivot-total-start { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--sc-accent) 45%, var(--sc-border)); }
+.sc-table-wrap th.sc-pivot-group-start[scope="colgroup"]:not(.sc-pivot-axis-heading) { text-align: center; }
 .sc-rollup-continued-label, .sc-rollup-continued-measure { color: var(--sc-accent); }
 .sc-empty-cell { color: var(--sc-muted); padding: 28px !important; text-align: center !important; }
 .sc-empty { display: grid; min-height: 520px; place-content: center; text-align: center; }

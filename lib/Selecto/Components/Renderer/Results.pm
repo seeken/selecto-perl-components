@@ -745,7 +745,14 @@ sub _summary_pivot_table ($class, $result, $model) {
             '-drill" name="' . $name . '" value="' . _h(to_json($selection)) . '" aria-label="Show details for ' .
             _h($described) . '">' . $label_html . '</button>';
     };
-    my @measure_classes = map { _numeric_measure_class($_, $model) ? ' class="sc-numeric-measure"' : '' } @measures;
+    # The first sub-column of each column group starts it: a divider sets the
+    # groups apart (sc-pivot-group-start), the Total group more strongly.
+    my @measure_class_names = map { _numeric_measure_class($_, $model) ? 'sc-numeric-measure' : '' } @measures;
+    my $class_of = sub ($index, $total = 0) {
+        my $names = join ' ', grep { length } $measure_class_names[$index],
+            ($index == 0 ? ('sc-pivot-group-start', ($total ? 'sc-pivot-total-start' : ())) : ());
+        return length($names) ? ' class="' . $names . '"' : '';
+    };
 
     # Three header rows: the group shown as columns by name, its values, and
     # the measures under each. Row groups span all three, Total the first two.
@@ -758,25 +765,27 @@ sub _summary_pivot_table ($class, $result, $model) {
             ($described ? ' class="sc-described" title="' . _h($group->{description}) . '"' : '') .
             '>' . _h($group->{label}) . '</th>'
     } 0 .. $#groups;
-    $head .= '<th scope="colgroup" colspan="' . (@columns * @measures) . '" id="' . $id . '-ca" class="sc-pivot-axis-heading' .
+    $head .= '<th scope="colgroup" colspan="' . (@columns * @measures) . '" id="' . $id . '-ca" class="sc-pivot-axis-heading sc-pivot-group-start' .
         ($axis_described ? ' sc-described" title="' . _h($axis->{description}) : '') . '">' . _h($axis->{label}) . '</th>'
         if @columns;
     my ($top, $sub) = ('', '');
     for my $index (0 .. $#columns) {
         my $column = $columns[$index];
-        $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id . '-c' . $index . '">' .
+        $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id . '-c' . $index .
+            '" class="sc-pivot-group-start">' .
             $drill->('grid_axis', {axis => $column_group, value => $column->{selection_value}},
                 _html_display($pivot->{column_axis}, $column->{value}, 1),
                 $pivot->{column_axis}{label} . ' ' . _display_group($column->{value})) . '</th>';
         $sub .= join '', map {
-            '<th scope="col" id="' . $id . '-c' . $index . 'm' . $_ . '"' . $measure_classes[$_] . '>' .
+            '<th scope="col" id="' . $id . '-c' . $index . 'm' . $_ . '"' . $class_of->($_) . '>' .
                 _h($measures[$_]{label}) . '</th>'
         } 0 .. $#measures;
     }
     my $totals = ($pivot->{totals} // 1) ? 1 : 0;
-    $head .= '<th scope="colgroup" rowspan="2" colspan="' . scalar(@measures) . '" id="' . $id . '-ct">Total</th>' if $totals;
+    $head .= '<th scope="colgroup" rowspan="2" colspan="' . scalar(@measures) . '" id="' . $id .
+        '-ct" class="sc-pivot-group-start sc-pivot-total-start">Total</th>' if $totals;
     $sub .= join '', map {
-        '<th scope="col" id="' . $id . '-ctm' . $_ . '"' . $measure_classes[$_] . '>' . _h($measures[$_]{label}) . '</th>'
+        '<th scope="col" id="' . $id . '-ctm' . $_ . '"' . $class_of->($_, 1) . '>' . _h($measures[$_]{label}) . '</th>'
     } $totals ? 0 .. $#measures : ();
 
     my $rows = '';
@@ -842,12 +851,12 @@ sub _summary_pivot_table ($class, $result, $model) {
                     : $drill->($name, $selection,
                         _html_display($measures[$measure_index], $values->{$measures[$measure_index]{key}}),
                         $row_label . ', ' . _display_group($column->{value}));
-                $cells .= '<td' . $measure_classes[$measure_index] . $headers . '>' . $content . '</td>';
+                $cells .= '<td' . $class_of->($measure_index) . $headers . '>' . $content . '</td>';
             }
         }
         for my $measure_index ($totals ? 0 .. $#measures : ()) {
             my $measure = $measures[$measure_index];
-            $cells .= '<td' . $measure_classes[$measure_index] . ' headers="' . $row_id . ' ' . $id . '-ct ' .
+            $cells .= '<td' . $class_of->($measure_index, 1) . ' headers="' . $row_id . ' ' . $id . '-ct ' .
                 $id . '-ctm' . $measure_index . '">' .
                 ($continued ? '<span class="sc-rollup-continued-measure">-</span>'
                     : '<strong>' . _html_display($measure, $record->{$measure->{key}}) . '</strong>') . '</td>';
@@ -901,6 +910,8 @@ sub _pivot_grid ($class, $result, $model) {
     # They are stable for one query and distinct between grids on a page.
     my $id = 'scg' . substr(Digest::MD5::md5_hex(Mojo::Util::encode('UTF-8', to_json($selection_pairs))), 0, 8);
     my @measure_classes = map { _numeric_measure_class($_, $model) ? ' sc-numeric-measure' : '' } @measures;
+    # The first sub-column of each column group starts it, as in the summary pivot.
+    my @group_start = map { $_ == 0 ? ' sc-pivot-group-start' : '' } 0 .. $#measures;
 
     # Three header rows, as in the summary pivot: the group shown as columns
     # by name, its values, and the measures under each.
@@ -917,7 +928,7 @@ sub _pivot_grid ($class, $result, $model) {
     my $axis = $grid->{column_axis};
     my $axis_described = defined($axis->{description}) && length($axis->{description});
     $head .= '<th scope="colgroup" colspan="' . (@{$grid->{columns}} * @measures) . '" id="' . $id .
-        '-ca" class="sc-pivot-axis-heading' .
+        '-ca" class="sc-pivot-axis-heading sc-pivot-group-start' .
         ($axis_described ? ' sc-described" title="' . _h($axis->{description}) : '') . '">' . _h($axis->{label}) . '</th>'
         if @{$grid->{columns}};
     my ($top, $sub) = ('', '');
@@ -925,23 +936,24 @@ sub _pivot_grid ($class, $result, $model) {
     for my $column (@{$grid->{columns}}) {
         my $index = $column_number++;
         $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id . '-c' . $index .
-            '"><label class="sc-grid-axis-toggle"><input class="sc-grid-axis-input" ' .
+            '" class="sc-pivot-group-start"><label class="sc-grid-axis-toggle"><input class="sc-grid-axis-input" ' .
             'type="checkbox" name="grid_axis" value="' .
             _h(to_json({axis => $column_group, value => $column->{selection_value}})) . '" ' .
             'data-sc-grid-column-toggle="' . _h($index) . '" aria-label="Select column ' .
             _h(_display_group($column->{value})) . '"><span>' .
             _html_display($grid->{column_axis}, $column->{value}, 1) . '</span></label></th>';
         $sub .= join '', map {
-            '<th scope="col" id="' . $id . '-c' . $index . 'm' . $_ . '" class="sc-grid-measure-heading">' .
+            '<th scope="col" id="' . $id . '-c' . $index . 'm' . $_ . '" class="sc-grid-measure-heading' . $group_start[$_] . '">' .
                 _h($measures[$_]{label}) . '</th>'
         } 0 .. $#measures;
     }
     my $total_columns = $totals && ($grid->{total_columns} // 1);
     if ($total_columns) {
         $head .= '<th scope="colgroup" rowspan="2" colspan="' . scalar(@measures) . '" id="' . $id .
-            '-ct" class="sc-grid-total-heading">Total</th>';
+            '-ct" class="sc-grid-total-heading sc-pivot-group-start sc-pivot-total-start">Total</th>';
         $sub .= join '', map {
-            '<th scope="col" id="' . $id . '-ctm' . $_ . '" class="sc-grid-measure-heading sc-grid-total-heading">' .
+            '<th scope="col" id="' . $id . '-ctm' . $_ . '" class="sc-grid-measure-heading sc-grid-total-heading' .
+                ($_ == 0 ? ' sc-pivot-group-start sc-pivot-total-start' : '') . '">' .
                 _h($measures[$_]{label}) . '</th>'
         } 0 .. $#measures;
     }
@@ -949,7 +961,8 @@ sub _pivot_grid ($class, $result, $model) {
     # Totals are the database's own aggregates, not sums of the cells shown.
     my $total_cells = sub ($total, $kind, $headers, $column_id) {
         return join '', map {
-            '<td class="sc-grid-total sc-grid-total-' . $kind . $measure_classes[$_] . '" headers="' .
+            '<td class="sc-grid-total sc-grid-total-' . $kind . $measure_classes[$_] . $group_start[$_] .
+                ($_ == 0 && $kind ne 'column' ? ' sc-pivot-total-start' : '') . '" headers="' .
                 $headers . ' ' . $column_id . ' ' . $column_id . 'm' . $_ . '"><strong>' .
                 (ref($total) eq 'HASH' ? _html_display($measures[$_], $total->{values}{$measures[$_]{key}}) : '—') .
                 '</strong></td>'
@@ -1000,7 +1013,7 @@ sub _pivot_grid ($class, $result, $model) {
                 ) : undef;
                 my $text = $cell ? _html_display($measure, $value) : '—';
                 $cells .= '<td class="sc-grid-cell' . ($cell ? '' : ' sc-grid-empty-cell') .
-                    ($cell ? $measure_classes[$measure_index] : '') .
+                    ($cell ? $measure_classes[$measure_index] : '') . $group_start[$measure_index] .
                     (defined($heat) ? ' ' . _grid_heat_class($heat) : '') .
                     '" data-sc-grid-row="' . _h($current_row) . '" data-sc-grid-column="' .
                     _h($current_column) . '"' .
