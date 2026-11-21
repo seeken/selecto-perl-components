@@ -322,6 +322,12 @@
       panel.disabled = !aggregateActive;
     });
     var graphActive = view === "graph";
+    root.querySelectorAll("[data-sc-measure-graph]").forEach(function (node) {
+      node.hidden = !graphActive;
+    });
+    root.querySelectorAll("[data-sc-group-grid-column]").forEach(function (node) {
+      node.hidden = view !== "aggregate";
+    });
     syncGraphStateCopies(root, graphActive);
     var limitLabel = root.querySelector("[data-sc-limit-label]");
     if (limitLabel) limitLabel.textContent = graphActive ? "Points" : "Rows";

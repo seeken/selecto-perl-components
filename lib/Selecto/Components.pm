@@ -790,7 +790,16 @@ one Aggregate Grid selection may submit.
 =item max_grid_result_cells
 
 100 to 100000, default 10000. A larger grid is refused with advice to add
-filters or pick lower-cardinality groups.
+filters or pick lower-cardinality groups. A grid of two groups and one
+measure counts rows times columns. A pivot grid (several row groups or
+several measures) counts every rendered cell: rows times columns times
+measures, with its totals.
+
+=item max_grid_columns
+
+1 to 500, default 50. A pivot grid with more column values is refused with a
+message naming this limit; it is never cut short. A grid of two groups and one
+measure is bounded by C<max_grid_result_cells> alone, as before.
 
 =item max_action_rows
 
@@ -1177,7 +1186,12 @@ one numbered clause are ANDed, and clauses are ORed.
 =item * C<order> and C<direction>, C<limit> and C<page>
 
 =item * C<aggregate_grid>, C<aggregate_grid_colorize>,
-C<aggregate_grid_color_scale> and C<row_click_action>
+C<aggregate_grid_color_scale>, C<grid_column> and C<row_click_action>
+
+=item * C<grid_cell> and C<grid_axis>, a grid selection handed to the Detail
+view: a cell is a JSON array with one value per group, in group order; an
+axis is C<{"axis": N, "value": V}> for one group or
+C<{"axes": [N, ...], "values": [V, ...]}> for a row of several row groups
 
 =item * for domains with a query library: C<query_library_view>, repeated
 C<query_library_segment>, and C<query_library_param_name> /
@@ -1267,6 +1281,22 @@ a Total row and a grand total. These are the database's own aggregates over
 each row, column and the whole grid, so an average or a distinct count is
 correct there too. Total cells are read-only and are not part of a grid
 selection.
+
+The grid shows one group across and the others down. With two groups and one
+measure the second group is across. C<grid_column=E<lt>group fieldE<gt>>, set
+by B<Show as columns> in a Group By item's Configure panel, names the group to
+put across instead, and then the grid takes any number of row groups and
+measures: each column value heads one sub-column per measure, and a Total
+column group and Total row hold the row, column and grand totals. Those need
+the adapter's C<grouping_sets> capability, or C<cube> when there are two
+groups; without it the grid shows no totals. Bucketed columns keep the order
+their ranges were given in, dates follow time, and a missing value is last.
+Colour is scaled per measure. Selecting a cell, a row header or a column
+header filters on the row values and the column value, whichever measure is
+clicked. L<Selecto::Components::Explorer/export> of a pivot model flattens the
+header to C<< <column value> · <measure label> >>. A measure's series settings
+(style, axis, stack group, colour and opacity) appear only in the Graph view;
+they stay in the form elsewhere, so they survive a change of view.
 
 =head1 SECURITY
 

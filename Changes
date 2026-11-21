@@ -1,6 +1,25 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Aggregate grid: one Group By can be marked "Show as columns"
+      (grid_column=<group field>), and the grid then takes any number of row
+      groups and measures. Each column value heads one sub-column per
+      measure; a Total column group and a Total row hold the row, column and
+      grand totals, fetched with grouping sets (cube for two groups). Columns
+      of bucketed groups keep the order their ranges were given in. Colour
+      is scaled per measure. Cell, row and column selection filter on the row
+      values and the column value; grid_cell carries one value per group and
+      grid_axis may name several row groups ({axes, values}). Explorer->export
+      of a pivot model flattens the header to "<column value> · <measure>".
+      New limit max_grid_columns (default 50), and max_grid_result_cells
+      counts a pivot's rendered cells (rows x columns x measures, with
+      totals). A grid of two groups and one measure without grid_column
+      renders and is limited exactly as before. Not included: subtotals per
+      row-group prefix, a pivot in Selecto::API::Explorer's complete grid,
+      and web export of grids, which is refused as before.
+    - A measure's graph series settings (style, Y axis, stack group, colour,
+      fill opacity) show only in the Graph view. They stay in the form in the
+      other views, so the settings survive a change of view.
     - API Console: an Aggregates query profile on hosts that enable
       canonical_explorer. It builds grouped aggregate queries from the
       explorer features document, with rollup, cube and grouping-set

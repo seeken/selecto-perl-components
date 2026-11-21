@@ -17,11 +17,11 @@ use Selecto::Query ();
 use Selecto::QueryLibrary ();
 use Selecto::Components::InputBudget ();
 
-has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale aggregate_grid_column row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group graph_palette graph_category_field graph_category_value graph_category_format graph_category_color aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale row_click_action field field_alias field_format filter_field filter_op filter_value filter_values_json filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
+        q query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group graph_palette graph_category_field graph_category_value graph_category_format graph_category_color aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale grid_column row_click_action field field_alias field_format filter_field filter_op filter_value filter_values_json filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_fill_opacity measure_transform measure_transform_window
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
@@ -100,6 +100,7 @@ sub from_input ($class, $config, $domain, $input) {
         $config, $domain, $input, $config->field_map($domain, $retarget), $valid_fields,
         $query_library, \@errors, $retarget,
     );
+    my $aggregate_grid_column = _parse_grid_column($aggregate_grid, $input, $valid_groups, \@errors);
     my ($limit, $page) = _parse_pagination($config, $input, $view, \@errors);
     my $filters = _parse_filters(
         $config, $input, $config->filter_map($domain, $grain),
@@ -119,6 +120,7 @@ sub from_input ($class, $config, $domain, $input) {
         aggregate_grid => $aggregate_grid,
         aggregate_grid_colorize => $aggregate_grid_colorize,
         aggregate_grid_color_scale => $aggregate_grid_color_scale,
+        aggregate_grid_column => $aggregate_grid_column,
         row_click_action => $row_click_action,
         fields => $valid_fields,
         field_configs => $field_configs,
@@ -185,6 +187,8 @@ sub query_pairs ($self) {
         push @pairs, aggregate_grid => 1;
         push @pairs, aggregate_grid_colorize => 1 if $self->aggregate_grid_colorize;
         push @pairs, aggregate_grid_color_scale => $self->aggregate_grid_color_scale;
+        push @pairs, grid_column => $self->aggregate_grid_column
+            if defined($self->aggregate_grid_column);
     }
     push @pairs, row_click_action => $self->row_click_action
         if defined($self->row_click_action) && length($self->row_click_action);
@@ -382,6 +386,7 @@ sub as_hash ($self) {
         aggregate_grid => $self->aggregate_grid,
         aggregate_grid_colorize => $self->aggregate_grid_colorize,
         aggregate_grid_color_scale => $self->aggregate_grid_color_scale,
+        aggregate_grid_column => $self->aggregate_grid_column,
         row_click_action => $self->row_click_action,
         fields => [@{$self->fields}],
         field_configs => { map { $_ => { %{$self->field_configs->{$_}} } } keys %{$self->field_configs} },
@@ -439,6 +444,26 @@ sub _parse_aggregate_grid ($view, $input) {
     my $scale = lc(_scalar(_first($input, 'aggregate_grid_color_scale')) || 'linear');
     $scale = 'linear' unless $scale eq 'linear' || $scale eq 'log';
     return ($enabled, $colorize, $scale);
+}
+
+# The group shown as the grid's columns (grid_column=<group field>). Every
+# other group is a row dimension. Without it a grid of two groups uses the
+# second as its columns, as it always has.
+sub _parse_grid_column ($enabled, $input, $groups, $errors) {
+    return undef unless $enabled;
+    my @requested = grep { length } map { _scalar($_) } @{_values($input, 'grid_column')};
+    return undef unless @requested;
+    my %seen;
+    @requested = grep { !$seen{$_}++ } @requested;
+    if (@requested > 1) {
+        push @$errors, 'Only one group can be shown as the grid columns.';
+        return undef;
+    }
+    unless (grep { $_ eq $requested[0] } @$groups) {
+        push @$errors, 'The grid column must be one of the selected groups.';
+        return undef;
+    }
+    return $requested[0];
 }
 
 sub _parse_row_click_action ($config, $domain, $input, $configured) {
@@ -970,7 +995,7 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
             $seen_clause{$clause} = 1;
             $clause_condition_count++;
             if (keys(%seen_clause) > $config->max_grid_cells
-                || $clause_condition_count > $config->max_grid_cells * 2) {
+                || $clause_condition_count > $config->max_grid_cells * (@$valid_groups > 2 ? scalar @$valid_groups : 2)) {
                 push @$errors, 'Too many alternative filter clauses were submitted.';
                 last;
             }
@@ -1100,10 +1125,15 @@ sub _declared_choice ($catalog, $op, $value, $membership_values = undef) {
     return !grep { length($_) && !$declared{$_} } @values;
 }
 
+# Grid selections as filters. A cell is one value per selected group, in group
+# order. An axis is one group's value ({axis, value}) or, for a row of
+# several row groups, their values together ({axes, values}). Each selected
+# cell or axis is one alternative clause.
 sub _grid_cell_filter_inputs ($config, $grid_cells, $grid_axes, $field_map, $valid_groups, $group_configs, $errors) {
     return [] unless @$grid_cells || @$grid_axes;
-    if (@$valid_groups != 2) {
-        push @$errors, 'Grid cell filters require exactly two selected groups.';
+    my $group_count = scalar @$valid_groups;
+    if ($group_count < 2) {
+        push @$errors, 'Grid cell filters require at least two selected groups.';
         return [];
     }
     if (@$grid_cells + @$grid_axes > $config->max_grid_cells * 2) {
@@ -1111,49 +1141,59 @@ sub _grid_cell_filter_inputs ($config, $grid_cells, $grid_axes, $field_map, $val
         return [];
     }
     my @group_filters = @{_grid_group_filters($field_map, $valid_groups, $group_configs)};
+    my $valid_value = sub ($value) { !ref($value) && (!defined($value) || length("$value") <= 1_000) };
+    my $condition = sub ($group_index, $value, $clause) {
+        return {
+            %{$group_filters[$group_index]},
+            op => defined($value) ? 'eq' : 'is_null',
+            value => defined($value) ? "$value" : '',
+            clause => $clause,
+        };
+    };
+    my $value_key = sub ($value) { defined($value) ? "v$value" : 'n' };
     my @filters;
     my $clause = 0;
-    my %selected_axis;
+    my (%seen_axis, @selected_axes);
     for my $encoded (@$grid_axes) {
         my $axis = eval { from_json($encoded) };
-        if ($@ || ref($axis) ne 'HASH' || !exists($axis->{axis}) || !exists($axis->{value})
-            || $axis->{axis} !~ /\A[01]\z/ || ref($axis->{value})
-            || (defined($axis->{value}) && length("$axis->{value}") > 1_000)) {
+        my (@indexes, @values);
+        if (!$@ && ref($axis) eq 'HASH' && keys(%$axis) == 2 && exists($axis->{axis}) && exists($axis->{value})) {
+            @indexes = ($axis->{axis});
+            @values = ($axis->{value});
+        } elsif (!$@ && ref($axis) eq 'HASH' && keys(%$axis) == 2
+            && ref($axis->{axes}) eq 'ARRAY' && ref($axis->{values}) eq 'ARRAY'
+            && @{$axis->{axes}} == @{$axis->{values}} && @{$axis->{axes}} >= 2) {
+            @indexes = @{$axis->{axes}};
+            @values = @{$axis->{values}};
+        }
+        my %distinct;
+        if (!@indexes || @indexes >= $group_count
+            || grep({ !defined($_) || ref($_) || !/\A(?:0|[1-9]\d*)\z/ || $_ >= $group_count || $distinct{$_}++ } @indexes)
+            || grep({ !$valid_value->($_) } @values)) {
             push @$errors, 'A selected grid axis is invalid.';
             next;
         }
-        my $key = $axis->{axis} . "\0" . (defined($axis->{value}) ? "v$axis->{value}" : 'n');
-        next if $selected_axis{$key}++;
-        push @filters, {
-            %{$group_filters[$axis->{axis}]},
-            op => defined($axis->{value}) ? 'eq' : 'is_null',
-            value => defined($axis->{value}) ? "$axis->{value}" : '',
-            clause => ++$clause,
-        };
+        my %selected = map { ($indexes[$_] => $value_key->($values[$_])) } 0 .. $#indexes;
+        my $key = join "\0", map { "$_=" . $selected{$_} } sort { $a <=> $b } keys %selected;
+        next if $seen_axis{$key}++;
+        push @selected_axes, \%selected;
+        ++$clause;
+        push @filters, map { $condition->($indexes[$_], $values[$_], $clause) } 0 .. $#indexes;
     }
     for my $encoded (@$grid_cells) {
         my $values = eval { from_json($encoded) };
-        if ($@ || ref($values) ne 'ARRAY' || @$values != 2
-            || grep { defined($_) && ref($_) } @$values
-            || grep { defined($_) && length("$_") > 1_000 } @$values) {
+        if ($@ || ref($values) ne 'ARRAY' || @$values != $group_count
+            || grep { !$valid_value->($_) } @$values) {
             push @$errors, 'A selected grid cell is invalid.';
             next;
         }
+        # A cell inside a selected row or column is already covered by it.
         next if grep {
-            my $value = $values->[$_];
-            my $key = $_ . "\0" . (defined($value) ? "v$value" : 'n');
-            $selected_axis{$key}
-        } (0, 1);
+            my $axis = $_;
+            !grep { $value_key->($values->[$_]) ne $axis->{$_} } keys %$axis
+        } @selected_axes;
         ++$clause;
-        for my $group_index (0, 1) {
-            my $value = $values->[$group_index];
-            push @filters, {
-                %{$group_filters[$group_index]},
-                op => defined($value) ? 'eq' : 'is_null',
-                value => defined($value) ? "$value" : '',
-                clause => $clause,
-            };
-        }
+        push @filters, map { $condition->($_, $values->[$_], $clause) } 0 .. $group_count - 1;
     }
     if ($clause > $config->max_grid_cells) {
         push @$errors, 'Too many grid filter alternatives were selected.';

@@ -96,7 +96,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         my $build_started = time;
         my $built = Selecto::Components::QueryBuilder->build(
             $config, $engine->domain, $state,
-            {paginate => !$all_rows, rollup => _rollup_supported($engine), cube => _cube_supported($engine)}
+            {paginate => !$all_rows, rollup => _rollup_supported($engine), cube => _cube_supported($engine), grouping_sets => _grouping_sets_supported($engine)}
         );
         _cap_export($config, $built) if $all_rows;
         my $build_ms = _elapsed_ms($build_started);
@@ -166,10 +166,12 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         );
         my $grid_data = _aggregate_grid_data(
             $state, $built, \@records, $drilldowns,
-            $config->max_grid_result_cells,
+            $config->max_grid_result_cells, $config->max_grid_columns,
         );
+        my $grid_limit;
         if (ref($grid_data) eq 'HASH' && $grid_data->{limit_exceeded}) {
             $grid_limit_exceeded = 1;
+            $grid_limit = $grid_data->{limit};
             $grid_data = undef;
         }
         my $transform_ms = _elapsed_ms($transform_started);
@@ -181,6 +183,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             graph_axis_drilldowns => $graph_axis_drilldowns,
             (defined($grid_data) ? (grid_data => $grid_data) : ()),
             grid_limit_exceeded => $grid_limit_exceeded,
+            ($grid_limit ? (grid_limit => $grid_limit) : ()),
             count => $returned_count,
             total_count => $total_count,
             total_known => defined($total_count) ? 1 : 0,   # an aggregate page with more after it: no
@@ -388,7 +391,7 @@ sub count ($self, $controller) {
     my $state = Selecto::Components::State->from_input($config, $engine->domain, $input);
     die join('; ', @{$state->errors}) . "\n" unless $state->valid;
     my $built = Selecto::Components::QueryBuilder->build(
-        $config, $engine->domain, $state, {paginate => 1, rollup => _rollup_supported($engine), cube => _cube_supported($engine)},
+        $config, $engine->domain, $state, {paginate => 1, rollup => _rollup_supported($engine), cube => _cube_supported($engine), grouping_sets => _grouping_sets_supported($engine)},
     );
     die "Only Detail pages are counted later\n" unless $built->{count_beyond_page};
     my $prepared = Selecto::BoundedQuery->prepare($engine, $built->{query}, limits => $config->limits);
@@ -477,6 +480,10 @@ sub _prepare_nested_records ($built, $records) {
 # MySQL and SQL Server in selecto-perl) get plainly grouped aggregates.
 sub _rollup_supported ($engine) {
     return $engine->adapter->supports('rollup') ? 1 : 0;
+}
+
+sub _grouping_sets_supported ($engine) {
+    return $engine->adapter->supports('grouping_sets') ? 1 : 0;
 }
 
 sub _cube_supported ($engine) {
@@ -630,88 +637,148 @@ sub _graph_axis_drilldowns ($state, $built, $records, $grain = undef) {
     } @$records];
 }
 
-sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells = undef) {
+# The aggregate grid: one group across, the others down, and every measure in
+# each cell. $built->{grid} says which group is the columns; totals come from
+# the query's own grouping sets, never from adding cells.
+sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells = undef, $maximum_columns = undef) {
     return undef unless $built->{aggregate_grid};
     my @groups = grep { !$_->{measure} } @{$built->{columns} // []};
     my @measures = grep { $_->{measure} } @{$built->{columns} // []};
-    return undef unless @groups == 2 && @measures == 1;
+    return undef unless @groups >= 2 && @measures >= 1;
+    my $plan = $built->{grid} // {column => 1, rows => [0], totals => $built->{cube} ? 1 : 0};
+    my $column_index = $plan->{column};
+    my @row_indexes = @{$plan->{rows}};
+    return undef unless @row_indexes && @row_indexes + 1 == @groups;
+    # The original shape keeps its original rules and rendering.
+    my $pivot = @row_indexes > 1 || @measures > 1 ? 1 : 0;
+    my $totals = $plan->{totals} && $built->{cube} ? 1 : 0;
+
+    # Grouping mask bits follow the groups, first group highest; a set bit
+    # means the row leaves that group out.
+    my $bit = sub ($index) { 1 << ($#groups - $index) };
+    my $column_bit = $bit->($column_index);
+    my $row_bits = 0;
+    $row_bits |= $bit->($_) for @row_indexes;
+
+    my $key_of = sub ($record, @indexes) {
+        encode_json([map {
+            my $value = $record->{$groups[$_]{key}};
+            [defined($value) ? 1 : 0, defined($value) ? "$value" : '']
+        } @indexes]);
+    };
+    my $measured = sub ($record) { +{map { ($_->{key} => $record->{$_->{key}}) } @measures} };
 
     my (@rows, @columns);
     my (%seen_row, %seen_column, %cells);
     my (%row_totals, %column_totals, $grand_total);
-    my $maximum_positive;
+    my %maximum_positive;
     for my $record_index (0 .. $#$records) {
         my $record = $records->[$record_index];
         next if $record->{__selecto_rollup_continued};
-        if ($built->{cube} && ($record->{__selecto_rollup_level} // -1) < 2) {
-            # Mask bits follow the dimensions, first dimension highest: 1 drops
-            # the column dimension (a row total), 2 the row dimension (a
-            # column total), 3 both (the grand total).
-            my $mask = $record->{__selecto_grouping_mask};
-            my $total = {value => $record->{$measures[0]{key}}};
-            if ($mask == 1) { $row_totals{_grid_value_key($record->{$groups[0]{key}})} = $total }
-            elsif ($mask == 2) { $column_totals{_grid_value_key($record->{$groups[1]{key}})} = $total }
-            else { $grand_total = $total }
+        my $mask = $record->{__selecto_grouping_mask};
+        my $detail = $built->{cube} ? defined($mask) && $mask == 0
+            : !$built->{rollup} || ($record->{__selecto_rollup_level} // -1) == @groups;
+        if (!$detail) {
+            next unless $totals && defined $mask;
+            my $values = $measured->($record);
+            my $total = {value => $values->{$measures[0]{key}}, values => $values};
+            if ($mask == $column_bit) { $row_totals{$key_of->($record, @row_indexes)} = $total }
+            elsif ($mask == $row_bits) { $column_totals{$key_of->($record, $column_index)} = $total }
+            elsif ($mask == ($row_bits | $column_bit)) { $grand_total = $total }
             next;
         }
-        next unless ($record->{__selecto_rollup_level} // -1) == 2;
 
-        my $row_value = $record->{$groups[0]{key}};
-        my $column_value = $record->{$groups[1]{key}};
-        my $row_key = _grid_value_key($row_value);
-        my $column_key = _grid_value_key($column_value);
+        my $row_key = $key_of->($record, @row_indexes);
+        my $column_key = $key_of->($record, $column_index);
         unless ($seen_row{$row_key}++) {
+            my @parts = map {
+                my $group = $groups[$_];
+                {
+                    value => $record->{$group->{key}},
+                    (defined($group->{sort_key}) ? (sort_value => $record->{$group->{sort_key}}) : ()),
+                    selection_value => $record->{$group->{drilldown_key} // $group->{key}},
+                }
+            } @row_indexes;
             push @rows, {
                 key => $row_key,
-                value => $row_value,
-                (defined($groups[0]{sort_key})
-                    ? (sort_value => $record->{$groups[0]{sort_key}}) : ()),
-                selection_value => $record->{$groups[0]{drilldown_key} // $groups[0]{key}},
+                parts => \@parts,
+                # The first row group, as the original single-row-group grid reads it.
+                value => $parts[0]{value},
+                (exists($parts[0]{sort_value}) ? (sort_value => $parts[0]{sort_value}) : ()),
+                selection_value => $parts[0]{selection_value},
+                selection_values => [map { $_->{selection_value} } @parts],
                 drilldown => _drilldown_for_group_indexes(
-                    $state, \@groups, $record, [0],
+                    $state, \@groups, $record, [@row_indexes],
                 ),
             };
         }
         unless ($seen_column{$column_key}++) {
+            my $group = $groups[$column_index];
             push @columns, {
                 key => $column_key,
-                value => $column_value,
-                (defined($groups[1]{sort_key})
-                    ? (sort_value => $record->{$groups[1]{sort_key}}) : ()),
-                selection_value => $record->{$groups[1]{drilldown_key} // $groups[1]{key}},
+                value => $record->{$group->{key}},
+                (defined($group->{sort_key})
+                    ? (sort_value => $record->{$group->{sort_key}}) : ()),
+                selection_value => $record->{$group->{drilldown_key} // $group->{key}},
                 drilldown => _drilldown_for_group_indexes(
-                    $state, \@groups, $record, [1],
+                    $state, \@groups, $record, [$column_index],
                 ),
             };
         }
-        my $value = $record->{$measures[0]{key}};
+        my $values = $measured->($record);
         $cells{$row_key}{$column_key} = {
-            value => $value,
+            value => $values->{$measures[0]{key}},
+            values => $values,
             drilldown => $drilldowns->[$record_index][-1],
+            # One value per group, in group order.
             selection_values => [map {
                 my $value_key = $_->{drilldown_key} // $_->{key};
                 $record->{$value_key}
             } @groups],
         };
-        if (defined($value) && !ref($value) && looks_like_number($value) && $value > 0) {
-            $maximum_positive = 0 + $value
-                if !defined($maximum_positive) || $value > $maximum_positive;
+        for my $measure (@measures) {
+            my $value = $values->{$measure->{key}};
+            next unless defined($value) && !ref($value) && looks_like_number($value) && $value > 0;
+            $maximum_positive{$measure->{key}} = 0 + $value
+                if !defined($maximum_positive{$measure->{key}}) || $value > $maximum_positive{$measure->{key}};
         }
     }
 
-    @rows = @{_sort_grid_entries(\@rows, $groups[0])};
-    @columns = @{_sort_grid_entries(\@columns, $groups[1])};
-    return {limit_exceeded => 1}
-        if defined($maximum_cells) && @rows * @columns > $maximum_cells;
+    my @row_orders = map { _grid_entry_order($groups[$_]) } @row_indexes;
+    @rows = sort {
+        my $order = 0;
+        for my $part (0 .. $#row_orders) {
+            $order = $row_orders[$part]->($a->{parts}[$part], $b->{parts}[$part]) and last;
+        }
+        $order;
+    } @rows;
+    @columns = @{_sort_grid_entries(\@columns, $groups[$column_index])};
+    if ($pivot) {
+        return {limit_exceeded => 1, limit => {kind => 'columns', limit => $maximum_columns}}
+            if defined($maximum_columns) && @columns > $maximum_columns;
+        # Everything the table renders: each measure in each cell, with totals.
+        my $rendered = (@rows + $totals) * (@columns + $totals) * @measures;
+        return {limit_exceeded => 1, limit => {kind => 'cells', limit => $maximum_cells}}
+            if defined($maximum_cells) && $rendered > $maximum_cells;
+    } else {
+        return {limit_exceeded => 1}
+            if defined($maximum_cells) && @rows * @columns > $maximum_cells;
+    }
     return {
-        row_axis => $groups[0],
-        column_axis => $groups[1],
+        pivot => $pivot,
+        row_axes => [@groups[@row_indexes]],
+        row_indexes => \@row_indexes,
+        row_axis => $groups[$row_indexes[0]],
+        column_axis => $groups[$column_index],
+        column_index => $column_index,
+        measures => \@measures,
         measure => $measures[0],
         rows => \@rows,
         columns => \@columns,
         cells => \%cells,
-        maximum_positive => $maximum_positive,
-        ($built->{cube} ? (totals => {
+        maximum_positive => $maximum_positive{$measures[0]{key}},
+        maximum_positive_by_measure => \%maximum_positive,
+        ($totals ? (totals => {
             rows => \%row_totals, columns => \%column_totals, grand => $grand_total,
         }) : ()),
         selection_pairs => _grid_selection_pairs($state),
@@ -737,6 +804,14 @@ sub _grid_value_key ($value) {
 }
 
 sub _sort_grid_entries ($entries, $column) {
+    my $order = _grid_entry_order($column);
+    return [sort { $order->($a, $b) } @$entries];
+}
+
+# How two entries of one grid axis compare: by the group's own sort key when
+# it has one (bucket ranges in the order they were given), by number or time
+# where the format says so, otherwise as text. A missing value goes last.
+sub _grid_entry_order ($column) {
     my $format = $column->{format} // '';
     my $type = $column->{source_type} // $column->{type} // '';
     my $has_sort_key = defined($column->{sort_key}) ? 1 : 0;
@@ -750,14 +825,28 @@ sub _sort_grid_entries ($entries, $column) {
     # PostgreSQL money arrives formatted for its locale (such as $1,234.00),
     # not as a number, so it sorts as text like any other plain value.
     $numeric ||= $plain && $type =~ /\A(?:integer|bigint|smallint|numeric|decimal|float|double|real)/i;
-    return [sort {
-        !defined($a->{value}) <=> !defined($b->{value})
+    if (my $buckets = $column->{bucket_order}) {
+        # Buckets keep the order their ranges were given in; a label outside
+        # them (such as Other) follows, and a missing value is last.
+        my $rank = ref($buckets) eq 'HASH'
+            ? sub ($value) { $buckets->{$value} // 9**9**9 }
+            : sub ($value) { "$value" =~ /\A\s*(-?\d+(?:\.\d+)?)/ ? 0 + $1 : 9**9**9 };
+        return sub ($left, $right) {
+            !defined($left->{value}) <=> !defined($right->{value})
+                || (defined($left->{value})
+                    ? $rank->($left->{value}) <=> $rank->($right->{value})
+                        || _compare_grid_entry_text($left->{value}, $right->{value})
+                    : 0)
+        };
+    }
+    return sub ($left, $right) {
+        !defined($left->{value}) <=> !defined($right->{value})
             || ($plain && !$numeric
-                ? _compare_grid_entry_text($a->{value}, $b->{value})
+                ? _compare_grid_entry_text($left->{value}, $right->{value})
                 : _compare_grid_entry_values(
-                    $a, $b, $has_sort_key, $numeric, $timezone,
+                    $left, $right, $has_sort_key, $numeric, $timezone,
                 ))
-    } @$entries];
+    };
 }
 
 sub _compare_grid_entry_text ($left, $right) {
@@ -850,7 +939,7 @@ sub stream_export ($self, $controller, $format) {
     die join('; ', @{$state->errors}) . "\n" unless $state->valid;
     my $built = Selecto::Components::QueryBuilder->build(
         $config, $engine->domain, $state,
-        {paginate => 0, rollup => _rollup_supported($engine), cube => _cube_supported($engine)},
+        {paginate => 0, rollup => _rollup_supported($engine), cube => _cube_supported($engine), grouping_sets => _grouping_sets_supported($engine)},
     );
     # Grids need the bounded matrix transformation; their fallback export is
     # deliberately capped by max_grid_result_cells.
@@ -949,7 +1038,7 @@ sub xlsx_file_export ($self, $controller) {
     die join('; ', @{$state->errors}) . "\n" unless $state->valid;
     my $built = Selecto::Components::QueryBuilder->build(
         $config, $engine->domain, $state,
-        {paginate => 0, rollup => _rollup_supported($engine), cube => _cube_supported($engine)},
+        {paginate => 0, rollup => _rollup_supported($engine), cube => _cube_supported($engine), grouping_sets => _grouping_sets_supported($engine)},
     );
     die "Aggregate grid exports require a bounded job\n" if $built->{aggregate_grid};
     _cap_export($config, $built);
@@ -1153,7 +1242,8 @@ sub xlsx ($self, $model) {
         $row_index++;
     }
     if (@columns) {
-        $worksheet->freeze_panes(1, $model->{result}{grid_data} ? 1 : 0);
+        my $grid = $model->{result}{grid_data};
+        $worksheet->freeze_panes(1, !$grid ? 0 : $grid->{pivot} ? scalar @{$grid->{row_axes}} : 1);
         $worksheet->autofilter(0, 0, $row_index - 1, $#columns);
         for my $column_index (0 .. $#columns) {
             my $width = ($widths[$column_index] // 0) + 2;
@@ -1198,6 +1288,7 @@ sub _export_columns ($model) {
 sub _export_dataset ($model) {
     my $grid = $model->{result}{grid_data};
     return ([ _export_columns($model) ], $model->{result}{records}) unless $grid;
+    return _pivot_export_dataset($grid) if $grid->{pivot};
 
     my @columns = ({
         key => '__selecto_grid_row',
@@ -1221,6 +1312,51 @@ sub _export_dataset ($model) {
         }
         push @records, \%record;
     }
+    return (\@columns, \@records);
+}
+
+# A pivot grid as a flat table: one column per row group, then one per column
+# value and measure, headed "<column value> · <measure label>", with the
+# totals where the grid shows them.
+sub _pivot_export_dataset ($grid) {
+    my @measures = @{$grid->{measures}};
+    my $totals = $grid->{totals};
+    my @columns = map {
+        {key => '__selecto_grid_row_' . $_, label => $grid->{row_axes}[$_]{label}}
+    } 0 .. $#{$grid->{row_axes}};
+    my @value_columns;
+    for my $column_index (0 .. $#{$grid->{columns}}) {
+        for my $measure_index (0 .. $#measures) {
+            push @value_columns, {
+                key => "__selecto_grid_column_${column_index}_$measure_index",
+                label => _grid_export_label($grid->{columns}[$column_index]{value}) . " \x{b7} " . $measures[$measure_index]{label},
+                column => $grid->{columns}[$column_index]{key}, measure => $measures[$measure_index]{key},
+            };
+        }
+    }
+    if ($totals) {
+        push @value_columns, map { {
+            key => "__selecto_grid_total_$_", label => "Total \x{b7} " . $measures[$_]{label},
+            total => 1, measure => $measures[$_]{key},
+        } } 0 .. $#measures;
+    }
+    push @columns, map { {key => $_->{key}, label => $_->{label}} } @value_columns;
+    my $record = sub ($labels, $cells, $total) {
+        my %record;
+        $record{'__selecto_grid_row_' . $_} = $labels->[$_] for 0 .. $#{$grid->{row_axes}};
+        for my $column (@value_columns) {
+            my $source = $column->{total} ? $total : $cells->{$column->{column}};
+            $record{$column->{key}} = ref($source) eq 'HASH' ? $source->{values}{$column->{measure}} : undef;
+        }
+        return \%record;
+    };
+    my @records = map {
+        my $row = $_;
+        $record->([map { _grid_export_label($_->{value}) } @{$row->{parts}}],
+            $grid->{cells}{$row->{key}} // {}, $totals ? $totals->{rows}{$row->{key}} : undef);
+    } @{$grid->{rows}};
+    push @records, $record->(['Total', map { '' } 1 .. $#{$grid->{row_axes}}],
+        $totals->{columns}, $totals->{grand}) if $totals && @records;
     return (\@columns, \@records);
 }
 

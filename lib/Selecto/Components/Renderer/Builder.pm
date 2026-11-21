@@ -859,7 +859,8 @@ sub _selection_picker ($class, $state, $catalog, %options) {
                 ($direction eq 'desc' ? ' selected' : '') . '>Descending</option></select></label>';
         } else {
             $config_controls = _picker_config_controls(
-                $options{config}, $kind, $field, $item_config, $options{date_formats}
+                $options{config}, $kind, $field, $item_config, $options{date_formats}, $state->view,
+                $state->aggregate_grid_column,
             );
         }
         '<article class="sc-picker-set-item" draggable="true" data-sc-picker-set-item data-field="' .
@@ -945,7 +946,7 @@ sub _grouped_picker_items ($fields, $root_label, $render) {
     } sort { !length($a) ? -1 : !length($b) ? 1 : lc($a) cmp lc($b) } keys %groups;
 }
 
-sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats) {
+sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats, $view = '', $grid_column = undef) {
     return _hidden('field_alias', '') . _hidden('field_format', '')
         if $kind eq 'field' && $field->{type} eq 'action';
     my $alias = $item_config->{alias} // '';
@@ -1003,6 +1004,15 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
                 '<option value="0"' . ($item_config->{exclude_articles} ? '' : ' selected') .
                 '>Keep articles</option></select></label>';
         }
+        # One group may become the columns of the aggregate grid; the others
+        # are its rows. It means nothing in a graph, so it shows only in the
+        # aggregate view and stays in the form otherwise.
+        $controls .= '<label class="sc-option-check" data-sc-group-grid-column' .
+            ($view eq 'aggregate' ? '' : ' hidden') . '><input type="checkbox" name="grid_column" value="' .
+            _h($field->{path}) . '" data-sc-grid-column-choice' .
+            (($grid_column // '') eq $field->{path} ? ' checked' : '') .
+            ' aria-label="Show ' . _h($field->{label}) . ' as grid columns"><span>Show as columns</span>' .
+            '<small>In the aggregate grid. The other groups become rows.</small></label>';
     } elsif ($kind eq 'measure') {
         my $function = $item_config->{function} // $field->{default_function} // 'count';
         my $functions = join '', map {
@@ -1051,6 +1061,9 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
         my $transform_window = ref($transform_config->{parameters}) eq 'HASH'
             ? $transform_config->{parameters}{window} // 3 : 3;
         my $window_visible = $selected_transform eq 'moving_average';
+        # Series settings only draw a graph. Outside the graph view they stay
+        # in the form, hidden, so the settings survive a change of view.
+        my $graph_only = ' data-sc-measure-graph' . ($view eq 'graph' ? '' : ' hidden');
         $controls .= _hidden('measure_series_id', $series_id) .
             '<label>Function<select name="measure_function" data-sc-measure-function ' .
             'aria-label="Measure function for ' . _h($field->{label}) . '">' . $functions .
@@ -1066,21 +1079,21 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
             '>Always treat NULL as 0</option><option value="auto"' .
             ($null_handling eq 'auto' ? ' selected' : '') .
             '>Automatic for view</option></select><small>Automatic treats NULL as 0 in graphs and aggregates.</small></label>' .
-            '<label>Series style<select name="measure_chart_type" aria-label="Series style for ' .
+            '<label' . $graph_only . '>Series style<select name="measure_chart_type" aria-label="Series style for ' .
             _h($field->{label}) . '">' . $chart_options . '</select></label>' .
-            '<label>Y axis<select name="measure_axis" aria-label="Y axis for ' .
+            '<label' . $graph_only . '>Y axis<select name="measure_axis" aria-label="Y axis for ' .
             _h($field->{label}) . '">' . $axis_options . '</select></label>' .
-            '<label>Stack group<input name="measure_stack" value="' . _h($series_stack) .
+            '<label' . $graph_only . '>Stack group<input name="measure_stack" value="' . _h($series_stack) .
             '" maxlength="32" pattern="[a-z][a-z0-9_]*" placeholder="e.g. expenses" ' .
             'aria-label="Stack group for ' . _h($field->{label}) . '"><small>Series with the same group stack together.</small></label>' .
-            '<div class="sc-series-color" data-sc-measure-color-control>' .
+            '<div' . $graph_only . '><div class="sc-series-color" data-sc-measure-color-control>' .
             '<span>Series color</span><input type="hidden" name="measure_color" value="' .
             _h($series_color) . '"><input type="color" value="' . _h($color_value) .
             '" data-sc-measure-color-picker aria-label="Color for ' . _h($field->{label}) . '"' .
             (length($series_color) ? '' : ' disabled') . '><label class="sc-option-check"><input ' .
             'type="checkbox" data-sc-measure-color-auto' . (length($series_color) ? '' : ' checked') .
-            '><span>Automatic contrasting color</span></label></div>' .
-            '<label>Fill opacity<input type="number" name="measure_fill_opacity" min="0" max="1" step="0.01" value="' .
+            '><span>Automatic contrasting color</span></label></div></div>' .
+            '<label' . $graph_only . '>Fill opacity<input type="number" name="measure_fill_opacity" min="0" max="1" step="0.01" value="' .
             _h($fill_opacity) . '" aria-label="Fill opacity for ' . _h($field->{label}) . '"></label>' .
             '<label>Transform<select name="measure_transform" data-sc-measure-transform ' .
             'aria-label="Analytical transform for ' . _h($field->{label}) . '">' .

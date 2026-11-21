@@ -9,6 +9,8 @@ use Mojo::JSON qw(to_json);
 use Mojo::URL ();
 use Mojo::Util qw(url_escape);
 use POSIX qw(ceil);
+use Digest::MD5 ();
+use Mojo::Util ();
 use Selecto::Components::Renderer::Markup;
 use Selecto::Components::Renderer::Debug ();
 use Selecto::Components::RowActions ();
@@ -26,12 +28,19 @@ sub _results ($class, $model) {
     my $actions = $model->{state}->view eq 'detail'
         ? $class->_bulk_actions($model) : '';
     my $grid_warning = $result->{grid_limit_exceeded}
+            && ($result->{grid_limit} // {})->{kind} && $result->{grid_limit}{kind} eq 'columns'
+        ? '<div class="sc-grid-warning" role="status">This grid has more than ' .
+          _h($result->{grid_limit}{limit}) .
+          ' columns. Add filters or show a lower-cardinality group as columns before displaying it.</div>'
+        : $result->{grid_limit_exceeded}
         ? '<div class="sc-grid-warning" role="status">This grid requires more than ' .
           _h($model->{config}->max_grid_result_cells) .
           ' display cells. Add filters or choose lower-cardinality groups before displaying it.</div>'
         : $model->{state}->view eq 'aggregate' && $model->{state}->aggregate_grid
             && !$result->{grid_data}
-        ? '<div class="sc-grid-warning" role="status">Grid view requires exactly two Group By fields and one Aggregate.</div>'
+        ? '<div class="sc-grid-warning" role="status">Grid view requires exactly two Group By fields and one Aggregate.' .
+          (@{$model->{state}->groups} >= 2 && @{$model->{state}->measures} >= 1 && !defined($model->{state}->aggregate_grid_column)
+            ? ' For more, mark one Group By as Show as columns.' : '') . '</div>'
         : '';
     my $body = $result->{grid_limit_exceeded} ? ''
         : $result->{graph} ? $class->_graph($result, $model)
@@ -553,7 +562,16 @@ sub table_markup ($class, $head, $rows) {
 
 sub _grid ($class, $result, $model) {
     my $grid = $result->{grid_data};
+    return $class->_pivot_grid($result, $model) if $grid->{pivot};
     my $state = $model->{state};
+    # Which group is down and which is across: 0 and 1 unless grid_column says otherwise.
+    my $row_group = $grid->{row_indexes} ? $grid->{row_indexes}[0] : 0;
+    my $column_group = $grid->{column_index} // 1;
+    my $cell_values = sub ($row_value, $column_value) {
+        my @values;
+        @values[$row_group, $column_group] = ($row_value, $column_value);
+        return \@values;
+    };
     my $colorize = $state->aggregate_grid_colorize ? 1 : 0;
     my $scale = $state->aggregate_grid_color_scale;
     my $heading = '<div class="sc-grid-heading"><strong>Aggregate Grid</strong>' .
@@ -585,7 +603,7 @@ sub _grid ($class, $result, $model) {
             my $index = $column_index++;
             '<th scope="col"><label class="sc-grid-axis-toggle"><input class="sc-grid-axis-input" ' .
                 'type="checkbox" name="grid_axis" value="' .
-                _h(to_json({axis => 1, value => $column->{selection_value}})) . '" ' .
+                _h(to_json({axis => $column_group, value => $column->{selection_value}})) . '" ' .
                 'data-sc-grid-column-toggle="' . _h($index) . '" aria-label="Select column ' .
                 _h(_display_group($column->{value})) . '"><span>' .
                 _html_display($grid->{column_axis}, $column->{value}, 1) . '</span></label></th>'
@@ -607,7 +625,7 @@ sub _grid ($class, $result, $model) {
         my $current_row = $row_index++;
         my $cells = '<th scope="row"><label class="sc-grid-axis-toggle"><input ' .
             'class="sc-grid-axis-input" type="checkbox" name="grid_axis" value="' .
-            _h(to_json({axis => 0, value => $row->{selection_value}})) . '" ' .
+            _h(to_json({axis => $row_group, value => $row->{selection_value}})) . '" ' .
             'data-sc-grid-row-toggle="' . _h($current_row) . '" aria-label="Select row ' .
             _h(_display_group($row->{value})) . '"><span>' .
             _html_display($grid->{row_axis}, $row->{value}, 1) . '</span></label></th>';
@@ -620,7 +638,7 @@ sub _grid ($class, $result, $model) {
                     _h($current_row) . '" data-sc-grid-column="' .
                     _h($current_column) . '"><label class="sc-grid-cell-toggle"><input ' .
                     'class="sc-grid-cell-input" type="checkbox" name="grid_cell" value="' .
-                    _h(to_json([$row->{selection_value}, $column->{selection_value}])) . '" ' .
+                    _h(to_json($cell_values->($row->{selection_value}, $column->{selection_value}))) . '" ' .
                     'data-sc-grid-cell data-sc-grid-row="' . _h($current_row) .
                     '" data-sc-grid-column="' . _h($current_column) . '" aria-label="Select empty ' .
                     _h(_display_group($row->{value}) . ', ' .
@@ -677,6 +695,191 @@ sub _grid ($class, $result, $model) {
         _h($grid->{measure}{label}) . ' by ' . _h($grid->{row_axis}{label}) .
         ' and ' . _h($grid->{column_axis}{label}) . '</caption><thead><tr>' .
         $head . '</tr></thead><tbody>' . $rows . '</tbody></table></div>' .
+        '<noscript><p class="sc-note">Choose cells and submit with Show selected details.</p></noscript></form>';
+}
+
+# The grid with several row groups or several measures: the column group's
+# values head groups of columns, one sub-column per measure, and each row
+# group has its own header column. Selecting works on whole cells: a cell is
+# one row and one column value, whatever the measure.
+sub _pivot_grid ($class, $result, $model) {
+    my $grid = $result->{grid_data};
+    my $state = $model->{state};
+    my $colorize = $state->aggregate_grid_colorize ? 1 : 0;
+    my $scale = $state->aggregate_grid_color_scale;
+    my @measures = @{$grid->{measures}};
+    my @row_axes = @{$grid->{row_axes}};
+    my @row_indexes = @{$grid->{row_indexes}};
+    my $column_group = $grid->{column_index};
+    my $totals = $grid->{totals};
+    my $group_count = @row_indexes + 1;
+
+    my $heading = '<div class="sc-grid-heading"><strong>Aggregate Grid</strong>' .
+        ($colorize ? '<span>' . _h(_humanize($scale)) . ' heat scale, per measure</span>' : '') .
+        '</div>';
+    my $legend = '';
+    if ($colorize) {
+        my $swatches = join '', map {
+            '<span class="' . _grid_heat_class($_) . '"></span>'
+        } (10, 16, 22, 28, 34, 40, 46, 52, 58, 64);
+        $legend = '<div class="sc-grid-legend"><strong>Color legend</strong><span>Low</span>' .
+            '<span class="sc-grid-legend-scale" aria-label="Grid color legend">' .
+            $swatches . '</span><span>High</span></div>';
+    }
+    my $method = $model->{config}->query_params_enabled($model->{domain}) ? 'get' : 'post';
+    my $hidden = '';
+    my $selection_pairs = $grid->{selection_pairs} // [];
+    for (my $index = 0; $index < @$selection_pairs; $index += 2) {
+        $hidden .= _hidden($selection_pairs->[$index], $selection_pairs->[$index + 1]);
+    }
+    # Header ids tie each cell to its row values, column value and measure.
+    # They are stable for one query and distinct between grids on a page.
+    my $id = 'scg' . substr(Digest::MD5::md5_hex(Mojo::Util::encode('UTF-8', to_json($selection_pairs))), 0, 8);
+    my @measure_classes = map { _numeric_measure_class($_, $model) ? ' sc-numeric-measure' : '' } @measures;
+
+    my $top = join '', map {
+        my $index = $_;
+        '<th scope="col" rowspan="2" id="' . $id . '-g' . $index . '"' .
+            ($index == 0 ? ' class="sc-grid-corner"' : '') . '>' .
+            ($index == 0
+                ? '<label class="sc-grid-axis-toggle"><input class="sc-grid-axis-input" type="checkbox" ' .
+                  'data-sc-grid-toggle-all aria-label="Select all grid cells"><span>' .
+                  _h($row_axes[$index]{label}) . '</span></label>'
+                : _h($row_axes[$index]{label})) . '</th>'
+    } 0 .. $#row_axes;
+    my $sub = '';
+    my $column_number = 0;
+    for my $column (@{$grid->{columns}}) {
+        my $index = $column_number++;
+        $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id . '-c' . $index .
+            '"><label class="sc-grid-axis-toggle"><input class="sc-grid-axis-input" ' .
+            'type="checkbox" name="grid_axis" value="' .
+            _h(to_json({axis => $column_group, value => $column->{selection_value}})) . '" ' .
+            'data-sc-grid-column-toggle="' . _h($index) . '" aria-label="Select column ' .
+            _h(_display_group($column->{value})) . '"><span>' .
+            _html_display($grid->{column_axis}, $column->{value}, 1) . '</span></label></th>';
+        $sub .= join '', map {
+            '<th scope="col" id="' . $id . '-c' . $index . 'm' . $_ . '" class="sc-grid-measure-heading">' .
+                _h($measures[$_]{label}) . '</th>'
+        } 0 .. $#measures;
+    }
+    if ($totals) {
+        $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id .
+            '-ct" class="sc-grid-total-heading">Total</th>';
+        $sub .= join '', map {
+            '<th scope="col" id="' . $id . '-ctm' . $_ . '" class="sc-grid-measure-heading sc-grid-total-heading">' .
+                _h($measures[$_]{label}) . '</th>'
+        } 0 .. $#measures;
+    }
+
+    # Totals are the database's own aggregates, not sums of the cells shown.
+    my $total_cells = sub ($total, $kind, $headers, $column_id) {
+        return join '', map {
+            '<td class="sc-grid-total sc-grid-total-' . $kind . $measure_classes[$_] . '" headers="' .
+                $headers . ' ' . $column_id . ' ' . $column_id . 'm' . $_ . '"><strong>' .
+                (ref($total) eq 'HASH' ? _html_display($measures[$_], $total->{values}{$measures[$_]{key}}) : '—') .
+                '</strong></td>'
+        } 0 .. $#measures;
+    };
+
+    my $rows = '';
+    my $row_number = 0;
+    for my $row (@{$grid->{rows}}) {
+        my $current_row = $row_number++;
+        my $row_label = join ', ', map { _display_group($_->{value}) } @{$row->{parts}};
+        # One row group selects as before; several select together.
+        my $axis = @row_indexes == 1
+            ? {axis => $row_indexes[0], value => $row->{selection_values}[0]}
+            : {axes => [@row_indexes], values => $row->{selection_values}};
+        my @row_ids = map { $id . '-r' . $current_row . 'g' . $_ } 0 .. $#row_axes;
+        my $headers = join ' ', @row_ids;
+        my $cells = join '', map {
+            my $part = $_;
+            '<th scope="row" id="' . $row_ids[$part] . '">' .
+                ($part == 0
+                    ? '<label class="sc-grid-axis-toggle"><input class="sc-grid-axis-input" type="checkbox" ' .
+                      'name="grid_axis" value="' . _h(to_json($axis)) . '" data-sc-grid-row-toggle="' .
+                      _h($current_row) . '" aria-label="Select row ' . _h($row_label) . '"><span>' .
+                      _html_display($row_axes[$part], $row->{parts}[$part]{value}, 1) . '</span></label>'
+                    : _html_display($row_axes[$part], $row->{parts}[$part]{value}, 1)) . '</th>'
+        } 0 .. $#row_axes;
+        my $current_column = 0;
+        for my $column (@{$grid->{columns}}) {
+            my $row_cells = $grid->{cells}{$row->{key}};
+            my $cell = ref($row_cells) eq 'HASH' ? $row_cells->{$column->{key}} : undef;
+            my @selection;
+            if ($cell) {
+                @selection = @{$cell->{selection_values}};
+            } else {
+                @selection[@row_indexes] = @{$row->{selection_values}};
+                $selection[$column_group] = $column->{selection_value};
+                $#selection = $group_count - 1;
+            }
+            my $cell_id = $id . '-x' . $current_row . '-' . $current_column;
+            my $column_id = $id . '-c' . $current_column;
+            my $label = _h($row_label . ', ' . _display_group($column->{value}));
+            for my $measure_index (0 .. $#measures) {
+                my $measure = $measures[$measure_index];
+                my $value = $cell ? $cell->{values}{$measure->{key}} : undef;
+                my $heat = $cell && $colorize ? _grid_heat_percentage(
+                    $value, $grid->{maximum_positive_by_measure}{$measure->{key}}, $scale,
+                ) : undef;
+                my $text = $cell ? _html_display($measure, $value) : '—';
+                $cells .= '<td class="sc-grid-cell' . ($cell ? '' : ' sc-grid-empty-cell') .
+                    ($cell ? $measure_classes[$measure_index] : '') .
+                    (defined($heat) ? ' ' . _grid_heat_class($heat) : '') .
+                    '" data-sc-grid-row="' . _h($current_row) . '" data-sc-grid-column="' .
+                    _h($current_column) . '"' .
+                    (defined($heat) ? ' data-sc-grid-heat="' . _h($heat) . '"' : '') .
+                    ' headers="' . $headers . ' ' . $column_id . ' ' . $column_id . 'm' . $measure_index . '">' .
+                    ($measure_index == 0
+                        # The cell's one checkbox; the other measures' cells are labels for it.
+                        ? '<label class="sc-grid-cell-toggle"><input class="sc-grid-cell-input" type="checkbox" ' .
+                          'id="' . $cell_id . '" name="grid_cell" value="' . _h(to_json(\@selection)) . '" ' .
+                          'data-sc-grid-cell data-sc-grid-row="' . _h($current_row) .
+                          '" data-sc-grid-column="' . _h($current_column) . '" aria-label="Select ' .
+                          ($cell ? '' : 'empty ') . $label . '"><span class="sc-grid-cell-value">' . $text .
+                          '</span><span class="sc-grid-cell-selected" aria-hidden="true">&#10003;</span></label>'
+                        : '<label class="sc-grid-cell-toggle" for="' . $cell_id .
+                          '"><span class="sc-grid-cell-value">' . $text . '</span></label>') .
+                    '</td>';
+            }
+            $current_column++;
+        }
+        $cells .= $total_cells->($totals->{rows}{$row->{key}}, 'row', $headers, $id . '-ct') if $totals;
+        $rows .= '<tr>' . $cells . '</tr>';
+    }
+    if ($totals && $rows) {
+        my $total_id = $id . '-rt';
+        my $column = 0;
+        $rows .= '<tr class="sc-grid-total-row"><th scope="row" colspan="' . scalar(@row_axes) .
+            '" id="' . $total_id . '" class="sc-grid-total-heading">Total</th>' .
+            join('', map {
+                $total_cells->($totals->{columns}{$_->{key}}, 'column', $total_id, $id . '-c' . $column++)
+            } @{$grid->{columns}}) .
+            $total_cells->($totals->{grand}, 'grand', $total_id, $id . '-ct') . '</tr>';
+    }
+    my $column_count = @row_axes + (@{$grid->{columns}} + ($totals ? 1 : 0)) * @measures;
+    $rows ||= '<tr><td class="sc-empty-cell" colspan="' . $column_count .
+        '">No rows matched this query.</td></tr>';
+    my $max_cells = $model->{config}->max_grid_cells;
+    my $selection_controls = '<div class="sc-grid-selection-actions"><span role="status" ' .
+        'aria-live="polite"><strong data-sc-grid-selection-count>0</strong> ' .
+        '<span data-sc-grid-selection-label>cells selected</span></span><span class="sc-grid-selection-buttons">' .
+        '<button class="sc-button sc-secondary" type="button" data-sc-grid-clear disabled>Clear</button>' .
+        '<button class="sc-button sc-primary" type="submit" data-sc-grid-apply>' .
+        'Show selected details</button></span></div><p class="sc-grid-selection-help" ' .
+        'data-sc-grid-selection-help>Selections may compile to at most ' .
+        _h($max_cells) . ' filter groups. Full rows and columns become one condition.</p>';
+    return '<form class="sc-grid-selection-form" action="' . _h($model->{config}->path) .
+        '" method="' . $method . '" hx-ws:send data-sc-grid-selection data-sc-grid-max="' .
+        _h($max_cells) . '">' . $hidden . $heading . $legend . $selection_controls .
+        '<div class="sc-table-wrap sc-aggregate-grid-wrap"><table class="sc-aggregate-grid sc-pivot-grid">' .
+        '<caption class="sc-visually-hidden">Aggregate grid of ' .
+        _h(join(', ', map { $_->{label} } @measures)) . ' by ' .
+        _h(join(', ', map { $_->{label} } @row_axes)) .
+        ' across ' . _h($grid->{column_axis}{label}) . '</caption><thead><tr>' .
+        $top . '</tr><tr>' . $sub . '</tr></thead><tbody>' . $rows . '</tbody></table></div>' .
         '<noscript><p class="sc-note">Choose cells and submit with Show selected details.</p></noscript></form>';
 }
 

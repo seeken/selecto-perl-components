@@ -356,6 +356,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             format => $column_config->{format} // '',
             drilldown_grouped => length($column_config->{format} // '')
                 && ($column_config->{format} // '') ne 'default' ? 1 : 0,
+            _bucket_order($column_config),
             (defined($field_map->{$field}{html_format})
                 ? (html_format => $field_map->{$field}{html_format}) : ()),
             ($dimension ? (
@@ -486,10 +487,19 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         push @selections, $expression->as($measure_key);
     }
     my @columns = (@group_columns, @measure_columns);
-    my $aggregate_grid = $state->view eq 'aggregate'
-        && $state->aggregate_grid
-        && @group_columns == 2
-        && @measure_columns == 1 ? 1 : 0;
+    # The grid pivots one group into columns. A group marked with grid_column
+    # may do that for any number of row groups and measures; without one, the
+    # grid is the original shape: two groups, the second across, one measure.
+    my $grid_column_field = $state->view eq 'aggregate' && $state->aggregate_grid
+        ? $state->aggregate_grid_column : undef;
+    my ($grid_column_index) = defined($grid_column_field)
+        ? grep { $group_columns[$_]{field} eq $grid_column_field } 0 .. $#group_columns : ();
+    my $aggregate_grid = $state->view eq 'aggregate' && $state->aggregate_grid
+        && (defined($grid_column_index)
+            ? @group_columns >= 2 && @measure_columns >= 1
+            : @group_columns == 2 && @measure_columns == 1) ? 1 : 0;
+    $grid_column_index = $#group_columns if $aggregate_grid && !defined($grid_column_index);
+    my @grid_row_indexes = $aggregate_grid ? grep { $_ != $grid_column_index } 0 .. $#group_columns : ();
     push @selections, @dimension_key_selections;
     my $rollup_key = '__selecto_rollup_grouping';
     push @selections, Selecto::Expression->grouping(\@groups)->as($rollup_key) if $rollup;
@@ -498,8 +508,16 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
     # The grid is a matrix of two dimensions. A cube adds what a rollup lacks
     # there: a total for every column as well as for every row. Callers pass
     # cube => 1 only for adapters that support it.
-    my $cube = $rollup && $aggregate_grid && $options->{cube} ? 1 : 0;
+    # Totals need four grouping sets: every group (the cells), the row groups
+    # (row totals), the column group (column totals) and none (the grand
+    # total). For two groups that is exactly a cube. Callers pass cube and
+    # grouping_sets only for adapters that support them; without the one a
+    # grid needs it keeps its rollup query and shows no totals.
+    my $cube = $rollup && $aggregate_grid && @groups == 2 && $options->{cube} ? 1 : 0;
+    my $grid_sets = $rollup && $aggregate_grid && !$cube && $options->{grouping_sets} ? 1 : 0;
     $query = $cube ? $query->group_by_cube(\@groups)
+        : $grid_sets ? $query->group_by_grouping_sets(
+            [@groups], [@groups[@grid_row_indexes]], [$groups[$grid_column_index]], [])
         : $rollup ? $query->group_by_rollup(\@groups) : $query->group_by(\@groups);
     $query = _with_filters($query, $state, $config, $domain);
     $query = $query->order_by($_, 'asc') for @group_orders;
@@ -523,7 +541,11 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         graph => $state->view eq 'graph' ? 1 : 0,
         aggregate_grid => $aggregate_grid,
         rollup => $rollup,
-        cube => $cube,
+        # Rows may drop any group, not only trailing ones.
+        cube => $cube || $grid_sets ? 1 : 0,
+        ($aggregate_grid ? (grid => {
+            column => $grid_column_index, rows => \@grid_row_indexes, totals => $cube || $grid_sets ? 1 : 0,
+        }) : ()),
         rollup_key => $rollup ? $rollup_key : undef,
         group_count => scalar(@groups),
     };
@@ -599,6 +621,25 @@ sub _group_expression ($column, $config) {
         });
     }
     return Selecto::Expression->datetime_format($field, $format);
+}
+
+# How a bucketed group's labels are ordered where they are laid out side by
+# side (the grid): ranges in the order they were given, and stepped buckets
+# (*/10) by their lower bound. Text order would put 10-20 before 5-9.
+sub _bucket_order ($config) {
+    my $format = $config->{format} // '';
+    return () unless $format =~ /\A(?:buckets|age_buckets|custom_buckets|year_buckets)\z/;
+    my $kind = $format eq 'buckets' ? 'numeric_ranges'
+        : $format eq 'age_buckets' ? 'elapsed_days_ranges'
+        : $format eq 'custom_buckets' ? 'date_relative_ranges' : 'year_ranges';
+    my $specification = Selecto::Components::BucketParser->specification($config->{bucket_ranges}, $kind);
+    return () unless ref($specification) eq 'HASH';
+    return (bucket_order => 'lower_bound') unless ref($specification->{ranges}) eq 'ARRAY';
+    my ($rank, %rank) = (0);
+    for my $range (@{$specification->{ranges}}) {
+        $rank{$range->{label}} //= $rank++ if defined $range->{label};
+    }
+    return (bucket_order => \%rank);
 }
 
 sub _group_natural_order_expression ($column, $config) {

@@ -25,6 +25,7 @@ has max_limit      => 100;
 has max_filters    => 20;
 has max_grid_cells => 50;
 has max_grid_result_cells => 10_000;
+has max_grid_columns => 50;
 has max_orders     => 10;
 has max_measures   => 10;
 has max_action_rows => 1000;
@@ -125,6 +126,9 @@ sub new ($class, @args) {
     die "max_grid_cells must be between 1 and 100\n"
         unless $self->max_grid_cells =~ /\A\d+\z/
             && $self->max_grid_cells >= 1 && $self->max_grid_cells <= 100;
+    die "max_grid_columns must be between 1 and 500\n"
+        unless $self->max_grid_columns =~ /\A\d+\z/
+            && $self->max_grid_columns >= 1 && $self->max_grid_columns <= 500;
     die "max_grid_result_cells must be between 100 and 100000\n"
         unless $self->max_grid_result_cells =~ /\A\d+\z/
             && $self->max_grid_result_cells >= 100

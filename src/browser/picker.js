@@ -372,6 +372,25 @@
       ["count", "Count"], ["count_distinct", "Count distinct"],
       ["min", "Minimum"], ["max", "Maximum"]
     ];
+      // One group may become the aggregate grid's columns. syncPickerConfig
+    // gives the box its group's field and hides it outside the aggregate view.
+    var gridColumn = document.createElement("label");
+    gridColumn.className = "sc-option-check";
+    gridColumn.setAttribute("data-sc-group-grid-column", "");
+    var gridColumnBox = document.createElement("input");
+    gridColumnBox.type = "checkbox";
+    gridColumnBox.name = "grid_column";
+    gridColumnBox.value = "";
+    gridColumnBox.setAttribute("data-sc-grid-column-choice", "");
+    gridColumnBox.setAttribute("aria-label", "Show " + label + " as grid columns");
+    gridColumn.appendChild(gridColumnBox);
+    var gridColumnText = document.createElement("span");
+    gridColumnText.textContent = "Show as columns";
+    gridColumn.appendChild(gridColumnText);
+    var gridColumnHelp = document.createElement("small");
+    gridColumnHelp.textContent = "In the aggregate grid. The other groups become rows.";
+    gridColumn.appendChild(gridColumnHelp);
+    grid.appendChild(gridColumn);
   }
 
   function appendMeasureConfig(grid, type, label, selected) {
@@ -416,13 +435,13 @@
     appendOptions(chartType, [
       ["auto", "Use chart default"], ["bar", "Bar"], ["line", "Line"], ["area", "Area"]
     ], "auto");
-    appendConfigLabel(grid, "Series style", chartType);
+    appendConfigLabel(grid, "Series style", chartType, "data-sc-measure-graph");
 
     var axis = document.createElement("select");
     axis.name = "measure_axis";
     axis.setAttribute("aria-label", "Y axis for " + label);
     appendOptions(axis, [["auto", "Automatic"], ["left", "Left"], ["right", "Right"]], "auto");
-    appendConfigLabel(grid, "Y axis", axis);
+    appendConfigLabel(grid, "Y axis", axis, "data-sc-measure-graph");
 
     var stack = document.createElement("input");
     stack.name = "measure_stack";
@@ -430,7 +449,7 @@
     stack.pattern = "[a-z][a-z0-9_]*";
     stack.placeholder = "e.g. expenses";
     stack.setAttribute("aria-label", "Stack group for " + label);
-    appendConfigLabel(grid, "Stack group", stack);
+    appendConfigLabel(grid, "Stack group", stack, "data-sc-measure-graph");
 
     var colorControl = document.createElement("div");
     colorControl.className = "sc-series-color";
@@ -460,7 +479,11 @@
     autoText.textContent = "Automatic contrasting color";
     autoLabel.appendChild(autoText);
     colorControl.appendChild(autoLabel);
-    grid.appendChild(colorControl);
+    // The colour block has its own display rule, so a plain wrapper hides it.
+    var colorWrapper = document.createElement("div");
+    colorWrapper.setAttribute("data-sc-measure-graph", "");
+    colorWrapper.appendChild(colorControl);
+    grid.appendChild(colorWrapper);
 
     var opacity = document.createElement("input");
     opacity.type = "number";
@@ -470,7 +493,7 @@
     opacity.step = "0.01";
     opacity.value = "0.22";
     opacity.setAttribute("aria-label", "Fill opacity for " + label);
-    appendConfigLabel(grid, "Fill opacity", opacity);
+    appendConfigLabel(grid, "Fill opacity", opacity, "data-sc-measure-graph");
 
     var transform = document.createElement("select");
     transform.name = "measure_transform";
@@ -494,6 +517,15 @@
   }
 
   function syncPickerConfig(item) {
+    // Series settings only draw a graph: show them in the graph view alone.
+    var form = item.closest("form");
+    var view = form && form.querySelector('input[name="view"]:checked');
+    var viewName = view ? view.value : "";
+    item.querySelectorAll("[data-sc-measure-graph]").forEach(function (node) { node.hidden = viewName !== "graph"; });
+    // The grid column choice belongs to the aggregate view.
+    item.querySelectorAll("[data-sc-group-grid-column]").forEach(function (node) { node.hidden = viewName !== "aggregate"; });
+    var gridColumnChoice = item.querySelector("[data-sc-grid-column-choice]");
+    if (gridColumnChoice && !gridColumnChoice.value) gridColumnChoice.value = item.dataset.field || "";
     var groupFormat = item.querySelector("[data-sc-group-format]");
     if (groupFormat) {
       var buckets = /^(?:buckets|age_buckets|custom_buckets|year_buckets)$/.test(groupFormat.value);
