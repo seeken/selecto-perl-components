@@ -39,6 +39,15 @@ sub texts {
     return [map { my $text = $_->all_text; $text =~ s/[\s\x{2713}]+//g; $text } @{$dom->find($selector)}];
 }
 
+# The pivot's header as one list: the row groups, the column values, Total.
+# The name of the group shown as columns heads its values in a row above.
+sub layout {
+    my ($dom) = @_;
+    my @first = @{texts($dom, '.sc-pivot-grid thead tr:nth-child(1) > th:not(.sc-pivot-axis-heading)')};
+    return [(grep { $_ ne 'Total' } @first), @{texts($dom, '.sc-pivot-grid thead tr:nth-child(2) > th')},
+        (grep { $_ eq 'Total' } @first)];
+}
+
 # Three groups, the last bucketed in an order that text sorting would change.
 my @pivot = (q => 1, view => 'aggregate', aggregate_grid => 1, field => 'id',
     group => [qw(origin destination days)], group_alias => ['', '', ''],
@@ -84,10 +93,10 @@ for my $backend (qw(sqlite postgresql)) {
             or diag $t->tx->res->dom->find('.sc-error, [role=alert], .sc-grid-warning')->map('all_text')->join('; ');
         my $dom = $t->tx->res->dom;
 
-        is_deeply texts($dom, '.sc-pivot-grid thead tr:nth-child(1) > th'),
+        is_deeply layout($dom),
             ['Origin', 'Destination', '5-9', '10-20', '21+', 'Total'],
             'row group headers, then bucket columns in the order the ranges were given, then Total';
-        is_deeply texts($dom, '.sc-pivot-grid thead tr:nth-child(2) > th'), [('Price', 'Pay', 'Count') x 4],
+        is_deeply texts($dom, '.sc-pivot-grid thead tr:nth-child(3) > th'), [('Price', 'Pay', 'Count') x 4],
             'each column value and the total have one sub-column per measure';
         is_deeply texts($dom, '.sc-pivot-grid tbody tr:nth-child(1) > *'),
             [qw(MI OH 110 85 2 200 150 1), '—', '—', '—', qw(310 235 3)], 'MI to OH, with its row totals';
@@ -99,13 +108,17 @@ for my $backend (qw(sqlite postgresql)) {
             [qw(Total 160 125 3 270 210 2 300 250 1 730 585 6)], 'column totals and the grand total';
 
         subtest 'accessibility' => sub {
-            is $dom->find('.sc-pivot-grid thead tr:nth-child(1) > th[scope="colgroup"][colspan="3"]')->size, 4, 'column groups span their measures';
-            is $dom->find('.sc-pivot-grid thead tr:nth-child(1) > th[scope="col"][rowspan="2"]')->size, 2, 'row group headers span both rows';
-            is $dom->find('.sc-pivot-grid thead tr:nth-child(2) > th[scope="col"]')->size, 12, 'measure headers';
+            is_deeply texts($dom, '.sc-pivot-grid thead tr:nth-child(1) > th'), ['Origin', 'Destination', 'Days', 'Total'],
+                'the group shown as columns is named above its values';
+            is $dom->at('.sc-pivot-grid thead th.sc-pivot-axis-heading[scope="colgroup"]')->attr('colspan'), 9, 'over all its columns';
+            is $dom->find('.sc-pivot-grid thead tr:nth-child(2) > th[scope="colgroup"][colspan="3"]')->size, 3, 'column groups span their measures';
+            is $dom->find('.sc-pivot-grid thead tr:nth-child(1) > th[scope="colgroup"][colspan="3"][rowspan="2"]')->size, 1, 'and so does Total';
+            is $dom->find('.sc-pivot-grid thead tr:nth-child(1) > th[scope="col"][rowspan="3"]')->size, 2, 'row group headers span all three rows';
+            is $dom->find('.sc-pivot-grid thead tr:nth-child(3) > th[scope="col"]')->size, 12, 'measure headers';
             my $cell = $dom->at('.sc-pivot-grid tbody tr:nth-child(1) > td:nth-of-type(2)');
             my %header = map { ($_->attr('id') => $_->all_text =~ s/\s+//gr) } @{$dom->find('.sc-pivot-grid th[id]')};
-            is_deeply [map { $header{$_} } split ' ', $cell->attr('headers')], [qw(MI OH 5-9 Pay)],
-                'a cell names its row values, its column value and its measure';
+            is_deeply [map { $header{$_} } split ' ', $cell->attr('headers')], [qw(MI OH Days 5-9 Pay)],
+                'a cell names its row values, the column group, its column value and its measure';
             my %seen;
             ok !grep({ $seen{$_}++ } keys %header) && keys(%header) == $dom->find('.sc-pivot-grid th[id]')->size, 'header ids are distinct';
         };
@@ -143,7 +156,7 @@ for my $backend (qw(sqlite postgresql)) {
         subtest 'the column group need not be last' => sub {
             $t->get_ok('/loads' => form => {@pivot, grid_column => 'destination'})->status_is(200);
             my $other = $t->tx->res->dom;
-            is_deeply texts($other, '.sc-pivot-grid thead tr:nth-child(1) > th'), ['Origin', 'Days', 'OH', 'TX', 'Total'], 'destination across';
+            is_deeply layout($other), ['Origin', 'Days', 'OH', 'TX', 'Total'], 'destination across';
             is_deeply texts($other, '.sc-pivot-grid tbody tr:nth-child(1) > *'),
                 [qw(MI 5-9 110 85 2 50 40 1 160 125 3)], 'origin and day bucket down, in range order';
             is_deeply from_json($other->at('.sc-pivot-grid tbody tr:nth-child(1) input[name="grid_cell"]')->attr('value')),
@@ -156,7 +169,7 @@ for my $backend (qw(sqlite postgresql)) {
             $t->get_ok('/loads' => form => {q => 1, view => 'aggregate', aggregate_grid => 1, field => 'id',
                 group => [qw(origin destination)], measure => [qw(price loads)], grid_column => 'origin', limit => 25, page => 1})->status_is(200);
             my $two = $t->tx->res->dom;
-            is_deeply texts($two, '.sc-pivot-grid thead tr:nth-child(1) > th'), [qw(Destination MI OH Total)], 'the first group across';
+            is_deeply layout($two), [qw(Destination MI OH Total)], 'the first group across';
             is_deeply texts($two, '.sc-pivot-grid tbody tr > *'),
                 [qw(OH 310 3), '—', '—', qw(310 3), qw(TX 350 2 70 1 420 3), qw(Total 660 5 70 1 730 6)], 'cells and totals';
             is_deeply from_json($two->at('.sc-pivot-grid tbody tr:nth-child(1) input[data-sc-grid-row-toggle]')->attr('value')),
@@ -189,9 +202,9 @@ for my $backend (qw(sqlite postgresql)) {
         subtest 'the Total columns can be turned off' => sub {
             $t->get_ok('/loads' => form => {@pivot, pivot_column => 'days', pivot_totals => 0})->status_is(200);
             my $off = $t->tx->res->dom;
-            is_deeply texts($off, '.sc-pivot-grid thead tr:nth-child(1) > th'),
+            is_deeply layout($off),
                 ['Origin', 'Destination', '5-9', '10-20', '21+'], 'no Total column group';
-            is_deeply texts($off, '.sc-pivot-grid thead tr:nth-child(2) > th'), [('Price', 'Pay', 'Count') x 3];
+            is_deeply texts($off, '.sc-pivot-grid thead tr:nth-child(3) > th'), [('Price', 'Pay', 'Count') x 3];
             is_deeply texts($off, '.sc-pivot-grid tbody tr:nth-child(1) > *'),
                 [qw(MI OH 110 85 2 200 150 1), '—', '—', '—'], 'the cells are unchanged';
             is_deeply texts($off, '.sc-pivot-grid tbody tr:nth-child(2) > *'),
@@ -237,12 +250,12 @@ for my $backend (qw(sqlite postgresql)) {
         subtest 'every bucket range is a column' => sub {
             my %ranged = (@pivot, group_bucket_ranges => ['', '', '5-9, 40-50, 10-20, 21+'], pivot_column => 'days');
             $t->get_ok('/loads' => form => \%ranged)->status_is(200);
-            is_deeply texts($t->tx->res->dom, '.sc-pivot-grid thead tr:nth-child(1) > th'),
+            is_deeply layout($t->tx->res->dom),
                 ['Origin', 'Destination', '5-9', '40-50', '10-20', '21+', 'Total'], 'the empty range has its column';
             is_deeply texts($t->tx->res->dom, '.sc-pivot-grid tbody tr.sc-grid-total-row > *'),
                 [qw(Total 160 125 3), '—', '—', '—', qw(270 210 2 300 250 1 730 585 6)], 'with nothing in it';
             $t->get_ok('/loads' => form => {%ranged, group_bucket_ranges => ['', '', '5-9, 40-50, 10-20']})->status_is(200);
-            is_deeply texts($t->tx->res->dom, '.sc-pivot-grid thead tr:nth-child(1) > th'),
+            is_deeply layout($t->tx->res->dom),
                 ['Origin', 'Destination', '5-9', '40-50', '10-20', 'Total'], 'ranges leave out what is outside them';
             is_deeply texts($t->tx->res->dom, '.sc-pivot-grid tbody tr.sc-grid-total-row > *'),
                 [qw(Total 160 125 3), '—', '—', '—', qw(270 210 2 430 335 5)];

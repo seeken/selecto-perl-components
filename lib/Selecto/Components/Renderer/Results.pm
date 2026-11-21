@@ -902,9 +902,11 @@ sub _pivot_grid ($class, $result, $model) {
     my $id = 'scg' . substr(Digest::MD5::md5_hex(Mojo::Util::encode('UTF-8', to_json($selection_pairs))), 0, 8);
     my @measure_classes = map { _numeric_measure_class($_, $model) ? ' sc-numeric-measure' : '' } @measures;
 
-    my $top = join '', map {
+    # Three header rows, as in the summary pivot: the group shown as columns
+    # by name, its values, and the measures under each.
+    my $head = join '', map {
         my $index = $_;
-        '<th scope="col" rowspan="2" id="' . $id . '-g' . $index . '"' .
+        '<th scope="col" rowspan="3" id="' . $id . '-g' . $index . '"' .
             ($index == 0 ? ' class="sc-grid-corner"' : '') . '>' .
             ($index == 0
                 ? '<label class="sc-grid-axis-toggle"><input class="sc-grid-axis-input" type="checkbox" ' .
@@ -912,7 +914,13 @@ sub _pivot_grid ($class, $result, $model) {
                   _h($row_axes[$index]{label}) . '</span></label>'
                 : _h($row_axes[$index]{label})) . '</th>'
     } 0 .. $#row_axes;
-    my $sub = '';
+    my $axis = $grid->{column_axis};
+    my $axis_described = defined($axis->{description}) && length($axis->{description});
+    $head .= '<th scope="colgroup" colspan="' . (@{$grid->{columns}} * @measures) . '" id="' . $id .
+        '-ca" class="sc-pivot-axis-heading' .
+        ($axis_described ? ' sc-described" title="' . _h($axis->{description}) : '') . '">' . _h($axis->{label}) . '</th>'
+        if @{$grid->{columns}};
+    my ($top, $sub) = ('', '');
     my $column_number = 0;
     for my $column (@{$grid->{columns}}) {
         my $index = $column_number++;
@@ -930,7 +938,7 @@ sub _pivot_grid ($class, $result, $model) {
     }
     my $total_columns = $totals && ($grid->{total_columns} // 1);
     if ($total_columns) {
-        $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id .
+        $head .= '<th scope="colgroup" rowspan="2" colspan="' . scalar(@measures) . '" id="' . $id .
             '-ct" class="sc-grid-total-heading">Total</th>';
         $sub .= join '', map {
             '<th scope="col" id="' . $id . '-ctm' . $_ . '" class="sc-grid-measure-heading sc-grid-total-heading">' .
@@ -997,7 +1005,7 @@ sub _pivot_grid ($class, $result, $model) {
                     '" data-sc-grid-row="' . _h($current_row) . '" data-sc-grid-column="' .
                     _h($current_column) . '"' .
                     (defined($heat) ? ' data-sc-grid-heat="' . _h($heat) . '"' : '') .
-                    ' headers="' . $headers . ' ' . $column_id . ' ' . $column_id . 'm' . $measure_index . '">' .
+                    ' headers="' . $headers . ' ' . $id . '-ca ' . $column_id . ' ' . $column_id . 'm' . $measure_index . '">' .
                     ($measure_index == 0
                         # The cell's one checkbox; the other measures' cells are labels for it.
                         ? '<label class="sc-grid-cell-toggle"><input class="sc-grid-cell-input" type="checkbox" ' .
@@ -1044,7 +1052,7 @@ sub _pivot_grid ($class, $result, $model) {
         '<caption class="sc-visually-hidden">Aggregate grid of ' .
         _h(join(', ', map { $_->{label} } @measures)) . ' by ' .
         _h(join(', ', map { $_->{label} } @row_axes)) .
-        ' across ' . _h($grid->{column_axis}{label}) . '</caption><thead><tr>' .
+        ' across ' . _h($grid->{column_axis}{label}) . '</caption><thead><tr>' . $head . '</tr><tr>' .
         $top . '</tr><tr>' . $sub . '</tr></thead><tbody>' . $rows . '</tbody></table></div>' .
         '<noscript><p class="sc-note">Choose cells and submit with Show selected details.</p></noscript></form>';
 }

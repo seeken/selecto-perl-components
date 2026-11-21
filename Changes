@@ -8,8 +8,8 @@ Unreleased
       Stepped buckets (*/10) are unchanged.
     - A pivot shows every range of a bucketed column group as a column, in the
       order given, even when nothing falls in it.
-    - The summary pivot names the group shown as columns in a header row
-      above its values.
+    - The summary pivot and the grid pivot name the group shown as columns
+      in a header row above its values.
     - Show Total columns: a checkbox beside Show as columns, on by default.
       pivot_totals=0 leaves the Total column group out of the summary pivot
       and the grid pivot, their exports and their queries; the Total row and
