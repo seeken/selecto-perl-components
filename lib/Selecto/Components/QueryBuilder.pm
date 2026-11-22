@@ -457,23 +457,27 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             $measure_id, ++$measure_occurrence{$measure_id},
         );
         if ($function eq 'buckets' || $function eq 'age_buckets') {
+            # A duration is already an age. Numeric age buckets compare its
+            # value directly; date fields first become elapsed calendar days.
+            my $bucket_function = $config->numeric_type($field_map->{$measure->{field}}{type})
+                ? 'buckets' : $function;
             my $ranges = Selecto::Components::BucketParser->parse($measure_config->{bucket_ranges});
             my $index = 0;
             for my $range (@$ranges) {
                 next if !defined($range->{minimum}) && !defined($range->{maximum});
                 next if defined($range->{minimum}) && $range->{minimum} !~ /\A\d+\z/;
                 my $key = $measure_key . '__bucket_' . ++$index;
-                my $label = _bucket_measure_label($range->{label}, $function, $alias, $index);
+                my $label = _bucket_measure_label($range->{label}, $bucket_function, $alias, $index);
                 my $expression = Selecto::Expression->count_bucket(
                     $measure->{field},
                     $range->{minimum},
                     $range->{maximum},
-                    $function eq 'age_buckets' ? 'elapsed_days' : 'numeric',
+                    $bucket_function eq 'age_buckets' ? 'elapsed_days' : 'numeric',
                 );
                 push @measure_columns, {
                     key => $key, field => $measure->{field}, label => $label,
                     raw_label => _bucket_measure_label(
-                        $range->{label}, $function, '', $index,
+                        $range->{label}, $bucket_function, '', $index,
                     ),
                     type => 'integer', measure => 1, function => $function,
                     series => {
@@ -697,6 +701,8 @@ sub _group_expression ($column, $config) {
     my $field = _temporal_expression($column->{field}, $column->{source_type} // $column->{type});
     return $field unless length($format) && $format ne 'default';
     if (my $kind = Selecto::Components::BucketParser->group_kind($format)) {
+        $kind = 'numeric_ranges' if $format eq 'age_buckets'
+            && ($column->{source_type} // $column->{type} // '') =~ /\A(?:integer|int|smallint|bigint|decimal|number|numeric|float|double|real)\z/i;
         my $specification = Selecto::Components::BucketParser->specification(
             $config->{bucket_ranges}, $kind
         );
@@ -737,6 +743,8 @@ sub _group_natural_order_expression ($column, $config) {
     # Rank the same ranges used by the label expression, preserving first-match
     # semantics for overlapping ranges. The SQL key also orders paged results.
     if (my $kind = Selecto::Components::BucketParser->group_kind($format)) {
+        $kind = 'numeric_ranges' if $format eq 'age_buckets'
+            && ($column->{source_type} // $column->{type} // '') =~ /\A(?:integer|int|smallint|bigint|decimal|number|numeric|float|double|real)\z/i;
         my $specification = Selecto::Components::BucketParser->specification($config->{bucket_ranges}, $kind);
         return undef unless $specification;
         # For stepped numeric/year buckets MIN(source) has exactly the order

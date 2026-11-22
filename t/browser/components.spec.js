@@ -2429,8 +2429,11 @@ test("graph numeric labels use en-US grouping and percentage scale", async ({pag
         [789.2609221822, {kind: "currency", code: "USD"}],
         [0.1312335958, {kind: "percentage", scale: "fraction"}],
         [13.12335958, {kind: "percentage", scale: "whole"}],
-        [442.7363179, {}]
-      ].map(([value, unit]) => label({dataset: {label: "Value", unit}, parsed: {y: value}, raw: value}));
+        [442.7363179, {}],
+        [8, {kind: "duration", code: "hour"}],
+        [.354166, {kind: "duration", code: "day"}, 2],
+        [12, {kind: "duration", code: "day"}, 0]
+      ].map(([value, unit, displayDecimals]) => label({dataset: {label: "Value", unit, displayDecimals}, parsed: {y: value}, raw: value}));
       this.destroy = function () {};
     };
     window.Chart.register = function () {};
@@ -2440,6 +2443,7 @@ test("graph numeric labels use en-US grouping and percentage scale", async ({pag
   await page.addScriptTag({path: bundle});
   await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
   await expect.poll(() => page.evaluate(() => window.numberLabels)).toEqual([
-    "Value: 17,526", "Value: $789.26", "Value: 13.1%", "Value: 13.1%", "Value: 442.74"
+    "Value: 17,526", "Value: $789.26", "Value: 13.1%", "Value: 13.1%", "Value: 442.74",
+    "Value: 8.0 hour", "Value: 0.35 day", "Value: 12 day"
   ]);
 });

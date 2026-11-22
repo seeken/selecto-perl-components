@@ -480,7 +480,7 @@
       parseInt(match[3], 16) + "," + alpha + ")";
   }
 
-  function formatChartValue(value, unit) {
+  function formatChartValue(value, unit, decimals) {
     if (value === null || typeof value === "undefined") return "—";
     unit = unit || {};
     if (unit.kind === "currency" && unit.code) {
@@ -493,6 +493,11 @@
     if (unit.kind === "percentage") {
       var percent = Number(value) * (unit.scale === "fraction" ? 100 : 1);
       return percent.toLocaleString("en-US", {minimumFractionDigits: 1, maximumFractionDigits: 1}) + "%";
+    }
+    if (unit.kind === "duration") {
+      var places = Number.isInteger(decimals) && decimals >= 0 && decimals <= 15 ? decimals : 1;
+      var duration = Number(value).toLocaleString("en-US", {minimumFractionDigits: places, maximumFractionDigits: places});
+      return unit.code ? duration + " " + unit.code : duration;
     }
     if (unit.kind === "count") return Number(value).toLocaleString("en-US", {maximumFractionDigits: 0});
     var formatted = Number(value).toLocaleString("en-US", {maximumFractionDigits: 2});
@@ -542,7 +547,7 @@
           var dataset = context.dataset || {};
           var value = context.parsed && typeof context.parsed.y !== "undefined"
             ? context.parsed.y : context.raw;
-          return (dataset.label ? dataset.label + ": " : "") + formatChartValue(value, dataset.unit);
+          return (dataset.label ? dataset.label + ": " : "") + formatChartValue(value, dataset.unit, dataset.displayDecimals);
         }, afterLabel: function (context) {
           var dataset = context.dataset || {};
           if (!dataset.transforms || !dataset.transforms.length || !dataset.rawData) return "";
@@ -591,7 +596,7 @@
         });
         options.scales[axisId].stacked = Boolean(definition.stacked);
         options.scales[axisId].ticks = Object.assign({}, axis.ticks, {
-          callback: function (value) { return formatChartValue(value, definition.unit); }
+          callback: function (value) { return formatChartValue(value, definition.unit, definition.displayDecimals); }
         });
         // Counts are whole numbers: fractional ticks would round to duplicate labels.
         if (definition.unit && definition.unit.kind === "count") {

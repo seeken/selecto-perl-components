@@ -37,6 +37,7 @@ sub _display ($value) { return defined($value) ? "$value" : '—'; }
 sub _display_group ($value, $column = undef) {
     return '[NULL]' unless defined $value;
     return "$value" unless ref($column) eq 'HASH' && ($column->{format} // '') eq 'age_buckets';
+    return "$value" if ($column->{source_type} // '') =~ /\A(?:integer|int|smallint|bigint|decimal|number|numeric|float|double|real)\z/i;
     return 'today' if "$value" eq '0';
     return '1 day ago' if "$value" eq '1';
     return "$value days ago" if "$value" =~ /\A(?:\x{2264}?\d+|\d+-\d+|\d+\+)\z/;

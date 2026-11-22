@@ -19,6 +19,11 @@ my $formatter = 'Selecto::Components::NumberFormat';
 sub column { +{measure => 1, type => 'decimal', function => 'avg', @_} }
 for my $case (
     [column(), '789.2609221822209914', '789.26'],
+    [column(series => {raw_unit => {kind => 'duration', code => 'hour'}}), '8.54', '8.5'],
+    [column(series => {raw_unit => {kind => 'duration', code => 'hour'}}), '8', '8.0'],
+    [column(series => {raw_unit => {kind => 'duration', code => 'day'}}), '.354166', '0.4'],
+    [column(series => {raw_unit => {kind => 'duration', code => 'day'}}, type => 'integer'), '8', '8'],
+    [column(series => {raw_unit => {kind => 'duration', code => 'day'}}, display => {decimals => 2}), '.354166', '0.35'],
     [column(function => 'count', type => 'integer'), 17526, '17,526'],
     [column(function => 'count_distinct', type => 'integer'), 17526, '17,526'],
     [column(function => 'true_count', type => 'integer'), 17526, '17,526'],

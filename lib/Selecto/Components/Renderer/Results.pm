@@ -1336,11 +1336,18 @@ sub _graph ($class, $result, $model) {
             $series_type = $global_type if $series_type eq 'auto';
             my $resolved_axis = $series->{axis} // 'left';
             my $axis_id = $resolved_axis eq 'right' ? 'y1' : 'y';
+            my $duration_profile = ref($analysis->{unit}) eq 'HASH' && ($analysis->{unit}{kind} // '') eq 'duration'
+                ? Selecto::Components::NumberFormat->profile({%$measure,
+                    series => {unit => $analysis->{unit}}}) : undef;
+            my %duration_display = $duration_profile
+                ? (displayDecimals => $duration_profile->{decimals}) : ();
+
             my $stack = $series->{stack} // '';
             if ($mixed_series) {
                 $axes{$axis_id} //= {
                     side => $resolved_axis,
                     label => _graph_unit_label($series->{unit}),
+                    %duration_display,
                     (defined($series->{unit}) ? (unit => $series->{unit}) : ()),
                 };
                 $axes{$axis_id}{stacked} = 1 if length($stack);
@@ -1371,6 +1378,7 @@ sub _graph ($class, $result, $model) {
                 drilldownIndices => \@record_indices,
                 transforms => [map { $_->{type} } @{$series->{transforms} // []}],
                 unit => $analysis->{unit},
+                %duration_display,
                 ($mixed_series ? (
                     type => $series_type eq 'area' ? 'line' : $series_type,
                     scType => $series_type,

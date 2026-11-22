@@ -1295,7 +1295,7 @@ sub measure_functions ($self, $type, $row_count = 0) {
     return [
         [count => 'Count'], [count_distinct => 'Count distinct'],
         [avg => 'Average'], [sum => 'Sum'], [min => 'Minimum'], [max => 'Maximum'],
-        [buckets => 'Buckets'],
+        [buckets => 'Buckets'], [age_buckets => 'Age buckets'],
     ] if $self->numeric_type($type);
     return [
         [count => 'Count'], [count_distinct => 'Count distinct'],
@@ -1324,7 +1324,7 @@ sub group_formats ($self, $type) {
         [year_buckets => 'Year buckets'],
         [month_buckets => 'Month buckets'],
     ] if $self->temporal_type($type);
-    return [[default => 'Default'], [buckets => 'Buckets']] if $self->numeric_type($type);
+    return [[default => 'Default'], [buckets => 'Buckets'], [age_buckets => 'Age buckets']] if $self->numeric_type($type);
     return [[default => 'Default'], [text_prefix => 'Text prefix']]
         if defined($type) && !ref($type) && "$type" =~ /(?:string|text|char|citext)/i;
     return [[default => 'Default']];

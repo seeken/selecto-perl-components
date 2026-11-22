@@ -16,9 +16,10 @@ sub profile ($class, $column) {
         /\A(?:integer|int|smallint|bigint|id|decimal|number|numeric|float|double|real)\z/i;
     my $count = $function =~ /\A(?:count|count_distinct|true_count|false_count|buckets|age_buckets)\z/;
     my $places = $percentage ? 1 : $count ? 0 : $kind eq 'currency' ? 2
+        : $kind eq 'duration' ? (($column->{type} // '') =~ /\A(?:integer|int|smallint|bigint)\z/i ? 0 : 1)
         : $function eq 'avg' ? 2
         : ($column->{type} // '') =~ /\A(?:integer|int|smallint|bigint|id)\z/i ? 0 : 2;
-    my $fixed = $percentage || $count || $kind eq 'currency' || !$places;
+    my $fixed = $percentage || $count || $kind eq 'currency' || $kind eq 'duration' || !$places;
     my $override = ($column->{display} // {})->{decimals};
     if (defined($override) && !ref($override) && "$override" =~ /\A(?:[0-9]|1[0-5])\z/) {
         $places = 0 + $override;

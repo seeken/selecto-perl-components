@@ -1,6 +1,10 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Duration measures use one decimal by default for hours and fractional
+      days, integer presentation for whole days, and host display.decimals
+      when declared, including chart tooltips and axes. Numeric duration Age buckets compare values directly
+      for both group bands and bucket-count measures.
     - Bucket ranges: "-N" right after a range that ends at a number continues
       from it, so "1, -4, -10, -20, 21+" means "1, 2-4, 5-10, 11-20, 21+".
       A leading "-N", or one after an open range, still means N or less.

@@ -128,3 +128,4 @@ t/summary_pivot.t
 lib/Selecto/Components/NumberFormat.pm
 t/number_format.t
 t/bucket_row_order.t
+t/temporal_duration.t
