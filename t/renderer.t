@@ -454,7 +454,7 @@ like $measure_table,
     qr{<th scope="col" class="sc-numeric-measure">Revenue</th>},
     'numeric measure headings receive right-alignment semantics';
 like $measure_table,
-    qr{<td class="sc-numeric-measure">1234\.50</td>},
+    qr{<td class="sc-numeric-measure"><span[^>]+>1,234\.5</span></td>},
     'numeric measure values receive right-alignment semantics';
 like $measure_table,
     qr{<th scope="col">Latest pickup</th>.*<td>2026-09-02 10:30:00</td>}s,

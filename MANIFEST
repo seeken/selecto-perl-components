@@ -125,3 +125,5 @@ t/measure_graph_controls.t
 t/month_buckets.t
 t/pivot_grid.t
 t/summary_pivot.t
+lib/Selecto/Components/NumberFormat.pm
+t/number_format.t

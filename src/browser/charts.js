@@ -67,14 +67,17 @@
     unit = unit || {};
     if (unit.kind === "currency" && unit.code) {
       try {
-        return new Intl.NumberFormat(undefined, {
-          style: "currency", currency: unit.code, maximumFractionDigits: 2
+        return new Intl.NumberFormat("en-US", {
+          style: "currency", currency: unit.code, minimumFractionDigits: 2, maximumFractionDigits: 2
         }).format(value);
       } catch (_error) {}
     }
-    if (unit.kind === "percentage") return Number(value).toLocaleString() + "%";
-    if (unit.kind === "count") return Number(value).toLocaleString(undefined, {maximumFractionDigits: 0});
-    var formatted = Number(value).toLocaleString(undefined, {maximumFractionDigits: 3});
+    if (unit.kind === "percentage") {
+      var percent = Number(value) * (unit.scale === "fraction" ? 100 : 1);
+      return percent.toLocaleString("en-US", {minimumFractionDigits: 1, maximumFractionDigits: 1}) + "%";
+    }
+    if (unit.kind === "count") return Number(value).toLocaleString("en-US", {maximumFractionDigits: 0});
+    var formatted = Number(value).toLocaleString("en-US", {maximumFractionDigits: 2});
     return unit.code ? formatted + " " + unit.code : formatted;
   }
 

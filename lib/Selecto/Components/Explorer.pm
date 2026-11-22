@@ -10,7 +10,9 @@ use Selecto::Components::ExportBudget ();
 use Selecto::BoundedQuery ();
 use Digest::SHA qw(sha256_hex);
 use Scalar::Util qw(blessed looks_like_number);
+use Math::BigFloat ();
 use Time::HiRes qw(time);
+use Selecto::Components::NumberFormat ();
 use Selecto::Components::QueryBuilder ();
 use Selecto::Components::RoundTrips ();
 use Selecto::Components::State ();
@@ -1230,6 +1232,12 @@ sub xlsx_file_export ($self, $controller) {
         my $header_format = $workbook->add_format(
             bold => 1, bg_color => '#DCE6F1', bottom => 1,
         );
+        # BigFloat below avoids the writer's native-number coercion losing
+        # database numeric digits before the value is serialized to XML.
+        my @number_formats = map {
+            my $format = Selecto::Components::NumberFormat->xlsx_format($_);
+            defined($format) ? $workbook->add_format(num_format => $format) : undef
+        } @columns;
         my ($worksheet, $sheet_index, $row_index, @widths);
         my $start_sheet = sub {
             $sheet_index++;
@@ -1285,7 +1293,7 @@ sub xlsx_file_export ($self, $controller) {
                 $reserve_cell->($text);
 
                 if (!ref($value) && looks_like_number($value) && $text !~ /\A[+-]?0\d/) {
-                    $worksheet->write_number($row_index, $column_index, 0 + $value);
+                    $worksheet->write_number($row_index, $column_index, Math::BigFloat->new("$value"), $number_formats[$column_index]);
                 } else {
                     $worksheet->write_string($row_index, $column_index, $text);
                 }
@@ -1371,6 +1379,10 @@ sub xlsx ($self, $model) {
         bg_color => '#DCE6F1',
         bottom => 1,
     );
+    my @number_formats = map {
+        my $format = Selecto::Components::NumberFormat->xlsx_format($_);
+        defined($format) ? $workbook->add_format(num_format => $format) : undef
+    } @columns;
     my @widths;
     for my $column_index (0 .. $#columns) {
         my $label = defined($columns[$column_index]{label})
@@ -1388,7 +1400,7 @@ sub xlsx ($self, $model) {
             }
             my $text = _flat_value($value);
             if (!ref($value) && looks_like_number($value) && $text !~ /\A[+-]?0\d/) {
-                $worksheet->write_number($row_index, $column_index, 0 + $value);
+                $worksheet->write_number($row_index, $column_index, Math::BigFloat->new("$value"), $number_formats[$column_index]);
             } else {
                 $worksheet->write_string($row_index, $column_index, $text);
             }
@@ -1454,6 +1466,7 @@ sub _export_dataset ($model) {
     });
     for my $column_index (0 .. $#{$grid->{columns}}) {
         push @columns, {
+            %{$grid->{measure}},
             key => '__selecto_grid_column_' . $column_index,
             label => _grid_export_label($grid->{columns}[$column_index]{value}),
         };
@@ -1486,6 +1499,7 @@ sub _pivot_export_dataset ($grid) {
     for my $column_index (0 .. $#{$grid->{columns}}) {
         for my $measure_index (0 .. $#measures) {
             push @value_columns, {
+                %{$measures[$measure_index]},
                 key => "__selecto_grid_column_${column_index}_$measure_index",
                 label => _grid_export_label($grid->{columns}[$column_index]{value}) . " \x{b7} " . $measures[$measure_index]{label},
                 column => $grid->{columns}[$column_index]{key}, measure => $measures[$measure_index]{key},
@@ -1494,11 +1508,12 @@ sub _pivot_export_dataset ($grid) {
     }
     if ($totals && ($grid->{total_columns} // 1)) {
         push @value_columns, map { {
+            %{$measures[$_]},
             key => "__selecto_grid_total_$_", label => "Total \x{b7} " . $measures[$_]{label},
             total => 1, measure => $measures[$_]{key},
         } } 0 .. $#measures;
     }
-    push @columns, map { {key => $_->{key}, label => $_->{label}} } @value_columns;
+    push @columns, map { +{%$_} } @value_columns;
     my $record = sub ($labels, $cells, $total) {
         my %record;
         $record{'__selecto_grid_row_' . $_} = $labels->[$_] for 0 .. $#{$grid->{row_axes}};
@@ -1530,14 +1545,15 @@ sub _summary_pivot_export_dataset ($model) {
     my @value_columns;
     for my $column_index (0 .. $#{$pivot->{columns}}) {
         push @value_columns, map { {
+            %{$measures[$_]},
             key => "__selecto_pivot_${column_index}_$_",
             label => _grid_export_label($pivot->{columns}[$column_index]{value}) . " \x{b7} " . $measures[$_]{label},
             column => $pivot->{columns}[$column_index]{key}, measure => $measures[$_]{key},
         } } 0 .. $#measures;
     }
     my $totals = ($pivot->{totals} // 1) ? 1 : 0;
-    push @columns, (map { {key => $_->{key}, label => $_->{label}} } @value_columns),
-        map { {key => "__selecto_pivot_total_$_", label => "Total \x{b7} " . $measures[$_]{label}} }
+    push @columns, (map { +{%$_} } @value_columns),
+        map { {%{$measures[$_]}, key => "__selecto_pivot_total_$_", label => "Total \x{b7} " . $measures[$_]{label}} }
             $totals ? 0 .. $#measures : ();
     my @records;
     for my $record (@{$result->{records}}) {

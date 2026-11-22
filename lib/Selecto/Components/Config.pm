@@ -708,6 +708,8 @@ sub field_catalog ($self, $domain, $options = undef) {
             (_picker_hidden_id($path, $source->{primary_key}, $dimension,
                 \%visible_id, \%reference_keys)
                 ? (picker_hidden => 1) : ()),
+            (ref($domain->field_metadata($path)->{display}) eq 'HASH'
+                ? (display => $domain->field_metadata($path)->{display}) : ()),
             (defined($domain->field_unit($path))
                 ? (unit => $domain->field_unit($path)) : ()),
             (defined($domain->field_behavior($path))
@@ -768,6 +770,8 @@ sub field_catalog ($self, $domain, $options = undef) {
                 (_picker_hidden_id($path, $schema->{primary_key}, $dimension,
                     \%visible_id, {})
                     ? (picker_hidden => 1) : ()),
+                (ref($domain->field_metadata($path)->{display}) eq 'HASH'
+                    ? (display => $domain->field_metadata($path)->{display}) : ()),
                 (defined($domain->field_unit($path))
                     ? (unit => $domain->field_unit($path)) : ()),
                 (defined($domain->field_behavior($path))
@@ -803,6 +807,8 @@ sub field_catalog ($self, $domain, $options = undef) {
             ),
             internal => $domain->field_is_public($path) ? 0 : 1,
             denormalizing => $dimension->{denormalizing} ? 1 : 0,
+            (ref($domain->field_metadata($path)->{display}) eq 'HASH'
+                ? (display => $domain->field_metadata($path)->{display}) : ()),
             (defined($domain->field_unit($path))
                 ? (unit => $domain->field_unit($path)) : ()),
             (defined($domain->field_behavior($path))

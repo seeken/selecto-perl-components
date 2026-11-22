@@ -21,6 +21,7 @@ sub _results ($class, $model) {
     return '<div class="sc-empty"><h2>Query unavailable</h2><p>Correct the controls and try again.</p></div>'
         unless $model->{state}->valid && $model->{result};
     my $result = $model->{result};
+    $class->_prepare_number_columns($result);
     my $heading = $class->heading_for_view($model->{state}->view);
     my $meta = '<div class="sc-result-meta"><div><h2>' . _h($heading) .
         '</h2>' . $class->_retarget_note($model) . '</div><div>' . $class->_matched($model) .
@@ -66,6 +67,31 @@ sub _results ($class, $model) {
     my $debug = Selecto::Components::Renderer::Debug->_debug_panel($result, $model);
     return $meta . $actions . $grid_warning . $top_pagination . $body .
         $bottom_pagination . $debug;
+}
+
+# Include every presentation of a measure when choosing optional precision.
+sub _prepare_number_columns ($class, $result) {
+    for my $column (grep { $_->{measure} } @{$result->{columns}}) {
+        my $key = $column->{key};
+        my @values = map { $_->{$key} } @{$result->{records}};
+        if (my $grid = $result->{grid_data}) {
+            for my $row (values %{$grid->{cells}}) {
+                push @values, map { $_->{values}{$key} } values %$row;
+            }
+            if (my $totals = $grid->{totals}) {
+                push @values, map { $_->{values}{$key} } values %{$totals->{rows}}, values %{$totals->{columns}};
+                push @values, $totals->{grand}{values}{$key} if $totals->{grand};
+            }
+        }
+        if (my $pivot = $result->{pivot_data}) {
+            if (!$pivot->{limit}) {
+                for my $record (@{$result->{records}}) {
+                    push @values, map { $_->{$key} } values %{$pivot->{cells_for}->($record)};
+                }
+            }
+        }
+        Selecto::Components::NumberFormat->prepare($column, \@values);
+    }
 }
 
 # How many rows matched. An aggregate page with more after it was not counted
@@ -1389,7 +1415,8 @@ sub _graph ($class, $result, $model) {
                 ? '<small>Raw: ' . _h(_display($raw_value)) . '</small>' : '';
             '<li><span class="sc-graph-label">' . _h($label) . '</span><meter min="0" max="' .
             _h($max) . '" value="' . _h($value) . '"></meter><strong>' .
-            _h(_display($display_value)) . '</strong>' . $raw_note . '</li>'
+            _html_display({%$measure, series => {%{$measure->{series}},
+                raw_unit => $measure->{series}{unit}}}, $display_value) . '</strong>' . $raw_note . '</li>'
         } @measures
     } 0 .. $#records;
     $bars ||= '<li class="sc-empty-cell">No rows matched this query.</li>';

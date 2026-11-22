@@ -676,3 +676,16 @@ responses do not include generated SQL. Debug copy now emits JSON
 with parameterized `sql` and a separate `parameters` array; it never synthesizes
 an executable statement from user values. Treat the debug panel and its copied
 diagnostics as sensitive because bound values may contain tenant or filter data.
+
+### Measure number display
+
+Explorer tables use en-US separators. Counts and integer sums/min/max use
+whole numbers, currency uses two decimals, percentages use one decimal and
+`%`, and other numeric measures use up to two decimals. Optional decimals
+are padded consistently across a displayed measure, including its totals.
+A source column can override precision with `display => {decimals => 0}`
+(0 through 15). Groups and Detail cells retain their existing display.
+Hover a formatted measure for the exact value. CSV retains raw values;
+XLSX retains numeric values with display formats. Whole-scale percentages
+use a literal percent sign in XLSX so their numeric value stays unchanged;
+fraction-scale percentages use Excel's percentage format.

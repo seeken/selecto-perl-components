@@ -5,6 +5,7 @@ use Mojo::Base -strict, -signatures;
 use Exporter 'import';
 use Mojo::JSON qw(to_json);
 use Mojo::Util qw(url_escape);
+use Selecto::Components::NumberFormat ();
 use Selecto::Components::Util qw(humanize html_escape);
 
 our @EXPORT = qw(
@@ -42,6 +43,11 @@ sub _display_group ($value, $column = undef) {
     return "$value";
 }
 sub _html_display ($column, $value, $group = 0) {
+    if (!$group && $column->{measure}) {
+        my $formatted = Selecto::Components::NumberFormat->format($column, $value);
+        return '<span title="' . _h($value) . '" data-sc-raw-value="' . _h($value) . '">' .
+            _h($formatted) . '</span>' if defined $formatted;
+    }
     my $display = $group ? _display_group($value, $column) : _display($value);
     return _h($display) unless ($column->{html_format} // '') eq 'vin_last_six';
     return _h($display) unless defined($value) && !ref($value)

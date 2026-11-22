@@ -465,7 +465,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                     raw_label => _bucket_measure_label(
                         $range->{label}, $function, '', $index,
                     ),
-                    type => 'integer', measure => 1,
+                    type => 'integer', measure => 1, function => $function,
                     series => {
                         id => ($measure_config->{series_id} // 'series_' . ($measure_index + 1)) .
                             '_bucket_' . $index,
@@ -495,6 +495,9 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                 ? 'integer' : $function eq 'true_percentage'
                     ? 'decimal' : $field_map->{$measure->{field}}{type},
             measure => 1,
+            function => $function,
+            (defined($measure->{field}) && ref($field_map->{$measure->{field}}{display}) eq 'HASH'
+                ? (display => $field_map->{$measure->{field}}{display}) : ()),
             series => {
                 id => $measure_config->{series_id} // 'series_' . ($measure_index + 1),
                 chart_type => $measure_config->{chart_type} // 'auto',

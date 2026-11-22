@@ -1,6 +1,9 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Format numeric measures consistently in summary, pivot, grid and graph
+      tables, retaining exact values on hover and in exports. XLSX numeric
+      cells have number formats. Column display.decimals overrides defaults.
     - Drilldowns open elsewhere with the platform's link modifiers: Shift+click
       in a new window, Cmd+click (Mac) or Ctrl+click in a new tab, and
       Cmd+Shift+click or Ctrl+Shift+click in a dialog over the page. Holding a

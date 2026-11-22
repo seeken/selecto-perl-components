@@ -2416,3 +2416,30 @@ test("exact membership values stay aligned with newly added filters and promoted
   expect(await page.locator("form").evaluate(form => new FormData(form).getAll("filter_values_json"))).toEqual(["", ""]);
   await expect(page.locator('[data-sc-promoted-filter-values] [data-sc-promoted-filter-input="value"]')).toHaveCount(1);
 });
+
+
+test("graph numeric labels use en-US grouping and percentage scale", async ({page}) => {
+  await page.setContent(`<div data-sc-chart data-chart-type="bar"
+    data-chart-data='{"labels":["A"],"datasets":[{"label":"Value","data":[1]}]}'><canvas></canvas></div>`);
+  await page.evaluate(() => {
+    window.Chart = function (_canvas, config) {
+      const label = config.options.plugins.tooltip.callbacks.label;
+      window.numberLabels = [
+        [17526, {kind: "count"}],
+        [789.2609221822, {kind: "currency", code: "USD"}],
+        [0.1312335958, {kind: "percentage", scale: "fraction"}],
+        [13.12335958, {kind: "percentage", scale: "whole"}],
+        [442.7363179, {}]
+      ].map(([value, unit]) => label({dataset: {label: "Value", unit}, parsed: {y: value}, raw: value}));
+      this.destroy = function () {};
+    };
+    window.Chart.register = function () {};
+    window.Chart.getChart = function () { return null; };
+    window.Chart.version = "test";
+  });
+  await page.addScriptTag({path: bundle});
+  await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded", {bubbles: true})));
+  await expect.poll(() => page.evaluate(() => window.numberLabels)).toEqual([
+    "Value: 17,526", "Value: $789.26", "Value: 13.1%", "Value: 13.1%", "Value: 442.74"
+  ]);
+});

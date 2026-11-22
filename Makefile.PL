@@ -29,6 +29,7 @@ WriteMakefile(
     PREREQ_PM        => {
         'Excel::Writer::XLSX' => '1.10',
         'Digest::SHA' => 0,
+        'Math::BigFloat' => 0,
         'JSON::PP'    => '4.06',
         'Cpanel::JSON::XS' => '4.38',
         'Mojolicious' => '9.49',
