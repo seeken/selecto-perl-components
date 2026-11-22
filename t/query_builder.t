@@ -627,19 +627,19 @@ my $multi_measure_statement = $postgresql->compile($domain, $multi_measure->{que
 like $multi_measure_statement->sql, qr/COUNT\(\*\) AS "count"/,
     'the first selected measure compiles independently';
 like $multi_measure_statement->sql,
-    qr/COUNT\(CASE WHEN "s0"\."unit_price" >= \$7 AND "s0"\."unit_price" <= \$8 THEN 1 END\) AS "total_price__bucket_1"/,
+    qr/COUNT\(CASE WHEN "s0"\."unit_price" >= \$13 AND "s0"\."unit_price" <= \$14 THEN 1 END\) AS "total_price__bucket_1"/,
     'a numeric measure bucket expands to a governed conditional count column';
 like $multi_measure_statement->sql, qr/GROUP BY ROLLUP \(CASE WHEN "s0"\."unit_price" >=/,
     'numeric group buckets compile as governed rollup expressions';
 like $multi_measure_statement->sql, qr/GROUPING\(CASE WHEN .*?\) AS "__selecto_rollup_grouping"/,
     'aggregate rollup carries governed grouping metadata for hierarchy rendering';
 like $multi_measure_statement->sql,
-    qr/\ASELECT \* FROM \(SELECT .*\) AS rollupfix ORDER BY 5 DESC, 1 ASC NULLS LAST LIMIT 26 OFFSET 0\z/s,
+    qr/\ASELECT \* FROM \(SELECT .*\) AS rollupfix ORDER BY 6 DESC, 2 ASC NULLS LAST LIMIT 26 OFFSET 0\z/s,
     'one-level bucket rollups sort the grand total separately from data NULL buckets';
 unlike $multi_measure_statement->sql, qr/ORDER BY CASE/,
     'the rollup outer sort does not rebuild the parameterized bucket expression';
-# Nine for the selections, and the 'Other' that the group's ranges leave out.
-is scalar(@{$multi_measure_statement->params}), 10,
+# Six label bounds, six rank bounds, three count bounds, and excluded Other.
+is scalar(@{$multi_measure_statement->params}), 16,
     'ordered bucket rollups do not duplicate their bound bucket parameters';
 like $multi_measure_statement->sql, qr/ WHERE .*<> \$\d+/s, 'a group bucketed by ranges keeps to its ranges';
 is_deeply [map { $_->{label} } @{$multi_measure->{columns}}],

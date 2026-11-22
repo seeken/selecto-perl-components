@@ -689,3 +689,9 @@ Hover a formatted measure for the exact value. CSV retains raw values;
 XLSX retains numeric values with display formats. Whole-scale percentages
 use a literal percent sign in XLSX so their numeric value stays unchanged;
 fraction-scale percentages use Excel's percentage format.
+
+Bucket rows in summaries, pivots and graphs follow their declared ranges;
+stepped buckets follow their numeric lower bounds. Ordering is done before
+paging. An explicit measure sort (`order=measure:total_price&direction=desc`)
+takes precedence; a curated measure ID that does not name a source field
+also works without the `measure:` prefix.

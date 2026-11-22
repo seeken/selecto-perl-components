@@ -422,9 +422,19 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             );
             if ($natural_order) {
                 my $sort_key = '__selecto_group_sort_' . $group_index;
-                my $aggregate_order = Selecto::Expression->min($natural_order);
+                my $aggregate_order = $rollup
+                    && Selecto::Components::BucketParser->group_kind($column->{format})
+                    ? Selecto::Expression->dimension_display($natural_order, $group)
+                    : Selecto::Expression->min($natural_order);
                 $column->{sort_key} = $sort_key;
                 push @group_sort_selections, $aggregate_order->as($sort_key);
+                if (!$rollup && ($column->{bucket_order} // '') eq 'lower_bound') {
+                    my $missing = Selecto::Expression->max(Selecto::Expression->value(
+                        ['case', [['is_null', $column->{field}], ['literal', 1]], ['else', ['literal', 0]]],
+                    ));
+                    push @group_sort_selections, $missing->as($sort_key . '_missing');
+                    push @group_orders, $missing;
+                }
                 push @group_orders, $aggregate_order;
             } else {
                 push @group_orders, $group;
@@ -557,6 +567,15 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             [$groups[$grid_column_index]], ($total_columns ? [] : ()))
         : $rollup ? $query->group_by_rollup(\@groups) : $query->group_by(\@groups);
     $query = _with_filters($query, $state, $config, $domain);
+    # An explicitly selected measure ordering precedes natural group order.
+    # Resolve only governed selections; never treat a request as an SQL alias.
+    my %measure_selections = map { ($_->alias_name => $_) }
+        grep { defined($_->alias_name) } @selections;
+    for my $order (@{$state->orders // []}) {
+        next unless $order->{field} =~ /\Ameasure:(.+)\z/;
+        my $expression = $measure_selections{_measure_key($1)} or next;
+        $query = $query->order_by($expression, $order->{direction});
+    }
     $query = $query->order_by($_, 'asc') for @group_orders;
     if ($aggregate_grid) {
         # A pair of high-cardinality dimensions can otherwise materialize an
@@ -715,11 +734,15 @@ sub _group_natural_order_expression ($column, $config) {
     my $field = _temporal_expression(
         $column->{field}, $column->{source_type} // $column->{type},
     );
-    # Month labels read as text out of order; their ranges, in the order
-    # given, are the order. The same bucket labelled by rank sorts that way.
-    if ($format eq 'month_buckets') {
-        my $specification = Selecto::Components::BucketParser->specification($config->{bucket_ranges}, 'month_ranges');
+    # Rank the same ranges used by the label expression, preserving first-match
+    # semantics for overlapping ranges. The SQL key also orders paged results.
+    if (my $kind = Selecto::Components::BucketParser->group_kind($format)) {
+        my $specification = Selecto::Components::BucketParser->specification($config->{bucket_ranges}, $kind);
         return undef unless $specification;
+        # For stepped numeric/year buckets MIN(source) has exactly the order
+        # of the lower bounds, including negative numeric buckets. It avoids
+        # parsing display labels or adding dialect SQL to Components.
+        return $field unless ref($specification->{ranges}) eq 'ARRAY';
         my $rank = 0;
         return Selecto::Expression->bucket($field, {%$specification,
             ranges => [map { {%$_, label => sprintf('%04d', $rank++)} } @{$specification->{ranges}}]});

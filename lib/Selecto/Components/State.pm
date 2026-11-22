@@ -98,7 +98,7 @@ sub from_input ($class, $config, $domain, $input) {
     );
     my ($orders, $order, $direction) = _parse_orders(
         $config, $domain, $input, $config->field_map($domain, $retarget), $valid_fields,
-        $query_library, \@errors, $retarget,
+        $query_library, \@errors, $retarget, $view, $valid_measures,
     );
     my $pivot_column = _parse_pivot_column($view, $input, $valid_groups, \@errors);
     # The pivot's Total columns are on unless pivot_totals says otherwise. The
@@ -908,7 +908,8 @@ sub _parse_graph_colors ($config, $view, $input, $errors) {
     return ($palette, \@overrides);
 }
 
-sub _parse_orders ($config, $domain, $input, $field_map, $valid_fields, $query_library, $errors, $rows_of = undef) {
+sub _parse_orders ($config, $domain, $input, $field_map, $valid_fields, $query_library, $errors, $rows_of = undef, $view = 'detail', $measures = undef) {
+    my %measure_ids = $view ne 'detail' ? map { ($_ => 1) } @{$measures // []} : ();
     my $order_fields = _values($input, 'order');
     my $order_directions = _values($input, 'direction');
     if ($query_library->{materialize} && @{$query_library->{orders}}) {
@@ -929,11 +930,16 @@ sub _parse_orders ($config, $domain, $input, $field_map, $valid_fields, $query_l
             push @$errors, 'Too many sort fields were submitted.';
             last;
         }
-        unless ($field_map->{$field}) {
+        # A prefix disambiguates a measure from its source field. Curated
+        # measure IDs that are not source fields can also be used directly.
+        $field = 'measure:' . $field if !$field_map->{$field} && $measure_ids{$field};
+        my ($measure_id) = $field =~ /\Ameasure:(.+)\z/;
+        my $measure_order = defined($measure_id) && $measure_ids{$measure_id};
+        unless ($field_map->{$field} || $measure_order) {
             push @$errors, 'Choose an available sort field.';
             next;
         }
-        if ($field_map->{$field}{denormalizing}) {
+        if (!$measure_order && $field_map->{$field}{denormalizing}) {
             push @$errors, 'A to-many field cannot order root detail rows.';
             next;
         }
