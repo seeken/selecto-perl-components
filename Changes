@@ -1,6 +1,9 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Bucket ranges: "-N" right after a range that ends at a number continues
+      from it, so "1, -4, -10, -20, 21+" means "1, 2-4, 5-10, 11-20, 21+".
+      A leading "-N", or one after an open range, still means N or less.
     - Summary and graph bucket rows follow the ranges as given; stepped
       buckets sort numerically. SQL sort keys preserve rollup and page order,
       and explicit measure ordering takes precedence over bucket order.

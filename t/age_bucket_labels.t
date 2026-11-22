@@ -52,6 +52,24 @@ my @grid = map { text_of($_) } @{$dom->find('.sc-aggregate-grid thead th:not(.sc
 is_deeply [grep { /day|today/ } @grid], ['today', '1 day ago', '2-30 days ago', '31+ days ago'],
     'grid column headings say so too';
 
+# "-N" after a range continues it: "0, -1, -30, 31+" is "0, 1, 2-30, 31+",
+# and its drilldowns find the same rows.
+$t->get_ok('/loads' => form => {@form, group_bucket_ranges => ['', '0, -1, -30, 31+'], pivot_column => 'received'})
+    ->status_is(200);
+$dom = $t->tx->res->dom;
+is_deeply [map { text_of($_) } @{$dom->find('.sc-pivot-table thead tr:nth-child(2) > th')}],
+    ['today', '1 day ago', '2-30 days ago', '31+ days ago'], 'the shorthand reads as the full ranges';
+my ($shorthand_drill) = grep { from_json($_->attr('value'))->{value} eq '2-30' }
+    @{$dom->find('.sc-pivot-table thead tr:nth-child(2) button')};
+ok $shorthand_drill, 'and drills by the inferred range';
+my %drill_pairs;
+my $drill_form = $dom->at('form#' . ($shorthand_drill->attr('form') // ''));
+push @{$drill_pairs{$_->attr('name')}}, $_->attr('value') for @{$drill_form->find('input[type="hidden"]')};
+push @{$drill_pairs{$shorthand_drill->attr('name')}}, $shorthand_drill->attr('value');
+$t->get_ok('/loads' => form => \%drill_pairs)->status_is(200)->element_exists_not('.sc-alert');
+is_deeply [map { text_of($_) } @{$t->tx->res->dom->find('.sc-results table tbody tr td:first-child')}], ['3'],
+    'which finds the load received 12 days ago';
+
 # A drilldown from a 250-row summary opens Detail at Detail's own page size.
 $t->get_ok('/loads' => form => {@form, limit => 250})->status_is(200);
 $dom = $t->tx->res->dom;

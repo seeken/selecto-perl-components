@@ -60,7 +60,16 @@ sub parse ($class, $input) {
     for my $part (@parts) {
         $part =~ s/\A\s+|\s+\z//g;
         next unless length($part);
-        if ($part =~ /\A(\d+)\z/) {
+        # "-N" right after a range that ends at a number continues it:
+        # "1, -4, -10, 21+" reads as "1, 2-4, 5-10, 21+". Leading, or after
+        # an open or keyword range, it is still "N or less".
+        my $previous = @ranges ? $ranges[-1]{maximum} : undef;
+        my ($through) = $part =~ /\A-(\d+)\z/;
+        if (defined($through) && defined($previous) && $previous =~ /\A\d+\z/ && $previous + 1 <= $through) {
+            my $minimum = $previous + 1;
+            push @ranges, { minimum => $minimum, maximum => 0 + $through,
+                label => $minimum == $through ? "$through" : "$minimum-$through" };
+        } elsif ($part =~ /\A(\d+)\z/) {
             push @ranges, { minimum => 0 + $1, maximum => 0 + $1, label => "$1" };
         } elsif ($part =~ /\A(\d+)-(\d+)\z/ && $1 <= $2) {
             push @ranges, { minimum => 0 + $1, maximum => 0 + $2, label => "$1-$2" };
