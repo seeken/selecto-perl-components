@@ -17,6 +17,7 @@ const modules = [
   "charts.js",
   "row-dialog.js",
   "grid.js",
+  "drilldown-open.js",
   "table-headers.js",
   "deferred-count.js",
   "explorer-session.js",

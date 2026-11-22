@@ -770,6 +770,13 @@ row count is always available.
 The page size (default 25) and the largest page size a user may request
 (default 100, and at least C<default_limit>).
 
+=item aggregate_default_limit, aggregate_max_limit
+
+The same for Summary (aggregate) pages: default 250 rows, up to 1000. Their
+rows are groups, and a page with more after it is not counted, so a bigger
+page shows a whole report at once. Detail keeps C<default_limit> and
+C<max_limit>.
+
 =item max_filters
 
 1 to 20, default 20.

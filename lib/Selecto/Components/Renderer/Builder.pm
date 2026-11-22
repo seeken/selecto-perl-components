@@ -99,7 +99,7 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         '<strong data-sc-builder-pending role="status" aria-live="polite" aria-atomic="true"></strong></div>' .
         '<div class="sc-control-row"><label><span data-sc-limit-label>' .
         ($state->view eq 'graph' ? 'Points' : 'Rows') .
-        '</span><select name="limit" data-sc-limit>' . _limit_options($state, $config) . '</select></label>' .
+        '</span><select name="limit" data-sc-limit data-sc-limit-view="' . _h($state->view) . '" data-sc-limit-views="' . _h(_limit_views($config)) . '">' . _limit_options($state, $config) . '</select></label>' .
         '<label data-sc-page-control' . ($state->view eq 'graph' ? ' hidden' : '') .
         '>Page<input name="page" inputmode="numeric" value="' . _h($state->page) . '"' .
         ($state->view eq 'graph' ? ' disabled' : '') . '></label></div>' .

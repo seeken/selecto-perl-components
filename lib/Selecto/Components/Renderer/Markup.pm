@@ -3,6 +3,7 @@ package Selecto::Components::Renderer::Markup;
 use utf8;
 use Mojo::Base -strict, -signatures;
 use Exporter 'import';
+use Mojo::JSON qw(to_json);
 use Mojo::Util qw(url_escape);
 use Selecto::Components::Util qw(humanize html_escape);
 
@@ -19,6 +20,7 @@ our @EXPORT = qw(
     _selection_hidden
     _measure_selection_hidden
     _limit_options
+    _limit_views
     _format_url
 );
 
@@ -117,13 +119,24 @@ sub _measure_selection_hidden ($state) {
                 ? $transform->{parameters}{window} // '' : '')
     } 0 .. $#{$state->measures};
 }
+# Page sizes up to the largest any view allows. The browser switches the
+# list with the view (data-sc-limit-views); sizes above this view's maximum
+# start hidden.
 sub _limit_options ($state, $config) {
     my %seen;
-    my @limits = sort { $a <=> $b } grep { $_ <= $config->max_limit && !$seen{$_}++ }
-        (10, 25, 50, 100, 250, 500, 1000, $config->default_limit, $state->limit);
+    my (undef, $max) = $config->page_limits($state->view);
+    my $largest = $config->max_limit > $config->aggregate_max_limit ? $config->max_limit : $config->aggregate_max_limit;
+    my @limits = sort { $a <=> $b } grep { $_ <= $largest && !$seen{$_}++ }
+        (10, 25, 50, 100, 250, 500, 1000, $config->default_limit, $config->aggregate_default_limit, $state->limit);
     return join '', map {
-        '<option value="' . $_ . '"' . ($_ == $state->limit ? ' selected' : '') . '>' . $_ . '</option>'
+        '<option value="' . $_ . '"' . ($_ == $state->limit ? ' selected' : '') .
+            ($_ > $max ? ' hidden disabled' : '') . '>' . $_ . '</option>'
     } @limits;
+}
+# Each view's default and largest page size, for the browser.
+sub _limit_views ($config) {
+    return to_json({map { my ($default, $max) = $config->page_limits($_); ($_ => {default => 0 + $default, max => 0 + $max}) }
+        qw(detail aggregate graph)});
 }
 sub _format_url ($canonical_url, $format) {
     my $separator = $canonical_url =~ /\?/ ? '&' : '?';

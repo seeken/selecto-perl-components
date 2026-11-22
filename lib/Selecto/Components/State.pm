@@ -304,9 +304,9 @@ sub query_pairs ($self) {
     for my $order (@{$self->orders}) {
         push @pairs, order => $order->{field}, direction => $order->{direction};
     }
-    push @pairs,
-        limit => $self->limit,
-        page => $self->page;
+    # A state built to leave the page size to its view (a drilldown) has none.
+    push @pairs, limit => $self->limit if defined $self->limit;
+    push @pairs, page => $self->page;
     return \@pairs;
 }
 
@@ -959,17 +959,15 @@ sub _parse_pagination ($config, $input, $view, $errors) {
     my $limit_label = $view eq 'graph' ? 'Point' : 'Row';
     push @$errors, "$limit_label limit must be a positive integer."
         if defined($limit_input) && $limit_input !~ /\A[1-9]\d*\z/;
-    my $default_limit = $view eq 'graph'
-        ? ($config->max_limit < 500 ? $config->max_limit : 500)
-        : $config->default_limit;
+    my ($default_limit, $max_limit) = $config->page_limits($view);
     my $limit = _positive_integer($limit_input, $default_limit);
     if ($view eq 'graph') {
-        my $minimum = $config->max_limit < 250 ? $config->max_limit : 250;
+        my $minimum = $max_limit < 250 ? $max_limit : 250;
         $limit = $minimum if $limit < $minimum;
     }
-    if ($limit > $config->max_limit) {
+    if ($limit > $max_limit) {
         push @$errors, "$limit_label limit is above the configured maximum.";
-        $limit = $config->max_limit;
+        $limit = $max_limit;
     }
     return ($limit, 1) if $view eq 'graph';
     my $page_input = _first($input, 'page');

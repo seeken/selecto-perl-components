@@ -22,6 +22,10 @@ has default_group  => sub { return [] };
 has measures       => sub { return [] };
 has default_limit  => 25;
 has max_limit      => 100;
+# Summary pages hold group rows, not records, and are not counted (Explorer
+# model, peek): a bigger page shows a whole report at once.
+has aggregate_default_limit => 250;
+has aggregate_max_limit     => 1000;
 has max_filters    => 20;
 has max_grid_cells => 50;
 has max_grid_result_cells => 10_000;
@@ -121,6 +125,11 @@ sub new ($class, @args) {
         unless $self->default_limit =~ /\A\d+\z/ && $self->default_limit > 0;
     die "max_limit must be at least default_limit\n"
         unless $self->max_limit =~ /\A\d+\z/ && $self->max_limit >= $self->default_limit;
+    die "aggregate_default_limit must be a positive integer\n"
+        unless $self->aggregate_default_limit =~ /\A\d+\z/ && $self->aggregate_default_limit > 0;
+    die "aggregate_max_limit must be at least aggregate_default_limit\n"
+        unless $self->aggregate_max_limit =~ /\A\d+\z/
+            && $self->aggregate_max_limit >= $self->aggregate_default_limit;
     die "max_filters must be between 1 and 20\n"
         unless $self->max_filters =~ /\A\d+\z/ && $self->max_filters >= 1 && $self->max_filters <= 20;
     die "max_grid_cells must be between 1 and 100\n"
@@ -320,6 +329,15 @@ sub _without_hidden_action_prerequisites ($self, $engine, $controller) {
 
 sub allows_view ($self, $view) {
     return scalar grep { $_ eq $view } @{$self->views};
+}
+
+# A view's page size and the largest it allows: summary pages have their
+# own, and a graph plots at least 250 points (up to 500 by default).
+sub page_limits ($self, $view) {
+    my $max = $self->max_limit;
+    return ($self->aggregate_default_limit, $self->aggregate_max_limit) if ($view // '') eq 'aggregate';
+    return (($max < 500 ? $max : 500), $max) if ($view // '') eq 'graph';
+    return ($self->default_limit, $max);
 }
 
 sub action_handler ($self, $id) {

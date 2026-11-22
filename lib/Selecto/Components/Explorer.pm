@@ -619,6 +619,7 @@ sub _drilldown_for_group_indexes ($state, $groups, $record, $indexes, $grain = u
     my $drilldown = Selecto::Components::State->new(
         %{$state->as_hash},
         view => 'detail',
+        limit => undef,   # Detail's own page size, not the summary's
         filters => \@filters,
         page => 1,
         errors => [],
@@ -942,6 +943,7 @@ sub _grid_selection_pairs ($state) {
     my $detail = Selecto::Components::State->new(
         %{$state->as_hash},
         view => 'detail',
+        limit => undef,   # Detail's own page size, not the summary's
         aggregate_grid => 0,
         aggregate_grid_colorize => 0,
         filters => [@kept, @{_group_filter_inputs($state, undef, \@kept)}],

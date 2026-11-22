@@ -1424,6 +1424,86 @@ test("a host limit below 250 remains selectable in graph mode", async ({page}) =
   expect(await page.locator("form").evaluate(form => new FormData(form).get("limit"))).toBe("100");
 });
 
+test("the Rows menu follows each view's page sizes", async ({page}) => {
+  await load(page, `
+    <form data-sc-builder>
+      <input type="radio" name="view" value="detail" checked>
+      <input type="radio" name="view" value="aggregate">
+      <fieldset data-sc-result-view-panel="detail"></fieldset>
+      <fieldset data-sc-result-view-panel="summary" hidden disabled></fieldset>
+      <fieldset data-sc-graph-options hidden disabled></fieldset>
+      <fieldset data-sc-aggregate-options hidden disabled></fieldset>
+      <span data-sc-limit-label>Rows</span>
+      <select name="limit" data-sc-limit data-sc-limit-view="detail"
+        data-sc-limit-views='{"detail":{"default":25,"max":100},"aggregate":{"default":250,"max":1000},"graph":{"default":100,"max":100}}'>
+        <option value="25" selected>25</option><option value="100">100</option>
+        <option value="250" hidden disabled>250</option><option value="1000" hidden disabled>1000</option>
+      </select>
+      <label data-sc-page-control>Page<input name="page" value="1"></label>
+    </form>
+  `);
+  await page.locator('input[name="view"][value="aggregate"]').check();
+  await expect(page.locator('[data-sc-limit]')).toHaveValue("250");
+  await expect(page.locator('[data-sc-limit] option[value="1000"]')).not.toBeDisabled();
+  await page.locator('[data-sc-limit]').selectOption("1000");
+  await page.locator('input[name="view"][value="detail"]').check();
+  // A size the user chose is kept where it fits; 1000 does not fit Detail.
+  await expect(page.locator('[data-sc-limit]')).toHaveValue("100");
+  await expect(page.locator('[data-sc-limit] option[value="250"]')).toBeDisabled();
+  await page.locator('[data-sc-limit]').selectOption("25");
+  await page.locator('input[name="view"][value="aggregate"]').check();
+  await expect(page.locator('[data-sc-limit]')).toHaveValue("250");
+});
+
+test("drilldown modifiers open a window, a tab, or a dialog, and say which", async ({page, context}) => {
+  const opened = [];
+  await context.route("http://selecto.test/**", (route) => {
+    opened.push(route.request().url());
+    route.fulfill({contentType: "text/html", body: "<title>Detail</title><p id=detail>Detail rows</p>"});
+  });
+  await load(page, `
+    <table><tbody><tr><th>
+      <form class="sc-drilldown-form" action="http://selecto.test/explorer/load" method="get">
+        <input type="hidden" name="q" value="1"><input type="hidden" name="view" value="detail">
+        <input type="hidden" name="filter_field" value="origin"><input type="hidden" name="filter_value" value="MI">
+        <button class="sc-drilldown-value sc-rollup-level-1" type="submit">MI</button>
+      </form>
+    </th></tr></tbody></table>
+  `);
+  const drill = page.locator("button.sc-drilldown-value");
+  await drill.hover();
+  await page.keyboard.down("Shift");
+  await expect(page.locator("html")).toHaveAttribute("data-sc-drill-open", "window");
+  await page.keyboard.down("ControlOrMeta");
+  await expect(page.locator("html")).toHaveAttribute("data-sc-drill-open", "dialog");
+  await page.keyboard.up("Shift");
+  await expect(page.locator("html")).toHaveAttribute("data-sc-drill-open", "tab");
+  await page.keyboard.up("ControlOrMeta");
+  await expect(page.locator("html")).not.toHaveAttribute("data-sc-drill-open", /./);
+
+  const popup = context.waitForEvent("page");
+  await drill.click({modifiers: ["Shift"]});
+  const window = await popup;
+  await expect(window.locator("#detail")).toHaveText("Detail rows");
+  expect(new URL(window.url()).searchParams.get("filter_value")).toBe("MI");
+  await window.close();
+
+  const tab = context.waitForEvent("page");
+  await drill.click({modifiers: ["ControlOrMeta"]});
+  await expect((await tab).locator("#detail")).toHaveText("Detail rows");
+  await (await tab).close();
+
+  await drill.click({modifiers: ["ControlOrMeta", "Shift"]});
+  const dialog = page.locator("dialog.sc-drilldown-dialog[open]");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator("h3")).toHaveText("MI");
+  await expect(page.frameLocator("dialog.sc-drilldown-dialog iframe").locator("#detail")).toHaveText("Detail rows");
+  expect(page.url()).toBe("about:blank");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("dialog.sc-drilldown-dialog")).toHaveCount(0);
+  expect(opened.every((url) => new URL(url).searchParams.get("filter_value") === "MI")).toBe(true);
+});
+
 test("an export uses the columns currently selected in the builder", async ({page}) => {
   await load(page, `
     <section id="selecto-surface-truck" data-sc-query-params="enabled">

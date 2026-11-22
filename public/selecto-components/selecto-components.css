@@ -580,6 +580,17 @@ th.sc-described { cursor: help; text-decoration: underline dotted; text-decorati
 .sc-row-dialog-toolbar [data-sc-row-dialog-position] { color: var(--sc-muted); font-size: .75rem; margin-left: auto; }
 .sc-row-dialog-frame-shell { background: var(--sc-canvas); min-height: 0; position: relative; }
 .sc-row-dialog-frame { display: block; }
+/* A drilldown opened over the page (Ctrl+Shift+click): its header, then the frame. */
+.sc-drilldown-dialog-panel { grid-template-rows: auto minmax(0, 1fr); }
+.sc-drilldown-dialog-tools { align-items: center; display: flex; gap: 10px; }
+.sc-drilldown-dialog-tools .sc-button { font-size: .76rem; min-height: 32px; padding: 5px 10px; }
+/* With a drilldown modifier held (data-sc-drill-open), the drilldown under
+   the pointer shows where a click opens it: a window, a tab or a dialog. */
+:root[data-sc-drill-open] .sc-drilldown-value { position: relative; }
+:root[data-sc-drill-open] .sc-drilldown-value:hover::after { background-color: var(--sc-accent); border-radius: 4px; box-shadow: 0 1px 3px var(--sc-shadow); content: ""; height: 16px; pointer-events: none; position: absolute; right: -12px; top: -10px; width: 16px; background-image: var(--sc-drill-icon); background-position: center; background-repeat: no-repeat; background-size: 12px 12px; }
+:root[data-sc-drill-open="window"] { --sc-drill-icon: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 12 12%27 fill=%27none%27 stroke=%27%23fff%27 stroke-width=%271.6%27%3E%3Cpath d=%27M5 2H2v8h8V7M7 1h4v4M11 1 5.5 6.5%27/%3E%3C/svg%3E"); }
+:root[data-sc-drill-open="tab"] { --sc-drill-icon: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 12 12%27 fill=%27none%27 stroke=%27%23fff%27 stroke-width=%271.6%27%3E%3Cpath d=%27M1 4h10v7H1zM1 4V1.5h4.5V4%27/%3E%3C/svg%3E"); }
+:root[data-sc-drill-open="dialog"] { --sc-drill-icon: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 12 12%27 fill=%27none%27 stroke=%27%23fff%27 stroke-width=%271.6%27%3E%3Crect x=%271%27 y=%271.5%27 width=%2710%27 height=%279%27 rx=%271%27/%3E%3Cpath d=%27M1 4.5h10%27/%3E%3C/svg%3E"); }
 .sc-row-dialog iframe { background: var(--sc-canvas); border: 0; display: block; height: 100%; opacity: 1; transition: opacity .12s ease; width: 100%; }
 .sc-row-dialog iframe.is-loading { opacity: .28; }
 .sc-row-dialog-loading { background: rgba(255, 255, 255, .92); border: 1px solid #d7dce0; border-radius: 8px; color: #273138; font-size: .82rem; font-weight: 750; left: 50%; padding: 9px 12px; position: absolute; top: 50%; transform: translate(-50%, -50%); z-index: 2; }

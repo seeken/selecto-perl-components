@@ -1,6 +1,15 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Drilldowns open elsewhere with the platform's link modifiers: Shift+click
+      in a new window, Cmd+click (Mac) or Ctrl+click in a new tab, and
+      Cmd+Shift+click or Ctrl+Shift+click in a dialog over the page. Holding a
+      modifier shows an icon on the drilldown under the pointer. A drilldown
+      leaves the page size to Detail, so one from a 250-row summary still runs.
+    - Summary pages have their own page sizes: 250 rows by default, up to
+      1000 (aggregate_default_limit, aggregate_max_limit). Detail keeps 25,
+      up to 100. The Rows menu offers each view's sizes and, left at one
+      view's default, moves to the next view's.
     - Age buckets say how far back they reach: a pivot or grid heading, a
       group cell and its accessible label read "366-730 days ago", "1 day
       ago" or "today". Drilldowns, grid selections and exports keep the bare

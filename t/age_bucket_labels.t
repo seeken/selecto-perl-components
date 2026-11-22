@@ -52,4 +52,15 @@ my @grid = map { text_of($_) } @{$dom->find('.sc-aggregate-grid thead th:not(.sc
 is_deeply [grep { /day|today/ } @grid], ['today', '1 day ago', '2-30 days ago', '31+ days ago'],
     'grid column headings say so too';
 
+# A drilldown from a 250-row summary opens Detail at Detail's own page size.
+$t->get_ok('/loads' => form => {@form, limit => 250})->status_is(200);
+$dom = $t->tx->res->dom;
+my $drill = $dom->at('form.sc-drilldown-form');
+ok $drill, 'the summary has drilldowns';
+ok !$drill->at('input[name="limit"]'), 'which leave the page size to Detail';
+my %pairs;
+push @{$pairs{$_->attr('name')}}, $_->attr('value') for @{$drill->find('input[type="hidden"]')};
+$t->get_ok('/loads' => form => \%pairs)->status_is(200)->element_exists_not('.sc-alert');
+is $t->tx->res->dom->at('select[name="limit"] option[selected]')->attr('value'), 25, 'Detail opens at 25 rows';
+
 done_testing;
