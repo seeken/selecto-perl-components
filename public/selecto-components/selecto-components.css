@@ -444,6 +444,22 @@ th.sc-described { cursor: help; text-decoration: underline dotted; text-decorati
 .sc-table-wrap .sc-pivot-group-start { box-shadow: inset 2px 0 0 var(--sc-border); padding-left: 20px; }
 .sc-table-wrap .sc-pivot-total-start { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--sc-accent) 45%, var(--sc-border)); }
 .sc-table-wrap th.sc-pivot-group-start[scope="colgroup"]:not(.sc-pivot-axis-heading) { text-align: center; }
+/* Row-group headings span every header row, so a later row's first cell is a
+   column heading: not frozen, and it keeps its divider. */
+.sc-table-wrap > :is(.sc-pivot-table, .sc-pivot-grid) > thead > tr:not(:first-child) > th:first-child { left: auto; z-index: auto; }
+.sc-table-wrap > :is(.sc-pivot-table, .sc-pivot-grid) > thead > tr:not(:first-child) > th.sc-pivot-group-start:first-child { box-shadow: inset 2px 0 0 var(--sc-border); }
+.sc-table-wrap > :is(.sc-pivot-table, .sc-pivot-grid) > thead > tr:not(:first-child) > th.sc-pivot-total-start:first-child { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--sc-accent) 45%, var(--sc-border)); }
+/* Each column heading gets a rule over the columns it spans, broken at the
+   group edges, so it visibly owns the measures below it. A heavier rule
+   closes the header. */
+.sc-table-wrap th.sc-pivot-group-start[scope="colgroup"] { padding-bottom: 14px; }
+.sc-table-wrap th.sc-pivot-group-start[scope="colgroup"]::after { border-bottom: 2px solid color-mix(in srgb, var(--sc-accent) 50%, var(--sc-border)); bottom: 6px; content: ""; left: 14px; position: absolute; right: 10px; }
+.sc-table-wrap th.sc-pivot-group-start.sc-pivot-axis-heading[scope="colgroup"]::after { border-bottom-color: var(--sc-border); border-bottom-width: 1px; }
+/* No borders between header rows: they would break the group dividers,
+   which are drawn inside the cells. The closing rule is drawn inside too. */
+.sc-table-wrap :is(.sc-pivot-table, .sc-pivot-grid) > thead th { border-bottom: 0; }
+.sc-table-wrap :is(.sc-pivot-table, .sc-pivot-grid) > thead th:not([scope="colgroup"]) { vertical-align: bottom; }
+.sc-table-wrap :is(.sc-pivot-table, .sc-pivot-grid) > thead th:not([scope="colgroup"])::after { border-bottom: 2px solid var(--sc-border); bottom: 0; content: ""; left: 0; position: absolute; right: 0; }
 .sc-rollup-continued-label, .sc-rollup-continued-measure { color: var(--sc-accent); }
 .sc-empty-cell { color: var(--sc-muted); padding: 28px !important; text-align: center !important; }
 .sc-empty { display: grid; min-height: 520px; place-content: center; text-align: center; }

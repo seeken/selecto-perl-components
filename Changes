@@ -1,6 +1,12 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Pivot column headings each get an underline over the columns they span,
+      broken at the group edges, and a heavier rule closes the header, so
+      each heading visibly owns the measures below it. Header rows have no
+      borders between them, so the group dividers run unbroken. The first heading in the second
+      and third header rows no longer loses its divider or sticks to the left
+      edge when the table scrolls sideways.
     - In the summary pivot, a subtotal or Total row's label spans the row-group
       columns it leaves empty, so those rows have no blank group cells.
     - Month buckets: a date group format whose ranges are calendar months
