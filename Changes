@@ -1,6 +1,10 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Age buckets say how far back they reach: a pivot or grid heading, a
+      group cell and its accessible label read "366-730 days ago", "1 day
+      ago" or "today". Drilldowns, grid selections and exports keep the bare
+      range, so saved links still match.
     - Pivot column headings each get an underline over the columns they span,
       broken at the group edges, and a heavier rule closes the header, so
       each heading visibly owns the measures below it. Header rows have no

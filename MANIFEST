@@ -76,6 +76,7 @@ t/00-load.t
 t/action_prerequisite_columns.t
 t/action_target_forms.t
 t/action_variants.t
+t/age_bucket_labels.t
 t/aggregate_grid_totals.t
 t/api_console.t
 t/bucket_parser.t

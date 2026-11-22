@@ -28,9 +28,19 @@ sub _hidden ($name, $value) {
     return '<input type="hidden" name="' . _h($name) . '" value="' . _h($value) . '">';
 }
 sub _display ($value) { return defined($value) ? "$value" : '—'; }
-sub _display_group ($value) { return defined($value) ? "$value" : '[NULL]'; }
+# A group value as shown. Age buckets count days back, so their range
+# labels say so: "366-730 days ago". The value itself, which drilldowns
+# and filters match on, stays the bare range.
+sub _display_group ($value, $column = undef) {
+    return '[NULL]' unless defined $value;
+    return "$value" unless ref($column) eq 'HASH' && ($column->{format} // '') eq 'age_buckets';
+    return 'today' if "$value" eq '0';
+    return '1 day ago' if "$value" eq '1';
+    return "$value days ago" if "$value" =~ /\A(?:\x{2264}?\d+|\d+-\d+|\d+\+)\z/;
+    return "$value";
+}
 sub _html_display ($column, $value, $group = 0) {
-    my $display = $group ? _display_group($value) : _display($value);
+    my $display = $group ? _display_group($value, $column) : _display($value);
     return _h($display) unless ($column->{html_format} // '') eq 'vin_last_six';
     return _h($display) unless defined($value) && !ref($value)
         && "$value" =~ /\A[A-Za-z0-9]{17}\z/;

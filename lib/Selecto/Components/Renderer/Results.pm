@@ -620,7 +620,7 @@ sub _grid ($class, $result, $model) {
                 'type="checkbox" name="grid_axis" value="' .
                 _h(to_json({axis => $column_group, value => $column->{selection_value}})) . '" ' .
                 'data-sc-grid-column-toggle="' . _h($index) . '" aria-label="Select column ' .
-                _h(_display_group($column->{value})) . '"><span>' .
+                _h(_display_group($column->{value}, $grid->{column_axis})) . '"><span>' .
                 _html_display($grid->{column_axis}, $column->{value}, 1) . '</span></label></th>'
         } @{$grid->{columns}});
     my $totals = $grid->{totals};
@@ -643,7 +643,7 @@ sub _grid ($class, $result, $model) {
             'class="sc-grid-axis-input" type="checkbox" name="grid_axis" value="' .
             _h(to_json({axis => $row_group, value => $row->{selection_value}})) . '" ' .
             'data-sc-grid-row-toggle="' . _h($current_row) . '" aria-label="Select row ' .
-            _h(_display_group($row->{value})) . '"><span>' .
+            _h(_display_group($row->{value}, $grid->{row_axis})) . '"><span>' .
             _html_display($grid->{row_axis}, $row->{value}, 1) . '</span></label></th>';
         my $current_column = 0;
         for my $column (@{$grid->{columns}}) {
@@ -657,8 +657,8 @@ sub _grid ($class, $result, $model) {
                     _h(to_json($cell_values->($row->{selection_value}, $column->{selection_value}))) . '" ' .
                     'data-sc-grid-cell data-sc-grid-row="' . _h($current_row) .
                     '" data-sc-grid-column="' . _h($current_column) . '" aria-label="Select empty ' .
-                    _h(_display_group($row->{value}) . ', ' .
-                        _display_group($column->{value})) . '"><span class="sc-grid-cell-value">—</span>' .
+                    _h(_display_group($row->{value}, $grid->{row_axis}) . ', ' .
+                        _display_group($column->{value}, $grid->{column_axis})) . '"><span class="sc-grid-cell-value">—</span>' .
                     '<span class="sc-grid-cell-selected" aria-hidden="true">&#10003;</span></label></td>';
                 $current_column++;
                 next;
@@ -677,8 +677,8 @@ sub _grid ($class, $result, $model) {
                 'name="grid_cell" value="' . _h(to_json($cell->{selection_values})) . '" ' .
                 'data-sc-grid-cell data-sc-grid-row="' . _h($current_row) .
                 '" data-sc-grid-column="' . _h($current_column) . '" aria-label="Select ' .
-                _h(_display_group($row->{value}) . ', ' .
-                    _display_group($column->{value})) . '"><span class="sc-grid-cell-value">' .
+                _h(_display_group($row->{value}, $grid->{row_axis}) . ', ' .
+                    _display_group($column->{value}, $grid->{column_axis})) . '"><span class="sc-grid-cell-value">' .
                 _html_display($grid->{measure}, $cell->{value}) .
                 '</span><span class="sc-grid-cell-selected" aria-hidden="true">&#10003;</span></label></td>';
             $current_column++;
@@ -775,7 +775,7 @@ sub _summary_pivot_table ($class, $result, $model) {
             '" class="sc-pivot-group-start">' .
             $drill->('grid_axis', {axis => $column_group, value => $column->{selection_value}},
                 _html_display($pivot->{column_axis}, $column->{value}, 1),
-                $pivot->{column_axis}{label} . ' ' . _display_group($column->{value})) . '</th>';
+                $pivot->{column_axis}{label} . ' ' . _display_group($column->{value}, $pivot->{column_axis})) . '</th>';
         $sub .= join '', map {
             '<th scope="col" id="' . $id . '-c' . $index . 'm' . $_ . '"' . $class_of->($_) . '>' .
                 _h($measures[$_]{label}) . '</th>'
@@ -831,7 +831,7 @@ sub _summary_pivot_table ($class, $result, $model) {
         }
         # What this row holds: one value per row group it keeps.
         my @held = map { $record->{$_->{drilldown_key} // $_->{key}} } @groups[0 .. $level - 1];
-        my $row_label = $level ? join(', ', map { _display_group($record->{$_->{key}}) } @groups[0 .. $level - 1]) : 'Total';
+        my $row_label = $level ? join(', ', map { _display_group($record->{$_->{key}}, $_) } @groups[0 .. $level - 1]) : 'Total';
         my $row_cells = $pivot->{cells_for}->($record);
         for my $column_number (0 .. $#columns) {
             my $column = $columns[$column_number];
@@ -858,7 +858,7 @@ sub _summary_pivot_table ($class, $result, $model) {
                     : !$values ? '—'
                     : $drill->($name, $selection,
                         _html_display($measures[$measure_index], $values->{$measures[$measure_index]{key}}),
-                        $row_label . ', ' . _display_group($column->{value}));
+                        $row_label . ', ' . _display_group($column->{value}, $pivot->{column_axis}));
                 $cells .= '<td' . $class_of->($measure_index) . $headers . '>' . $content . '</td>';
             }
         }
@@ -948,7 +948,7 @@ sub _pivot_grid ($class, $result, $model) {
             'type="checkbox" name="grid_axis" value="' .
             _h(to_json({axis => $column_group, value => $column->{selection_value}})) . '" ' .
             'data-sc-grid-column-toggle="' . _h($index) . '" aria-label="Select column ' .
-            _h(_display_group($column->{value})) . '"><span>' .
+            _h(_display_group($column->{value}, $grid->{column_axis})) . '"><span>' .
             _html_display($grid->{column_axis}, $column->{value}, 1) . '</span></label></th>';
         $sub .= join '', map {
             '<th scope="col" id="' . $id . '-c' . $index . 'm' . $_ . '" class="sc-grid-measure-heading' . $group_start[$_] . '">' .
@@ -981,7 +981,7 @@ sub _pivot_grid ($class, $result, $model) {
     my $row_number = 0;
     for my $row (@{$grid->{rows}}) {
         my $current_row = $row_number++;
-        my $row_label = join ', ', map { _display_group($_->{value}) } @{$row->{parts}};
+        my $row_label = join ', ', map { _display_group($row->{parts}[$_]{value}, $row_axes[$_]) } 0 .. $#{$row->{parts}};
         # One row group selects as before; several select together.
         my $axis = @row_indexes == 1
             ? {axis => $row_indexes[0], value => $row->{selection_values}[0]}
@@ -1012,7 +1012,7 @@ sub _pivot_grid ($class, $result, $model) {
             }
             my $cell_id = $id . '-x' . $current_row . '-' . $current_column;
             my $column_id = $id . '-c' . $current_column;
-            my $label = _h($row_label . ', ' . _display_group($column->{value}));
+            my $label = _h($row_label . ', ' . _display_group($column->{value}, $grid->{column_axis}));
             for my $measure_index (0 .. $#measures) {
                 my $measure = $measures[$measure_index];
                 my $value = $cell ? $cell->{values}{$measure->{key}} : undef;
