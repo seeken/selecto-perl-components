@@ -52,8 +52,13 @@ test("changing As of re-runs relative reads and Today restores the real clock", 
 test("saved timestamps survive ordinary submits and editing selects a calendar day", async ({page}) => {
   await page.goto(base + "/events" + today + '&as_of=2026-03-16T00%3A30%3A00%2B02%3A00');
   await expect(page.locator('.sc-results tbody tr td:first-child')).toHaveText(["1"]);
+  // A run made before the socket opens is held until it connects; its late
+  // swap would replace the date edited below, so start from a live socket
+  // and let the run finish first.
+  await expect(page.locator("[data-selecto-connection]")).toHaveText("Live");
   await page.getByRole("button", {name: "Expand view menu"}).click();
   await page.getByRole('button', {name: 'Run query', exact: true}).click();
+  await expect(page.locator("form[data-sc-builder]")).not.toHaveAttribute("aria-busy");
   await expect.poll(() => page.evaluate(() => !!history.state?.selectoPendingNavigation)).toBe(false);
   await expect.poll(() => new URL(page.url()).searchParams.get('as_of')).toBe('2026-03-16T00:30:00+02:00');
   await page.getByRole("button", {name: "Expand view menu"}).click();

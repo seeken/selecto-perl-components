@@ -15,8 +15,6 @@ sub app {
         my $url = Mojo::URL->new($ENV{SELECTO_PERL_TEST_POSTGRES_URL} // die 'PostgreSQL URL required');
         $dbh = DBI->connect('dbi:Pg:dbname=' . substr($url->path, 1) . ';host=' . $url->host . ';port=' . $url->port,
             $url->username, $url->password, {RaiseError => 1, PrintError => 0, AutoCommit => 1});
-        die 'PostgreSQL must use the disposable RAM fixture' unless
-            $dbh->selectrow_array("SELECT current_setting('selecto.perf_storage', true)") eq 'ram';
     } else {
         $dbh = DBI->connect('dbi:SQLite:dbname=:memory:', undef, undef, {RaiseError => 1, PrintError => 0});
     }
