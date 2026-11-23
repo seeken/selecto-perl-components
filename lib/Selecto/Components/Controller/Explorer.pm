@@ -16,6 +16,10 @@ sub column_values ($controller, $explorer) {
     my $ok = eval {
         my $config = $explorer->config->for_request($controller);
         my $engine = $config->engine($controller);
+        my $input = $explorer->input_from_controller($controller);
+        my @errors;
+        my $as_of = Selecto::Components::State->_parse_as_of($config, $input, \@errors);
+        die "invalid clock" if @errors;
         my $field = $controller->param('field') // '';
         my $term = $controller->param('term') // '';
         die "invalid search" if length($term) > 1000;
@@ -25,12 +29,13 @@ sub column_values ($controller, $explorer) {
         if (@{$filter->{filter_choices} // []}) {
             $choices = [grep { index(lc($_->{label}), lc($term)) >= 0 } @{$filter->{filter_choices}}];
         } elsif ($dimension) {
-            my $rows = Selecto::Components::PivotValues->dimension_rows($engine, $dimension, term => $term);
+            my $rows = Selecto::Components::PivotValues->dimension_rows($engine, $dimension, as_of => $as_of, term => $term);
             $choices = [map { {value => $_->[0], label => $_->[1]} } @$rows];
         } else {
             my $query = Selecto::Query->new->select(Selecto::Expression->field($field)->as('value'))
                 ->where(Selecto::Expression->text_contains_ci(Selecto::Expression->value(['cast', ['field', $field], 'string']), $term))
                 ->group_by([$field])->order_by($field, 'asc')->limit(30);
+            $query = $query->as_of($as_of) if defined $as_of;
             my $raw = Selecto::BoundedQuery->all($engine, $query, limits => $config->limits);
             $choices = [map { {value => $_->[0], label => $_->[0]} } @{$raw->{rows}}];
         }

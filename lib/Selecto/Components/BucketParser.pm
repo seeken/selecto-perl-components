@@ -2,6 +2,7 @@ package Selecto::Components::BucketParser;
 
 use Mojo::Base -base, -signatures;
 use Selecto::Limits ();
+use Selecto::AsOf ();
 
 # The range kind a group format buckets by, or '' for a format that is not
 # a range bucket.
@@ -96,7 +97,11 @@ sub specification ($class, $input, $kind, $now = undef) {
     if ($kind eq 'month_ranges') {
         # Bounded and checked as other ranges are; the labels need the month.
         return undef unless @{$class->parse($input =~ s/(\d+)\s*-\s*(\d+)/$1 <= $2 ? "$1-$2" : "$2-$1"/ger)};
-        my @local = localtime;
+        if (defined($now) && !ref($now)) {
+            my ($year, $month) = split /-/, Selecto::AsOf->date($now);
+            $now = [$year, $month - 1];
+        }
+        my @local = defined($now) ? () : localtime;
         my $ranges = $class->_month_ranges($input, $now // [$local[5] + 1900, $local[4]]);
         return @$ranges ? {kind => $kind, ranges => $ranges} : undef;
     }

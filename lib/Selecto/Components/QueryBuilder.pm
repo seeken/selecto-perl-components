@@ -305,6 +305,7 @@ sub _detail ($class, $config, $domain, $state, $options) {
     my $query = Selecto::Query->new->select(map {
         _column_expression($_)->as($_->{key})
     } @query_columns);
+    $query = $query->as_of($state->as_of) if defined $state->as_of;
     $query = _with_filters($query, $state, $config, $domain);
     for my $order (@{$state->orders}) {
         $query = $query->order_by($order->{field}, $order->{direction});
@@ -633,6 +634,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             [@groups], ($total_columns ? [@groups[@grid_row_indexes]] : ()),
             [$groups[$grid_column_index]], ($total_columns ? [] : ()))
         : $rollup ? $query->group_by_rollup(\@groups) : $query->group_by(\@groups);
+    $query = $query->as_of($state->as_of) if defined $state->as_of;
     $query = _with_filters($query, $state, $config, $domain);
     # An explicitly selected measure ordering precedes natural group order.
     # Resolve only governed selections; never treat a request as an SQL alias.
@@ -800,7 +802,7 @@ sub _group_expression ($column, $config) {
         $kind = 'numeric_ranges' if $format eq 'age_buckets'
             && ($column->{source_type} // $column->{type} // '') =~ /\A(?:integer|int|smallint|bigint|decimal|number|numeric|float|double|real)\z/i;
         my $specification = Selecto::Components::BucketParser->specification(
-            $config->{bucket_ranges}, $kind
+            $config->{bucket_ranges}, $kind, $config->{as_of}
         );
         return Selecto::Expression->bucket($field, $specification);
     }
@@ -821,7 +823,7 @@ sub _group_expression ($column, $config) {
 sub _bucket_order ($config) {
     my $format = $config->{format} // '';
     my $kind = Selecto::Components::BucketParser->group_kind($format) or return ();
-    my $specification = Selecto::Components::BucketParser->specification($config->{bucket_ranges}, $kind);
+    my $specification = Selecto::Components::BucketParser->specification($config->{bucket_ranges}, $kind, $config->{as_of});
     return () unless ref($specification) eq 'HASH';
     return (bucket_order => 'lower_bound') unless ref($specification->{ranges}) eq 'ARRAY';
     my ($rank, %rank) = (0);
@@ -864,7 +866,7 @@ sub _group_natural_order_expression ($column, $config) {
     if (my $kind = Selecto::Components::BucketParser->group_kind($format)) {
         $kind = 'numeric_ranges' if $format eq 'age_buckets'
             && ($column->{source_type} // $column->{type} // '') =~ /\A(?:integer|int|smallint|bigint|decimal|number|numeric|float|double|real)\z/i;
-        my $specification = Selecto::Components::BucketParser->specification($config->{bucket_ranges}, $kind);
+        my $specification = Selecto::Components::BucketParser->specification($config->{bucket_ranges}, $kind, $config->{as_of});
         return undef unless $specification;
         # For stepped numeric/year buckets MIN(source) has exactly the order
         # of the lower bounds, including negative numeric buckets. It avoids

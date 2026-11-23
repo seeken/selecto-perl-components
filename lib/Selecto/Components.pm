@@ -739,6 +739,34 @@ C<domain.title> term.
 
 =over 4
 
+=item default_as_of, as_of_control
+
+An Explorer may set C<default_as_of =E<gt> '2026-03-15'> to seed a new
+builder with a read clock. ISO timestamps accepted by L<Selecto::Query/as_of>
+are accepted too. Invalid defaults fail configuration validation. The default
+applies only to an unconfigured request (without C<q=1>); a configured URL
+without C<as_of> uses the real clock, so clearing a default survives saved
+queries and permalink round trips.
+
+C<as_of_control> defaults to C<1>. Set it to C<0> to hide the date control;
+existing state still carries its clock. This is a presentation option, not
+an authorization restriction on query state.
+
+The compact B<As of> date control lives in the builder's Filters panel.
+Changing it runs the query; B<Today> clears it and returns to the real clock.
+Without JavaScript, edit or empty the date and use B<Run query>. Timestamp
+state from URLs is preserved until the date is edited (editing a timestamp's
+day requires JavaScript). Applied filters show the effective date. The terms
+C<explorer.as_of>, C<explorer.as_of_today> and C<dates.months.01> through
+C<dates.months.12> use the existing domain i18n/localizer mechanism.
+
+C<as_of> is optional URL/POST/WebSocket state. It is validated by core, bound
+on every Explorer read, and carried through Detail drilldowns, counts,
+exports, saved queries, library selections and canonical API handoff. Relative
+shortcuts and month-range labels use the same day. An absent clock adds no
+URL parameter or SQL setting. Record writes and canonical metadata clocks
+continue to use their existing host policy.
+
 =item views, default_view
 
 The enabled result views, from C<detail>, C<aggregate> and C<graph>. The

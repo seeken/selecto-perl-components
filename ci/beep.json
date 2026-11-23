@@ -11,7 +11,7 @@
   "sources": [
     {
       "repository": "seeken/selecto-perl",
-      "commit": "e62aa4d4deadd8f43b722c857965b56f33c35831",
+      "commit": "389cee7bfcd97a12ddc4145daf6a44e7ffb2d9e2",
       "access": "public"
     },
     {
@@ -70,5 +70,5 @@
   "optional_targets": [
     "Northwind example syntax/smoke when optional demo is absent."
   ],
-  "browser_minimum_tests": 111
+  "browser_minimum_tests": 116
 }

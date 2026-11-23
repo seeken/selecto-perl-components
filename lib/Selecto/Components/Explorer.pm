@@ -1039,6 +1039,7 @@ sub _resolve_formatted_pivot_values ($config, $engine, $state) {
         (defined($gc->{pivot_null_value}) ? (Selecto::Expression->is_null($group)) : ()));
     my $query = Selecto::Query->new->select(Selecto::Expression->field($source)->as('source_value'), $group->as('group_value'))
         ->group_by([$source, $group])->where(Selecto::Expression->any(\@conditions));
+    $query = $query->as_of($state->as_of) if defined $state->as_of;
     my $raw = Selecto::BoundedQuery->all($engine, $query, limits => $config->limits);
     my %matches;
     for my $row (@{$raw->{rows}}) {
@@ -1059,7 +1060,7 @@ sub _resolve_pivot_labels ($config, $engine, $state) {
     my $dimension = $config->field_map($engine->domain, $state->retarget)->{$source}{dimension};
     if ($dimension) {
         my @keys = grep { !defined($gc->{pivot_null_value}) || $_ ne $gc->{pivot_null_value} } @{$gc->{pivot_values}};
-        my $rows = @keys ? Selecto::Components::PivotValues->dimension_rows($engine, $dimension, values => \@keys, limit => scalar(@keys)) : [];
+        my $rows = @keys ? Selecto::Components::PivotValues->dimension_rows($engine, $dimension, as_of => $state->as_of, values => \@keys, limit => scalar(@keys)) : [];
         %labels = ();
         $labels{"$_->[0]"} = $_->[1] for @$rows;
     } else {

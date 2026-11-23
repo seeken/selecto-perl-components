@@ -3,6 +3,7 @@ package Selecto::Components::Config;
 use Mojo::Base -base, -signatures;
 use Scalar::Util qw(blessed);
 use Selecto::DateFormat ();
+use Selecto::AsOf ();
 use Selecto::Components::DateShortcut ();
 use Selecto::Components::I18N ();
 use Selecto::Components::ExplorerSession ();
@@ -16,6 +17,8 @@ use File::Spec ();
 has [qw(id title path engine_factory)];
 has views         => sub { return [qw(detail aggregate graph)] };
 has default_view  => 'detail';
+has 'default_as_of';
+has as_of_control => 1;
 has default_row_click_action => '';
 has default_fields => sub { return [] };
 has default_group  => sub { return [] };
@@ -97,6 +100,7 @@ my @DATE_FORMATS = @{Selecto::DateFormat->choices};
 
 sub new ($class, @args) {
     my $self = $class->SUPER::new(@args);
+    Selecto::AsOf->validate($self->default_as_of) if defined $self->default_as_of;
     die "limits must be a Selecto::Limits object\n" unless blessed($self->limits) && $self->limits->isa('Selecto::Limits');
     die "explorer id must be a lowercase identifier\n"
         unless defined($self->id) && $self->id =~ /\A[a-z][a-z0-9_-]*\z/;

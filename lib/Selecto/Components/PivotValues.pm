@@ -127,6 +127,7 @@ sub _reachable_rows ($class, $engine, $dimension, %options) {
 sub _rows ($engine, $key, $display, %options) {
     my $query = Selecto::Query->new->select(Selecto::Expression->field($key)->as('value'),
         ($options{grouped} ? Selecto::Expression->min($display) : Selecto::Expression->field($display))->as('label'));
+    $query = $query->as_of($options{as_of}) if defined $options{as_of};
     $query = $query->group_by([$key]) if $options{grouped};
     $query = $query->where(Selecto::Expression->in($key, $options{values})) if $options{values};
     $query = $query->where(Selecto::Expression->text_contains_ci($display, $options{term})) if defined($options{term});

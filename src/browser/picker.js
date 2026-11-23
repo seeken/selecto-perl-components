@@ -835,6 +835,9 @@
     var url = new URL(form.action.replace(/\/$/, "") + "/column-values", window.location.href);
     var body = new URLSearchParams({field: item.dataset.field, term: input.value,
       csrf_token: form.dataset.scColumnValuesCsrf || ""});
+    var clock = new FormData(form).get("as_of");
+    body.set("q", "1");
+    if (clock) body.set("as_of", clock);
     var sequence = (input._scSequence || 0) + 1;
     input._scSequence = sequence;
     try {

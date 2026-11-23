@@ -1,6 +1,11 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Add an optional As of date in Explorer's Filters panel, with a Today
+      reset and localized applied-filter label. Carry the validated bound
+      clock through every read, counts, drilldowns, exports, saved/library
+      queries and API handoff; month-bucket labels follow the same day.
+      Hosts may seed default_as_of or hide the control with as_of_control.
     - The canonical stack PostgreSQL check moves to xt/: it needs an owned
       stack database, a seed and sibling SPA builds, so it runs only through
       mise run test:canonical-stack and no longer counts as a required skip.

@@ -148,3 +148,7 @@ t/boolean_groups.t
 t/lib/BooleanGroupsFixture.pm
 t/browser/fixtures/boolean-groups.pl
 t/browser/boolean-groups.spec.js
+t/as_of.t
+t/lib/AsOfFixture.pm
+t/browser/as-of.spec.js
+t/browser/fixtures/as-of.pl

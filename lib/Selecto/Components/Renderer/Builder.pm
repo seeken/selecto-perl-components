@@ -5,6 +5,7 @@ use Mojo::JSON qw(to_json);
 use Mojo::URL ();
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
+use Selecto::AsOf ();
 use Selecto::Components::QueryLibrary ();
 use Selecto::Components::RowActions ();
 use Selecto::Components::Renderer::Markup;
@@ -37,8 +38,8 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $config,
     );
     my $applied_filter_count = _logical_filter_count($state->filters)
-        + scalar(@$governed_segments);
-    my $query_summary = $class->_query_summary($state, $filter_catalog, $governed_segments);
+        + scalar(@$governed_segments) + (defined($state->as_of) ? 1 : 0);
+    my $query_summary = $class->_query_summary($state, $filter_catalog, $governed_segments, $config, $model->{domain});
     my $view_controls = join '', map {
         my $mode = $_;
         my $active = ($mode eq 'detail') == $detail_active;
@@ -75,7 +76,7 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $view_controls . '</section>';
     my $filter_panel = '<section class="sc-builder-panel" role="tabpanel" id="' . $filter_panel_id .
         '" aria-labelledby="' . $filter_tab_id . '" data-sc-builder-panel="filters" hidden>' .
-        $query_library_filters . $filter_picker . '</section>';
+        $class->_as_of_control($model) . $query_library_filters . $filter_picker . '</section>';
     my $saved_queries = $class->_saved_queries($model, $saved_panel_id, $saved_tab_id);
     my $collapsed = Selecto::Components::Renderer::_builder_collapsed($model);
     my $tray_content_id = 'selecto-builder-tray-content-' . $builder_id;
@@ -162,7 +163,7 @@ sub _query_summary_for_model ($class, $model, $catalog) {
         $model->{state}->query_library_segments // [],
         $model->{config},
     );
-    return $class->_query_summary($model->{state}, $catalog, $segments);
+    return $class->_query_summary($model->{state}, $catalog, $segments, $model->{config}, $model->{domain});
 }
 
 # "Rows of" chooses the row grain: automatic (a detail view whose columns
@@ -417,7 +418,7 @@ sub _query_library_picker ($class, $state, $domain, $config = undef) {
         $class->_query_library_filter_controls($state, $domain, $config);
 }
 
-sub _query_summary ($class, $state, $catalog, $governed_segments) {
+sub _query_summary ($class, $state, $catalog, $governed_segments, $config = undef, $domain = undef) {
     my %by_path = map { $_->{path} => $_ } @$catalog;
     my @filters = grep { !$_->{draft} && !defined($_->{clause}) } @{$state->filters};
     my @chips = map {
@@ -442,7 +443,15 @@ sub _query_summary ($class, $state, $catalog, $governed_segments) {
         '<span data-sc-query-library-segment-summary="' . _h($_->{id}) . '">' .
             _h('Segment: ' . $_->{label}) . '</span>'
     } @$governed_segments;
-    my $count = @filters + $clause_count + @$governed_segments;
+    if (defined $state->as_of) {
+        my $day = Selecto::AsOf->date($state->as_of);
+        my ($year, $month, $date) = split /-/, $day;
+        my @months = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+        my $month_label = $config ? $config->localize($domain, "dates.months.$month", $months[$month - 1]) : $months[$month - 1];
+        my $label = $config ? $config->localize($domain, 'explorer.as_of', 'As of') : 'As of';
+        push @chips, '<span data-sc-as-of-summary>' . _h("$label " . (0 + $date) . " $month_label $year") . '</span>';
+    }
+    my $count = @filters + $clause_count + @$governed_segments + (defined($state->as_of) ? 1 : 0);
     my $filter_label = $count == 1 ? 'applied filter' : 'applied filters';
     my $chips = @chips ? '<div class="sc-query-summary-chips">' . join('', @chips) . '</div>'
         : '<p>No filters applied</p>';
@@ -450,6 +459,21 @@ sub _query_summary ($class, $state, $catalog, $governed_segments) {
         '<div><small>View controller</small><strong>' . _h(_humanize($state->view)) .
         ' results</strong></div><span>' . $count . ' ' . $filter_label . '</span></div>' .
         $chips . '</section>';
+}
+
+sub _as_of_control ($class, $model) {
+    my ($config, $domain, $state) = @$model{qw(config domain state)};
+    return defined($state->as_of) ? _hidden('as_of', $state->as_of) : '' unless $config->as_of_control;
+    my $label = $config->localize($domain, 'explorer.as_of', 'As of');
+    my $clear = $config->localize($domain, 'explorer.as_of_today', 'Today');
+    my $value = defined($state->as_of) ? Selecto::AsOf->date($state->as_of) : '';
+    # Preserve a timestamp from a saved URL until the user edits its date.
+    my $timestamp = defined($state->as_of) && $state->as_of =~ /T/;
+    return '<div class="sc-control-row" data-sc-as-of-control><label>' . _h($label) .
+        '<input type="date"' . ($timestamp ? '' : ' name="as_of"') .
+        ' data-sc-as-of-date value="' . _h($value) . '"></label>' .
+        ($timestamp ? _hidden('as_of', $state->as_of) : '') .
+        '<button type="button" class="sc-button" data-sc-as-of-clear>' . _h($clear) . '</button></div>';
 }
 
 sub _logical_filter_count ($filters) {

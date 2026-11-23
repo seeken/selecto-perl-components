@@ -14,14 +14,15 @@ use Selecto::Analytics::TransformRegistry ();
 use Selecto::Error ();
 use Selecto::Expression ();
 use Selecto::Query ();
+use Selecto::AsOf ();
 use Selecto::QueryLibrary ();
 use Selecto::Components::InputBudget ();
 
-has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column pivot_totals pivot_column_values pivot_column_other pivot_column_top pivot_column_top_order pivot_column_top_measure pivot_column_value_null filter_groups row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(as_of rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column pivot_totals pivot_column_values pivot_column_other pivot_column_top pivot_column_top_order pivot_column_top_measure pivot_column_value_null filter_groups row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group graph_palette graph_category_field graph_category_value graph_category_format graph_category_color aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column grid_column pivot_totals pivot_column_value pivot_column_other pivot_column_top pivot_column_top_order pivot_column_top_measure pivot_column_value_null row_click_action field field_alias field_format filter_field filter_op filter_value filter_values_json filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
+        q as_of query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group graph_palette graph_category_field graph_category_value graph_category_format graph_category_color aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column grid_column pivot_totals pivot_column_value pivot_column_other pivot_column_top pivot_column_top_order pivot_column_top_measure pivot_column_value_null row_click_action field field_alias field_format filter_field filter_op filter_value filter_values_json filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles group_exclude_missing
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_fill_opacity measure_transform measure_transform_window
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
@@ -38,6 +39,7 @@ sub from_input ($class, $config, $domain, $input) {
     my $detail_map = $config->detail_column_map($domain);
     my @errors = $budget_ok ? () : ('Query state exceeds the configured input budget.');
     my $configured = _first($input, 'q') ? 1 : 0;
+    my $as_of = $class->_parse_as_of($config, $input, \@errors);
     my $query_library = _query_library_state($domain, $input, \@errors, $config->limits);
     my $view = _parse_view($config, $input, $query_library, \@errors);
     my $rows_of = _parse_rows_of($config, $domain, $input, \@errors);
@@ -90,6 +92,7 @@ sub from_input ($class, $config, $domain, $input) {
         $config, $domain, $input, $group_map, $view, $configured, \@errors,
         $carry ? undef : $grain,
     );
+    $_->{as_of} = $as_of for defined($as_of) ? values %$group_configs : ();
     my $graph_series_group = _parse_graph_series_group(
         $view, $input, $valid_groups, $group_configs, \@errors,
     );
@@ -161,6 +164,7 @@ sub from_input ($class, $config, $domain, $input) {
     );
 
     my $state = $class->new(
+        as_of => $as_of,
         rows_of => $rows_of,
         retarget => $retarget,
         retarget_auto => $retarget_auto,
@@ -208,6 +212,28 @@ sub from_input ($class, $config, $domain, $input) {
         && "$query_signature" =~ /\A[0-9a-f]{64}\z/
         && "$query_signature" ne $state->query_signature;
     return $state;
+}
+
+sub _parse_as_of ($class, $config, $input, $errors) {
+    my $configured = _first($input, 'q') ? 1 : 0;
+    # Defaults seed a new builder. A configured URL without a clock means
+    # the real clock, including a permalink saved after clearing the default.
+    my $clock_input = $input->{as_of};
+    my $provided = exists($input->{as_of})
+        && !(ref($clock_input) eq 'ARRAY' && !@$clock_input);
+    $clock_input = $clock_input->[0]
+        if ref($clock_input) eq 'ARRAY' && @$clock_input == 1;
+    my $as_of = $provided ? $clock_input
+        : $configured ? undef : $config->default_as_of;
+    if (defined($as_of) && (ref($as_of) || length($as_of))) {
+        my $valid = eval { Selecto::AsOf->validate($as_of); 1 };
+        unless ($valid) {
+            push @$errors, 'as_of must be a valid ISO date or timestamp.';
+            $as_of = undef;
+        }
+    } else { $as_of = undef }
+
+    return $as_of;
 }
 
 # Group references are validated against selected instances, never used as SQL.
@@ -270,6 +296,7 @@ sub grain ($self) { return $self->retarget_auto ? undef : $self->retarget; }
 sub query_pairs ($self) {
     my @pairs = (q => 1, view => $self->view);
     push @pairs, rows_of => $self->rows_of if length($self->rows_of // '');
+    push @pairs, as_of => $self->as_of if defined $self->as_of;
     push @pairs, query_library_view => $self->query_library_view
         if defined($self->query_library_view) && length($self->query_library_view);
     push @pairs, query_library_materialized_view => $self->query_library_materialized_view
@@ -473,6 +500,7 @@ sub api_query_payload ($self, $config, $domain) {
     @segments = grep { !$seen_segment{$_}++ } @segments;
 
     return {
+        (defined($self->as_of) ? (as_of => $self->as_of) : ()),
         select => \@select,
         (@segments ? (segments => \@segments) : ()),
         (%{$self->query_library_parameters // {}}
@@ -496,6 +524,7 @@ sub _api_repeat_alias ($field, $names) {
 
 sub as_hash ($self) {
     return {
+        as_of => $self->as_of,
         rows_of => $self->rows_of,
         retarget => $self->retarget,
         retarget_auto => $self->retarget_auto,

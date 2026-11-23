@@ -6,7 +6,7 @@ requires 'Cpanel::JSON::XS', '>= 4.38, < 4.80';  # 4.80 reorders canonical keys 
 requires 'Mojolicious', '9.49';
 recommends 'DBI';
 recommends 'DBD::SQLite';
-requires 'Selecto', '0.2.2';
+requires 'Selecto', '0.3.0';
 requires 'Time::HiRes';
 
 on configure => sub {

@@ -2246,7 +2246,7 @@
         var data = submitter ? new FormData(form, submitter) : new FormData(form);
         data.forEach(function (value, name) {
           if (typeof File !== "undefined" && value instanceof File) return;
-          if (name === "selecto_request_id") return;
+          if (name === "selecto_request_id" || (name === "as_of" && !value)) return;
           query.append(name, value);
         });
         target.search = query.toString();
@@ -2618,6 +2618,7 @@
       // The Explorer builder has no file controls, but do not turn one into
       // a misleading URL if a host adds one around the surface.
       if (typeof File !== "undefined" && value instanceof File) return;
+      if (name === "as_of" && !value) return;
       query.append(name, value);
     });
     query.set("format", format);
@@ -2908,6 +2909,29 @@
     unmount: function (node) {
       destroyChartsWithin(node);
     }
+  });
+
+  function updateAsOfDate(input) {
+    var form = input.closest("form[data-sc-builder]");
+    if (!form) return;
+    form.querySelectorAll('input[type="hidden"][name="as_of"]').forEach(function (node) { node.remove(); });
+    input.name = "as_of";
+    var page = form.querySelector('[name="page"]');
+    if (page) page.value = "1";
+    form.requestSubmit();
+  }
+
+  document.addEventListener("change", function (event) {
+    if (event.target.matches("[data-sc-as-of-date]")) updateAsOfDate(event.target);
+  });
+
+  document.addEventListener("click", function (event) {
+    var clear = event.target.closest("[data-sc-as-of-clear]");
+    if (!clear) return;
+    event.preventDefault();
+    var input = clear.closest("[data-sc-as-of-control]").querySelector("[data-sc-as-of-date]");
+    input.value = "";
+    updateAsOfDate(input);
   });
 
   // Source: picker.js
@@ -3748,6 +3772,9 @@
     var url = new URL(form.action.replace(/\/$/, "") + "/column-values", window.location.href);
     var body = new URLSearchParams({field: item.dataset.field, term: input.value,
       csrf_token: form.dataset.scColumnValuesCsrf || ""});
+    var clock = new FormData(form).get("as_of");
+    body.set("q", "1");
+    if (clock) body.set("as_of", clock);
     var sequence = (input._scSequence || 0) + 1;
     input._scSequence = sequence;
     try {
