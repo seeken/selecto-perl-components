@@ -1,6 +1,11 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - The bundled API Console (selecto-api-console 5110655) gives As of a date
+      picker, an optional time with browser, UTC or explicit offset, quick
+      picks (Yesterday, end of last week, month, quarter, year) and a
+      readable summary. Imported values the pickers cannot show exactly keep
+      their text.
     - The bundled API Console (selecto-api-console a2a7799) adds an optional
       As of date or timestamp to plain, aggregate and nested query builders
       whose OpenAPI request schema publishes as_of. It round-trips through

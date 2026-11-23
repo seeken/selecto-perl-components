@@ -2315,6 +2315,57 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     ["Relative periods", "next_30_days", "Next 30 Days"],
   ];
 
+  const AS_OF_QUICK_PICKS = [
+    ["yesterday", "Yesterday"], ["week", "End of last week"],
+    ["month", "End of last month"], ["quarter", "End of last quarter"], ["year", "End of last year"],
+  ];
+
+  function asOfDay(date) {
+    return `${String(date.getFullYear()).padStart(4, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  }
+
+  function asOfQuickPick(pick, now) {
+    const day = new Date(now.getTime());
+    day.setHours(12, 0, 0, 0);
+    if (pick === "yesterday") day.setDate(day.getDate() - 1);
+    // Calendar weeks start on Monday; the previous week ends on Sunday.
+    else if (pick === "week") day.setDate(day.getDate() - ((day.getDay() + 6) % 7) - 1);
+    else if (pick === "month") day.setDate(0);
+    else if (pick === "quarter") day.setMonth(Math.floor(day.getMonth() / 3) * 3, 0);
+    else if (pick === "year") day.setMonth(0, 0);
+    else throw new Error("Unknown As of quick pick.");
+    return asOfDay(day);
+  }
+
+  function asOfPickerParts(value) {
+    if (!value) return {day: "", time: "", offset: ""};
+    try { global.SelectoCanonicalClient.assertAsOf(value); } catch { return null; }
+    // Keep fractional seconds and offset-free legacy timestamps verbatim in text.
+    const parts = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}:\d{2})(Z|[+-]\d{2}:\d{2}))?$/.exec(value);
+    return parts ? {day: parts[1], time: parts[2] || "", offset: parts[3] || ""} : null;
+  }
+
+  function asOfBrowserOffset(day, time) {
+    const [year, month, date] = day.split("-").map(Number), [hour, minute, second] = time.split(":").map(Number);
+    const local = new Date(0);
+    local.setFullYear(year, month - 1, date); local.setHours(hour || 0, minute || 0, second || 0, 0);
+    const minutes = -local.getTimezoneOffset(), absolute = Math.abs(minutes);
+    return `${minutes < 0 ? "-" : "+"}${String(Math.floor(absolute / 60)).padStart(2, "0")}:${String(absolute % 60).padStart(2, "0")}`;
+  }
+
+  function asOfSummary(value) {
+    if (!value) return "As of today (real clock)";
+    try { global.SelectoCanonicalClient.assertAsOf(value); } catch { return `As of ${value} (invalid ISO date or timestamp)`; }
+    const [day, time] = value.split("T"), [year, month, date] = day.split("-").map(Number);
+    const calendar = new Date(0); calendar.setUTCFullYear(year, month - 1, date);
+    const words = new Intl.DateTimeFormat("en-GB", {day: "numeric", month: "short", year: "numeric", timeZone: "UTC", ...(time ? {} : {weekday: "short"})})
+      .format(calendar).replace(/,/g, "");
+    if (!time) return `As of ${words}`;
+    const clock = /^(\d{2}:\d{2}:\d{2}(?:\.\d+)?)(Z|[+-]\d{2}:\d{2})?$/.exec(time);
+    const readable = clock[1].replace(/:00$/, ""), offset = clock[2] === "Z" ? "UTC" : (clock[2] || "").replace("-", "−");
+    return `As of ${words}, ${readable}${offset ? ` ${offset}` : ""}`;
+  }
+
   function normalizeAPIBase(value, fallback) {
     const candidate = String(value || fallback || "/api/v1/selecto").replace(/\/+$/, "");
     if (global.SelectoCanonicalClient) {try {global.SelectoCanonicalClient.safePath(candidate);} catch {throw new Error("The API console requires an absolute same-origin API path.");}}
@@ -3034,8 +3085,10 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
   }
 
   class APIConsole {
-    constructor(root) {
+    constructor(root, options = {}) {
       this.root = root;
+      this.asOfNow = options.now || (() => new Date());
+      this.asOfPickerModes = {};
       this.base = root.dataset.apiBase || standaloneOption("api");
       this.title = root.dataset.title || standaloneOption("title") || "API Console";
       this.curlAuth = normalizeCurlAuth(root.dataset.curlAuth, standaloneOption("curl_auth"));
@@ -4738,13 +4791,97 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       container.replaceChildren();
       container.hidden = !this.supportsAsOf(profile);
       if (container.hidden) return;
-      const row = element("div", "sac-inline-controls"), label = element("label", "", "As of");
-      const input = element("input", ""); input.type = "text"; input.maxLength = 45;
-      input.placeholder = "YYYY-MM-DD or timestamp"; input.value = this.asOfValue(profile);
-      input.setAttribute("aria-label", "As of"); input.dataset.sacAsOf = profile;
+      const value = this.asOfValue(profile), parts = asOfPickerParts(value);
+      const control = element("div", "sac-as-of"); control.dataset.sacAsOfControl = profile;
+      const row = element("div", "sac-inline-controls sac-as-of-fields");
+      const field = (caption, part, type, initial) => {
+        const label = element("label", "", caption), input = element(type === "select" ? "select" : "input", "");
+        if (type !== "select") input.type = type;
+        input.dataset.sacAsOf = profile; input.dataset.sacAsOfPart = part;
+        input.setAttribute("aria-label", caption); input.value = initial;
+        label.append(input); row.append(label); return input;
+      };
+      if (!parts) {
+        const input = field("As of (exact ISO value)", "text", "text", value);
+        input.maxLength = 45;
+      } else {
+        const input = field("As of date", "date", "date", parts.day);
+        input.min = "0001-01-01"; input.max = "9999-12-31";
+        if (parts.time) {
+          field("As of time", "time", "time", parts.time).step = "1";
+          const remembered = this.asOfPickerModes[profile];
+          const mode = remembered?.value === value ? remembered.mode : parts.offset === "Z" ? "utc" : "custom";
+          const zone = field("Time zone", "zone", "select", mode);
+          for (const [key, caption] of [["browser", "Browser offset"], ["utc", "UTC (Z)"], ["custom", "Explicit offset"]]) {
+            const option = element("option", "", caption); option.value = key; zone.append(option);
+          }
+          zone.value = mode;
+          const offset = field("UTC offset", "offset", "text", parts.offset);
+          offset.maxLength = 6; offset.placeholder = "±HH:MM"; offset.readOnly = mode !== "custom";
+        }
+        const toggle = element("button", "sac-text-button", parts.time ? "Remove time" : "Add time");
+        toggle.type = "button"; toggle.dataset.sacAsOfToggle = profile;
+        row.append(toggle);
+      }
       const today = element("button", "sac-text-button", "Today"); today.type = "button"; today.dataset.sacAsOfClear = profile;
-      label.append(input); row.append(label, today);
-      container.append(row, element("p", "sac-help", "Optional ISO date or timestamp, e.g. 2026-01-15T14:30:00+02:00. Today clears it and uses the real clock."));
+      row.append(today);
+      const summary = element("span", "sac-as-of-summary", asOfSummary(value));
+      summary.dataset.sacAsOfSummary = ""; summary.setAttribute("role", "status");
+      const picks = element("div", "sac-as-of-picks");
+      for (const [key, caption] of AS_OF_QUICK_PICKS) {
+        const button = element("button", "sac-text-button", caption);
+        button.type = "button"; button.dataset.sacAsOfQuickPick = key; button.dataset.sacAsOfProfile = profile;
+        picks.append(button);
+      }
+      control.append(row, summary, picks, element("p", "sac-help", parts
+        ? "Optional. Today clears it and uses the real clock. Weeks start on Monday."
+        : "This value is kept exactly as imported because the date and time pickers cannot represent it. Edit the text to change it, or use a quick pick. Today clears it."));
+      container.append(control);
+    }
+
+    refreshAsOf(control, profile, focusPart = "date") {
+      const container = control.parentElement;
+      this.renderAsOf(container, profile);
+      container.querySelector(`[data-sac-as-of-part="${focusPart}"]`)?.focus();
+    }
+
+    editAsOf(target) {
+      const profile = target.dataset.sacAsOf, part = target.dataset.sacAsOfPart;
+      if (!part) return this.changeAsOf(target.value, profile);
+      const control = target.closest("[data-sac-as-of-control]");
+      const field = name => control.querySelector(`[data-sac-as-of-part="${name}"]`);
+      let value = target.value;
+      if (part !== "text") {
+        const day = field("date").value, time = field("time"), zone = field("zone"), offset = field("offset");
+        value = day;
+        if (day && time) {
+          offset.readOnly = zone.value !== "custom";
+          if (zone.value === "browser") offset.value = asOfBrowserOffset(day, time.value);
+          else if (zone.value === "utc") offset.value = "Z";
+          else if (part === "zone" && offset.value === "Z") offset.value = "+00:00";
+          // Native time inputs may omit :00 seconds. The wire form always includes them.
+          const clock = /^\d{2}:\d{2}$/.test(time.value) ? `${time.value}:00` : time.value;
+          // A missing explicit offset must stay invalid rather than becoming an offset-free timestamp.
+          value = `${day}T${clock}${offset.value || " "}`;
+          this.asOfPickerModes[profile] = {value, mode: zone.value};
+        }
+      }
+      this.changeAsOf(value, profile);
+      control.querySelector("[data-sac-as-of-summary]").textContent = asOfSummary(value);
+    }
+
+    toggleAsOfTime(control, profile) {
+      const date = control.querySelector('[data-sac-as-of-part="date"]');
+      const time = control.querySelector('[data-sac-as-of-part="time"]');
+      if (!date || !this.supportsAsOf(profile)) return;
+      let value = date.value;
+      if (!time) {
+        const day = date.value || asOfDay(this.asOfNow());
+        value = `${day}T00:00:00${asOfBrowserOffset(day, "00:00:00")}`;
+        this.asOfPickerModes[profile] = {value, mode: "browser"};
+      }
+      this.changeAsOf(value, profile);
+      this.refreshAsOf(control, profile, time ? "date" : "time");
     }
 
     changeAsOf(value, profile = this.queryProfile) {
@@ -6467,7 +6604,16 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (clearClock) {
         const profile = clearClock.dataset.sacAsOfClear;
         this.changeAsOf("", profile);
-        const input = clearClock.parentElement.querySelector("[data-sac-as-of]"); if (input) input.value = "";
+        this.refreshAsOf(clearClock.closest("[data-sac-as-of-control]"), profile);
+        return;
+      }
+      const toggleClock = event.target.closest("[data-sac-as-of-toggle]");
+      if (toggleClock) return this.toggleAsOfTime(toggleClock.closest("[data-sac-as-of-control]"), toggleClock.dataset.sacAsOfToggle);
+      const quickClock = event.target.closest("[data-sac-as-of-quick-pick]");
+      if (quickClock) {
+        const profile = quickClock.dataset.sacAsOfProfile;
+        this.changeAsOf(asOfQuickPick(quickClock.dataset.sacAsOfQuickPick, this.asOfNow()), profile);
+        this.refreshAsOf(quickClock.closest("[data-sac-as-of-control]"), profile);
         return;
       }
       if (event.target.closest("[data-sac-root-restore]")) return this.rootStateAction("restore");
@@ -6518,7 +6664,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     onChange(event) {
       const target = event.target;
-      if (target.matches("[data-sac-as-of]")) return this.changeAsOf(target.value, target.dataset.sacAsOf);
+      if (target.matches("[data-sac-as-of]")) return this.editAsOf(target);
       if (target.matches("[data-sac-aggregate-control]")) return this.aggregateControl(target);
       if (target.matches("[data-sac-nested-control]")) return this.nestedControl(target);
       if (target.matches("[data-sac-query-method]")) {
@@ -6676,7 +6822,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     onInput(event) {
       const target = event.target;
-      if (target.matches("[data-sac-as-of]")) return this.changeAsOf(target.value, target.dataset.sacAsOf);
+      if (target.matches("[data-sac-as-of]")) return this.editAsOf(target);
       if (target.matches("[data-sac-aggregate-control]") && target.tagName === "INPUT" && target.type !== "checkbox") return this.aggregateControl(target);
       if (target.matches("[data-sac-nested-control]") && target.tagName === "INPUT") return this.nestedControl(target);
       if (target.matches("[data-sac-resource-id]")) {

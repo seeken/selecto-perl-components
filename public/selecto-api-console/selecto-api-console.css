@@ -431,6 +431,14 @@ code, pre, textarea.sac-request-editor {
 .sac-inline-controls { gap: .6rem; }
 .sac-inline-controls label { flex: 1; }
 .sac-inline-controls input { margin-top: .35rem; }
+.sac-as-of { margin-top: .6rem; }
+.sac-as-of-fields { flex-wrap: wrap; align-items: flex-end; }
+.sac-as-of-fields label { flex: 1 1 9rem; margin-top: .25rem; }
+.sac-as-of-fields select { margin-top: .35rem; }
+.sac-as-of-fields .sac-text-button { min-height: 2.55rem; }
+.sac-as-of-fields input[readonly] { color: var(--sac-muted); background: var(--sac-surface-2); }
+.sac-as-of-summary { display: block; margin-top: .5rem; color: var(--sac-text); font-size: .82rem; overflow-wrap: anywhere; }
+.sac-as-of-picks { display: flex; flex-wrap: wrap; gap: .15rem .65rem; margin-top: .3rem; }
 
 .sac-request-card { overflow: hidden; }
 .sac-request-card .sac-card-heading { min-height: 3.5rem; margin: 0; padding: .7rem 1rem; border-bottom: 1px solid var(--sac-border); background: var(--sac-surface-2); }

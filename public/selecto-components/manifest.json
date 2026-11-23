@@ -2,7 +2,7 @@
   "package": "@selecto/perl-components-browser",
   "version": "0.1.1",
   "revision": "0.1.1-ffe8c133c512",
-  "api_console_revision": "0.5.0-481237789c8a",
+  "api_console_revision": "0.5.0-748f1720b604",
   "assets": {
     "selecto-components.css": "c1bc0b0e3e9737d1fa5552d807cd0dde0749b9aabd1727feb56b2682d06f4392",
     "selecto-components.js": "bf8ae81609ac0253d2cb8f7ccfc16351f35c8c4fda40589f7dcebdbeb66fbc5c",
