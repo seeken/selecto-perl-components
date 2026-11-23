@@ -132,3 +132,4 @@ t/temporal_duration.t
 t/pivot_column_values.t
 t/browser/pivot-values.spec.js
 t/browser/fixtures/pivot-values.pl
+lib/Selecto/Components/PivotValues.pm

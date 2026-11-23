@@ -237,7 +237,9 @@ sub _routes (
 
     # The total a Detail page left uncounted (defer_count), for the browser to
     # fill in: its rendered matched rows and pagination.
-    $routes->get($route_path . '/column-values')->to(cb => sub ($controller) {
+    $routes->post($route_path . '/column-values')->to(cb => sub ($controller) {
+        return $controller->render(text => 'Forbidden', status => 403)
+            unless $origin_check->($controller) && _csrf_valid($controller);
         return Selecto::Components::Controller::Explorer::column_values($controller, $explorer);
     });
 
@@ -809,8 +811,9 @@ measures, with its totals.
 =item max_grid_columns
 
 1 to 500, default 50. A pivot grid with more column values is refused with a
-message naming this limit; it is never cut short. A grid of two groups and one
-measure is bounded by C<max_grid_result_cells> alone, as before.
+message naming this limit and suggesting chosen values or Top N; it is never
+cut short. Explicit column groups count chosen values plus Other. An implicit
+grid of two groups and one measure keeps its C<max_grid_result_cells> bound.
 
 =item max_action_rows
 
@@ -1132,6 +1135,7 @@ For an explorer at C<path>, the plugin registers:
     POST path                                           private URL mode fallback
     WS   path/ws                                        htmx 4 incremental updates
     POST path/controls                                  lazy view controls
+    POST path/column-values                             pivot value chooser
     GET  path/actions/:selecto_action_id/form           row-dependent action form
     POST path/actions/:selecto_action_id                run a selected-row action
     GET  path/actions/:selecto_action_id/lookups/:selecto_input_id
@@ -1456,5 +1460,17 @@ then by label and stable key. The global list is resolved before paging.
 C<pivot_column_other> and totals behave as for chosen values. Drilldowns
 carry the resolved list, including C<pivot_column_value_null> (a zero-based
 index identifying a missing-value column), so Detail never reranks its rows.
+
+=cut
+
+=head2 Value order and graph series
+
+Field column metadata C<< value_order => [qw(I A O G D H C)] >> declares
+the natural row and column order. Unlisted values follow as text; missing
+values come last. Explicit chosen values and Top N override this order.
+When C<graph_series_group> names the column group, the graph reads the same
+C<pivot_column_value>, C<pivot_column_top>, C<pivot_column_top_measure> and
+C<pivot_column_other> state. Empty chosen values remain series; dimension
+series use keys so identical display names remain distinct.
 
 =cut

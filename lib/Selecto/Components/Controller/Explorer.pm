@@ -5,6 +5,7 @@ use Mojo::URL ();
 use Selecto::Components::Actions ();
 use Selecto::Components::Controller::SavedQueries ();
 use Selecto::Components::State ();
+use Selecto::Components::PivotValues ();
 use Selecto::Components::Renderer::Builder ();
 use Time::HiRes qw(time);
 
@@ -24,16 +25,11 @@ sub column_values ($controller, $explorer) {
         if (@{$filter->{filter_choices} // []}) {
             $choices = [grep { index(lc($_->{label}), lc($term)) >= 0 } @{$filter->{filter_choices}}];
         } elsif ($dimension) {
-            my $resolved = $engine->domain->resolve_association($dimension->{association});
-            my $a = $resolved->{association};
-            die "scoped lookup cannot be listed" if $a->through || keys(%{$a->where}) || defined($a->target_tenant_field);
-            my $dbh = $engine->adapter->dbh;
-            my ($table, $key, $label) = map { $dbh->quote_identifier($_) } ($a->table, $a->related_key, $a->display_field);
-            my $rows = $dbh->selectall_arrayref("SELECT $key, $label FROM $table WHERE LOWER($label) LIKE ? ORDER BY $label, $key LIMIT 30", undef, '%' . lc($term) . '%');
+            my $rows = Selecto::Components::PivotValues->dimension_rows($engine, $dimension, term => $term);
             $choices = [map { {value => $_->[0], label => $_->[1]} } @$rows];
         } else {
             my $query = Selecto::Query->new->select(Selecto::Expression->field($field)->as('value'))
-                ->where(Selecto::Expression->text_contains_ci($field, $term))
+                ->where(Selecto::Expression->text_contains_ci(Selecto::Expression->value(['cast', ['field', $field], 'string']), $term))
                 ->group_by([$field])->order_by($field, 'asc')->limit(30);
             my $raw = Selecto::BoundedQuery->all($engine, $query, limits => $config->limits);
             $choices = [map { {value => $_->[0], label => $_->[0]} } @{$raw->{rows}}];

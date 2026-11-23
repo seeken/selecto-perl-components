@@ -580,6 +580,9 @@
           if (node.dataset.scGroupFilter === event.target.value) node.remove();
         });
       }
+    } else if (event.target.matches('[name="graph_series_group"]')) {
+      var seriesBuilder = event.target.closest("form[data-sc-builder]");
+      if (seriesBuilder) syncPivotTotals(seriesBuilder, "graph");
     } else if (event.target.matches("[data-sc-grid-column-choice]")) {
       // At most one group is the grid's columns.
       if (event.target.checked) {

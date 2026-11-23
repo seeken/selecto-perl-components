@@ -85,7 +85,7 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         '" data-sc-builder-content>' .
         $builder_tabs . '<form id="selecto-query-' . _h($config->id) . '" action="' .
         _h($config->path) . '" method="' . $method . '" hx-ws:send hx-trigger="submit" data-sc-builder="' .
-        $builder_id . '" data-sc-builder-query data-sc-date-shortcuts="' .
+        $builder_id . '" data-sc-column-values-csrf="' . _h($model->{csrf_token} // '') . '" data-sc-builder-query data-sc-date-shortcuts="' .
         _h(to_json([map { [$_->{group}, $_->{id}, $_->{label}] } @{$config->date_shortcuts}])) . '"' .
         ($config->lazy_view_controls ? ' data-sc-controls-url="' . _h($config->path . '/controls') .
             '" data-sc-controls-csrf="' . _h($model->{csrf_token} // '') . '"' : '') . '>' .
@@ -954,8 +954,9 @@ sub _grouped_picker_items ($fields, $root_label, $render) {
 
 sub _pivot_value_controls ($state, $field, $column) {
     my $active = ($column // '') eq $field->{path};
-    my $disabled = $active ? '' : ' disabled';
     my $gc = $state ? $state->group_configs->{$field->{path}} // {} : {};
+    $active = 0 if length($gc->{format} // '') && $gc->{format} ne 'default';
+    my $disabled = $active ? '' : ' disabled';
     my $values = $active && $state ? $state->pivot_column_values // [] : [];
     return '<div data-sc-pivot-values' . ($active ? '' : ' hidden') . '>' .
         '<label>Choose column values<input type="search" data-sc-pivot-search autocomplete="off" aria-label="Search column values"></label>' .

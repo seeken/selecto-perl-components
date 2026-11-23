@@ -3282,7 +3282,12 @@
     root.querySelectorAll("[data-sc-group-pivot-totals], [data-sc-pivot-values]").forEach(function (node) {
       var item = node.closest("[data-sc-picker-set-item]");
       var choice = item && item.querySelector("[data-sc-grid-column-choice]");
-      var active = viewName === "aggregate" && !!choice && choice.checked;
+      var seriesGroup = root.closest("form") && root.closest("form").querySelector('select[name="graph_series_group"]');
+      if (viewName === "graph" && seriesGroup && choice) choice.checked = choice.value === seriesGroup.value;
+      var active = !!choice && choice.checked && (viewName === "aggregate" ||
+        (node.hasAttribute("data-sc-pivot-values") && viewName === "graph"));
+      var format = item && item.querySelector('[name="group_format"]');
+      if (node.hasAttribute("data-sc-pivot-values") && format && format.value && format.value !== "default") active = false;
       node.hidden = !active;
       node.querySelectorAll("input, select").forEach(function (input) { input.disabled = !active; });
     });
@@ -3613,12 +3618,12 @@
     var item = box.closest("[data-sc-picker-set-item]");
     var form = input.closest("form");
     var url = new URL(form.action.replace(/\/$/, "") + "/column-values", window.location.href);
-    url.searchParams.set("field", item.dataset.field);
-    url.searchParams.set("term", input.value);
+    var body = new URLSearchParams({field: item.dataset.field, term: input.value,
+      csrf_token: form.dataset.scColumnValuesCsrf || ""});
     var sequence = (input._scSequence || 0) + 1;
     input._scSequence = sequence;
     try {
-      var response = await fetch(url, {credentials: "same-origin", headers: {Accept: "application/json"}});
+      var response = await fetch(url, {method: "POST", body: body, credentials: "same-origin", headers: {Accept: "application/json"}});
       if (!response.ok) throw new Error("Search failed");
       var data = await response.json();
       if (input._scSequence !== sequence || !input.isConnected) return;
@@ -4253,6 +4258,9 @@
           if (node.dataset.scGroupFilter === event.target.value) node.remove();
         });
       }
+    } else if (event.target.matches('[name="graph_series_group"]')) {
+      var seriesBuilder = event.target.closest("form[data-sc-builder]");
+      if (seriesBuilder) syncPivotTotals(seriesBuilder, "graph");
     } else if (event.target.matches("[data-sc-grid-column-choice]")) {
       // At most one group is the grid's columns.
       if (event.target.checked) {

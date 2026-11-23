@@ -13,6 +13,7 @@ use Scalar::Util qw(blessed looks_like_number);
 use Math::BigFloat ();
 use Time::HiRes qw(time);
 use Selecto::Components::NumberFormat ();
+use Selecto::Components::PivotValues ();
 use Selecto::Components::QueryBuilder ();
 use Selecto::Components::RoundTrips ();
 use Selecto::Components::State ();
@@ -789,9 +790,9 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
         $order;
     } @rows;
     @columns = @{_sort_grid_entries(\@columns, $groups[$column_index])};
+    return {limit_exceeded => 1, limit => {kind => 'columns', limit => $maximum_columns}}
+        if ($pivot || $plan->{explicit}) && defined($maximum_columns) && @columns > $maximum_columns;
     if ($pivot) {
-        return {limit_exceeded => 1, limit => {kind => 'columns', limit => $maximum_columns}}
-            if defined($maximum_columns) && @columns > $maximum_columns;
         # Everything the table renders: each measure in each cell, with totals.
         my $rendered = (@rows + $totals) * (@columns + $total_columns) * @measures;
         return {limit_exceeded => 1, limit => {kind => 'cells', limit => $maximum_cells}}
@@ -986,19 +987,10 @@ sub _resolve_pivot_labels ($config, $engine, $state) {
     my %labels = map { ("$_" => "$_") } @{$gc->{pivot_values}};
     my $dimension = $config->field_map($engine->domain, $state->retarget)->{$field}{dimension};
     if ($dimension) {
-        my $resolved = $engine->domain->resolve_association($dimension->{association});
-        my $association = $resolved->{association};
-        # Keep host scope/conditional associations governed by the engine.
-        # Plain lookup tables can name values even without matching fact rows.
-        if (!$association->through && !keys(%{$association->where}) && !defined($association->target_tenant_field)) {
-            my $dbh = $engine->adapter->dbh;
-            my ($table, $key, $display) = map { $dbh->quote_identifier($_) }
-                ($association->table, $association->related_key, $association->display_field);
-            my @keys = grep { !defined($gc->{pivot_null_value}) || $_ ne $gc->{pivot_null_value} } @{$gc->{pivot_values}};
-            my $marks = join ',', ('?') x @keys;
-            my $rows = @keys ? $dbh->selectall_arrayref("SELECT $key, $display FROM $table WHERE $key IN ($marks)", undef, @keys) : [];
-            $labels{"$_->[0]"} = $_->[1] for @$rows;
-        }
+        my @keys = grep { !defined($gc->{pivot_null_value}) || $_ ne $gc->{pivot_null_value} } @{$gc->{pivot_values}};
+        my $rows = @keys ? Selecto::Components::PivotValues->dimension_rows($engine, $dimension, values => \@keys, limit => scalar(@keys)) : [];
+        %labels = ();
+        $labels{"$_->[0]"} = $_->[1] for @$rows;
     } else {
         my $catalog = $config->filter_map($engine->domain, $state->retarget)->{$field} // {};
         $labels{"$_->{value}"} = $_->{label} for @{$catalog->{filter_choices} // []};
@@ -1021,8 +1013,7 @@ sub _prepare_pivot_records ($built, $records) {
 sub _pivot_layout ($axis) {
     return map { {value => $_, selection_value => $_} } _bucket_labels($axis)
         unless $axis->{pivot_values};
-    return ((map { {value => $axis->{pivot_labels}{$_} // $_, selection_value => $_} } @{$axis->{pivot_values}}),
-        ($axis->{pivot_other} ? ({value => 'Other', selection_value => $axis->{pivot_other_value}}) : ()));
+    return Selecto::Components::PivotValues->layout($axis);
 }
 
 sub _bucket_labels ($axis) {
@@ -1059,13 +1050,8 @@ sub _sort_grid_entries ($entries, $column) {
 # it has one (bucket ranges in the order they were given), by number or time
 # where the format says so, otherwise as text. A missing value goes last.
 sub _grid_entry_order ($column) {
-    if ($column->{pivot_values}) {
-        my $i = 0;
-        my %rank = map { ("$_" => $i++) } @{$column->{pivot_values}};
-        return sub ($left, $right) {
-            ($rank{$left->{selection_value} // ''} // 100000) <=> ($rank{$right->{selection_value} // ''} // 100000)
-        };
-    }
+    return Selecto::Components::PivotValues->entry_order($column)
+        if $column->{pivot_values} || $column->{value_order};
     my $format = $column->{format} // '';
     my $type = $column->{source_type} // $column->{type} // '';
     my $has_sort_key = defined($column->{sort_key}) ? 1 : 0;

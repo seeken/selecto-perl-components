@@ -4,6 +4,7 @@ use utf8;
 use Mojo::Base -base, -signatures;
 use Selecto::Limits ();
 use Selecto::OperationBudget ();
+use Selecto::Components::PivotValues ();
 use Selecto::Components::ResponseBudget ();
 use Mojo::JSON qw(to_json);
 use Mojo::URL ();
@@ -1253,15 +1254,26 @@ sub _graph ($class, $result, $model) {
         my $series_key = '__all';
         if ($series_dimension) {
             my $series_value = $record->{$series_dimension->{key}};
-            $series_key = to_json([$series_value]);
+            my $identity = $record->{$series_dimension->{drilldown_key} // $series_dimension->{key}};
+            $series_key = to_json([defined($identity) ? "$identity" : undef]);
             unless ($series_seen{$series_key}++) {
                 push @series_values, {
                     key => $series_key,
                     label => _display($series_value),
+                    value => $series_value, selection_value => $identity,
                 };
             }
         }
         $record_for{$point_key}{$series_key} = $record_index;
+    }
+    if ($series_dimension && $series_dimension->{pivot_values}) {
+        @series_values = map { +{
+            key => to_json(["$_->{selection_value}"]), label => _display($_->{value}),
+            value => $_->{value}, selection_value => $_->{selection_value},
+        } } Selecto::Components::PivotValues->layout($series_dimension);
+    } elsif ($series_dimension && $series_dimension->{value_order}) {
+        my $order = Selecto::Components::PivotValues->entry_order($series_dimension);
+        @series_values = sort { $order->($a, $b) } @series_values;
     }
     @series_values = ({key => '__all', label => ''}) unless $series_dimension;
     my @labels = map { $_->{label} } @points;

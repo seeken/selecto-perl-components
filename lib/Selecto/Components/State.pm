@@ -110,10 +110,13 @@ sub from_input ($class, $config, $domain, $input) {
         if length(_scalar(_first($input, 'pivot_column_top_measure')))
             && !grep { $_ eq $top_measure } @$valid_measures;
     my $pivot_column = _parse_pivot_column($view, $input, $valid_groups, \@errors);
+    push @errors, 'Chosen or top graph values require the same group as Separate series by.'
+        if $view eq 'graph' && (@{_values($input, 'pivot_column_value')} || length($top))
+            && (!length($graph_series_group // '') || ($pivot_column // '') ne $graph_series_group);
     my @pivot_values = @{_values($input, 'pivot_column_value')};
     my %seen_pivot_value;
     if (@pivot_values > (length($top) ? 500 : 100) || grep { !defined($_) || ref($_) || length($_) > 1000 } @pivot_values) {
-        push @errors, 'Choose at most 100 column values, each at most 1000 characters.';
+        push @errors, 'Too many column values were chosen, or a value exceeds 1000 characters.';
         @pivot_values = ();
     }
     @pivot_values = grep { !$seen_pivot_value{$_}++ } @pivot_values;
@@ -124,6 +127,11 @@ sub from_input ($class, $config, $domain, $input) {
     if (length($null_index) && ($null_index !~ /\A(?:0|[1-9][0-9]{0,2})\z/ || $null_index >= @pivot_values)) {
         push @errors, 'The missing column value is invalid.';
         $null_index = '';
+    }
+    if (defined($pivot_column) && (@pivot_values || length($top))) {
+        my $format = $group_configs->{$pivot_column}{format} // '';
+        push @errors, 'Choose column values or Top N on an unformatted group; use ranges for bucketed groups.'
+            if length($format) && $format ne 'default';
     }
     my $pivot_other = grep { _truthy($_, 0) } @{_values($input, 'pivot_column_other')};
     if (defined($pivot_column) && @pivot_values) {
@@ -555,6 +563,7 @@ sub _parse_pivot_column ($view, $input, $groups, $errors) {
     return undef unless $view eq 'aggregate' || @{_values($input, 'pivot_column_value')} || length(_scalar(_first($input, 'pivot_column_top')));
     my @requested = grep { length } map { _scalar($_) }
         @{_values($input, 'pivot_column')}, @{_values($input, 'grid_column')};
+    @requested = (_scalar(_first($input, 'graph_series_group'))) if !@requested && $view eq 'graph' && length(_scalar(_first($input, 'graph_series_group')));
     return undef unless @requested;
     my %seen;
     @requested = grep { !$seen{$_}++ } @requested;
@@ -1199,7 +1208,7 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
         $filter->{clause} = 0 + $clause if length($clause);
         $filter->{promoted} = 1 if !length($clause)
             && ($promoted_filter_index{$index + 1} || $promoted_filter_field{$field});
-        $filter->{draft} = 1 if $op !~ /_null\z/
+        $filter->{draft} = 1 if !($group_filter && $op eq 'eq' && grep { $_ eq $value } @{$group_configs->{$field}{pivot_values} // []}) && $op !~ /_null\z/
             && ($op =~ /in\z/ ? !length($value) && !$membership_values
                 : !length($value) || ($op eq 'between' && !length($value_end)));
         push @filters, $filter;

@@ -384,6 +384,8 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             drilldown_grouped => length($column_config->{format} // '')
                 && ($column_config->{format} // '') ne 'default' ? 1 : 0,
             _bucket_order($column_config),
+            (!length($column_config->{format} // '') || $column_config->{format} eq 'default'
+                ? _declared_value_order($domain, $field) : ()),
             (@{$column_config->{pivot_values} // []} ? (
                 pivot_values => $column_config->{pivot_values},
                 pivot_other => $column_config->{pivot_other},
@@ -423,6 +425,15 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             push @group_orders, Selecto::Expression->min(Selecto::Expression->value(
                 ['case', [['is_null', $dimension->{key_field}], ['literal', 1]], ['else', ['literal', 0]]]))
                 if $options->{top_ranking};
+            my $natural = !$options->{top_ranking} ? _group_natural_order_expression(
+                $column, $state->group_configs->{$column->{field}} // {}) : undef;
+            if ($natural) {
+                my $sort_key = '__selecto_group_sort_' . $group_index;
+                my $rank = $rollup ? Selecto::Expression->dimension_display($natural, $key) : Selecto::Expression->min($natural);
+                $column->{sort_key} = $sort_key;
+                push @group_sort_selections, $rank->as($sort_key);
+                push @group_orders, $rank;
+            }
             push @group_orders, $display, $key;
             push @dimension_key_selections, $key->as($column->{drilldown_key});
         } else {
@@ -432,13 +443,13 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             push @groups, $group;
             push @group_selections, $group->as($column->{key});
             push @dimension_key_selections, $group->as($column->{drilldown_key}) if $column->{pivot_values};
-            my $natural_order = _group_natural_order_expression(
+            my $natural_order = $options->{top_ranking} ? undef : _group_natural_order_expression(
                 $column, $state->group_configs->{$column->{field}} // {},
             );
             if ($natural_order) {
                 my $sort_key = '__selecto_group_sort_' . $group_index;
                 my $aggregate_order = $rollup
-                    && Selecto::Components::BucketParser->group_kind($column->{format})
+                    && (Selecto::Components::BucketParser->group_kind($column->{format}) || $column->{value_order})
                     ? Selecto::Expression->dimension_display($natural_order, $group)
                     : Selecto::Expression->min($natural_order);
                 $column->{sort_key} = $sort_key;
@@ -451,6 +462,12 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                     push @group_orders, $missing;
                 }
                 push @group_orders, $aggregate_order;
+                if ($column->{value_order}) {
+                    my $text = Selecto::Expression->value(['cast', ['field', $column->{field}], 'string']);
+                    my $text_order = $rollup ? Selecto::Expression->dimension_display($text, $group) : Selecto::Expression->min($text);
+                    push @group_sort_selections, $text_order->as($sort_key . '_text');
+                    push @group_orders, $text_order;
+                }
             } else {
                 push @group_orders, Selecto::Expression->min(Selecto::Expression->value(
                     ['case', [['is_null', $column->{field}], ['literal', 1]], ['else', ['literal', 0]]]))
@@ -761,7 +778,25 @@ sub _bucket_order ($config) {
     return (bucket_order => \%rank);
 }
 
+# Host metadata, never request-supplied SQL or identifiers.
+sub _declared_value_order ($domain, $field) {
+    my $values = $domain->field_metadata($field)->{value_order};
+    return () unless defined $values;
+    die "value_order must contain at most 500 scalar values of at most 1000 characters\n"
+        unless ref($values) eq 'ARRAY' && @$values <= 500
+            && !grep { !defined($_) || ref($_) || length($_) > 1000 } @$values;
+    my %seen;
+    return (value_order => [grep { !$seen{$_}++ } @$values]);
+}
+
 sub _group_natural_order_expression ($column, $config) {
+    if ($column->{value_order} && !$column->{pivot_values}) {
+        my $field = $column->{dimension} ? $column->{dimension}{key_field} : $column->{field};
+        my $rank = 0;
+        my @branches = map { [['eq', $field, "$_"], ['literal', $rank++]] } @{$column->{value_order}};
+        return Selecto::Expression->value(['case', @branches,
+            [['is_null', $field], ['literal', $rank + 1]], ['else', ['literal', $rank]]]);
+    }
     my $format = $config->{format} // '';
     my $field = _temporal_expression(
         $column->{field}, $column->{source_type} // $column->{type},

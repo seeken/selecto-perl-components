@@ -41,6 +41,14 @@ test("pivot value chooser adds, reorders, removes and rerenders columns", async 
     await box.locator("li").first().getByRole("button", {name: "Remove value", exact: true}).click();
     await page.getByRole("button", {name: "Run query", exact: true}).click();
     await expect(headings).toHaveText(["G"]);
+    if (await page.getByRole("button", {name: "Expand view menu", exact: true}).isVisible())
+      await page.getByRole("button", {name: "Expand view menu", exact: true}).click();
+    await page.locator(".sc-view-tab").filter({has: page.locator('[name="view"][value="graph"]')}).click();
+    await page.locator('select[name="graph_series_group"]').selectOption("status");
+    await page.getByRole("button", {name: "Run query", exact: true}).click();
+    await expect(page.locator("[data-sc-chart]")).toHaveCount(1);
+    const chart = JSON.parse(await page.locator("[data-sc-chart]").getAttribute("data-chart-data"));
+    expect(chart.datasets.map(dataset => dataset.label)).toEqual(["G"]);
   } finally {
     server.kill("SIGTERM");
   }
