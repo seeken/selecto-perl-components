@@ -1,6 +1,8 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Exercise computed Inventory Location star keys through live Explorer grouping,
+      filtering, missing-key and pivot cell drilldowns on SQLite and PostgreSQL.
     - Honor field value_order metadata for summary rows, pivot columns and
       grid axes. Graph series share chosen/top column values and order,
       retain empty selections and Other, and use dimension keys as identity.
