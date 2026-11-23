@@ -826,6 +826,8 @@ test("the builder tray collapses and expands in place", async ({page}) => {
 test("columns, measures, and filters can add the same field more than once", async ({page}) => {
   await load(page, `
     <form data-sc-builder>
+      <label><input type="radio" name="view" value="detail" checked>Detail</label>
+      <label><input type="radio" name="view" value="graph">Graph</label>
       <div data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
         <div data-sc-picker-available>
           <button class="sc-picker-choice" type="button" data-sc-picker-action="add" data-sc-picker-available-item
@@ -898,6 +900,10 @@ test("columns, measures, and filters can add the same field more than once", asy
   const colorPicker = page.locator('[data-sc-picker-kind="measure"] [data-sc-measure-color-picker]').first();
   await expect(autoColor).toBeChecked();
   await expect(colorPicker).toBeDisabled();
+  // Series settings belong to Graph; the same measure can also be used in Detail.
+  await expect(autoColor).toBeHidden();
+  await page.getByLabel("Graph", {exact: true}).check();
+  await expect(autoColor).toBeVisible();
   await autoColor.uncheck();
   await expect(colorPicker).toBeEnabled();
   await colorPicker.fill("#123456");
@@ -907,6 +913,13 @@ test("columns, measures, and filters can add the same field more than once", asy
   await firstTransform.selectOption("moving_average");
   await expect(page.locator('[data-sc-picker-kind="measure"] [data-sc-measure-transform-window]').first())
     .toBeVisible();
+  await page.getByLabel("Detail", {exact: true}).check();
+  await expect(autoColor).toBeHidden();
+  expect(await page.locator("form").evaluate(form => new FormData(form).getAll("measure_color")))
+    .toEqual(["#123456", ""]);
+  await page.getByLabel("Graph", {exact: true}).check();
+  await expect(autoColor).not.toBeChecked();
+  await expect(colorPicker).toHaveValue("#123456");
   await expect(addMeasure).toBeVisible();
 
   const addFilter = page.locator('[data-sc-filter-action="add"]');
@@ -2359,8 +2372,10 @@ test("graph edits survive view switches without duplicate graph form values", as
 test("a filter added in the browser takes promoted edits after a results-only run", async ({page}) => {
   // The builder item has no instance (added in the browser); the run renders
   // only results, whose promoted card carries the server's instance.
-  await load(page, `<div data-sc-workspace>
-    <form id="instance-form" data-sc-builder onsubmit="event.preventDefault()">
+  // Match the results-only WebSocket path. A plain form uses the full-page
+  // HTTP fallback, which replaces the builder rather than retaining it.
+  await load(page, `<div data-sc-workspace hx-ws:connect="/explorer/instance/ws">
+    <form id="instance-form" data-sc-builder hx-ws:send>
       <div data-sc-filter-root data-sc-filter-max="10"><div data-sc-filter-set>
         <article data-sc-filter-set-item data-field="act_pu" data-label="Act Pu" data-type="epoch_datetime">
           <input type="hidden" name="filter_field" value="act_pu">
@@ -2374,6 +2389,8 @@ test("a filter added in the browser takes promoted edits after a results-only ru
   </div>`);
   await page.locator("form").evaluate(form => form.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
   await expect(page.locator("[data-sc-filter-set-item]")).toHaveAttribute("data-filter-instance", "1");
+  await expect(page.locator('[name="filter_promote_index"]')).toHaveValue("1");
+  await expect(page.locator('[name="render_scope"]')).toHaveValue("results");
   await page.locator("#results").evaluate(results => { results.innerHTML = `<div data-sc-promoted-filters>
     <button type="button" form="instance-form">Run</button>
     <article data-sc-promoted-filter data-field="act_pu" data-filter-instance="1"><div data-sc-promoted-filter-values>
