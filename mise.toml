@@ -56,7 +56,7 @@ description = "Run real PostgreSQL HTTP/session checks for the shared explorer s
 run = '''
 : "${SELECTO_PERL_STACK_POSTGRES_URL:?Set the owned stack fixture URL}"
 export SELECTO_REMOTE_REQUIRE_POSTGRES=1
-script/with-local-sibling "$(mise which perl)" "$(dirname "$(mise which perl)")/prove" --exec "$(mise which perl)" -lv t/canonical_stack_postgresql.t
+script/with-local-sibling "$(mise which perl)" "$(dirname "$(mise which perl)")/prove" --exec "$(mise which perl)" -lv xt/canonical_stack_postgresql.t
 '''
 
 [tasks."test:api-console"]

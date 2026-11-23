@@ -1,6 +1,9 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - The canonical stack PostgreSQL check moves to xt/: it needs an owned
+      stack database, a seed and sibling SPA builds, so it runs only through
+      mise run test:canonical-stack and no longer counts as a required skip.
     - A live submit (a drilldown, page or run) made before HTMX has opened
       the WebSocket is held and sent once it connects, instead of being
       cancelled and lost; if it does not connect within five seconds the
