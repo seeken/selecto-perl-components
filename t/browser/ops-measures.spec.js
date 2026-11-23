@@ -19,6 +19,9 @@ test("picker defaults and ratio measures survive browser edits", async ({page}) 
     }).toBe(200);
     await page.goto(base + "/loads?q=1&view=aggregate&field=id&group=region&measure=revenue");
     await expect(page.locator('input[name="query_library_segment_choice_count_as"][value="shipments"]')).toBeChecked();
+    // Edit from a live socket and assert after each run finishes: a run held
+    // for the socket, or one still swapping, briefly leaves older builders.
+    await expect(page.locator("[data-selecto-connection]")).toHaveText("Live");
     await page.getByRole("button", {name: "Expand view menu", exact: true}).click();
     const picker = page.locator('[data-sc-picker-kind="measure"]');
     await picker.locator('[data-sc-picker-available-item][data-field="rpu"]').click();
@@ -26,6 +29,7 @@ test("picker defaults and ratio measures survive browser edits", async ({page}) 
     await expect(ratio.locator('input[name="measure_function"][value="ratio_of_sums"]')).toHaveCount(1);
     await expect(ratio.locator('select[name="measure_function"]')).toHaveCount(0);
     await page.getByRole("button", {name: "Run query", exact: true}).click();
+    await expect(page.locator("form[data-sc-builder]")).not.toHaveAttribute("aria-busy");
     await expect(page.locator('.sc-results')).toContainText('Revenue per unit');
     await expect(ratio.locator('input[name="measure_function"][value="ratio_of_sums"]')).toHaveCount(1);
     const off = page.locator('input[name="query_library_segment_choice_count_as"][value=""]');
@@ -34,6 +38,7 @@ test("picker defaults and ratio measures survive browser edits", async ({page}) 
     await page.locator('[data-sc-builder-tab="filters"]').click();
     await off.check();
     await page.getByRole("button", {name: "Run query", exact: true}).click();
+    await expect(page.locator("form[data-sc-builder]")).not.toHaveAttribute("aria-busy");
     await expect(off).toBeChecked();
     await expect(page.locator('.sc-results')).toContainText('41.67');
   } finally { server.kill("SIGTERM"); }
