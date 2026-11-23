@@ -370,8 +370,10 @@ th.sc-described { cursor: help; text-decoration: underline dotted; text-decorati
 .sc-table-wrap th { background: var(--sc-table-fixed-bg); color: var(--sc-muted); font-size: .72rem; letter-spacing: .05em; position: sticky; text-transform: uppercase; }
 .sc-table-wrap > table > thead > tr > th { z-index: 4; }
 .sc-table-wrap > table > thead > tr > th:first-child { box-shadow: 7px 0 10px -10px var(--sc-shadow); left: 0; z-index: 6; }
-.sc-table-wrap > table > tbody > tr > td:first-child { background: var(--sc-table-fixed-bg); box-shadow: 7px 0 10px -10px var(--sc-shadow); left: 0; position: sticky; z-index: 2; }
-.sc-table-wrap > table > tbody > tr:hover > td:first-child { background: var(--sc-table-hover-bg); }
+/* The first body cell names the row (a td, or a th when one group names it):
+   frozen like the heading above it. */
+.sc-table-wrap > table > tbody > tr > :is(td, th):first-child { background: var(--sc-table-fixed-bg); box-shadow: 7px 0 10px -10px var(--sc-shadow); left: 0; position: sticky; z-index: 2; }
+.sc-table-wrap > table > tbody > tr:hover > :is(td, th):first-child { background: var(--sc-table-hover-bg); }
 .sc-table-wrap tr:hover td { background: var(--sc-table-hover-bg); }
 .sc-aggregate-grid-wrap { max-height: 70vh; overflow: auto; }
 .sc-table-wrap > .sc-aggregate-grid > thead .sc-grid-corner { left: 0; z-index: 4; }

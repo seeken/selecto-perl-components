@@ -1,6 +1,9 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Freeze summary pivot row labels while the table scrolls sideways: with
+      one row group each row is named by a th, which stayed behind its
+      frozen heading. Shared CSS from selecto-api-console d15d366.
     - Separate Top N column selection from display order. Largest first is
       the unchanged default, now numbered in summary/grid headings and
       CSV/XLSX exports; Natural order follows the group's value_order,

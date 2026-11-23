@@ -104,3 +104,37 @@ test("Top N column order appears on input and survives query and view changes", 
     server.kill("SIGTERM");
   }
 });
+
+test("summary pivot row labels stay frozen while columns scroll", async ({page}) => {
+  const listener = net.createServer();
+  await new Promise(resolve => listener.listen(0, "127.0.0.1", resolve));
+  const port = listener.address().port;
+  await new Promise(resolve => listener.close(resolve));
+  const base = `http://127.0.0.1:${port}`;
+  const server = spawn("script/with-local-sibling", [perl, "t/browser/fixtures/pivot-values.pl", "daemon", "-l", base], {cwd: root, stdio: "pipe"});
+  let output = "";
+  server.stdout.on("data", chunk => {output += chunk;});
+  server.stderr.on("data", chunk => {output += chunk;});
+  try {
+    await expect.poll(async () => {
+      try { return (await fetch(base + "/loads", {signal: AbortSignal.timeout(1000)})).status; } catch (_) { return output.includes("Unknown") ? output : 0; }
+    }).toBe(200);
+    // One row group: each body row is named by a th, not a td.
+    await page.goto(base + "/loads?q=1&view=aggregate&field=id&group=region&group=status&measure=revenue&pivot_column=status");
+    await expect(page.locator(".sc-pivot-table")).toHaveCount(1);
+    const wrap = page.locator(".sc-table-wrap").filter({has: page.locator(".sc-pivot-table")});
+    const label = page.locator(".sc-pivot-table > tbody > tr:nth-child(2) > :first-child");
+    const heading = page.locator(".sc-pivot-table > thead > tr:first-child > th:first-child");
+    // Narrow the scrollport so the status columns overflow it.
+    await wrap.evaluate(node => { node.style.width = "180px"; });
+    expect(await wrap.evaluate(node => node.scrollWidth > node.clientWidth + 100)).toBe(true);
+    const before = await label.boundingBox();
+    const headingBefore = await heading.boundingBox();
+    await wrap.evaluate(node => { node.scrollLeft = node.scrollWidth; });
+    await expect.poll(async () => (await label.boundingBox()).x).toBeCloseTo(before.x, 0);
+    expect((await heading.boundingBox()).x).toBeCloseTo(headingBefore.x, 0);
+    expect(await label.evaluate(node => node.tagName)).toBe("TH");
+  } finally {
+    server.kill("SIGTERM");
+  }
+});
