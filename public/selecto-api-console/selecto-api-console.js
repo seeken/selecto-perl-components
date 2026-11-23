@@ -185,6 +185,30 @@ function validDate(value) {
   const date = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
+const periodTypes = new Set(["date", "datetime", "naive_datetime", "utc_datetime", "epoch_datetime"]);
+/** Validate an absolute calendar period; retain wall-clock text, never convert zones. */
+function assertPeriodOn(value, type, path = "on.value") {
+  const match = typeof value === "string" && /^(\d{4})(?:-(\d{2})(?:-(\d{2})(?:[T ](\d{2})(?::(\d{2}))?)?)?)?$/.exec(value);
+  const date = match && `${match[1]}-${match[2] || "01"}-${match[3] || "01"}`;
+  if (!periodTypes.has(type) || !match || match[1] === "0000" || !validDate(date)
+      || (match[4] !== undefined && (type === "date" || +match[4] > 23))
+      || (match[5] !== undefined && +match[5] > 59)) {
+    throw new CanonicalWireError(path, "on requires a valid calendar period (year, month, day, hour or minute; date fields allow year/month/day only)");
+  }
+  return value.replace(" ", "T");
+}
+function validatePeriodOnFilters(filters, fields) {
+  if (!Array.isArray(filters)) return;
+  for (const filter of filters) {
+    if (!filter || typeof filter !== "object") continue;
+    validatePeriodOnFilters(filter.all, fields); validatePeriodOnFilters(filter.any, fields);
+    if (filter.not) validatePeriodOnFilters([filter.not], fields);
+    if (filter.op !== "on") continue;
+    const field = fields?.find(f => f.path === filter.field);
+    if (fields && (!field || !field.operators?.includes("on"))) throw new CanonicalWireError("filters", "on is not published for this field");
+    assertPeriodOn(filter.value, field?.type || "datetime");
+  }
+}
 // remote-query v1: shape plus calendar/time/offset correctness (no clock access).
 function assertAsOf(value) {
   const match = typeof value === "string" && value.length <= 45
@@ -299,6 +323,7 @@ function buildRemoteRequest(fingerprint, query, requestId) {
   if (query.row_format !== undefined) oneOf(query.row_format, ["arrays", "objects"], "query.row_format");
   if (query.timezone !== undefined) nonEmptyString(query.timezone, "query.timezone");
   if (query.as_of !== undefined) assertAsOf(query.as_of);
+  validatePeriodOnFilters(query.filters);
   if (!jsonScalar(query)) throw new CanonicalWireError("query", "must contain finite JSON values");
   const result = {format: "selecto.remote-query", format_version: 1, domain: {fingerprint}, query};
   if (requestId !== undefined) { nonEmptyString(requestId, "request_id"); if (requestId.length > 128) throw new CanonicalWireError("request_id", "too long"); result.request_id = requestId; }
@@ -673,7 +698,7 @@ function nestedField(field,path,child=false) {
   rootPair(field,path);
   if (!child) {
     const expected = field.type === "boolean" ? ["eq","ne","is_null","is_not_null"] : rootOps;
-    if (JSON.stringify(field.operators) !== JSON.stringify(expected)) throw new CanonicalWireError(path,"unsupported operator inventory");
+    if (!Array.isArray(field.operators) || (field.operators.includes("on") && field.type !== "date") || new Set(field.operators).size !== field.operators.length || JSON.stringify(field.operators.filter(op => op !== "on")) !== JSON.stringify(expected)) throw new CanonicalWireError(path,"unsupported operator inventory");
   }
 }
 function assertNestedDetailFeatures(value, discovered) {
@@ -773,7 +798,7 @@ function assertNestedDetailQuery(query,features,options={}) {
   if(Object.hasOwn(query,"filters")) {
     const filters=array(query.filters,"nested.filters");if(filters.length>20)throw new CanonicalWireError("nested.filters","filter bound");
     filters.forEach((f,i)=>{const nullOp=["is_null","is_not_null"].includes(f?.op);exactKeys(f,nullOp?["field","op"]:["field","op","value"],`nested.filters.${i}`);const field=byPath.get(f.field);if(!field||!field.operators.includes(f.op))throw new CanonicalWireError("nested.filters","unpublished field/operator");
-      if(!nullOp){if(typeof f.value==="number"){if(!["integer","decimal"].includes(field.type)||!Number.isSafeInteger(f.value))throw new CanonicalWireError("nested.filters","unsafe/nonnumeric integer");const token=options.numberTokens?.get(`/query/filters/${i}/value`);if(token!==undefined&&!/^-?(?:0|[1-9]\d*)$/.test(token))throw new CanonicalWireError("nested.filters","noninteger numeric token");}else assertNestedDetailScalar(f.value,field,`nested.filters.${i}.value`,{author:true});}});
+      if(f.op==="on")assertPeriodOn(f.value,field.type,`nested.filters.${i}.value`);else if(!nullOp){if(typeof f.value==="number"){if(!["integer","decimal"].includes(field.type)||!Number.isSafeInteger(f.value))throw new CanonicalWireError("nested.filters","unsafe/nonnumeric integer");const token=options.numberTokens?.get(`/query/filters/${i}/value`);if(token!==undefined&&!/^-?(?:0|[1-9]\d*)$/.test(token))throw new CanonicalWireError("nested.filters","noninteger numeric token");}else assertNestedDetailScalar(f.value,field,`nested.filters.${i}.value`,{author:true});}});
   }
   if(Object.hasOwn(query,"order_by")) {const orders=array(query.order_by,"nested.order_by"),seen=new Set();if(orders.length>10)throw new CanonicalWireError("nested.order_by","order bound");orders.forEach(o=>{exactKeys(o,["field","direction"],"nested.order");if(!byPath.has(o.field)||seen.has(o.field)||!["asc","desc"].includes(o.direction))throw new CanonicalWireError("nested.order","invalid/duplicate root order");seen.add(o.field);});}
   for(const [key,min,max] of [["limit",1,25],["offset",0,100000]])if(Object.hasOwn(query,key)){integer(query[key],`nested.query.${key}`,min);if(query[key]>max)throw new CanonicalWireError(key,"page bound");const token=options.numberTokens?.get(`/query/${key}`);if(token!==undefined&&!/^(?:0|[1-9]\d*)$/.test(token))throw new CanonicalWireError(key,"noninteger page token");}
@@ -829,7 +854,7 @@ const explorerExportMediaTypes = Object.freeze({csv: "text/csv", tsv: "text/tab-
 const explorerFieldTypes = Object.freeze(["integer", "decimal", "string", "boolean", "date", "naive_datetime", "utc_datetime"]);
 const explorerGroupFormats = Object.freeze(["day", "day_hour", "week", "month", "quarter", "year", "month_of_year", "day_of_month", "day_of_week", "hour"]);
 const explorerAggregates = Object.freeze(["count", "count_distinct", "sum", "avg", "min", "max", "true_count", "false_count", "true_percentage", "bucket_count"]);
-const explorerOperators = ["eq", "ne", "gt", "gte", "lt", "lte", "between", "in", "not_in", "is_null", "not_null", "starts_with", "starts_with_ci", "text_contains", "text_contains_ci", "ends_with", "ends_with_ci", "date_shortcut"];
+const explorerOperators = ["eq", "ne", "gt", "gte", "lt", "lte", "between", "in", "not_in", "is_null", "not_null", "starts_with", "starts_with_ci", "text_contains", "text_contains_ci", "ends_with", "ends_with_ci", "date_shortcut", "on"];
 const explorerBucketKinds = ["numeric", "year", "elapsed_days", "relative_days"];
 const explorerSupportFlags = ["detail", "aggregate", "graph", "rollup", "grid", "nested", "recursive_filters", "group_formats", "buckets", "boolean_aggregates", "count_exact", "text_ops", "date_shortcuts"];
 const explorerLimitNames = ["max_limit", "max_offset", "max_select", "max_filters", "max_filter_depth", "max_filter_values", "max_orders", "max_group_by", "max_aggregates", "max_groups", "max_result_cells", "max_buckets", "max_export_rows"];
@@ -884,6 +909,7 @@ function assertExplorerFeatures(value, context = {}) {
     oneOf(field.encoding, ["json", "string", "decimal-string"], `${path}.encoding`);
     for (const key of ["nullable", "selectable", "sortable", "filterable", "groupable"]) bool(field[key], `${path}.${key}`);
     stringArray(field.operators, `${path}.operators`, explorerOperators);
+    if (field.operators.includes("on") && !periodTypes.has(field.type)) throw new CanonicalWireError(path, "on requires a temporal field");
     stringArray(field.aggregates, `${path}.aggregates`, explorerAggregates);
     stringArray(field.group_formats, `${path}.group_formats`, explorerGroupFormats);
     stringArray(field.buckets, `${path}.buckets`, explorerBucketKinds);
@@ -919,6 +945,7 @@ function buildExplorerRequest(features, query, requestId) {
   if (query.count !== undefined) oneOf(query.count, ["none", "exact"], "query.count");
   for (const key of ["rollup", "complete"]) if (query[key] !== undefined) bool(query[key], `query.${key}`);
   if (query.timezone !== undefined) assertTimezone(query.timezone);
+  validatePeriodOnFilters(query.filters, features.fields);
   if (!jsonScalar(query)) throw new CanonicalWireError("query", "must contain finite JSON values");
   const result = {format: "selecto.explorer-query", format_version: 1, domain: {fingerprint: features.domain.fingerprint}, features: {revision: features.revision}, query};
   if (requestId !== undefined) { assertUnicode(nonEmptyString(requestId, "request_id"), "request_id", 128); if (requestId.length > 128) throw new CanonicalWireError("request_id", "too long"); result.request_id = requestId; }
@@ -1024,14 +1051,14 @@ function assertExplorerResult(value, {features, query = {}, requestId} = {}) {
   return value;
 }
 
-return {CanonicalWireError,CanonicalHttpError,nestedDetailRefusal,markNestedDetailRefusal,safePath,record,nonEmptyString,integer,keys,assertCatalog,assertManifest,routePath,assertDomain,assertError,assertColumn,assertAsOf,assertScalar,assertQueryResult,assertExactResultNumbers,buildRemoteRequest,createCanonicalClient,assertUnicode,parseStrictJSON,canonicalRootFields,assertRootPredicateFeatures,assertRootScalar,assertRootPredicateQuery,assertTimezone,buildRootPredicateRequest,parseCanonicalRequestText,assertRootPredicateResult,assertNestedDetailFeatures,nestedDetailContext,encodeNestedDetailContext,assertNestedDetailScalar,assertNestedDetailQuery,buildNestedDetailRequest,parseNestedDetailRequestText,assertNestedDetailResult,EXPLORER_PROFILE,explorerExportMediaTypes,explorerFieldTypes,explorerGroupFormats,explorerAggregates,assertExplorerFeatures,buildExplorerRequest,assertExplorerResult};
+return {CanonicalWireError,CanonicalHttpError,nestedDetailRefusal,markNestedDetailRefusal,safePath,record,nonEmptyString,integer,keys,assertCatalog,assertManifest,routePath,assertDomain,assertError,assertColumn,assertPeriodOn,assertAsOf,assertScalar,assertQueryResult,assertExactResultNumbers,buildRemoteRequest,createCanonicalClient,assertUnicode,parseStrictJSON,canonicalRootFields,assertRootPredicateFeatures,assertRootScalar,assertRootPredicateQuery,assertTimezone,buildRootPredicateRequest,parseCanonicalRequestText,assertRootPredicateResult,assertNestedDetailFeatures,nestedDetailContext,encodeNestedDetailContext,assertNestedDetailScalar,assertNestedDetailQuery,buildNestedDetailRequest,parseNestedDetailRequestText,assertNestedDetailResult,EXPLORER_PROFILE,explorerExportMediaTypes,explorerFieldTypes,explorerGroupFormats,explorerAggregates,assertExplorerFeatures,buildExplorerRequest,assertExplorerResult};
 })();
 global.SelectoExplorerClient = (function() {
 const canonical = global.SelectoCanonicalClient;
 
 // Comparison/null operators are remote_query.v1 base; range/list operators are
 // translated only when the publication's metadata advertises them.
-const operatorMap = {equals: "eq", not_equals: "ne", greater_than: "gt", greater_than_or_equal: "gte", less_than: "lt", less_than_or_equal: "lte", is_null: "is_null", is_not_null: "is_not_null", between: "between", in: "in", not_in: "not_in"};
+const operatorMap = {equals: "eq", not_equals: "ne", greater_than: "gt", greater_than_or_equal: "gte", less_than: "lt", less_than_or_equal: "lte", is_null: "is_null", is_not_null: "is_not_null", on: "on", between: "between", in: "in", not_in: "not_in"};
 const reverseOperators = Object.fromEntries(Object.entries(operatorMap).map(([key, value]) => [value, key]));
 const {record, nonEmptyString, integer, keys, safePath, CanonicalWireError} = canonical;
 
@@ -1158,7 +1185,7 @@ function toExplorerDescriptor(metadata) {
     id: metadata.domain.id, name: metadata.label, source: metadata.label,
     capabilities: ["detail"], protocolFeatures: metadata.links?.api_console ? ["api_console"] : [],
     fields: metadata.fields.map((field) => ({id: field.id, label: explorerFieldLabel(field), ...(field.description ? {metadata: {description: field.description}} : {}), type: field.type === "string" ? "text" : field.type === "binary" ? "text" : field.type, encoding: field.encoding, selectable: true, sortable: true, groupable: false, aggregatable: false,
-      filterOperators: metadata.query.operators.map((op) => reverseOperators[op]).filter(Boolean)})),
+      filterOperators: metadata.query.operators.filter(op => op !== "on" || ["date","datetime","naive_datetime","utc_datetime","epoch_datetime"].includes(field.type)).map((op) => reverseOperators[op]).filter(Boolean)})),
     views: [{id: "detail", kind: "detail", label: "Detail"}],
     defaults: {selected: metadata.default_select.slice(), orderBy: [], groupBy: [], aggregates: [], rollup: true, preventDenormalization: true},
     release: {schema: "selecto.domain-publication/v1", id: metadata.domain.publication, version: metadata.domain.fingerprint, fingerprint: metadata.domain.fingerprint, status: "published"},
@@ -1187,7 +1214,7 @@ function unsupportedExplorerFeatures(metadata) {
   list.push({id: "fields.joined", label: "Joined fields", reason: "explorer metadata v1 publishes root fields only"});
   if (!supports.nested) list.push({id: "fields.collections", label: "Nested collection columns", reason: richer});
   list.push({id: "columns.occurrences", label: "Repeated columns", reason: richer});
-  for (const [spa, op] of [["between", "between"], ["in", "in"], ["not_in", "not_in"], ["contains", "text_contains"], ["contains_ci", "text_contains_ci"], ["starts_with", "starts_with"], ["starts_with_ci", "starts_with_ci"], ["ends_with", "ends_with"], ["ends_with_ci", "ends_with_ci"], ["date_shortcut", "date_shortcut"]]) {
+  for (const [spa, op] of [["on", "on"], ["between", "between"], ["in", "in"], ["not_in", "not_in"], ["contains", "text_contains"], ["contains_ci", "text_contains_ci"], ["starts_with", "starts_with"], ["starts_with_ci", "starts_with_ci"], ["ends_with", "ends_with"], ["ends_with_ci", "ends_with_ci"], ["date_shortcut", "date_shortcut"]]) {
     if (!operators.has(op) || !operatorMap[spa]) list.push({id: `operator.${spa}`, label: `Filter operator ${spa.replaceAll("_", " ")}`, reason: "not advertised by this publication"});
   }
   list.push({id: "page.total_rows", label: "Total row count", reason: "no implicit count; paging uses has_more"});
@@ -1248,7 +1275,9 @@ function toCanonicalQuery(request, metadata) {
     if (!op || !metadata.query.operators.includes(op)) refuse(`${path}.operator`, "operator not supported by this profile");
     if (filter.valueTo !== undefined && op !== "between") refuse(`${path}.valueTo`, "only between carries an end value", "invalid_query");
     const result = {field: field(filter.field, `${path}.field`).path, op};
-    if (op === "between") {
+    if (op === "on") {
+      result.value = canonical.assertPeriodOn(filter.value, field(filter.field, `${path}.field`).type, `${path}.value`);
+    } else if (op === "between") {
       if (!Object.hasOwn(filter, "value") || !Object.hasOwn(filter, "valueTo")) refuse(path, "between requires value and valueTo", "invalid_query");
       result.value = filter.value; result.end = filter.valueTo;
     } else if (op === "in" || op === "not_in") {
@@ -1431,7 +1460,7 @@ const detailProfile = Object.freeze({
 
 // ---- remote_query.explorer.v1 strategy (harness docs/remote_query_explorer.md 6.6) ----
 
-const explorerOperatorMap = {equals: "eq", not_equals: "ne", greater_than: "gt", greater_than_or_equal: "gte", less_than: "lt", less_than_or_equal: "lte", between: "between", in: "in", not_in: "not_in", contains: "text_contains", contains_ci: "text_contains_ci", starts_with: "starts_with", starts_with_ci: "starts_with_ci", ends_with: "ends_with", ends_with_ci: "ends_with_ci", date_shortcut: "date_shortcut", is_null: "is_null", is_not_null: "not_null"};
+const explorerOperatorMap = {equals: "eq", not_equals: "ne", greater_than: "gt", greater_than_or_equal: "gte", less_than: "lt", less_than_or_equal: "lte", on: "on", between: "between", in: "in", not_in: "not_in", contains: "text_contains", contains_ci: "text_contains_ci", starts_with: "starts_with", starts_with_ci: "starts_with_ci", ends_with: "ends_with", ends_with_ci: "ends_with_ci", date_shortcut: "date_shortcut", is_null: "is_null", is_not_null: "not_null"};
 const explorerReverseOperators = Object.fromEntries(Object.entries(explorerOperatorMap).map(([spa, op]) => [op, spa]));
 const explorerFunctionLabel = {count: "Count", count_distinct: "Distinct count", sum: "Sum", avg: "Average", min: "Min", max: "Max", true_count: "True count", false_count: "False count", true_percentage: "True percentage"};
 const explorerGroupFormatIds = new Set(["day", "day_hour", "week", "month", "quarter", "year", "month_of_year", "day_of_month", "day_of_week", "hour"]);
@@ -1664,7 +1693,9 @@ function planExplorerV1(request, features, options) {
     if (!op || !target.operators.includes(op)) refuse(`${path}.operator`, `operator ${item.operator} is not available for ${explorerFieldLabel(target)}`);
     if (item.valueTo !== undefined && item.valueTo !== null && item.valueTo !== "" && op !== "between") refuse(`${path}.valueTo`, "only between carries an end value", "invalid_query");
     const leaf = {field: target.path, op};
-    if (op === "between") {
+    if (op === "on") {
+      leaf.value = canonical.assertPeriodOn(item.value, target.type, `${path}.value`);
+    } else if (op === "between") {
       leaf.value = explorerFilterValue(item.value, target, `${path}.value`);
       leaf.end = explorerFilterValue(item.valueTo, target, `${path}.valueTo`);
     } else if (op === "in" || op === "not_in") {
@@ -2212,7 +2243,7 @@ function nestedIntentShape(intent) {
   intent.select.forEach(slot=>{if(Array.isArray(slot)){children++;if(!slot.length||slot.length>20||new Set(slot).size!==slot.length)refuse("nested.intent.select","child selection bound/duplicate","invalid_query");slot.forEach(id=>nestedID(id,"nested.intent.child"));}else{nestedID(slot,"nested.intent.select");if(rootIDs.has(slot))refuse("nested.intent.select","duplicate root ID","invalid_query");rootIDs.add(slot);}});
   if(children!==1||!rootIDs.size||rootIDs.size>20)refuse("nested.intent.select","one collection and root selection required","invalid_query");
   if(!Array.isArray(intent.filters)||intent.filters.length>20)refuse("nested.intent.filters","filter bound","invalid_query");const filterIDs=new Set();
-  intent.filters.forEach(f=>{const nullOp=["is_null","is_not_null"].includes(f?.op);requiredKeys(f,nullOp?["id","field","op"]:["id","field","op","value"],"nested.intent.filter");nestedID(f.id,"nested.intent.filter.id",128);if(/[\u0000-\u001f\u007f]/.test(f.id)||filterIDs.has(f.id))refuse("nested.intent.filter.id","control/duplicate filter ID","invalid_query");filterIDs.add(f.id);nestedID(f.field,"nested.intent.filter.field");if(!["eq","ne","gt","gte","lt","lte","is_null","is_not_null"].includes(f.op))refuse("nested.intent.filter.op","unknown operator");if(!nullOp){if(typeof f.value!=="string"&&typeof f.value!=="boolean")refuse("nested.intent.filter.value","typed text/boolean required","invalid_query");if(typeof f.value==="string")canonical.assertUnicode(f.value,"nested.intent.filter.value",16384);}});
+  intent.filters.forEach(f=>{const nullOp=["is_null","is_not_null"].includes(f?.op);requiredKeys(f,nullOp?["id","field","op"]:["id","field","op","value"],"nested.intent.filter");nestedID(f.id,"nested.intent.filter.id",128);if(/[\u0000-\u001f\u007f]/.test(f.id)||filterIDs.has(f.id))refuse("nested.intent.filter.id","control/duplicate filter ID","invalid_query");filterIDs.add(f.id);nestedID(f.field,"nested.intent.filter.field");if(!["eq","ne","gt","gte","lt","lte","is_null","is_not_null","on"].includes(f.op))refuse("nested.intent.filter.op","unknown operator");if(!nullOp){if(typeof f.value!=="string"&&typeof f.value!=="boolean")refuse("nested.intent.filter.value","typed text/boolean required","invalid_query");if(typeof f.value==="string")canonical.assertUnicode(f.value,"nested.intent.filter.value",16384);}});
   if(!Array.isArray(intent.order_by)||intent.order_by.length>10)refuse("nested.intent.order_by","order bound","invalid_query");const seen=new Set();intent.order_by.forEach(o=>{requiredKeys(o,["field","direction"],"nested.intent.order");nestedID(o.field,"nested.intent.order.field");if(seen.has(o.field)||!["asc","desc"].includes(o.direction))refuse("nested.intent.order","duplicate/direction","invalid_query");seen.add(o.field);});
   integer(intent.limit,"nested.intent.limit",1);integer(intent.offset,"nested.intent.offset");if(intent.limit>25||intent.offset>100000)refuse("nested.intent.page","page bound","invalid_query");if(!["arrays","objects"].includes(intent.row_format))refuse("nested.intent.row_format","unknown format","invalid_query");requiredKeys(intent.presentation,["timezone","locale"],"nested.intent.presentation");if(intent.presentation.timezone!=="UTC"||intent.presentation.locale!=="en-US")refuse("nested.intent.presentation","first browser presentation is UTC/en-US");return intent;
 }
@@ -2234,11 +2265,11 @@ function validateNestedDetailIntent(intent,context) {
   if(intent.collection_id!==collection.id)nestedRefuse("nested.intent.collection_id","unpublished collection","invalid_field","unpublished-field-id");
   const field=(id,map)=>{const f=map.get(id);if(!f)nestedRefuse("nested.intent.field","unpublished opaque ID","invalid_field","unpublished-field-id");return f;};
   intent.select.forEach(s=>Array.isArray(s)?s.forEach(id=>field(id,children)):field(s,roots));
-  intent.order_by.forEach(o=>field(o.field,roots));intent.filters.forEach(f=>{const descriptor=field(f.field,roots);if(!descriptor.operators.includes(f.op))refuse("nested.intent.filter.op","unavailable operator");if(Object.hasOwn(f,"value"))canonical.assertNestedDetailScalar(f.value,descriptor,"nested.intent.filter.value",{author:true});});return intent;
+  intent.order_by.forEach(o=>field(o.field,roots));intent.filters.forEach(f=>{const descriptor=field(f.field,roots);if(!descriptor.operators.includes(f.op))refuse("nested.intent.filter.op","unavailable operator");if(f.op==="on")canonical.assertPeriodOn(f.value,descriptor.type,"nested.intent.filter.value");else if(Object.hasOwn(f,"value"))canonical.assertNestedDetailScalar(f.value,descriptor,"nested.intent.filter.value",{author:true});});return intent;
 }
 function toNestedDetailQuery(intent,context) {
   assertNestedDetailIntent(intent,context);const collection=context.features.collections[0],roots=new Map(context.features.root_fields.map(f=>[f.id,f])),children=new Map(collection.fields.map(f=>[f.id,f]));
-  const query={select:intent.select.map(s=>Array.isArray(s)?s.map(id=>children.get(id).path):roots.get(s).path),filters:intent.filters.map(f=>({field:roots.get(f.field).path,op:f.op,...(Object.hasOwn(f,"value")?{value:f.value}:{})})),order_by:intent.order_by.map(o=>({field:roots.get(o.field).path,direction:o.direction})),limit:intent.limit,offset:intent.offset,row_format:intent.row_format,timezone:intent.presentation.timezone};if (intent.as_of !== undefined) query.as_of = intent.as_of;canonical.assertNestedDetailQuery(query,context.features);return query;
+  const query={select:intent.select.map(s=>Array.isArray(s)?s.map(id=>children.get(id).path):roots.get(s).path),filters:intent.filters.map(f=>({field:roots.get(f.field).path,op:f.op,...(Object.hasOwn(f,"value")?{value:f.op === "on" ? canonical.assertPeriodOn(f.value,roots.get(f.field).type) : f.value}:{})})),order_by:intent.order_by.map(o=>({field:roots.get(o.field).path,direction:o.direction})),limit:intent.limit,offset:intent.offset,row_format:intent.row_format,timezone:intent.presentation.timezone};if (intent.as_of !== undefined) query.as_of = intent.as_of;canonical.assertNestedDetailQuery(query,context.features);return query;
 }
 function parseNestedDetailState(raw,context) {
   try {
@@ -2792,15 +2823,16 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
   // Choice filters offer the choice operators their field type accepts (not_in wherever in
   // is): a boolean Yes/No choice gets equals and does not equal, never one of.
-  function operatorsForField(field) {
-    if (!Array.isArray(field && field.filterChoices)) return operatorsForType(field.type);
-    const accepted = new Set(operatorsForType(field.type));
-    return ["eq", "ne", "in", "not_in", "is_null", "not_null"].filter((op) =>
+  function operatorsForField(field, advertised = []) {
+    if (!Array.isArray(field && field.filterChoices)) return operatorsForType(field.type, advertised);
+    const accepted = new Set(operatorsForType(field.type, advertised));
+    return ["eq", ...(accepted.has("on") ? ["on"] : []), "ne", "in", "not_in", "is_null", "not_null"].filter((op) =>
       accepted.has(op) || (op === "not_in" && accepted.has("in")));
   }
 
-  // A new filter starts on one of for choices whose type accepts it, else on equals.
-  function initialFilterOperator(field) {
+  // Epoch instants start on a calendar day when advertised; choices otherwise use one of.
+  function initialFilterOperator(field, advertised = []) {
+    if (field?.type === "epoch_datetime" && operatorsForField(field, advertised).includes("on")) return "on";
     return field && field.filterChoices && operatorsForField(field).includes("in") ? "in" : "eq";
   }
 
@@ -2823,10 +2855,10 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     return association.related_key !== String(schema.primary_key || "id");
   }
 
-  function operatorsForType(type) {
+  function operatorsForType(type, advertised = []) {
     const common = ["eq", "ne", "in", "is_null", "not_null"];
     if (TEMPORAL_TYPES.has(type)) {
-      return ["eq", "ne", "gt", "gte", "lt", "lte", "between", "date_shortcut", "in", "is_null", "not_null"];
+      return ["eq", ...(advertised.includes("on") ? ["on"] : []), "ne", "gt", "gte", "lt", "lte", "between", "date_shortcut", "in", "is_null", "not_null"];
     }
     if (NUMERIC_TYPES.has(type)) {
       return ["eq", "ne", "gt", "gte", "lt", "lte", "between", "in", "is_null", "not_null"];
@@ -2863,6 +2895,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
   function optionLabel(operator) {
     return ({
       eq: "equals",
+      on: "on (period)",
       ne: "does not equal",
       text_contains_ci: "contains (ignore case)",
       starts_with_ci: "starts with (ignore case)",
@@ -3097,6 +3130,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       this.domain = null;
       this.manifest = null;
       this.openapi = null;
+      this.periodPrecisions = new WeakMap();
       this.queryPath = `${this.base}/query`;
       this.resourcePath = "";
       this.writePath = `${this.base}/write`;
@@ -4622,15 +4656,52 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       });
     }
 
-    renderFilters() {
-      const container = this.root.querySelector("[data-sac-filters]");
+    advertisedFilterOperators() {
+      return schemaParts(this.openapi, this.openapi?.components?.schemas?.SelectoFilter)
+        .flatMap(schema => schemaParts(this.openapi, schema.properties?.op))
+        .flatMap(schema => schema.enum || []);
+    }
+
+    queryFilterFields(profile = this.queryProfile) {
+      if (profile === "aggregate") return (this.aggregateFeatures?.fields || [])
+        .filter(f => !f.collection && f.filterable).map(f => ({...f, path: f.path || f.id}));
+      if (profile === "nested") return this.nestedDetailContext?.features.root_fields || [];
+      return this.filterFields;
+    }
+
+    queryFilterOperators(field, profile = this.queryProfile) {
+      const advertised = this.advertisedFilterOperators();
+      const ops = profile === "flat" || !["nested", "aggregate"].includes(profile)
+        ? operatorsForField(field, advertised) : field.operators || [];
+      const supported = ops.filter(op => op !== "on" || TEMPORAL_TYPES.has(field.type) && advertised.includes("on"));
+      // A publication may list on anywhere; the chooser places it after equals.
+      if (supported.includes("on")) {const rest = supported.filter(op => op !== "on"); rest.splice(rest.indexOf("eq") + 1, 0, "on"); return rest;}
+      return supported;
+    }
+
+    validatePeriodFilters(query, profile = this.queryProfile) {
+      const fields = new Map(this.queryFilterFields(profile).map(f => [f.path, f]));
+      const visit = filter => {
+        if (!isPlainObject(filter)) return;
+        for (const key of ["all", "any"]) if (Array.isArray(filter[key])) filter[key].forEach(visit);
+        if (filter.not) visit(filter.not);
+        if (filter.op !== "on") return;
+        const field = fields.get(filter.field);
+        if (!field || !this.queryFilterOperators(field, profile).includes("on")) throw new Error(`The on filter is not available for ${filter.field}.`);
+        global.SelectoCanonicalClient.assertPeriodOn(filter.value, field.type);
+      };
+      if (Array.isArray(query?.filters)) query.filters.forEach(visit);
+    }
+
+    renderFilters(container = this.root.querySelector("[data-sac-filters]"), filters = this.state.filters, profile = "flat") {
       container.replaceChildren();
-      this.state.filters.forEach((filter) => {
-        const field = this.filterFieldMap.get(filter.field) || this.filterFields[0];
+      filters.forEach((filter) => {
+        const field = this.queryFilterFields(profile).find(f => f.path === filter.field);
         if (!field) return;
         const row = element("article", "sac-filter-row");
         markPicked(row, field.path);
         row.dataset.filterId = filter.id;
+        row.dataset.filterProfile = profile;
         const heading = element("div", "sac-filter-heading");
         const copy = element("span", "sac-selected-copy");
         copy.append(element("strong", "", field.label));
@@ -4644,7 +4715,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         const operator = element("select", "");
         operator.dataset.sacFilterOp = "";
         operator.setAttribute("aria-label", `Filter mode for ${field.label}`);
-        appendOptions(operator, operatorsForField(field).map((op) => ({value: op, label: optionLabel(op)})), filter.op);
+        appendOptions(operator, this.queryFilterOperators(field, profile).map((op) => ({value: op, label: optionLabel(op)})), filter.op);
         controls.append(operator);
         if (!/^(is_null|not_null)$/.test(filter.op)) {
           controls.append(this.filterValueControl(filter, field, false));
@@ -4653,7 +4724,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         row.append(heading, controls);
         container.append(row);
       });
-      if (!this.state.filters.length) container.append(element("p", "sac-muted", "Choose a field below to add a filter."));
+      if (!filters.length) container.append(element("p", "sac-muted", "Choose a field below to add a filter."));
     }
 
     dateShortcuts() {
@@ -4672,6 +4743,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     }
 
     filterValueControl(filter, field, end) {
+      if (filter.op === "on") return this.periodControl(filter, field);
       let input;
       if (!end && Array.isArray(field.filterChoices)
         && ["eq", "ne", "in", "not_in"].includes(filter.op)) {
@@ -4706,7 +4778,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         appendOptions(input, [{value: "true", label: "True"}, {value: "false", label: "False"}], end ? filter.end : filter.value);
       } else {
         input = element("input", "");
-        if (TEMPORAL_TYPES.has(field.type)) input.type = field.type === "date" ? "date" : "datetime-local";
+        if (field.type === "epoch_datetime") {input.type = "number"; input.step = "1";}
+        else if (TEMPORAL_TYPES.has(field.type)) input.type = field.type === "date" ? "date" : "datetime-local";
         else if (NUMERIC_TYPES.has(field.type) && filter.op !== "in") {
           input.type = "number";
           input.step = "any";
@@ -4718,6 +4791,68 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       input.dataset[end ? "sacFilterEnd" : "sacFilterValue"] = "";
       input.setAttribute("aria-label", filter.op === "date_shortcut" ? `Quick period for ${field.label}` : (end ? "Filter end value" : "Filter value"));
       return input;
+    }
+
+    periodControl(filter, field) {
+      const wrapper = element("div", "sac-period-control");
+      wrapper.dataset.sacPeriod = "";
+      const raw = typeof filter.value === "string" ? filter.value.replace(" ", "T") : "";
+      const precision = this.periodPrecisions.get(filter) || ({4:"year",7:"month",10:"day",13:"hour",16:"minute"})[raw.length] || "day";
+      const select = element("select", ""); select.dataset.sacPeriodPart = "precision";
+      select.setAttribute("aria-label", `Period precision for ${field.label}`);
+      appendOptions(select, ["year", "month", "day", ...(field.type === "date" ? [] : ["hour", "minute"])].map(value => ({value, label: humanize(value)})), precision);
+      wrapper.append(select);
+      const input = element("input", ""); input.dataset.sacPeriodPart = "value";
+      input.setAttribute("aria-label", `Period ${precision} for ${field.label}`);
+      input.type = ({year:"text",month:"month",day:"date",hour:"date",minute:"datetime-local"})[precision];
+      if (precision === "year") {input.inputMode = "numeric"; input.pattern = "[0-9]{4}"; input.maxLength = 4; input.placeholder = "YYYY";}
+      else {input.min = precision === "month" ? "0001-01" : precision === "minute" ? "0001-01-01T00:00" : "0001-01-01"; input.max = precision === "month" ? "9999-12" : precision === "minute" ? "9999-12-31T23:59" : "9999-12-31";}
+      if (precision === "minute") input.step = "60";
+      input.value = precision === "hour" ? raw.slice(0,10) : raw;
+      wrapper.append(input);
+      if (precision === "hour") {
+        const hour = element("select", ""); hour.dataset.sacPeriodPart = "hour";
+        hour.setAttribute("aria-label", `Period hour for ${field.label}`);
+        appendOptions(hour, Array.from({length:24}, (_,n) => ({value:String(n).padStart(2,"0"),label:String(n).padStart(2,"0")})), raw.slice(11,13) || "00");
+        wrapper.append(hour);
+      }
+      const hint = element("span", "sac-help"); hint.dataset.sacPeriodHint = ""; hint.setAttribute("aria-live", "polite");
+      wrapper.append(hint); this.periodHint(wrapper, filter.value, field.type);
+      return wrapper;
+    }
+
+    periodHint(wrapper, value, type) {
+      const hint = wrapper.querySelector("[data-sac-period-hint]");
+      try {
+        const period = global.SelectoCanonicalClient.assertPeriodOn(value, type);
+        const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        const label = period.length === 4 ? period : period.length === 7 ? `${months[+period.slice(5,7)-1]} ${period.slice(0,4)}`
+          : `${+period.slice(8,10)} ${months[+period.slice(5,7)-1]} ${period.slice(0,4)}${period.length > 10 ? `, ${period.slice(11)}${period.length === 13 ? ":00 (hour)" : " (minute)"}` : ""}`;
+        hint.textContent = `Matches ${label}, in the API's time zone`;
+      } catch (_) {hint.textContent = value ? "Enter a valid calendar period." : "Choose a period, in the API's time zone.";}
+    }
+
+    editPeriod(target) {
+      const wrapper = target.closest("[data-sac-period]"), row = target.closest("[data-filter-id]"), profile = row.dataset.filterProfile;
+      const filters = profile === "nested" ? this.nestedState.intent.filters : profile === "aggregate" ? this.aggregateState.filters : this.state.filters;
+      const filter = filters.find(f => f.id === row.dataset.filterId);
+      const field = this.queryFilterFields(profile).find(f => (profile === "nested" ? f.id : f.path) === filter.field);
+      const precision = wrapper.querySelector('[data-sac-period-part="precision"]').value;
+      if (target.dataset.sacPeriodPart === "precision") {
+        const raw = String(filter.value || "").replace(" ", "T");
+        const expanded = `${raw.slice(0,4)}-${raw.slice(5,7) || "01"}-${raw.slice(8,10) || "01"}T${raw.slice(11,13) || "00"}:${raw.slice(14,16) || "00"}`;
+        filter.value = raw ? expanded.slice(0, {year:4,month:7,day:10,hour:13,minute:16}[precision]) : "";
+        this.periodPrecisions.set(filter, precision);
+        wrapper.replaceChildren(...this.periodControl(filter, field).children);
+      } else {
+        const value = wrapper.querySelector('[data-sac-period-part="value"]').value;
+        filter.value = precision === "hour" && value ? `${value}T${wrapper.querySelector('[data-sac-period-part="hour"]').value}` : value;
+      }
+      this.periodHint(wrapper, filter.value, field.type);
+      if (profile === "nested") this.nestedChanged(() => {}, false);
+      else if (profile === "aggregate") {this.cancelQuery(); this.state.response = null; this.clearQueryResult(); this.syncAggregateRequest();}
+      else this.syncRequest(true);
+      if (target.dataset.sacPeriodPart === "precision") wrapper.querySelector('[data-sac-period-part="value"]').focus();
     }
 
     renderOrders() {
@@ -4778,8 +4913,9 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       query.as_of = global.SelectoCanonicalClient.assertAsOf(value);
     }
 
-    validateRequestAsOf(request, profile = this.queryProfile) {
+    validateQueryContext(request, profile = this.queryProfile) {
       const query = request?.format ? request.query : request;
+      this.validatePeriodFilters(query, profile);
       if (isPlainObject(query) && Object.hasOwn(query, "as_of")) {
         global.SelectoCanonicalClient.assertAsOf(query.as_of);
         this.applyAsOf({}, query.as_of, profile);
@@ -4897,6 +5033,11 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     filterPayloads(filter) {
       const field = this.filterFieldMap.get(filter.field);
       const payload = {field: filter.field, op: this.remoteMode && filter.op === "not_null" ? "is_not_null" : filter.op};
+      if (filter.op === "on") {
+        if (!this.queryFilterOperators(field).includes("on")) throw new Error(`The on filter is not available for ${filter.field}.`);
+        payload.value = global.SelectoCanonicalClient.assertPeriodOn(filter.value, field.type);
+        return [payload];
+      }
       if (filter.op === "date_shortcut") {
         payload.value = filter.value;
         return [payload];
@@ -4918,7 +5059,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         if (this.nestedBlocked || !this.nestedState) throw new Error("Nested state remains blocked; restore valid bound state or explicitly start a new draft.");
         const context = this.nestedDetailContext;
         const query = global.SelectoExplorerClient.toNestedDetailQuery(this.nestedState.intent, context);
-        this.validateRequestAsOf(query, "nested");
+        this.validateQueryContext(query, "nested");
         return global.SelectoCanonicalClient.buildNestedDetailRequest(this.nestedState.intent.binding.fingerprint, query,
           {features: context.features, context: global.SelectoCanonicalClient.nestedDetailContext(context.features)});
       }
@@ -5135,10 +5276,11 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
           const field = this.filterFieldMap.get(filter.field);
           if (!field && this.fieldMap.has(filter.field)) throw new Error(`${filter.field} cannot be used in filters.`);
           if (!field) throw new Error(`The chooser does not know the filter field ${JSON.stringify(filter.field)}.`);
-          if (typeof filter.op !== "string" || !operatorsForField(field).includes(filter.op)) throw new Error(`The ${filter.op} filter is not available for ${filter.field}.`);
+          if (typeof filter.op !== "string" || !this.queryFilterOperators(field, "flat").includes(filter.op)) throw new Error(`The ${filter.op} filter is not available for ${filter.field}.`);
           if (["in", "not_in"].includes(filter.op) && (!Array.isArray(filter.value) || filter.value.some((value) => typeof value !== "string"))) throw new Error("The chooser supports membership-filter values as an array of strings.");
           if (!/^(is_null|not_null)$/.test(filter.op) && !Object.prototype.hasOwnProperty.call(filter, "value")) throw new Error(`The ${filter.op} filter requires a value.`);
           if (filter.op === "between" && !Object.prototype.hasOwnProperty.call(filter, "end")) throw new Error("A between filter requires an end value.");
+          if (filter.op === "on") filter = {...filter, value: global.SelectoCanonicalClient.assertPeriodOn(filter.value, field.type)};
           return {
             id: String(filterId++), field: filter.field, op: filter.op,
             value: ["in", "not_in"].includes(filter.op) ? filter.value.join(", ") : (filter.value === undefined ? "" : filter.value),
@@ -5161,7 +5303,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         });
       }
       if (payload.as_of !== undefined) {
-        this.validateRequestAsOf(payload, "flat");
+        this.validateQueryContext(payload, "flat");
         draft.asOf = payload.as_of;
       }
       if (payload.timezone !== undefined) {
@@ -5199,7 +5341,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       }).request;
       if (payload.request_id !== undefined) throw new Error("Request IDs stay in manual JSON mode.");
       const query = parsed.query;
-      this.validateRequestAsOf(query, "nested");
+      this.validateQueryContext(query, "nested");
       if (query.timezone !== undefined && query.timezone !== "UTC") throw new Error("The nested chooser requires UTC.");
       const intent = global.SelectoExplorerClient.createNestedDetailIntent(context.features);
       const roots = new Map(context.features.root_fields.map(field => [field.path, field.id]));
@@ -5225,9 +5367,20 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (onlyKeys(payload, ["format", "format_version", "domain", "features", "query"]).length
           || onlyKeys(payload.domain, ["fingerprint"]).length || onlyKeys(payload.features, ["revision"]).length) throw new Error("Unsupported aggregate envelope properties.");
       const query = payload.query;
-      if (!isPlainObject(query) || onlyKeys(query, ["select", "group_by", "rollup", "cube", "grouping_sets", "limit", "offset", "as_of"]).length) throw new Error("Unsupported aggregate chooser properties.");
-      this.validateRequestAsOf(query, "aggregate");
+      if (!isPlainObject(query) || onlyKeys(query, ["select", "group_by", "rollup", "cube", "grouping_sets", "limit", "offset", "as_of", "filters"]).length) throw new Error("Unsupported aggregate chooser properties.");
+      this.validateQueryContext(query, "aggregate");
       const state = this.newAggregateState();
+      if (query.filters !== undefined) {
+        if (!Array.isArray(query.filters)) throw new Error("filters must be an array.");
+        state.filtersPresent = true;
+        const fields = new Map(this.queryFilterFields("aggregate").map(f=>[f.path,f]));
+        state.filters = query.filters.map((f,i) => {
+          const field = fields.get(f?.field);
+          if (!isPlainObject(f) || onlyKeys(f,["field","op","value","end"]).length || !field || !this.queryFilterOperators(field,"aggregate").includes(f.op)) throw new Error("Unsupported aggregate filter.");
+          if (f.op === "on") global.SelectoCanonicalClient.assertPeriodOn(f.value, field.type);
+          return {id:`aggregate-${i}`,field:f.field,op:f.op,value:["in","not_in"].includes(f.op) && Array.isArray(f.value) ? f.value.join(", ") : f.value,end:f.end};
+        });
+      }
       state.groupBy = query.group_by || [];
       if (!Array.isArray(state.groupBy) || !Array.isArray(query.select)) throw new Error("Aggregate selection and groups must be arrays.");
       if (query.select.slice(0, state.groupBy.length).some((item, index) => item !== state.groupBy[index])) throw new Error("Group columns must lead the aggregate selection.");
@@ -5504,9 +5657,11 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       target.append(element("h3", "", "Parent filters (AND)"), button("Add filter", "add-filter", 0, "filters"));
       intent.filters.forEach((filter,i) => {
         const field = roots.get(filter.field), row = element("div", "sac-nested-filter");
-        row.append(selector("Filter field", "filter-field", choices, filter.field, i), selector("Operator", "filter-op", field.operators.map(op=>({value:op,label:optionLabel(op)})), filter.op, i));
+        row.dataset.filterId = filter.id; row.dataset.filterProfile = "nested";
+        row.append(selector("Filter field", "filter-field", choices, filter.field, i), selector("Operator", "filter-op", this.queryFilterOperators(field, "nested").map(op=>({value:op,label:optionLabel(op)})), filter.op, i));
         if (!["is_null","is_not_null"].includes(filter.op)) {
-          if (field.type === "boolean") row.append(selector("Filter value", "filter-value", [{value:"true",label:"true"},{value:"false",label:"false"}], String(filter.value), i));
+          if (filter.op === "on") row.append(this.periodControl(filter, field));
+          else if (field.type === "boolean") row.append(selector("Filter value", "filter-value", [{value:"true",label:"true"},{value:"false",label:"false"}], String(filter.value), i));
           else {const label=element("label","","Exact filter value"),input=element("input","");input.type="text";input.value=filter.value;input.dataset.sacNestedControl="filter-value";input.dataset.index=String(i);input.setAttribute("aria-label","Exact filter value");label.append(input);row.append(label);}
         }
         row.append(button("Remove", "remove", i, "filters")); target.append(row);
@@ -5525,8 +5680,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         const roots = new Map(this.nestedDetailContext.features.root_fields.map(f=>[f.id,f]));
         if (name === "add-root" && target.value) intent.select.push(target.value);
         if (name === "add-child" && target.value) intent.select.find(Array.isArray).push(target.value);
-        if (name === "filter-field") {const f=intent.filters[index];f.field=target.value;f.op="eq";f.value=roots.get(f.field).type === "boolean" ? false : "";}
-        if (name === "filter-op") {const f=intent.filters[index];f.op=target.value;if(["is_null","is_not_null"].includes(f.op))delete f.value;else if(!Object.hasOwn(f,"value"))f.value=roots.get(f.field).type === "boolean" ? false : "";}
+        if (name === "filter-field") {const f=intent.filters[index];this.periodPrecisions.delete(f);f.field=target.value;f.op="eq";f.value=roots.get(f.field).type === "boolean" ? false : "";}
+        if (name === "filter-op") {const f=intent.filters[index];this.periodPrecisions.delete(f);f.op=target.value;if(["is_null","is_not_null"].includes(f.op))delete f.value;else if(!Object.hasOwn(f,"value"))f.value=roots.get(f.field).type === "boolean" ? false : "";}
         if (name === "filter-value") {const f=intent.filters[index];f.value=roots.get(f.field).type === "boolean" ? target.value === "true" : target.value;}
         if (name === "order-field") intent.order_by[index].field=target.value;
         if (name === "order-direction") intent.order_by[index].direction=target.value;
@@ -6574,7 +6729,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         this.state.filters.push({
           id: String(this.nextFilterId++),
           field: initialField.path,
-          op: initialFilterOperator(initialField),
+          op: initialFilterOperator(initialField, this.advertisedFilterOperators()),
           value: initialField.type === "boolean" ? "true" : "",
           end: "",
         });
@@ -6583,6 +6738,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       }
       const removeFilter = event.target.closest("[data-sac-remove-filter]");
       if (removeFilter) {
+        if (removeFilter.closest("[data-filter-id]")?.dataset.filterProfile === "aggregate") return this.aggregateChanged(state => {state.filters=state.filters.filter(f=>f.id !== removeFilter.dataset.sacRemoveFilter);});
         this.state.filters = this.state.filters.filter((filter) => filter.id !== removeFilter.dataset.sacRemoveFilter);
         this.changed();
         return;
@@ -6664,6 +6820,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     onChange(event) {
       const target = event.target;
+      if (target.matches("[data-sac-period-part]")) return this.editPeriod(target);
+      if (target.closest?.("[data-filter-id]")?.dataset.filterProfile === "aggregate") return this.aggregateFilterEdit(target);
       if (target.matches("[data-sac-as-of]")) return this.editAsOf(target);
       if (target.matches("[data-sac-aggregate-control]")) return this.aggregateControl(target);
       if (target.matches("[data-sac-nested-control]")) return this.nestedControl(target);
@@ -6803,6 +6961,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       else if (target.matches("[data-sac-filter-op]")) {
         const filter = this.filterFor(target);
         filter.op = target.value;
+        this.periodPrecisions.delete(filter);
         const field = this.filterFieldMap.get(filter.field);
         if (filter.op === "date_shortcut") filter.value = "this_week";
         else if (field && field.type === "boolean") filter.value = "true";
@@ -6822,6 +6981,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     onInput(event) {
       const target = event.target;
+      if (target.matches("[data-sac-period-part]")) return this.editPeriod(target);
+      if (target.closest?.("[data-filter-id]")?.dataset.filterProfile === "aggregate") return this.aggregateFilterEdit(target);
       if (target.matches("[data-sac-as-of]")) return this.editAsOf(target);
       if (target.matches("[data-sac-aggregate-control]") && target.tagName === "INPUT" && target.type !== "checkbox") return this.aggregateControl(target);
       if (target.matches("[data-sac-nested-control]") && target.tagName === "INPUT") return this.nestedControl(target);
@@ -6933,7 +7094,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     filterFor(target) {
       const id = target.closest("[data-filter-id]").dataset.filterId;
-      return this.state.filters.find((filter) => filter.id === id);
+      const profile = target.closest("[data-filter-id]").dataset.filterProfile;
+      return (profile === "aggregate" ? this.aggregateState.filters : this.state.filters).find((filter) => filter.id === id);
     }
 
     orderFor(target) {
@@ -6997,7 +7159,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       try {
         if (this.blockedInitialRequestText && editor.value === this.blockedInitialRequestText) throw this.queryProfile === "nested" ? nestedError("URL state remains blocked. Restore valid bound state or explicitly start a new query.", global.SelectoCanonicalClient.nestedDetailRefusal(this.nestedInitialError)?.reason || "invalid-nested-state") : new Error("URL state remains blocked. Restore valid bound state or explicitly start a new query.");
         request = this.remoteMode ? global.SelectoCanonicalClient.parseStrictJSON(editor.value) : JSON.parse(editor.value);
-        this.validateRequestAsOf(request);
+        this.validateQueryContext(request);
         if (!this.state.rawDirty) this.applyAsOf({}, this.asOfValue());
       } catch (error) {
         if (this.queryProfile === "nested") global.SelectoCanonicalClient.markNestedDetailRefusal(error, "invalid-selected-raw");
@@ -7161,7 +7323,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     newAggregateState() {
       const limits = this.aggregateFeatures.limits || {};
-      return {groupBy: [], aggregates: [{fn: "count", field: "", alias: "count"}], grouping: "none", sets: [],
+      return {filters: [], groupBy: [], aggregates: [{fn: "count", field: "", alias: "count"}], grouping: "none", sets: [],
         limit: Math.min(100, limits.max_limit || 100), offset: 0};
     }
 
@@ -7213,6 +7375,18 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (!state.aggregates.length) errors.push("Add at least one aggregate.");
       if (limits.max_aggregates && state.aggregates.length > limits.max_aggregates) errors.push(`At most ${limits.max_aggregates} aggregates are allowed.`);
       const query = {select};
+      if (state.filters?.length || state.filtersPresent) {
+        const fields = new Map(this.queryFilterFields("aggregate").map(f => [f.path, f]));
+        query.filters = state.filters.map(filter => {
+          const field = fields.get(filter.field);
+          if (!field || !this.queryFilterOperators(field, "aggregate").includes(filter.op)) {errors.push(`Filter unavailable for ${filter.field}.`); return {field:filter.field,op:filter.op};}
+          const leaf = {field:filter.field, op:filter.op};
+          if (!["is_null", "not_null"].includes(filter.op)) leaf.value = ["in", "not_in"].includes(filter.op) ? String(filter.value).split(",").map(v=>v.trim()).filter(Boolean) : field.type === "boolean" ? String(filter.value) === "true" : filter.value;
+          if (filter.op === "between") leaf.end = filter.end;
+          if (filter.op === "on") {try {leaf.value = global.SelectoCanonicalClient.assertPeriodOn(filter.value, field.type);} catch (error) {errors.push(error.message);}}
+          return leaf;
+        });
+      }
       try { this.applyAsOf(query, state.asOf, "aggregate"); } catch (error) { errors.push(error.message); }
       if (groups.length) query.group_by = groups;
       if (state.grouping !== "none") {
@@ -7278,6 +7452,10 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       };
       target.append(element("h2", "", "Aggregates"), element("p", "sac-help", "Group rows and summarise them. Subtotals come from the database, one grouped query for each combination."));
       const clock = element("div", ""); this.renderAsOf(clock, "aggregate"); target.append(clock);
+      target.append(element("h3", "", "Filters (AND)"), selector("Add filter", "add-filter",
+        [{value:"",label:"Choose a field"}, ...this.queryFilterFields("aggregate").filter(f=>this.queryFilterOperators(f,"aggregate").length).map(f=>({value:f.path,label:f.label}))], ""));
+      const filterList = element("div", "sac-filter-list");
+      this.renderFilters(filterList, state.filters || [], "aggregate"); target.append(filterList);
       const groupFields = this.aggregateGroupFields();
       const labelOf = new Map(groupFields.map((field) => [field.id, field.label]));
       target.append(element("h3", "", "Group by"), selector("Add group", "add-group",
@@ -7316,6 +7494,15 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       target.append(paging);
     }
 
+    aggregateFilterEdit(target) {
+      const filter = this.filterFor(target);
+      if (target.matches("[data-sac-filter-op]")) {filter.op=target.value; filter.value=target.value === "date_shortcut" ? "this_week" : ""; filter.end=""; this.periodPrecisions.delete(filter); this.renderAggregateBuilder();}
+      else if (target.matches("[data-sac-filter-value]")) filter.value = target.value;
+      else if (target.matches("[data-sac-filter-end]")) filter.end = target.value;
+      else return;
+      this.cancelQuery(); this.state.response=null; this.clearQueryResult(); this.syncAggregateRequest();
+    }
+
     aggregateControl(target) {
       const name = target.dataset.sacAggregateControl, index = Number(target.dataset.index);
       if (name === "aggregate-alias" || name === "limit" || name === "offset") {
@@ -7326,7 +7513,13 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         return this.syncAggregateRequest();
       }
       this.aggregateChanged((state) => {
-        if (name === "add-group" && target.value) { state.groupBy.push(target.value); state.sets = []; }
+        if (name === "add-filter" && target.value) {
+          const field = this.queryFilterFields("aggregate").find(f=>f.path === target.value), ops = this.queryFilterOperators(field,"aggregate");
+          const op = field.type === "epoch_datetime" && ops.includes("on") ? "on" : ops.includes("eq") ? "eq" : ops[0];
+          while (state.filters.some(f=>f.id === `aggregate-${this.nextFilterId}`)) this.nextFilterId++;
+          state.filters.push({id:`aggregate-${this.nextFilterId++}`,field:field.path,op,value:field.type === "boolean" ? "true" : "",end:""});
+        }
+        else if (name === "add-group" && target.value) { state.groupBy.push(target.value); state.sets = []; }
         else if (name === "aggregate-fn") {
           const aggregate = state.aggregates[index]; aggregate.fn = target.value;
           if (!this.aggregateMeasureFields(aggregate.fn).some((field) => field.id === aggregate.field)) aggregate.field = "";
@@ -7362,7 +7555,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       let request;
       try {
         request = JSON.parse(editor.value);
-        this.validateRequestAsOf(request, "aggregate");
+        this.validateQueryContext(request, "aggregate");
         if (!this.state.rawDirty) this.applyAsOf({}, this.aggregateState.asOf, "aggregate");
       } catch (error) {
         this.setStatus("Invalid request JSON", "error", error);

@@ -669,3 +669,7 @@ code, pre, textarea.sac-request-editor {
 .sac-rolled-up { font-style: italic; opacity: .7; }
 .sac-aggregate-sets { display: flex; flex-wrap: wrap; gap: .4rem 1rem; margin: .5rem 0; }
 .sac-aggregate-sets label { display: inline-flex; align-items: center; gap: .35rem; }
+
+.sac-period-control { display: flex; flex-wrap: wrap; gap: .35rem; min-width: 0; }
+.sac-period-control > input { min-width: 0; flex: 1; }
+.sac-period-control > .sac-help { flex-basis: 100%; margin: 0; }

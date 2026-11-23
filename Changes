@@ -1,6 +1,10 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - The bundled API Console (selecto-api-console 61d523e) offers the
+      server's "on (period)" filter on temporal fields when the API publishes
+      it: Year, Month, Day, Hour or Minute pickers that send YYYY through
+      YYYY-MM-DDTHH:MM. New filters on epoch_datetime fields start as a day.
     - The bundled API Console (selecto-api-console 5110655) gives As of a date
       picker, an optional time with browser, UTC or explicit offset, quick
       picks (Yesterday, end of last week, month, quarter, year) and a
