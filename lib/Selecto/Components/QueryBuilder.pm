@@ -384,6 +384,14 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             drilldown_grouped => length($column_config->{format} // '')
                 && ($column_config->{format} // '') ne 'default' ? 1 : 0,
             _bucket_order($column_config),
+            (@{$column_config->{pivot_values} // []} ? (
+                pivot_values => $column_config->{pivot_values},
+                pivot_other => $column_config->{pivot_other},
+                pivot_other_value => $column_config->{pivot_other_value},
+                pivot_labels => $column_config->{pivot_labels},
+                drilldown_grouped => 1,
+                drilldown_key => '__selecto_dimension_key_' . _field_alias($field),
+            ) : ()),
             (defined($field_map->{$field}{html_format})
                 ? (html_format => $field_map->{$field}{html_format}) : ()),
             ($dimension ? (
@@ -401,10 +409,13 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
     for my $column (@group_columns) {
         $group_index++;
         if (my $dimension = $column->{dimension}) {
-            my $key = Selecto::Expression->field($dimension->{key_field});
+            my $pivot = $state->group_configs->{$column->{field}}{pivot_values};
+            my $key = $pivot ? _group_expression($column, $state->group_configs->{$column->{field}})
+                : Selecto::Expression->field($dimension->{key_field});
+            if ($pivot) { $column->{drilldown_field} = $column->{field}; }
             my $display = $rollup
                 ? Selecto::Expression->dimension_display(
-                    $dimension->{display_field}, $dimension->{key_field}
+                    $dimension->{display_field}, $key
                 )
                 : Selecto::Expression->min($dimension->{display_field});
             push @groups, $key;
@@ -417,6 +428,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             );
             push @groups, $group;
             push @group_selections, $group->as($column->{key});
+            push @dimension_key_selections, $group->as($column->{drilldown_key}) if $column->{pivot_values};
             my $natural_order = _group_natural_order_expression(
                 $column, $state->group_configs->{$column->{field}} // {},
             );
@@ -697,6 +709,12 @@ sub _column_expression ($column) {
 }
 
 sub _group_expression ($column, $config) {
+    if (@{$config->{pivot_values} // []}) {
+        my $field = $config->{pivot_key_field} // $column->{field};
+        return Selecto::Expression->value(['case',
+            (map { [['eq', $field, "$_"], ['literal', "$_", 'string']] } @{$config->{pivot_values}}),
+            ['else', ['literal', $config->{pivot_other_value}, 'string']]]);
+    }
     my $format = $config->{format} // '';
     my $field = _temporal_expression($column->{field}, $column->{source_type} // $column->{type});
     return $field unless length($format) && $format ne 'default';

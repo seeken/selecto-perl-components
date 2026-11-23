@@ -1,6 +1,9 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Choose ordered pivot column values by stored key, including empty
+      dimensions and an optional Other column; keep totals, drilldowns,
+      grids, exports, saved queries and permalinks on the same selection.
     - Duration measures use one decimal by default for hours and fractional
       days, integer presentation for whole days, and host display.decimals
       when declared, including chart tooltips and axes. Numeric duration Age buckets compare values directly

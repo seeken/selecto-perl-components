@@ -8,6 +8,46 @@ use Selecto::Components::State ();
 use Selecto::Components::Renderer::Builder ();
 use Time::HiRes qw(time);
 
+# The pivot chooser shares the filter catalog's labels and stored values.
+sub column_values ($controller, $explorer) {
+    $controller->res->headers->cache_control('no-store');
+    my $choices;
+    my $ok = eval {
+        my $config = $explorer->config->for_request($controller);
+        my $engine = $config->engine($controller);
+        my $field = $controller->param('field') // '';
+        my $term = $controller->param('term') // '';
+        die "invalid search" if length($term) > 1000;
+        my $catalog = $config->field_map($engine->domain)->{$field} or die "unknown field";
+        my $dimension = $catalog->{dimension};
+        my $filter = $config->filter_map($engine->domain)->{$dimension ? $dimension->{key_field} : $field} // {};
+        if (@{$filter->{filter_choices} // []}) {
+            $choices = [grep { index(lc($_->{label}), lc($term)) >= 0 } @{$filter->{filter_choices}}];
+        } elsif ($dimension) {
+            my $resolved = $engine->domain->resolve_association($dimension->{association});
+            my $a = $resolved->{association};
+            die "scoped lookup cannot be listed" if $a->through || keys(%{$a->where}) || defined($a->target_tenant_field);
+            my $dbh = $engine->adapter->dbh;
+            my ($table, $key, $label) = map { $dbh->quote_identifier($_) } ($a->table, $a->related_key, $a->display_field);
+            my $rows = $dbh->selectall_arrayref("SELECT $key, $label FROM $table WHERE LOWER($label) LIKE ? ORDER BY $label, $key LIMIT 30", undef, '%' . lc($term) . '%');
+            $choices = [map { {value => $_->[0], label => $_->[1]} } @$rows];
+        } else {
+            my $query = Selecto::Query->new->select(Selecto::Expression->field($field)->as('value'))
+                ->where(Selecto::Expression->text_contains_ci($field, $term))
+                ->group_by([$field])->order_by($field, 'asc')->limit(30);
+            my $raw = Selecto::BoundedQuery->all($engine, $query, limits => $config->limits);
+            $choices = [map { {value => $_->[0], label => $_->[0]} } @{$raw->{rows}}];
+        }
+        splice @$choices, 30 if @$choices > 30;
+        1;
+    };
+    unless ($ok) {
+        $controller->app->log->error("Selecto column search failed: $@");
+        return $controller->render(json => {error => 'Column values could not be loaded.'}, status => 422);
+    }
+    return $controller->render(json => {choices => $choices});
+}
+
 sub view_controls ($controller, $explorer) {
     $controller->res->headers->cache_control('no-store');
     my ($html, $error);

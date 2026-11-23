@@ -129,3 +129,6 @@ lib/Selecto/Components/NumberFormat.pm
 t/number_format.t
 t/bucket_row_order.t
 t/temporal_duration.t
+t/pivot_column_values.t
+t/browser/pivot-values.spec.js
+t/browser/fixtures/pivot-values.pl

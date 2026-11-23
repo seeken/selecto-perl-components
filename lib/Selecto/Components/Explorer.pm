@@ -95,6 +95,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         my $setup_ms = _elapsed_ms($setup_started);
         return $model unless $state->valid;
 
+        _resolve_pivot_labels($config, $engine, $state);
         my $build_started = time;
         my $built = Selecto::Components::QueryBuilder->build(
             $config, $engine->domain, $state,
@@ -157,6 +158,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         } @{$raw->{rows}};
         @records = () if $grid_limit_exceeded;
         my $returned_count = scalar(@records);
+        _prepare_pivot_records($built, \@records);
         _prepare_nested_records($built, \@records);
         _prepare_rollup_records($built, \@records);
         _prepend_continued_rollup_records($built, \@records)
@@ -681,7 +683,7 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
 
     my $key_of = sub ($record, @indexes) {
         encode_json([map {
-            my $value = $record->{$groups[$_]{key}};
+            my $value = $record->{$groups[$_]{drilldown_key} // $groups[$_]{key}};
             [defined($value) ? 1 : 0, defined($value) ? "$value" : '']
         } @indexes]);
     };
@@ -766,12 +768,13 @@ sub _aggregate_grid_data ($state, $built, $records, $drilldowns, $maximum_cells 
 
     if ($plan->{explicit}) {
         my $group = $groups[$column_index];
-        for my $label (_bucket_labels($group)) {
-            my $record = {$group->{key} => $label};
+        for my $entry (_pivot_layout($group)) {
+            my ($label, $selection) = @{$entry}{qw(value selection_value)};
+            my $record = {$group->{key} => $label, ($group->{drilldown_key} // $group->{key}) => $selection};
             my $key = $key_of->($record, $column_index);
             next if $seen_column{$key}++;
             push @columns, {
-                key => $key, value => $label, selection_value => $label,
+                key => $key, value => $label, selection_value => $selection,
                 drilldown => _drilldown_for_group_indexes($state, \@groups, $record, [$column_index]),
             };
         }
@@ -830,7 +833,8 @@ sub _summary_pivot ($config, $engine, $state, $built, $records, $run) {
     my @groups = grep { !$_->{measure} && !$_->{action_id} } @{$built->{columns} // []};
     my @measures = grep { $_->{measure} } @{$built->{columns} // []};
     my $records_of = sub ($raw) {
-        return [map { my %record; @record{@{$raw->{columns}}} = @$_; \%record } @{$raw->{rows}}];
+        my $records = [map { my %record; @record{@{$raw->{columns}}} = @$_; \%record } @{$raw->{rows}}];
+        return $records;
     };
     my $key_of = sub ($record, $columns) {
         encode_json([map {
@@ -847,7 +851,9 @@ sub _summary_pivot ($config, $engine, $state, $built, $records, $run) {
     my ($column_axis) = grep { !$_->{measure} } @{$top->{columns}};
     my @top_measures = grep { $_->{measure} } @{$top->{columns}};
     my (@columns, %cells);
-    for my $record (@{$records_of->($run->($top->{query}))}) {
+    my $top_records = $records_of->($run->($top->{query}));
+    _prepare_pivot_records($top, $top_records);
+    for my $record (@$top_records) {
         my $key = $key_of->($record, [$column_axis]);
         push @columns, {
             key => $key,
@@ -857,10 +863,11 @@ sub _summary_pivot ($config, $engine, $state, $built, $records, $run) {
         };
         $cells{0}{'[]'}{$key} = $measured->($record, \@top_measures);
     }
-    for my $label (_bucket_labels($column_axis)) {
-        my $key = $key_of->({$column_axis->{key} => $label}, [$column_axis]);
+    for my $entry (_pivot_layout($column_axis)) {
+        my ($label, $selection) = @{$entry}{qw(value selection_value)};
+        my $key = $key_of->({$column_axis->{key} => $label, ($column_axis->{drilldown_key} // $column_axis->{key}) => $selection}, [$column_axis]);
         next if $cells{0}{'[]'}{$key};
-        push @columns, {key => $key, value => $label, selection_value => $label};
+        push @columns, {key => $key, value => $label, selection_value => $selection};
         $cells{0}{'[]'}{$key} = undef;
     }
     delete $cells{0}{'[]'}{$_} for grep { !defined $cells{0}{'[]'}{$_} } keys %{$cells{0}{'[]'}};
@@ -892,7 +899,9 @@ sub _summary_pivot ($config, $engine, $state, $built, $records, $run) {
         my @part_groups = grep { !$_->{measure} } @{$part->{columns}};
         my $part_column = pop @part_groups;
         my @part_measures = grep { $_->{measure} } @{$part->{columns}};
-        for my $record (@{$records_of->($run->($part->{query}))}) {
+        my $part_records = $records_of->($run->($part->{query}));
+        _prepare_pivot_records($part, $part_records);
+        for my $record (@$part_records) {
             $cells{$level}{$key_of->($record, \@part_groups)}{$key_of->($record, [$part_column])}
                 = $measured->($record, \@part_measures);
         }
@@ -934,6 +943,53 @@ sub _group_filter_inputs ($state, $groups, $filters) {
 # The labels of a group bucketed by ranges, in the order the ranges were
 # given. A pivot shows each as a column whether or not any row falls in it:
 # the ranges are the report's layout.
+
+# Values are always keys. Fetch an empty dimension's heading from its governed
+# lookup relation too; never infer identity from a display label.
+sub _resolve_pivot_labels ($config, $engine, $state) {
+    my $field = $state->pivot_column // return;
+    my $gc = $state->group_configs->{$field} // return;
+    return unless @{$gc->{pivot_values} // []};
+    my %labels = map { ("$_" => "$_") } @{$gc->{pivot_values}};
+    my $dimension = $config->field_map($engine->domain, $state->retarget)->{$field}{dimension};
+    if ($dimension) {
+        my $resolved = $engine->domain->resolve_association($dimension->{association});
+        my $association = $resolved->{association};
+        # Keep host scope/conditional associations governed by the engine.
+        # Plain lookup tables can name values even without matching fact rows.
+        if (!$association->through && !keys(%{$association->where}) && !defined($association->target_tenant_field)) {
+            my $dbh = $engine->adapter->dbh;
+            my ($table, $key, $display) = map { $dbh->quote_identifier($_) }
+                ($association->table, $association->related_key, $association->display_field);
+            my $marks = join ',', ('?') x @{$gc->{pivot_values}};
+            my $rows = $dbh->selectall_arrayref("SELECT $key, $display FROM $table WHERE $key IN ($marks)", undef, @{$gc->{pivot_values}});
+            $labels{"$_->[0]"} = $_->[1] for @$rows;
+        }
+    } else {
+        my $catalog = $config->filter_map($engine->domain, $state->retarget)->{$field} // {};
+        $labels{"$_->{value}"} = $_->{label} for @{$catalog->{filter_choices} // []};
+    }
+    $gc->{pivot_labels} = \%labels;
+}
+
+sub _prepare_pivot_records ($built, $records) {
+    for my $column (grep { $_->{pivot_values} } @{$built->{columns}}) {
+        for my $record (@$records) {
+            my $value = $record->{$column->{drilldown_key} // $column->{key}};
+            next unless defined $value;
+            $record->{$column->{key}} = $value eq $column->{pivot_other_value} ? 'Other'
+                : $column->{pivot_labels}{$value} // $record->{$column->{key}};
+        }
+    }
+}
+
+sub _pivot_layout ($axis) {
+    return map { {value => $_, selection_value => $_} } _bucket_labels($axis)
+        unless $axis->{pivot_values};
+    return ((map { {value => $axis->{pivot_labels}{$_} // $_, selection_value => $_} } @{$axis->{pivot_values}}),
+        ($axis->{pivot_other} ? ({value => 'Other', selection_value => $axis->{pivot_other_value}}) : ()));
+}
+
 sub _bucket_labels ($axis) {
     my $rank = $axis->{bucket_order};
     return () unless ref($rank) eq 'HASH';
@@ -968,6 +1024,13 @@ sub _sort_grid_entries ($entries, $column) {
 # it has one (bucket ranges in the order they were given), by number or time
 # where the format says so, otherwise as text. A missing value goes last.
 sub _grid_entry_order ($column) {
+    if ($column->{pivot_values}) {
+        my $i = 0;
+        my %rank = map { ("$_" => $i++) } @{$column->{pivot_values}};
+        return sub ($left, $right) {
+            ($rank{$left->{selection_value} // ''} // 100000) <=> ($rank{$right->{selection_value} // ''} // 100000)
+        };
+    }
     my $format = $column->{format} // '';
     my $type = $column->{source_type} // $column->{type} // '';
     my $has_sort_key = defined($column->{sort_key}) ? 1 : 0;

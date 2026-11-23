@@ -419,6 +419,11 @@
     pivotTotalsHelp.textContent = "A last group of columns with each row's totals.";
     pivotTotals.appendChild(pivotTotalsHelp);
     grid.appendChild(pivotTotals);
+    var values = document.createElement("div");
+    values.setAttribute("data-sc-pivot-values", "");
+    values.hidden = true;
+    values.innerHTML = '<label>Choose column values<input type="search" data-sc-pivot-search autocomplete="off" aria-label="Search column values"></label><div data-sc-pivot-options role="list"></div><ol data-sc-pivot-chosen></ol><label><input type="checkbox" name="pivot_column_other" value="1" disabled>Include Other</label>';
+    grid.appendChild(values);
 
     // Leaving out rows with no value is a filter on the group's field.
     var excludeMissing = document.createElement("label");
@@ -442,7 +447,7 @@
   // Show Total columns appears, and is sent, only for the group shown as
   // columns in the aggregate view.
   function syncPivotTotals(root, viewName) {
-    root.querySelectorAll("[data-sc-group-pivot-totals]").forEach(function (node) {
+    root.querySelectorAll("[data-sc-group-pivot-totals], [data-sc-pivot-values]").forEach(function (node) {
       var item = node.closest("[data-sc-picker-set-item]");
       var choice = item && item.querySelector("[data-sc-grid-column-choice]");
       var active = viewName === "aggregate" && !!choice && choice.checked;
@@ -760,3 +765,65 @@
       return dateShortcuts;
     }
   }
+
+  async function searchPivotValues(input) {
+    var box = input.closest("[data-sc-pivot-values]");
+    var item = box.closest("[data-sc-picker-set-item]");
+    var form = input.closest("form");
+    var url = new URL(form.action.replace(/\/$/, "") + "/column-values", window.location.href);
+    url.searchParams.set("field", item.dataset.field);
+    url.searchParams.set("term", input.value);
+    var sequence = (input._scSequence || 0) + 1;
+    input._scSequence = sequence;
+    try {
+      var response = await fetch(url, {credentials: "same-origin", headers: {Accept: "application/json"}});
+      if (!response.ok) throw new Error("Search failed");
+      var data = await response.json();
+      if (input._scSequence !== sequence || !input.isConnected) return;
+      var options = box.querySelector("[data-sc-pivot-options]");
+      options.replaceChildren();
+      (data.choices || []).forEach(function (choice) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.textContent = choice.label;
+        button.dataset.scPivotAdd = String(choice.value);
+        options.appendChild(button);
+      });
+    } catch (_) {
+      box.querySelector("[data-sc-pivot-options]").textContent = "Search unavailable. Try again.";
+    }
+  }
+  document.addEventListener("input", function (event) {
+    if (event.target.matches("[data-sc-pivot-search]")) searchPivotValues(event.target);
+  });
+  document.addEventListener("focusin", function (event) {
+    if (event.target.matches("[data-sc-pivot-search]")) searchPivotValues(event.target);
+  });
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-sc-pivot-add], [data-sc-pivot-remove], [data-sc-pivot-move]");
+    if (!button) return;
+    event.preventDefault();
+    var box = button.closest("[data-sc-pivot-values]");
+    var list = box.querySelector("[data-sc-pivot-chosen]");
+    var row = button.closest("li");
+    if (button.hasAttribute("data-sc-pivot-add")) {
+      var value = button.dataset.scPivotAdd;
+      if (Array.from(list.querySelectorAll("input")).some(function (input) { return input.value === value; }) || list.children.length >= 100) return;
+      row = document.createElement("li");
+      var hidden = document.createElement("input");
+      hidden.type = "hidden"; hidden.name = "pivot_column_value"; hidden.value = value;
+      var label = document.createElement("span"); label.textContent = button.textContent;
+      row.append(hidden, label);
+      [["up", "Move value up"], ["down", "Move value down"], ["remove", "Remove value"]].forEach(function (action) {
+        var control = document.createElement("button"); control.type = "button";
+        control.textContent = action[1]; control.setAttribute("aria-label", action[1]);
+        if (action[0] === "remove") control.setAttribute("data-sc-pivot-remove", "");
+        else control.dataset.scPivotMove = action[0];
+        row.appendChild(control);
+      });
+      list.appendChild(row);
+    } else if (button.hasAttribute("data-sc-pivot-remove")) row.remove();
+    else if (button.dataset.scPivotMove === "up" && row.previousElementSibling) list.insertBefore(row, row.previousElementSibling);
+    else if (button.dataset.scPivotMove === "down" && row.nextElementSibling) list.insertBefore(row.nextElementSibling, row);
+    box.dispatchEvent(new Event("change", {bubbles: true}));
+  });

@@ -1,0 +1,47 @@
+import {test, expect} from "@playwright/test";
+import {spawn} from "node:child_process";
+import net from "node:net";
+import path from "node:path";
+import {fileURLToPath} from "node:url";
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const perl = "/Users/chris/.local/share/mise/installs/asdf-ouest-asdf-perl/5.40.5/bin/perl";
+
+test("pivot value chooser adds, reorders, removes and rerenders columns", async ({page}) => {
+  const listener = net.createServer();
+  await new Promise(resolve => listener.listen(0, "127.0.0.1", resolve));
+  const port = listener.address().port;
+  await new Promise(resolve => listener.close(resolve));
+  const base = `http://127.0.0.1:${port}`;
+  const server = spawn("script/with-local-sibling", [perl, "t/browser/fixtures/pivot-values.pl", "daemon", "-l", base], {cwd: root, stdio: "pipe"});
+  let output = "";
+  server.stdout.on("data", chunk => {output += chunk;});
+  server.stderr.on("data", chunk => {output += chunk;});
+  try {
+    await expect.poll(async () => {
+      try { return (await fetch(base + "/loads", {signal: AbortSignal.timeout(1000)})).status; } catch (_) { return output.includes("Unknown") ? output : 0; }
+    }).toBe(200);
+    await page.goto(base + "/loads?q=1&view=aggregate&field=id&group=region&group=status&measure=revenue&pivot_column=status");
+    await page.getByRole("button", {name: "Expand view menu", exact: true}).click();
+    await page.locator('[data-sc-picker-kind="group"] [data-sc-picker-set-item][data-field="status"] summary').click();
+    const box = page.locator('[data-sc-picker-set-item][data-field="status"] [data-sc-pivot-values]');
+    await box.getByLabel("Search column values").fill("G");
+    await box.locator('[data-sc-pivot-add="G"]').click();
+    await box.getByLabel("Search column values").fill("P");
+    await box.locator('[data-sc-pivot-add="P"]').click();
+    await box.locator("li").nth(1).getByRole("button", {name: "Move value up", exact: true}).click();
+    expect(await box.locator('input[name="pivot_column_value"]').evaluateAll(nodes => nodes.map(n => n.value))).toEqual(["P", "G"]);
+    await page.getByRole("button", {name: "Run query", exact: true}).click();
+    const headings = page.locator('.sc-pivot-table thead tr:nth-child(2) > th');
+    await expect(headings).toHaveText(["P", "G"]);
+    // A rerender retains the chosen values in the Configure panel.
+    if (await page.getByRole("button", {name: "Expand view menu", exact: true}).isVisible())
+      await page.getByRole("button", {name: "Expand view menu", exact: true}).click();
+    const configure = page.locator('[data-sc-picker-kind="group"] [data-sc-picker-set-item][data-field="status"] summary');
+    if (!(await box.getByLabel("Search column values").isVisible())) await configure.click();
+    await box.locator("li").first().getByRole("button", {name: "Remove value", exact: true}).click();
+    await page.getByRole("button", {name: "Run query", exact: true}).click();
+    await expect(headings).toHaveText(["G"]);
+  } finally {
+    server.kill("SIGTERM");
+  }
+});

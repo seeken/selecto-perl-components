@@ -17,11 +17,11 @@ use Selecto::Query ();
 use Selecto::QueryLibrary ();
 use Selecto::Components::InputBudget ();
 
-has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column pivot_totals filter_groups row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column pivot_totals pivot_column_values pivot_column_other filter_groups row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group graph_palette graph_category_field graph_category_value graph_category_format graph_category_color aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column grid_column pivot_totals row_click_action field field_alias field_format filter_field filter_op filter_value filter_values_json filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
+        q query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group graph_palette graph_category_field graph_category_value graph_category_format graph_category_color aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column grid_column pivot_totals pivot_column_value pivot_column_other row_click_action field field_alias field_format filter_field filter_op filter_value filter_values_json filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles group_exclude_missing
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_fill_opacity measure_transform measure_transform_window
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
@@ -101,6 +101,24 @@ sub from_input ($class, $config, $domain, $input) {
         $query_library, \@errors, $retarget, $view, $valid_measures,
     );
     my $pivot_column = _parse_pivot_column($view, $input, $valid_groups, \@errors);
+    my @pivot_values = @{_values($input, 'pivot_column_value')};
+    my %seen_pivot_value;
+    if (@pivot_values > 100 || grep { !defined($_) || ref($_) || length($_) > 1000 } @pivot_values) {
+        push @errors, 'Choose at most 100 column values, each at most 1000 characters.';
+        @pivot_values = ();
+    }
+    @pivot_values = grep { !$seen_pivot_value{$_}++ } @pivot_values;
+    push @errors, 'Column values require a selected column group.' if @pivot_values && !defined($pivot_column);
+    my $pivot_other = grep { _truthy($_, 0) } @{_values($input, 'pivot_column_other')};
+    if (defined($pivot_column) && @pivot_values) {
+        my $dimension = $group_map->{$pivot_column}{dimension};
+        my $other_value = '__selecto_pivot_other__';
+        $other_value .= '_' while $seen_pivot_value{$other_value};
+        $group_configs->{$pivot_column}{pivot_other_value} = $other_value;
+        $group_configs->{$pivot_column}{pivot_values} = [@pivot_values];
+        $group_configs->{$pivot_column}{pivot_other} = $pivot_other ? 1 : 0;
+        $group_configs->{$pivot_column}{pivot_key_field} = $dimension ? $dimension->{key_field} : $pivot_column;
+    }
     # The pivot's Total columns are on unless pivot_totals says otherwise. The
     # form sends 0 and, with the box ticked, 1 as well.
     my @pivot_totals = map { _scalar($_) } @{_values($input, 'pivot_totals')};
@@ -127,6 +145,8 @@ sub from_input ($class, $config, $domain, $input) {
         aggregate_grid_color_scale => $aggregate_grid_color_scale,
         pivot_column => $pivot_column,
         pivot_totals => $pivot_totals,
+        pivot_column_values => \@pivot_values,
+        pivot_column_other => $pivot_other ? 1 : 0,
         row_click_action => $row_click_action,
         fields => $valid_fields,
         field_configs => $field_configs,
@@ -179,12 +199,15 @@ sub group_filters ($self, $field_map = undef) {
         # Ranges are the report's layout, so they filter without being asked;
         # stepped buckets (*/10) cover every value and filter only on request.
         my $ranged = $bucketed && _ranged_buckets($group_config);
-        !$ranged && !$group_config->{exclude_missing} ? ()
+        my @chosen_filter = @{$group_config->{pivot_values} // []} && !$group_config->{pivot_other}
+            ? ({field => $group, op => 'ne', value => $group_config->{pivot_other_value}, value_end => '',
+                grouped => 1, from_group => $group, pivot_values => 1}) : ();
+        (@chosen_filter, !$ranged && !$group_config->{exclude_missing} ? ()
             : $bucketed
                 ? {field => $group, op => 'ne', value => 'Other', value_end => '', grouped => 1, from_group => $group,
                     ($ranged ? (ranges => 1) : ())}
                 : {field => $dimension ? $dimension->{key_field} : $group, op => 'not_null', value => '',
-                    value_end => '', from_group => $group}
+                    value_end => '', from_group => $group})
     } @{$self->filter_groups // $self->groups}];
 }
 
@@ -232,7 +255,9 @@ sub query_pairs ($self) {
         push @pairs, aggregate_grid_color_scale => $self->aggregate_grid_color_scale;
     }
     push @pairs, pivot_column => $self->pivot_column
-        if $self->view eq 'aggregate' && defined($self->pivot_column);
+        if defined($self->pivot_column);
+    push @pairs, pivot_column_value => $_ for @{$self->pivot_column_values // []};
+    push @pairs, pivot_column_other => 1 if $self->pivot_column_other;
     push @pairs, pivot_totals => 0
         if $self->view eq 'aggregate' && defined($self->pivot_column) && !($self->pivot_totals // 1);
     push @pairs, row_click_action => $self->row_click_action
@@ -435,6 +460,8 @@ sub as_hash ($self) {
         aggregate_grid_color_scale => $self->aggregate_grid_color_scale,
         pivot_column => $self->pivot_column,
         pivot_totals => $self->pivot_totals,
+        pivot_column_values => [@{$self->pivot_column_values // []}],
+        pivot_column_other => $self->pivot_column_other,
         row_click_action => $self->row_click_action,
         fields => [@{$self->fields}],
         field_configs => { map { $_ => { %{$self->field_configs->{$_}} } } keys %{$self->field_configs} },
@@ -498,7 +525,7 @@ sub _parse_aggregate_grid ($view, $input) {
 # grid_column is the same thing under its first name). Every other group is a
 # row dimension. It applies to the summary table and to the grid alike.
 sub _parse_pivot_column ($view, $input, $groups, $errors) {
-    return undef unless $view eq 'aggregate';
+    return undef unless $view eq 'aggregate' || @{_values($input, 'pivot_column_value')};
     my @requested = grep { length } map { _scalar($_) }
         @{_values($input, 'pivot_column')}, @{_values($input, 'grid_column')};
     return undef unless @requested;
@@ -1261,8 +1288,8 @@ sub _grid_group_filters ($field_map, $valid_groups, $group_configs) {
         my $dimension = $field_map->{$group}{dimension};
         my $format = $group_configs->{$group}{format} // '';
         {
-            field => $dimension ? $dimension->{key_field} : $group,
-            grouped => !$dimension && length($format) && $format ne 'default' ? 1 : 0,
+            field => @{$group_configs->{$group}{pivot_values} // []} ? $group : $dimension ? $dimension->{key_field} : $group,
+            grouped => @{$group_configs->{$group}{pivot_values} // []} || (!$dimension && length($format) && $format ne 'default') ? 1 : 0,
         }
     } @$valid_groups];
 }

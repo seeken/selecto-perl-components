@@ -122,7 +122,10 @@ sub view_controls ($class, $model, $mode, $catalog = undef, $detail_catalog = un
             $class->_field_picker($state, $detail_catalog, $config, $root_label) .
             $class->_order_picker($state, $catalog, $config->max_orders, $root_label) .
             _measure_selection_hidden($state) .
-            _selection_hidden('group', $state->groups, $state->group_configs);
+            _selection_hidden('group', $state->groups, $state->group_configs) .
+            (defined($state->pivot_column) ? _hidden('pivot_column', $state->pivot_column) .
+                join('', map { _hidden('pivot_column_value', $_) } @{$state->pivot_column_values // []}) .
+                _hidden('pivot_column_other', $state->pivot_column_other // 0) : '');
     }
     die "Unknown view control panel\n" unless $mode eq 'summary';
     return $class->_aggregate_grid_picker($state) .
@@ -861,7 +864,7 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         } else {
             $config_controls = _picker_config_controls(
                 $options{config}, $kind, $field, $item_config, $options{date_formats}, $state->view,
-                $state->pivot_column, $state->pivot_totals // 1,
+                $state->pivot_column, $state->pivot_totals // 1, $state,
             );
         }
         '<article class="sc-picker-set-item" draggable="true" data-sc-picker-set-item data-field="' .
@@ -947,7 +950,24 @@ sub _grouped_picker_items ($fields, $root_label, $render) {
     } sort { !length($a) ? -1 : !length($b) ? 1 : lc($a) cmp lc($b) } keys %groups;
 }
 
-sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats, $view = '', $grid_column = undef, $pivot_totals = 1) {
+sub _pivot_value_controls ($state, $field, $column) {
+    my $active = ($column // '') eq $field->{path};
+    my $disabled = $active ? '' : ' disabled';
+    my $gc = $state ? $state->group_configs->{$field->{path}} // {} : {};
+    my $values = $active && $state ? $state->pivot_column_values // [] : [];
+    return '<div data-sc-pivot-values' . ($active ? '' : ' hidden') . '>' .
+        '<label>Choose column values<input type="search" data-sc-pivot-search autocomplete="off" aria-label="Search column values"></label>' .
+        '<div data-sc-pivot-options role="list"></div><ol data-sc-pivot-chosen>' . join('', map {
+            '<li><input type="hidden" name="pivot_column_value" value="' . _h($_) . '"' . $disabled . '><span>' .
+                _h($gc->{pivot_labels}{$_} // $_) . '</span>' .
+                '<button type="button" data-sc-pivot-move="up" aria-label="Move value up">↑</button>' .
+                '<button type="button" data-sc-pivot-move="down" aria-label="Move value down">↓</button>' .
+                '<button type="button" data-sc-pivot-remove aria-label="Remove value">Remove</button></li>'
+        } @$values) . '</ol><label><input type="checkbox" name="pivot_column_other" value="1"' . $disabled .
+        ($active && $state && $state->pivot_column_other ? ' checked' : '') . '>Include Other</label></div>';
+}
+
+sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats, $view = '', $grid_column = undef, $pivot_totals = 1, $state = undef) {
     return _hidden('field_alias', '') . _hidden('field_format', '')
         if $kind eq 'field' && $field->{type} eq 'action';
     my $alias = $item_config->{alias} // '';
@@ -1028,6 +1048,7 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
                     ' aria-label="Show Total columns"><span>Show Total columns</span>' .
                     '<small>A last group of columns with each row\'s totals.</small></label>'
             } .
+            _pivot_value_controls($state, $field, $grid_column) .
             # A filter, not a hidden row: totals leave those rows out as well.
             '<label class="sc-option-check" data-sc-group-exclude-missing><input type="checkbox" ' .
             'name="group_exclude_missing" value="' . _h($field->{path}) . '"' .
@@ -1225,7 +1246,7 @@ sub _group_filter_list ($class, $state, $by_path) {
             '<article class="sc-filter-set-item sc-group-filter" ' .
             ($_->{ranges} ? 'data-sc-group-range-filter' : 'data-sc-group-filter') . '="' . _h($_->{from_group}) .
             '"><div class="sc-filter-set-heading"><span><strong>' . _h($field ? $field->{label} : $_->{from_group}) .
-            '</strong><small>' . ($_->{ranges} ? 'is in one of its ranges &middot; from the group\'s buckets'
+            '</strong><small>' . ($_->{pivot_values} ? 'is one of the chosen column values &middot; from Group By' : $_->{ranges} ? 'is in one of its ranges &middot; from the group\'s buckets'
                 : ($_->{grouped} ? 'is in a bucket' : 'has a value') . ' &middot; from Group By') .
             '</small></span></div></article>'
         } @filters) . '</div>';

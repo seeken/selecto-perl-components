@@ -237,6 +237,10 @@ sub _routes (
 
     # The total a Detail page left uncounted (defer_count), for the browser to
     # fill in: its rendered matched rows and pagination.
+    $routes->get($route_path . '/column-values')->to(cb => sub ($controller) {
+        return Selecto::Components::Controller::Explorer::column_values($controller, $explorer);
+    });
+
     $routes->get($route_path . '/count')->to(cb => sub ($controller) {
         my $model;
         unless (eval { $model = $explorer->count($controller); 1 }) {
@@ -1428,5 +1432,17 @@ This software is Copyright (c) 2026 by Chris Rohlfs.
 This is free software, licensed under:
 
   The Artistic License 2.0 (GPL Compatible)
+
+=cut
+
+=head2 Chosen pivot column values
+
+Repeat C<pivot_column_value> in the desired order alongside C<pivot_column>.
+Values are stored keys, including for star dimensions, limited to 100 values
+of at most 1000 characters. Every chosen value gets a column even without
+matching rows. C<pivot_column_other=1> adds Other, including missing values
+unless the group excludes them. Without Other, the selection is a Group By
+filter applied before totals and retained in Detail drilldowns. Configure
+provides a searchable chooser using the filter catalog and dimension labels.
 
 =cut
