@@ -1222,6 +1222,19 @@ sub measures_for_domain ($self, $domain, $rows_of = undef) {
     } grep {
         !defined($_->{field}) || exists($fields->{$_->{field}})
     } @{$self->measures};
+    require Selecto::RatioMeasures;
+    my $ratios = Selecto::RatioMeasures->definitions($domain);
+    for my $id (defined($rows_of) ? () : sort keys %$ratios) {
+        my $r = $ratios->{$id};
+        next unless exists($fields->{$r->{numerator}{field}}) && exists($fields->{$r->{denominator}{field}});
+        die "ratio measure ID conflicts with a configured measure: $id\n" if grep { $_->{id} eq $id } @measures;
+        push @measures, {
+            %$r, id => $id, aggregate => 'ratio_of_sums', ratio => 1,
+            type => 'decimal', curated => 1, source_behavior => 'ratio',
+            label => $self->localize($domain, "measures.$id.label", $r->{label},
+                {kind => 'measure', id => $id, attribute => 'label'}),
+        };
+    }
     my %seen = map { $_->{id} => 1 } @measures;
     unless (grep { !defined($_->{field}) && $_->{aggregate} eq 'count' } @measures) {
         push @measures, {

@@ -1521,6 +1521,8 @@ sub _graph_unit_label ($unit) {
     my $kind = $unit->{kind} // '';
     return 'Count' if $kind eq 'count';
     return $unit->{code} // 'Currency' if $kind eq 'currency';
+    return _graph_unit_label($unit->{numerator}) . ' per ' . _graph_unit_label($unit->{denominator})
+        if $kind eq 'ratio' && $unit->{numerator} && $unit->{denominator};
     return 'Percent' if $kind eq 'percentage';
     return ucfirst($kind) . (defined($unit->{code}) ? ' (' . $unit->{code} . ')' : '')
         if length($kind);

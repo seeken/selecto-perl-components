@@ -152,3 +152,8 @@ t/as_of.t
 t/lib/AsOfFixture.pm
 t/browser/as-of.spec.js
 t/browser/fixtures/as-of.pl
+t/ops_defaults.t
+t/ops_ratio.t
+t/lib/OpsMeasuresFixture.pm
+t/browser/fixtures/ops-measures.pl
+t/browser/ops-measures.spec.js

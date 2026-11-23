@@ -891,9 +891,10 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows
             $alias = '';
         }
         my $field = $measure->{field};
-        my $type = defined($field) ? $field_map->{$field}{type} : 'rows';
+        my $type = $measure->{ratio} ? 'decimal' : defined($field) ? $field_map->{$field}{type} : 'rows';
         my $function = lc(_scalar($measure_functions->[$index]) || $measure->{aggregate});
-        unless ($config->allows_measure_function($type, $function, !defined($field))) {
+        unless ($measure->{ratio} ? $function eq 'ratio_of_sums'
+            : $config->allows_measure_function($type, $function, !defined($field))) {
             push @$errors, 'A measure function is not available.';
             $function = $measure->{aggregate};
         }
@@ -947,10 +948,9 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows
             push @$errors, 'A graph fill opacity must be from 0 through 1.';
             $fill_opacity = '';
         }
-        my $aggregate_unit = Selecto::Analytics::UnitRegistry->aggregate_unit(
-            $measure->{source_unit}, $function,
-        );
-        my $behavior = $function eq 'true_percentage' ? 'ratio'
+        my $aggregate_unit = $measure->{ratio} ? $measure->{unit}
+            : Selecto::Analytics::UnitRegistry->aggregate_unit($measure->{source_unit}, $function);
+        my $behavior = $measure->{ratio} || $function eq 'true_percentage' ? 'ratio'
             : $function =~ /\A(?:count|count_distinct|true_count|false_count|buckets|age_buckets)\z/
                 ? 'flow' : $measure->{source_behavior};
         my $unit = $aggregate_unit;

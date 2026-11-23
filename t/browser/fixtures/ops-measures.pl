@@ -1,0 +1,16 @@
+use 5.034;
+use strict;
+use warnings;
+use Mojolicious;
+use DBI;
+use lib 't/lib';
+use OpsMeasuresFixture;
+use Selecto::Components;
+my $dbh=DBI->connect('dbi:SQLite:dbname=:memory:','','',{RaiseError=>1});
+my $engine=OpsMeasuresFixture::build($dbh,'sqlite');
+my $contract=$engine->domain->contract;
+$contract->{query_library}={segments=>{shipments=>{label=>'Shipments',filters=>[['eq','status','A']]},consignments=>{label=>'Consignments',filters=>[['eq','status','B']]}},segment_picker_groups=>{count_as=>{label=>'Count as',default=>'shipments',default_views=>[qw(aggregate graph)],choices=>[{segment=>'shipments',label=>'Shipments'},{segment=>'consignments',label=>'Consignments'}]}}};
+$engine=Selecto::Engine->new(domain=>Selecto::Domain->parse($contract,strict=>1),adapter=>$engine->adapter);
+my $app=Mojolicious->new;$app->secrets(['ops-browser']);
+$app->plugin('Selecto::Components'=>{websocket_mode=>'public',explorers=>{loads=>OpsMeasuresFixture::settings($engine)}});
+$app->start;

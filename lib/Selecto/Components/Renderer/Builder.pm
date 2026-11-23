@@ -1104,7 +1104,7 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
         my $functions = join '', map {
             '<option value="' . _h($_->[0]) . '"' .
             ($_->[0] eq $function ? ' selected' : '') . '>' . _h($_->[1]) . '</option>'
-        } @{$config->measure_functions($field->{type}, $field->{type} eq 'rows')};
+        } @{($function eq 'ratio_of_sums' ? [] : $config->measure_functions($field->{type}, $field->{type} eq 'rows'))};
         my $bucket_visible = $function eq 'buckets' || $function eq 'age_buckets';
         my $sum_visible = $function eq 'sum';
         my $null_handling = $item_config->{null_handling} //
@@ -1151,9 +1151,11 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
         # in the form, hidden, so the settings survive a change of view.
         my $graph_only = ' data-sc-measure-graph' . ($view eq 'graph' ? '' : ' hidden');
         $controls .= _hidden('measure_series_id', $series_id) .
-            '<label>Function<select name="measure_function" data-sc-measure-function ' .
-            'aria-label="Measure function for ' . _h($field->{label}) . '">' . $functions .
-            '</select></label><label data-sc-measure-buckets' . ($bucket_visible ? '' : ' hidden') .
+            ($function eq 'ratio_of_sums'
+                ? _hidden('measure_function', 'ratio_of_sums')
+                : '<label>Function<select name="measure_function" data-sc-measure-function ' .
+                    'aria-label="Measure function for ' . _h($field->{label}) . '">' . $functions . '</select></label>') .
+            '<label data-sc-measure-buckets' . ($bucket_visible ? '' : ' hidden') .
             '>Bucket ranges<input name="measure_bucket_ranges" value="' .
             _h($item_config->{bucket_ranges} // '') .
             '" placeholder="0-10, 11-50, 51+" aria-label="Measure bucket ranges for ' .

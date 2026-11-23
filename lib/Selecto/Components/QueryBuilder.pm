@@ -570,7 +570,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             label => $label,
             raw_label => _measure_label($measure, $function, $field_map),
             type => $function =~ /\A(?:count|count_distinct|true_count|false_count)\z/
-                ? 'integer' : $function eq 'true_percentage'
+                ? 'integer' : ($measure->{ratio} || $function eq 'true_percentage')
                     ? 'decimal' : $field_map->{$measure->{field}}{type},
             measure => 1,
             function => $function,
@@ -721,6 +721,9 @@ sub pivot_cells ($class, $config, $domain, $state, $level, $keys = undef) {
 }
 
 sub _measure_expression ($measure, $config) {
+    return Selecto::Expression->ratio_of_sums(
+        $measure->{numerator}{field}, $measure->{denominator}{field},
+    ) if $measure->{ratio};
     my $function = $config->{function} // $measure->{aggregate};
     return defined($measure->{field})
         ? Selecto::Expression->count_field($measure->{field})

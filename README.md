@@ -719,3 +719,29 @@ formatting and compatible stack groups. They allow 22px per category plus
 The viewport grows to 900px, then scrolls while every category keeps its tick.
 Axis names longer than 36 characters use an ellipsis; tooltip titles retain
 the full name. Vertical bars and lines rotate category labels before skipping.
+
+### Host-declared ratio measures
+
+Declare `ratio_measures` in the strict domain document:
+
+```perl
+ratio_measures => {
+    revenue_per_unit => {
+        label => 'Revenue per unit',
+        numerator => {field => 'total_revenue', function => 'sum'},
+        denominator => {field => 'det_cnt', function => 'sum'},
+        unit => {kind => 'currency', code => 'USD'},
+    },
+},
+```
+
+These appear beside field measures with no function selector. Every cell,
+subtotal and total evaluates `sum(n) / nullif(sum(d), 0)` with decimal
+division; zero denominators return NULL. The same expression drives graphs,
+sorting, Top N columns and exports. Currency displays two decimal places;
+CSV and XLSX preserve raw ratios and XLSX carries the number format. Without
+`unit`, metadata derives a ratio of the numerator's unit per denominator's
+unit. Only host-declared ratios of sums over public numeric fields at the
+owner grain (including to-one paths) are accepted. Select a ratio by its ID,
+for example `measure=revenue_per_unit`; its canonical function state is
+`measure_function=ratio_of_sums`. Ratios cannot be authored by the browser.

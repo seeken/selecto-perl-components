@@ -488,14 +488,19 @@
     while (usedSeriesIds.has("series_" + nextSeries)) nextSeries += 1;
     seriesId.value = "series_" + nextSeries;
     grid.appendChild(seriesId);
-    var functions = measureFunctionsForType(type);
-    if (!functions.some(function (entry) { return entry[0] === selected; })) selected = functions[0][0];
-    var functionSelect = document.createElement("select");
+    var ratio = selected === "ratio_of_sums";
+    var functions = ratio ? [] : measureFunctionsForType(type);
+    if (!ratio && !functions.some(function (entry) { return entry[0] === selected; })) selected = functions[0][0];
+    var functionSelect = document.createElement(ratio ? "input" : "select");
+    if (ratio) { functionSelect.type = "hidden"; functionSelect.value = selected; }
     functionSelect.name = "measure_function";
     functionSelect.setAttribute("data-sc-measure-function", "");
     functionSelect.setAttribute("aria-label", "Measure function for " + label);
-    appendOptions(functionSelect, functions, selected);
-    appendConfigLabel(grid, "Function", functionSelect);
+    if (ratio) grid.appendChild(functionSelect);
+    else {
+      appendOptions(functionSelect, functions, selected);
+      appendConfigLabel(grid, "Function", functionSelect);
+    }
 
     var ranges = document.createElement("input");
     ranges.name = "measure_bucket_ranges";

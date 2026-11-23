@@ -9,6 +9,10 @@ Unreleased
     - The canonical stack PostgreSQL check moves to xt/: it needs an owned
       stack database, a seed and sibling SPA builds, so it runs only through
       mise run test:canonical-stack and no longer counts as a required skip.
+    - Part 3: host-declared ratio_measures join the measure picker without a
+      function selector. Summary, rollup, pivot totals, grid, graph, sorting,
+      Top N and exports evaluate ratios of sums, preserving raw export values
+      and declared or derived units.
     - Segment picker groups apply declared defaults by view, retain explicit
       Off in saved state, omit defaults from permalinks, and freeze effective
       segment choices when drilling into Detail (Part 1).
