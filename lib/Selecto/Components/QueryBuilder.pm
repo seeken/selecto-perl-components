@@ -388,6 +388,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                 ? _declared_value_order($domain, $field) : ()),
             (@{$column_config->{pivot_values} // []} ? (
                 pivot_values => $column_config->{pivot_values},
+                pivot_ranked => $column_config->{pivot_ranked},
                 pivot_other => $column_config->{pivot_other},
                 pivot_other_value => $column_config->{pivot_other_value},
                 pivot_labels => $column_config->{pivot_labels},
@@ -474,6 +475,19 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                     if $options->{top_ranking};
                 push @group_orders, $group;
             }
+        }
+    }
+    # Ranking still orders by measure, label and key. Select natural sort
+    # metadata as well so the chosen rows can be laid out without reranking.
+    if ($options->{top_ranking}) {
+        for my $index (0 .. $#group_columns) {
+            my $column = $group_columns[$index];
+            my $natural = _group_natural_order_expression(
+                $column, $state->group_configs->{$column->{field}} // {});
+            next unless $natural;
+            my $key = '__selecto_group_sort_' . ($index + 1);
+            $column->{sort_key} = $key;
+            push @group_sort_selections, Selecto::Expression->min($natural)->as($key);
         }
     }
     my @selections = (@group_selections, @group_sort_selections);
@@ -735,6 +749,21 @@ sub _column_expression ($column) {
 sub _group_expression ($column, $config) {
     if (@{$config->{pivot_values} // []}) {
         my $field = $config->{pivot_key_field} // $column->{field};
+        if (my $matches = $config->{pivot_value_matches}) {
+            my @branches = map {
+                my $value = $_;
+                my @keys = @{$matches->{$value} // []};
+                my @present = grep { defined } @keys;
+                my @conditions = ((@present ? (['in', $field, \@present]) : ()),
+                    (grep { !defined } @keys) ? (['is_null', $field]) : ());
+                @conditions ? [@conditions == 1 ? $conditions[0] : ['or', @conditions], ['literal', "$value", 'string']] : ()
+            } @{$config->{pivot_values}};
+            # Keep a source-dependent CASE even when no key matches: a bare
+            # text constant is not a valid PostgreSQL ORDER BY expression.
+            @branches = ([['is_null', $field], ['literal', $config->{pivot_other_value}, 'string']]) unless @branches;
+            return Selecto::Expression->value(['case', @branches,
+                ['else', ['literal', $config->{pivot_other_value}, 'string']]]);
+        }
         return Selecto::Expression->value(['case',
             (map { [(defined($config->{pivot_null_value}) && $_ eq $config->{pivot_null_value}
                 ? ['is_null', $field] : ['eq', $field, "$_"]), ['literal', "$_", 'string']] } @{$config->{pivot_values}}),
@@ -858,7 +887,7 @@ sub _with_filters ($query, $state, $config, $domain) {
             ]);
         } else {
             my $operand = $filter->{grouped}
-                ? _group_expression({field => $field, type => $type}, $state->group_configs->{$field} // {})
+                ? _group_expression({field => $field, type => $type}, _filter_group_config($state, $field, $filter))
                 : _temporal_expression($field, $type);
             $expression = _filter_expression($operand, $op, $value, $value_end, $filter->{values});
         }
@@ -886,12 +915,21 @@ sub _with_filters ($query, $state, $config, $domain) {
             my $type = ($group_map->{$_->{field}} // {})->{type};
             $_->{grouped}
                 ? Selecto::Expression->ne(_group_expression({field => $_->{field}, type => $type},
-                    $state->group_configs->{$_->{field}} // {}), $_->{value})
+                    _filter_group_config($state, $_->{field}, $_)), $_->{value})
                 : Selecto::Expression->not_null(_temporal_expression($_->{field}, $type))
         } @{$state->group_filters($group_map)};
     }
     return $query unless @expressions;
     return $query->where(@expressions == 1 ? $expressions[0] : Selecto::Expression->all(\@expressions));
+}
+
+sub _filter_group_config ($state, $field, $filter) {
+    my $gc = $state->group_configs->{$field} // {};
+    return $gc unless $filter->{ranges} || (($filter->{op} // 'ne') eq 'ne'
+        && ($filter->{value} // '') eq 'Other' && Selecto::Components::State::_ranged_buckets($gc));
+    my %original = %$gc;
+    delete $original{pivot_values};
+    return \%original;
 }
 
 sub _filter_expression ($operand, $op, $value, $value_end, $membership_values = undef) {

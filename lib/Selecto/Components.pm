@@ -1457,6 +1457,17 @@ C<pivot_column_top> accepts 1 through 500. C<pivot_column_top_measure>
 selects a measure already in the report and defaults to its first measure.
 With no explicit chosen values, columns rank by that measure descending,
 then by label and stable key. The global list is resolved before paging.
+C<pivot_column_top_order> accepts C<rank> (default, omitted from canonical
+URLs) or C<natural>. Selection always ranks by the measure; natural display
+then orders those same columns using the group's value order, ranges,
+numeric or date order. Missing values keep their rank in rank mode and go
+last before Other in natural mode. Ranked table and CSV/XLSX headings show
+C<1 · value>, C<2 · value>, and so on; Other is unnumbered. Configure calls
+these choices "Largest first" and "Natural order". Explicit chosen values
+keep their given order, including any chosen missing value.
+
+Formatted Top N groups resolve their source-key mapping with a bounded
+query, subject to the same result and expression limits as other queries.
 C<pivot_column_other> and totals behave as for chosen values. Drilldowns
 carry the resolved list, including C<pivot_column_value_null> (a zero-based
 index identifying a missing-value column), so Detail never reranks its rows.
@@ -1467,9 +1478,9 @@ index identifying a missing-value column), so Detail never reranks its rows.
 
 Field column metadata C<< value_order => [qw(I A O G D H C)] >> declares
 the natural row and column order. Unlisted values follow as text; missing
-values come last. Explicit chosen values and Top N override this order.
+values come last. Explicit chosen values and Top N in rank mode override this order.
 When C<graph_series_group> names the column group, the graph reads the same
-C<pivot_column_value>, C<pivot_column_top>, C<pivot_column_top_measure> and
+C<pivot_column_value>, C<pivot_column_top>, C<pivot_column_top_order>, C<pivot_column_top_measure> and
 C<pivot_column_other> state. Empty chosen values remain series; dimension
 series use keys so identical display names remain distinct.
 

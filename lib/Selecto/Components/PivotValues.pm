@@ -13,6 +13,20 @@ sub layout ($class, $axis) {
         ($axis->{pivot_other} ? ({value => 'Other', selection_value => $axis->{pivot_other_value}}) : ()));
 }
 
+# A rank belongs to a selected key, including the missing-value sentinel.
+# Other has no rank. Labels and identities themselves remain unchanged.
+sub rank_prefix ($class, $axis, $entry) {
+    return '' unless $axis->{pivot_ranked};
+    my $key = $entry->{selection_value};
+    return '' unless defined $key;
+    my $rank = 0;
+    for my $value (@{$axis->{pivot_values} // []}) {
+        $rank++;
+        return "$rank \x{b7} " if "$value" eq "$key";
+    }
+    return '';
+}
+
 sub entry_order ($class, $column) {
     if ($column->{pivot_values}) {
         my $i = 0;

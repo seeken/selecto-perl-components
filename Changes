@@ -1,6 +1,13 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Separate Top N column selection from display order. Largest first is
+      the unchanged default, now numbered in summary/grid headings and
+      CSV/XLSX exports; Natural order follows the group's value_order,
+      dates and bucket ranges, placing missing values before Other. Graph
+      series share the order, saved queries and permalinks retain it, and
+      Detail keeps the resolved selection without reranking. Configure
+      shows Column order while Top N is set.
     - Exercise computed Inventory Location star keys through live Explorer grouping,
       filtering, missing-key and pivot cell drilldowns on SQLite and PostgreSQL.
     - Honor field value_order metadata for summary rows, pivot columns and

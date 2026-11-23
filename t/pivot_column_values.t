@@ -107,6 +107,10 @@ for my $backend (qw(sqlite postgresql)) {
         like $top_other_csv,qr/Total,50,1,40,1,60,3,150,5/, 'top N plus Other preserves unfiltered total';
         my $tie=$model->(pivot_column_top=>3,pivot_column_top_measure=>'loads');
         is_deeply $heads->($tie),[qw(C D G)],'ties break deterministically by label';
+        my $dimension_tie=$model->(group=>['region','client.name'],pivot_column=>'client.name',pivot_column_top=>3,pivot_column_top_measure=>'loads');
+        is_deeply $heads->($dimension_tie),['Same','Same','[NULL]'],'dimension rank ties retain labels';
+        is_deeply [map {$_->{selection_value}} @{$dimension_tie->{result}{pivot_data}{columns}}],
+            [1,2,'__selecto_pivot_missing__'],'dimension ties break by label then stable key';
         my $top2=$model->(pivot_column_top=>2,pivot_column_top_measure=>'revenue',page=>2,limit=>1);
         is_deeply $heads->($top2),$heads->($top),'page two shares the global top columns';
         my $top_grid=$model->(pivot_column_top=>2,pivot_column_top_measure=>'revenue',aggregate_grid=>1,pivot_column_other=>1);

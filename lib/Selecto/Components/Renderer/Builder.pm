@@ -126,7 +126,8 @@ sub view_controls ($class, $model, $mode, $catalog = undef, $detail_catalog = un
             (defined($state->pivot_column) ? _hidden('pivot_column', $state->pivot_column) .
                 join('', map { _hidden('pivot_column_value', $_) } @{$state->pivot_column_values // []}) .
                 _hidden('pivot_column_other', $state->pivot_column_other // 0) .
-                ($state->pivot_column_top ? _hidden('pivot_column_top', $state->pivot_column_top) . _hidden('pivot_column_top_measure', $state->pivot_column_top_measure) : '') .
+                ($state->pivot_column_top ? _hidden('pivot_column_top', $state->pivot_column_top) . _hidden('pivot_column_top_measure', $state->pivot_column_top_measure) .
+                    (($state->pivot_column_top_order // 'rank') eq 'natural' ? _hidden('pivot_column_top_order', 'natural') : '') : '') .
                 (defined($state->pivot_column_value_null) ? _hidden('pivot_column_value_null', $state->pivot_column_value_null) : '') : '');
     }
     die "Unknown view control panel\n" unless $mode eq 'summary';
@@ -955,24 +956,31 @@ sub _grouped_picker_items ($fields, $root_label, $render) {
 sub _pivot_value_controls ($state, $field, $column) {
     my $active = ($column // '') eq $field->{path};
     my $gc = $state ? $state->group_configs->{$field->{path}} // {} : {};
-    $active = 0 if length($gc->{format} // '') && $gc->{format} ne 'default';
     my $disabled = $active ? '' : ' disabled';
     my $values = $active && $state ? $state->pivot_column_values // [] : [];
+    my $formatted = length($gc->{format} // '') && $gc->{format} ne 'default';
     return '<div data-sc-pivot-values' . ($active ? '' : ' hidden') . '>' .
-        '<label>Choose column values<input type="search" data-sc-pivot-search autocomplete="off" aria-label="Search column values"></label>' .
+        '<div data-sc-pivot-chosen-controls' . ($formatted ? ' hidden' : '') . '><label>Choose column values<input type="search" data-sc-pivot-search autocomplete="off" aria-label="Search column values"></label>' .
         '<div data-sc-pivot-options role="list"></div><ol data-sc-pivot-chosen>' . join('', map {
             '<li><input type="hidden" name="pivot_column_value" value="' . _h($_) . '"' . $disabled . '><span>' .
                 _h($gc->{pivot_labels}{$_} // $_) . '</span>' .
                 '<button type="button" data-sc-pivot-move="up" aria-label="Move value up">↑</button>' .
                 '<button type="button" data-sc-pivot-move="down" aria-label="Move value down">↓</button>' .
                 '<button type="button" data-sc-pivot-remove aria-label="Remove value">Remove</button></li>'
-        } @$values) . '</ol>' .
+        } @$values) . '</ol></div>' .
         '<label>Top columns<input type="number" name="pivot_column_top" min="1" max="500" value="' .
             _h($active && $state ? $state->pivot_column_top // '' : '') . '"' . $disabled . '></label>' .
         '<label>Rank by<select name="pivot_column_top_measure"' . $disabled . '>' .
             join('', map { '<option value="' . _h($_) . '"' .
                 ($active && $state && ($state->pivot_column_top_measure // '') eq $_ ? ' selected' : '') . '>' . _h($_) . '</option>' }
                 @{$state ? $state->measures : []}) . '</select></label>' .
+        '<label data-sc-pivot-top-order' . ($active && $state && $state->pivot_column_top ? '' : ' hidden') . '>Column order' .
+        '<select name="pivot_column_top_order" aria-label="Column order"' . ($active && $state && $state->pivot_column_top ? '' : ' disabled') . '>' .
+        '<option value="rank"' .
+        (!$state || ($state->pivot_column_top_order // 'rank') eq 'rank' ? ' selected' : '') .
+        '>Largest first</option><option value="natural"' .
+        ($active && $state && ($state->pivot_column_top_order // 'rank') eq 'natural' ? ' selected' : '') .
+        '>Natural order</option></select></label>' .
         '<small>Top columns applies when no values are chosen.</small><label><input type="checkbox" name="pivot_column_other" value="1"' . $disabled .
         ($active && $state && $state->pivot_column_other ? ' checked' : '') . '>Include Other</label></div>';
 }

@@ -422,7 +422,7 @@
     var values = document.createElement("div");
     values.setAttribute("data-sc-pivot-values", "");
     values.hidden = true;
-    values.innerHTML = '<label>Choose column values<input type="search" data-sc-pivot-search autocomplete="off" aria-label="Search column values"></label><div data-sc-pivot-options role="list"></div><ol data-sc-pivot-chosen></ol><label>Top columns<input type="number" name="pivot_column_top" min="1" max="500" disabled></label><label>Rank by<select name="pivot_column_top_measure" disabled></select></label><small>Top columns applies when no values are chosen.</small><label><input type="checkbox" name="pivot_column_other" value="1" disabled>Include Other</label>';
+    values.innerHTML = '<div data-sc-pivot-chosen-controls><label>Choose column values<input type="search" data-sc-pivot-search autocomplete="off" aria-label="Search column values"></label><div data-sc-pivot-options role="list"></div><ol data-sc-pivot-chosen></ol></div><label>Top columns<input type="number" name="pivot_column_top" min="1" max="500" disabled></label><label>Rank by<select name="pivot_column_top_measure" disabled></select></label><label data-sc-pivot-top-order hidden>Column order<select name="pivot_column_top_order" aria-label="Column order" disabled><option value="rank">Largest first</option><option value="natural">Natural order</option></select></label><small>Top columns applies when no values are chosen.</small><label><input type="checkbox" name="pivot_column_other" value="1" disabled>Include Other</label>';
     grid.appendChild(values);
 
     // Leaving out rows with no value is a filter on the group's field.
@@ -455,10 +455,24 @@
       var active = !!choice && choice.checked && (viewName === "aggregate" ||
         (node.hasAttribute("data-sc-pivot-values") && viewName === "graph"));
       var format = item && item.querySelector('[name="group_format"]');
-      if (node.hasAttribute("data-sc-pivot-values") && format && format.value && format.value !== "default") active = false;
       node.hidden = !active;
       node.querySelectorAll("input, select").forEach(function (input) { input.disabled = !active; });
+      var chosen = node.querySelector("[data-sc-pivot-chosen-controls]");
+      if (chosen) {
+        var formatted = format && format.value && format.value !== "default";
+        chosen.hidden = !!formatted;
+        chosen.querySelectorAll("input").forEach(function (input) { input.disabled = !active || formatted; });
+      }
+      syncPivotTopOrder(node);
     });
+  }
+
+  function syncPivotTopOrder(node) {
+    var order = node.querySelector("[data-sc-pivot-top-order]");
+    var top = node.querySelector('[name="pivot_column_top"]');
+    if (!order || !top) return;
+    order.hidden = !top.value;
+    order.querySelector("select").disabled = top.disabled || !top.value;
   }
 
   function appendMeasureConfig(grid, type, label, selected) {
@@ -810,6 +824,7 @@
   }
   document.addEventListener("input", function (event) {
     if (event.target.matches("[data-sc-pivot-search]")) searchPivotValues(event.target);
+    if (event.target.matches('[name="pivot_column_top"]')) syncPivotTopOrder(event.target.closest("[data-sc-pivot-values]"));
   });
   document.addEventListener("focusin", function (event) {
     if (event.target.matches("[data-sc-pivot-search]")) searchPivotValues(event.target);

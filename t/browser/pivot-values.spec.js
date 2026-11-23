@@ -53,3 +53,54 @@ test("pivot value chooser adds, reorders, removes and rerenders columns", async 
     server.kill("SIGTERM");
   }
 });
+
+test("Top N column order appears on input and survives query and view changes", async ({page}) => {
+  const listener = net.createServer();
+  await new Promise(resolve => listener.listen(0, "127.0.0.1", resolve));
+  const port = listener.address().port;
+  await new Promise(resolve => listener.close(resolve));
+  const base = `http://127.0.0.1:${port}`;
+  const server = spawn("script/with-local-sibling", [perl, "t/browser/fixtures/pivot-values.pl", "daemon", "-l", base], {cwd: root, stdio: "pipe"});
+  try {
+    await expect.poll(async () => {
+      try { return (await fetch(base + "/loads", {signal: AbortSignal.timeout(1000)})).status; } catch (_) { return 0; }
+    }).toBe(200);
+    await page.goto(base + "/loads?q=1&view=aggregate&field=id&group=region&group=status&measure=revenue&pivot_column=status&pivot_column_other=1");
+    const box = page.locator('[data-sc-picker-set-item][data-field="status"] [data-sc-pivot-values]');
+    async function configure() {
+      const menu = page.getByRole("button", {name: "Expand view menu", exact: true});
+      if (await menu.isVisible()) await menu.click();
+      if (!(await box.getByLabel("Top columns", {exact: true}).isVisible()))
+        await page.locator('[data-sc-picker-kind="group"] [data-sc-picker-set-item][data-field="status"] summary').click();
+    }
+    await configure();
+    const order = box.getByLabel("Column order", {exact: true});
+    await expect(order).toBeHidden();
+    await box.getByLabel("Top columns", {exact: true}).fill("2");
+    await expect(order).toBeVisible();
+    await expect(order).toHaveValue("rank");
+    await page.getByRole("button", {name: "Run query", exact: true}).click();
+    const headings = page.locator('.sc-pivot-table thead tr:nth-child(2) > th');
+    await expect(headings).toHaveText(["1 · G", "2 · D", "Other"]);
+    await configure();
+    await order.selectOption("natural");
+    await page.getByRole("button", {name: "Run query", exact: true}).click();
+    await expect(headings).toHaveText(["D", "G", "Other"]);
+    await configure();
+    await expect(order).toHaveValue("natural");
+    const permalink = page.getByRole("link", {name: "Permalink", exact: true});
+    expect(await permalink.getAttribute("href")).toContain("pivot_column_top_order=natural");
+    await page.locator(".sc-view-tab").filter({has: page.locator('[name="view"][value="graph"]')}).click();
+    await page.locator('select[name="graph_series_group"]').selectOption("status");
+    await page.getByRole("button", {name: "Run query", exact: true}).click();
+    await expect(page.locator("[data-sc-chart]")).toHaveCount(1);
+    const chart = JSON.parse(await page.locator("[data-sc-chart]").getAttribute("data-chart-data"));
+    expect(chart.datasets.map(dataset => dataset.label)).toEqual(["D", "G", "Other"]);
+    await configure();
+    await box.getByLabel("Top columns", {exact: true}).fill("");
+    await expect(order).toBeHidden();
+    await expect(order).toBeDisabled();
+  } finally {
+    server.kill("SIGTERM");
+  }
+});

@@ -17,11 +17,11 @@ use Selecto::Query ();
 use Selecto::QueryLibrary ();
 use Selecto::Components::InputBudget ();
 
-has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column pivot_totals pivot_column_values pivot_column_other pivot_column_top pivot_column_top_measure pivot_column_value_null filter_groups row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column pivot_totals pivot_column_values pivot_column_other pivot_column_top pivot_column_top_order pivot_column_top_measure pivot_column_value_null filter_groups row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
 
 sub parameter_names ($class) {
     return [qw(
-        q query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group graph_palette graph_category_field graph_category_value graph_category_format graph_category_color aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column grid_column pivot_totals pivot_column_value pivot_column_other pivot_column_top pivot_column_top_measure pivot_column_value_null row_click_action field field_alias field_format filter_field filter_op filter_value filter_values_json filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
+        q query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group graph_palette graph_category_field graph_category_value graph_category_format graph_category_color aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column grid_column pivot_totals pivot_column_value pivot_column_other pivot_column_top pivot_column_top_order pivot_column_top_measure pivot_column_value_null row_click_action field field_alias field_format filter_field filter_op filter_value filter_values_json filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles group_exclude_missing
         measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_fill_opacity measure_transform measure_transform_window
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
@@ -105,6 +105,10 @@ sub from_input ($class, $config, $domain, $input) {
         push @errors, 'Top column count must be between 1 and 500.';
         $top = '';
     }
+    my $top_order = _scalar(_first($input, 'pivot_column_top_order'));
+    $top_order = 'rank' unless length $top_order;
+    push @errors, 'Top column order must be rank or natural.'
+        unless $top_order eq 'rank' || $top_order eq 'natural';
     my $top_measure = _scalar(_first($input, 'pivot_column_top_measure')) || $valid_measures->[0];
     push @errors, 'The top column measure must be a selected measure.'
         if length(_scalar(_first($input, 'pivot_column_top_measure')))
@@ -128,9 +132,9 @@ sub from_input ($class, $config, $domain, $input) {
         push @errors, 'The missing column value is invalid.';
         $null_index = '';
     }
-    if (defined($pivot_column) && (@pivot_values || length($top))) {
+    if (defined($pivot_column) && @pivot_values && !length($top)) {
         my $format = $group_configs->{$pivot_column}{format} // '';
-        push @errors, 'Choose column values or Top N on an unformatted group; use ranges for bucketed groups.'
+        push @errors, 'Choose column values on an unformatted group; use Top N or ranges for formatted groups.'
             if length($format) && $format ne 'default';
     }
     my $pivot_other = grep { _truthy($_, 0) } @{_values($input, 'pivot_column_other')};
@@ -173,6 +177,7 @@ sub from_input ($class, $config, $domain, $input) {
         pivot_column_values => \@pivot_values,
         pivot_column_top => length($top) ? 0 + $top : undef,
         pivot_column_top_measure => $top_measure,
+        pivot_column_top_order => $top_order,
         pivot_column_value_null => length($null_index) ? 0 + $null_index : undef,
         pivot_column_other => $pivot_other ? 1 : 0,
         row_click_action => $row_click_action,
@@ -288,6 +293,8 @@ sub query_pairs ($self) {
     push @pairs, pivot_column_other => 1 if $self->pivot_column_other;
     push @pairs, pivot_column_top => $self->pivot_column_top,
         pivot_column_top_measure => $self->pivot_column_top_measure if $self->pivot_column_top;
+    push @pairs, pivot_column_top_order => 'natural'
+        if $self->pivot_column_top && ($self->pivot_column_top_order // 'rank') eq 'natural';
     push @pairs, pivot_column_value_null => $self->pivot_column_value_null if defined($self->pivot_column_value_null) && ($self->view eq 'detail' || @{$self->pivot_column_values // []});
     push @pairs, pivot_totals => 0
         if $self->view eq 'aggregate' && defined($self->pivot_column) && !($self->pivot_totals // 1);
@@ -495,6 +502,7 @@ sub as_hash ($self) {
         _pivot_resolved_values => $self->{_pivot_resolved_values},
         pivot_column_top => $self->pivot_column_top,
         pivot_column_top_measure => $self->pivot_column_top_measure,
+        pivot_column_top_order => $self->pivot_column_top_order,
         pivot_column_value_null => $self->pivot_column_value_null,
         pivot_column_other => $self->pivot_column_other,
         row_click_action => $self->row_click_action,

@@ -97,6 +97,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         return $model unless $state->valid;
 
         _resolve_top_columns($config, $engine, $state);
+        _resolve_formatted_pivot_values($config, $engine, $state);
         _resolve_pivot_labels($config, $engine, $state);
         my $build_started = time;
         my $built = Selecto::Components::QueryBuilder->build(
@@ -957,7 +958,19 @@ sub _resolve_top_columns ($config, $engine, $state) {
     my ($axis) = grep { !$_->{measure} } @{$top->{columns}};
     my $raw = Selecto::BoundedQuery->all($engine, $top->{query}->limit($state->pivot_column_top), limits => $config->limits);
     my %index; @index{@{$raw->{columns}}} = 0 .. $#{$raw->{columns}};
-    my @values = map { $_->[$index{$axis->{drilldown_key} // $axis->{key}}] } @{$raw->{rows}};
+    my @rows = @{$raw->{rows}};
+    if (($state->pivot_column_top_order // 'rank') eq 'natural') {
+        my $order = _grid_entry_order($axis);
+        my $entry = sub ($row) { +{
+            value => $row->[$index{$axis->{key}}],
+            selection_value => $row->[$index{$axis->{drilldown_key} // $axis->{key}}],
+            (defined($axis->{sort_key}) ? (sort_value => $row->[$index{$axis->{sort_key}}]) : ()),
+        } };
+        # Sort only the already chosen rows; the measure and tie breakers
+        # still decide membership before this comparison is applied.
+        @rows = sort { $order->($entry->($a), $entry->($b)) } @rows;
+    }
+    my @values = map { $_->[$index{$axis->{drilldown_key} // $axis->{key}}] } @rows;
     my %used = map { defined($_) ? ("$_" => 1) : () } @values;
     my $missing = '__selecto_pivot_missing__'; $missing .= '_' while $used{$missing};
     my $other = '__selecto_pivot_other__'; $other .= '_' while $used{$other};
@@ -974,8 +987,36 @@ sub _resolve_top_columns ($config, $engine, $state) {
     my $dimension = $config->field_map($engine->domain, $state->retarget)->{$field}{dimension};
     @{$gc}{qw(pivot_values pivot_other pivot_other_value pivot_key_field)} =
         (\@values, $state->pivot_column_other ? 1 : 0, $other, $dimension ? $dimension->{key_field} : $field);
+    $gc->{pivot_ranked} = ($state->pivot_column_top_order // 'rank') eq 'rank' ? 1 : 0;
     # Detail must keep the global list rather than rerank its narrower rows.
     $state->{_pivot_resolved_values} = [@values];
+}
+
+# A formatted Top N selects group labels, whereas the chosen-value CASE
+# compares source keys. Resolve that finite mapping through a bounded core
+# query. It does not rank and is independent of the Detail drilldown's rows;
+# engine predicates still govern the source. Unformatted groups need no lookup.
+sub _resolve_formatted_pivot_values ($config, $engine, $state) {
+    my $field = $state->pivot_column // return;
+    my $gc = $state->group_configs->{$field} // return;
+    return unless @{$gc->{pivot_values} // []}
+        && length($gc->{format} // '') && $gc->{format} ne 'default';
+    my %original = %$gc;
+    delete $original{pivot_values};
+    my $type = $config->field_map($engine->domain, $state->retarget)->{$field}{type};
+    my $group = Selecto::Components::QueryBuilder::_group_expression({field => $field, type => $type}, \%original);
+    my @values = grep { !defined($gc->{pivot_null_value}) || $_ ne $gc->{pivot_null_value} } @{$gc->{pivot_values}};
+    my @conditions = ((@values ? (Selecto::Expression->in($group, \@values)) : ()),
+        (defined($gc->{pivot_null_value}) ? (Selecto::Expression->is_null($group)) : ()));
+    my $query = Selecto::Query->new->select(Selecto::Expression->field($field)->as('source_value'), $group->as('group_value'))
+        ->group_by([$field, $group])->where(Selecto::Expression->any(\@conditions));
+    my $raw = Selecto::BoundedQuery->all($engine, $query, limits => $config->limits);
+    my %matches;
+    for my $row (@{$raw->{rows}}) {
+        my $label = $row->[1] // $gc->{pivot_null_value};
+        push @{$matches{$label}}, $row->[0];
+    }
+    $gc->{pivot_value_matches} = \%matches;
 }
 
 # Values are always keys. Fetch empty dimension headings from the lookup
@@ -1552,7 +1593,7 @@ sub _export_dataset ($model) {
         push @columns, {
             %{$grid->{measure}},
             key => '__selecto_grid_column_' . $column_index,
-            label => _grid_export_label($grid->{columns}[$column_index]{value}),
+            label => Selecto::Components::PivotValues->rank_prefix($grid->{column_axis}, $grid->{columns}[$column_index]) . _grid_export_label($grid->{columns}[$column_index]{value}),
         };
     }
     my @records;
@@ -1585,7 +1626,7 @@ sub _pivot_export_dataset ($grid) {
             push @value_columns, {
                 %{$measures[$measure_index]},
                 key => "__selecto_grid_column_${column_index}_$measure_index",
-                label => _grid_export_label($grid->{columns}[$column_index]{value}) . " \x{b7} " . $measures[$measure_index]{label},
+                label => Selecto::Components::PivotValues->rank_prefix($grid->{column_axis}, $grid->{columns}[$column_index]) . _grid_export_label($grid->{columns}[$column_index]{value}) . " \x{b7} " . $measures[$measure_index]{label},
                 column => $grid->{columns}[$column_index]{key}, measure => $measures[$measure_index]{key},
             };
         }
@@ -1631,7 +1672,7 @@ sub _summary_pivot_export_dataset ($model) {
         push @value_columns, map { {
             %{$measures[$_]},
             key => "__selecto_pivot_${column_index}_$_",
-            label => _grid_export_label($pivot->{columns}[$column_index]{value}) . " \x{b7} " . $measures[$_]{label},
+            label => Selecto::Components::PivotValues->rank_prefix($pivot->{column_axis}, $pivot->{columns}[$column_index]) . _grid_export_label($pivot->{columns}[$column_index]{value}) . " \x{b7} " . $measures[$_]{label},
             column => $pivot->{columns}[$column_index]{key}, measure => $measures[$_]{key},
         } } 0 .. $#measures;
     }

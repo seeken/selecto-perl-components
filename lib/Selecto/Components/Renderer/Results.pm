@@ -648,6 +648,7 @@ sub _grid ($class, $result, $model) {
                 _h(to_json({axis => $column_group, value => $column->{selection_value}})) . '" ' .
                 'data-sc-grid-column-toggle="' . _h($index) . '" aria-label="Select column ' .
                 _h(_display_group($column->{value}, $grid->{column_axis})) . '"><span>' .
+                _h(Selecto::Components::PivotValues->rank_prefix($grid->{column_axis}, $column)) .
                 _html_display($grid->{column_axis}, $column->{value}, 1) . '</span></label></th>'
         } @{$grid->{columns}});
     my $totals = $grid->{totals};
@@ -801,6 +802,7 @@ sub _summary_pivot_table ($class, $result, $model) {
         $top .= '<th scope="colgroup" colspan="' . scalar(@measures) . '" id="' . $id . '-c' . $index .
             '" class="sc-pivot-group-start">' .
             $drill->('grid_axis', {axis => $column_group, value => $column->{selection_value}},
+                _h(Selecto::Components::PivotValues->rank_prefix($pivot->{column_axis}, $column)) .
                 _html_display($pivot->{column_axis}, $column->{value}, 1),
                 $pivot->{column_axis}{label} . ' ' . _display_group($column->{value}, $pivot->{column_axis})) . '</th>';
         $sub .= join '', map {
@@ -976,7 +978,8 @@ sub _pivot_grid ($class, $result, $model) {
             _h(to_json({axis => $column_group, value => $column->{selection_value}})) . '" ' .
             'data-sc-grid-column-toggle="' . _h($index) . '" aria-label="Select column ' .
             _h(_display_group($column->{value}, $grid->{column_axis})) . '"><span>' .
-            _html_display($grid->{column_axis}, $column->{value}, 1) . '</span></label></th>';
+            _h(Selecto::Components::PivotValues->rank_prefix($grid->{column_axis}, $column)) .
+                _html_display($grid->{column_axis}, $column->{value}, 1) . '</span></label></th>';
         $sub .= join '', map {
             '<th scope="col" id="' . $id . '-c' . $index . 'm' . $_ . '" class="sc-grid-measure-heading' . $group_start[$_] . '">' .
                 _h($measures[$_]{label}) . '</th>'
