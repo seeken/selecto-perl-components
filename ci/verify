@@ -23,7 +23,7 @@ stage browser-install python3 -B ci/browser-install.py
 stage asset-web node script/selecto-web-assets.mjs sync --profile perl-components --target public/selecto-components --check
 stage asset-api script/with-local-sibling perl script/sync-api-console --check
 stage generated-bundle npm run build:check
-stage browser env PLAYWRIGHT_JSON_OUTPUT_NAME="$RUNNER_TEMP/playwright-results.json" npm run test:browser -- --reporter=json
+stage browser env SELECTO_TEST_PERL="$sdk_perl" PLAYWRIGHT_JSON_OUTPUT_NAME="$RUNNER_TEMP/playwright-results.json" npm run test:browser -- --reporter=json
 stage browser-summary python3 -B ci/browser-summary.py
 stage optional-northwind script/with-local-sibling sh -c 'if perl -MSelecto::Perl::Northwind::Database -e 1 >/dev/null 2>&1; then perl -Ilib -c examples/northwind.pl; else echo "Optional Northwind example unavailable"; fi'
 stage unit script/with-local-sibling prove -lrv t

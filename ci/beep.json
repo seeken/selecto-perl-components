@@ -70,5 +70,5 @@
   "optional_targets": [
     "Northwind example syntax/smoke when optional demo is absent."
   ],
-  "browser_minimum_tests": 106
+  "browser_minimum_tests": 111
 }

@@ -1,9 +1,10 @@
 import {test, expect} from "@playwright/test";
-import {spawn, execFileSync} from "node:child_process";
+import {spawn} from "node:child_process";
 import {once} from "node:events";
 import net from "node:net";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
+import {testPerl} from "./test-perl.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 let server, base;
@@ -12,7 +13,7 @@ test.beforeAll(async () => {
   await new Promise(resolve => listener.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${listener.address().port}`;
   await new Promise(resolve => listener.close(resolve));
-  const perl = execFileSync("mise", ["which", "perl"], {cwd: root, encoding: "utf8"}).trim();
+  const perl = testPerl(root);
   server = spawn("script/with-local-sibling", [perl, "t/browser/fixtures/hbar.pl", "daemon", "-l", base], {cwd: root, stdio: "pipe"});
   let output = "";
   server.stdout.on("data", chunk => { output += chunk; });

@@ -3,8 +3,9 @@ import {spawn} from "node:child_process";
 import net from "node:net";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
+import {testPerl} from "./test-perl.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const perl = "/Users/chris/.local/share/mise/installs/asdf-ouest-asdf-perl/5.40.5/bin/perl";
+const perl = testPerl(root);
 
 test("pivot value chooser adds, reorders, removes and rerenders columns", async ({page}) => {
   const listener = net.createServer();

@@ -138,3 +138,4 @@ t/top_n_column_order.t
 t/graph_categories.t
 t/browser/hbar.spec.js
 t/browser/fixtures/hbar.pl
+t/browser/test-perl.js
