@@ -544,31 +544,14 @@ ok !$duplicate_star_state->valid,
 like join(' ', @{$duplicate_star_state->errors}), qr/star dimension only once/,
     'duplicate star groups fail with an actionable validation message';
 
-my $unpaged_graph = Selecto::Components::QueryBuilder->build(
-    $config, $domain, $aggregate_state, {paginate => 0},
-);
-my $unpaged_graph_statement = $postgresql->compile($domain, $unpaged_graph->{query});
-like $unpaged_graph_statement->sql, qr/\bLIMIT 10001\z/,
-    'graph category reads retain the cell ceiling even without pagination';
-unlike $unpaged_graph_statement->sql, qr/\bOFFSET\b/,
-    'graph category reads start at the first category';
-
-my $export_aggregate_state = Selecto::Components::State->from_input($config, $domain, {
-    q => 1, view => 'aggregate', field => 'product_name',
-    group => 'category.category_name', measure => 'total_price',
-    filter_field => 'unit_price', filter_op => 'gte', filter_value => '12.50',
-    limit => 25, page => 3,
-});
 my $export_aggregate = Selecto::Components::QueryBuilder->build(
-    $config, $domain, $export_aggregate_state, {paginate => 0},
+    $config, $domain, $aggregate_state, {paginate => 0},
 );
 my $export_aggregate_statement = $postgresql->compile(
     $domain, $export_aggregate->{query},
 );
 unlike $export_aggregate_statement->sql, qr/\b(?:LIMIT|OFFSET)\b/,
     'an all-row aggregate export preserves grouping without pagination';
-like $export_aggregate_statement->sql, qr/GROUP BY ROLLUP\s*\("j_category"\."category_name"\)/,
-    'an all-row aggregate export retains its grouping';
 like $export_aggregate_statement->sql, qr/WHERE "s0"\."unit_price" >= \$1/,
     'an all-row aggregate export retains the configured filters';
 

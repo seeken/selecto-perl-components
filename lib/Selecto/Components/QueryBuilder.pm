@@ -634,9 +634,10 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         # A pair of high-cardinality dimensions can otherwise materialize an
         # effectively unbounded matrix in both PostgreSQL and the browser.
         $query = $query->limit($config->max_grid_result_cells + 1);
-    } elsif ($state->view eq 'graph') {
+    } elsif ($state->view eq 'graph' && (!exists($options->{paginate}) || $options->{paginate})) {
         # A graph keeps its first N categories (Explorer model), so it reads
         # past the page to count them, but never more cells than a grid does.
+        # An unpaginated read (an all-rows export) stays complete.
         $query = $query->limit($config->max_grid_result_cells + 1);
     } elsif ((!exists($options->{paginate}) || $options->{paginate})) {
         # An aggregate page is counted from its own rows rather than a second, equally
