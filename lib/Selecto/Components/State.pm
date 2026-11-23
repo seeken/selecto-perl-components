@@ -18,7 +18,7 @@ use Selecto::AsOf ();
 use Selecto::QueryLibrary ();
 use Selecto::Components::InputBudget ();
 
-has [qw(as_of rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column pivot_totals pivot_column_values pivot_column_other pivot_column_top pivot_column_top_order pivot_column_top_measure pivot_column_value_null filter_groups row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters)];
+has [qw(as_of rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column pivot_totals pivot_column_values pivot_column_other pivot_column_top pivot_column_top_order pivot_column_top_measure pivot_column_value_null filter_groups row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters query_library_choices query_library_defaults query_library_defaults_view)];
 
 sub parameter_names ($class) {
     return [qw(
@@ -40,7 +40,7 @@ sub from_input ($class, $config, $domain, $input) {
     my @errors = $budget_ok ? () : ('Query state exceeds the configured input budget.');
     my $configured = _first($input, 'q') ? 1 : 0;
     my $as_of = $class->_parse_as_of($config, $input, \@errors);
-    my $query_library = _query_library_state($domain, $input, \@errors, $config->limits);
+    my $query_library = _query_library_state($domain, $input, \@errors, $config->limits, $config);
     my $view = _parse_view($config, $input, $query_library, \@errors);
     my $rows_of = _parse_rows_of($config, $domain, $input, \@errors);
     my $retarget = $rows_of eq '' || $rows_of eq '-' ? undef : $rows_of;
@@ -204,6 +204,9 @@ sub from_input ($class, $config, $domain, $input) {
         errors => \@errors,
         query_library_view => $query_library->{view},
         query_library_materialized_view => $query_library->{view},
+        query_library_choices => $query_library->{choices},
+        query_library_defaults => $query_library->{defaults},
+        query_library_defaults_view => $view,
         query_library_segments => $query_library->{segments},
         query_library_parameters => $query_library->{parameters},
     );
@@ -302,7 +305,14 @@ sub query_pairs ($self) {
     push @pairs, query_library_materialized_view => $self->query_library_materialized_view
         if defined($self->query_library_materialized_view)
         && length($self->query_library_materialized_view);
-    push @pairs, query_library_segment => $_ for @{$self->query_library_segments // []};
+    my $same_view = ($self->query_library_defaults_view // $self->view) eq $self->view;
+    push @pairs, query_library_segment => $_
+        for grep { !$same_view || !($self->query_library_defaults // {})->{$_} }
+            @{$self->query_library_segments // []};
+    for my $id (sort keys %{$self->query_library_choices // {}}) {
+        push @pairs, 'query_library_segment_choice_' . $id => ''
+            if $self->query_library_choices->{$id} eq '';
+    }
     for my $name (sort keys %{$self->query_library_parameters // {}}) {
         push @pairs,
             query_library_param_name => $name,
@@ -503,6 +513,8 @@ sub api_query_payload ($self, $config, $domain) {
         (defined($self->as_of) ? (as_of => $self->as_of) : ()),
         select => \@select,
         (@segments ? (segments => \@segments) : ()),
+        (keys %{$self->query_library_choices // {}}
+            ? (segment_choices => {%{$self->query_library_choices}}) : ()),
         (%{$self->query_library_parameters // {}}
             ? (parameters => {%{$self->query_library_parameters}}) : ()),
         (@filters ? (filters => \@filters) : ()),
@@ -564,6 +576,9 @@ sub as_hash ($self) {
         page => $self->page,
         query_library_view => $self->query_library_view,
         query_library_materialized_view => $self->query_library_materialized_view,
+        query_library_choices => {%{$self->query_library_choices // {}}},
+        query_library_defaults => {%{$self->query_library_defaults // {}}},
+        query_library_defaults_view => $self->query_library_defaults_view,
         query_library_segments => [@{$self->query_library_segments // []}],
         query_library_parameters => {%{$self->query_library_parameters // {}}},
     };
@@ -1566,7 +1581,7 @@ sub _valid_temporal_value ($value) {
     return Selecto::Components::DateShortcut->valid_date($1);
 }
 
-sub _query_library_state ($domain, $input, $errors, $limits) {
+sub _query_library_state ($domain, $input, $errors, $limits, $config) {
     my $library = Selecto::QueryLibrary->library($domain);
     my $view = _trim(_first($input, 'query_library_view'));
     my $materialized_view = _trim(_first($input, 'query_library_materialized_view'));
@@ -1608,6 +1623,25 @@ sub _query_library_state ($domain, $input, $errors, $limits) {
             if (grep { $choices{$_} } @effective_segments) > 1;
     }
 
+    my $result_view = _first($input, 'view') // $config->default_view;
+    $result_view = $config->default_view unless $config->allows_view($result_view);
+    my $view_spec = length($view) ? $library->{views}{$view} : {};
+    $result_view = 'detail' if $view_spec->{projection} || $view_spec->{ordering};
+    my %choices = map {
+        my $id = $_->{id};
+        my $name = 'query_library_segment_choice_' . $id;
+        exists($input->{$name}) ? ($id => _trim(_first($input, $name))) : ()
+    } @{Selecto::QueryLibrary->segment_picker_groups($domain)};
+    my $resolved = eval { Selecto::QueryLibrary->resolve_segment_choices(
+        $domain, \@effective_segments, \%choices, $result_view,
+    ) };
+    if ($resolved) {
+        # Named-view segments remain governed by that view, not duplicated.
+        my %inherited = length($view)
+            ? map { $_ => 1 } @{Selecto::QueryLibrary->view_segments($domain, $view)} : ();
+        @segments = grep { !$inherited{$_} } @{$resolved->{segments}};
+        @effective_segments = @{$resolved->{segments}};
+    }
     my $parameter_names = _values($input, 'query_library_param_name');
     my $parameter_values = _values($input, 'query_library_param_value');
     my %parameters;
@@ -1672,6 +1706,8 @@ sub _query_library_state ($domain, $input, $errors, $limits) {
         view => length($view) ? $view : undef,
         materialize => length($view) && $view ne $materialized_view ? 1 : 0,
         segments => \@segments,
+        defaults => $resolved ? $resolved->{defaults} : {},
+        choices => $resolved ? $resolved->{choices} : {},
         parameters => $ok ? $normalized : \%parameters,
         projection_fields => \@projection_fields,
         orders => \@orders,

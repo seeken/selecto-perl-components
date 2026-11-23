@@ -161,6 +161,13 @@ A canonical domain may declare a C<query_library> of named C<views>,
 C<segments>, C<projections>, C<orderings> and typed C<parameters> (see
 L<Selecto::QueryLibrary>). The Explorer shows named views in its View tab,
 and segments and parameters in its Filters tab. They take part in canonical
+A picker group can declare C<< default => 'segment_id' >> and optionally
+C<< default_views => [qw(aggregate graph)] >>. Defaults appear as applied
+filters and selected radios. Permalinks and saved queries omit the default,
+keep an explicit empty C<query_library_segment_choice_GROUP> for Off, and
+keep different choices. Detail drilldowns explicitly carry the effective
+segment, even when Detail has a different default.
+
 URL state as C<query_library_view>, repeated C<query_library_segment>, and
 C<query_library_param_name>/C<query_library_param_value> pairs.
 

@@ -9,6 +9,9 @@ Unreleased
     - The canonical stack PostgreSQL check moves to xt/: it needs an owned
       stack database, a seed and sibling SPA builds, so it runs only through
       mise run test:canonical-stack and no longer counts as a required skip.
+    - Segment picker groups apply declared defaults by view, retain explicit
+      Off in saved state, omit defaults from permalinks, and freeze effective
+      segment choices when drilling into Detail (Part 1).
     - A live submit (a drilldown, page or run) made before HTMX has opened
       the WebSocket is held and sent once it connects, instead of being
       cancelled and lost; if it does not connect within five seconds the
