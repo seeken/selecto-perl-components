@@ -9,6 +9,10 @@ Unreleased
       cancelled and lost; if it does not connect within five seconds the
       submit finishes over HTTP.
     - All-rows graph exports are no longer capped at the graph's cell limit.
+    - Display boolean group values as localized Yes/No labels in summary
+      rows, pivot headings, grids, graphs and CSV/XLSX exports. A field may
+      override display.true and display.false. No sorts before Yes unless
+      value_order is declared; drilldowns, selected keys and JSON stay raw.
     - Group a plain field with distinct formats or options, including month
       of year by year seasonality pivots. Qualified group references retain
       independent settings, result keys, labels and ANDed Detail predicates

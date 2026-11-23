@@ -143,3 +143,8 @@ t/browser/fixtures/same-field-groups.pl
 t/browser/same-field-groups.spec.js
 t/lib/SameFieldGroupsFixture.pm
 t/same_field_groups.t
+lib/Selecto/Components/GroupValue.pm
+t/boolean_groups.t
+t/lib/BooleanGroupsFixture.pm
+t/browser/fixtures/boolean-groups.pl
+t/browser/boolean-groups.spec.js

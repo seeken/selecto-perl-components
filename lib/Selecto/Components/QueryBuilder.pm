@@ -3,6 +3,7 @@ package Selecto::Components::QueryBuilder;
 use Mojo::Base -base, -signatures;
 use Scalar::Util qw(blessed);
 use Selecto::Components::BucketParser ();
+use Selecto::Components::GroupValue ();
 use Selecto::Components::DateShortcut ();
 use Selecto::Components::RowActions ();
 use Selecto::Components::Util qw(humanize trim);
@@ -387,6 +388,8 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             format => $column_config->{format} // '',
             drilldown_grouped => length($column_config->{format} // '')
                 && ($column_config->{format} // '') ne 'default' ? ($id eq $field ? 1 : $id) : 0,
+            (!$dimension && $config->boolean_type($field_map->{$field}{type}) ?
+                (boolean_labels => Selecto::Components::GroupValue->labels($config, $domain, $field)) : ()),
             _bucket_order($column_config),
             (!length($column_config->{format} // '') || $column_config->{format} eq 'default'
                 ? _declared_value_order($domain, $field) : ()),
@@ -835,8 +838,13 @@ sub _declared_value_order ($domain, $field) {
     die "value_order must contain at most 500 scalar values of at most 1000 characters\n"
         unless ref($values) eq 'ARRAY' && @$values <= 500
             && !grep { !defined($_) || ref($_) || length($_) > 1000 } @$values;
+    my $boolean = ($domain->field_metadata($field)->{type} // '') =~ /\A(?:bool|boolean)\z/i;
+    my @values = $boolean ? map {
+        my $key = Selecto::Components::GroupValue->boolean_key($_);
+        defined($key) ? ($key eq 'true' ? 1 : 0) : $_;
+    } @$values : @$values;
     my %seen;
-    return (value_order => [grep { !$seen{$_}++ } @$values]);
+    return (value_order => [grep { !$seen{$_}++ } @values]);
 }
 
 sub _group_natural_order_expression ($column, $config) {

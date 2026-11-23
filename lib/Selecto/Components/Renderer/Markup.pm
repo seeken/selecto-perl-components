@@ -6,6 +6,7 @@ use Exporter 'import';
 use Mojo::JSON qw(to_json);
 use Mojo::Util qw(url_escape);
 use Selecto::Components::NumberFormat ();
+use Selecto::Components::GroupValue ();
 use Selecto::Components::Util qw(humanize html_escape);
 
 our @EXPORT = qw(
@@ -36,6 +37,7 @@ sub _display ($value) { return defined($value) ? "$value" : '—'; }
 # and filters match on, stays the bare range.
 sub _display_group ($value, $column = undef) {
     return '[NULL]' unless defined $value;
+    $value = Selecto::Components::GroupValue->display($column, $value);
     return "$value" unless ref($column) eq 'HASH' && ($column->{format} // '') eq 'age_buckets';
     return "$value" if ($column->{source_type} // '') =~ /\A(?:integer|int|smallint|bigint|decimal|number|numeric|float|double|real)\z/i;
     return 'today' if "$value" eq '0';

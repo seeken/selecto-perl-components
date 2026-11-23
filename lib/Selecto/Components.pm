@@ -1216,6 +1216,15 @@ C<query_library_param_value> pairs
 
 =back
 
+Boolean group values display as Yes and No (missing values stay missing).
+A field's C<< display => {true => 'Invoiced', false => 'Not invoiced'} >>
+metadata overrides the labels. The existing i18n dictionary exposes them as
+C<fields.FIELD.display.true> and C<fields.FIELD.display.false>, including in
+C<localization_terms>. Default ordering is No before Yes; C<value_order>
+can reverse it. Selection keys, drilldown predicates, result records and
+JSON group values stay raw. CSV/TSV and XLSX render labels in group columns
+and pivot headings. Detail boolean columns retain their raw values.
+
 Plain fields can be grouped more than once when their format or format
 options differ; identical groups are deduplicated. Star dimensions remain
 single selections. Group references (C<pivot_column>, C<graph_series_group>,

@@ -5,6 +5,7 @@ use Mojo::Base -base, -signatures;
 use Selecto::Limits ();
 use Selecto::OperationBudget ();
 use Selecto::Components::PivotValues ();
+use Selecto::Components::GroupValue ();
 use Selecto::Components::ResponseBudget ();
 use Mojo::JSON qw(to_json);
 use Mojo::URL ();
@@ -1244,7 +1245,7 @@ sub _graph ($class, $result, $model) {
     my (@points, %point_index, @series_values, %series_seen, %record_for);
     for my $record_index (0 .. $#records) {
         my $record = $records[$record_index];
-        my @axis_values = map { $record->{$_->{key}} } @axis_dimensions;
+        my @axis_values = map { Selecto::Components::GroupValue->display($_, $record->{$_->{key}}) } @axis_dimensions;
         my $point_key = to_json([map { $record->{$_->{drilldown_key} // $_->{key}} } @axis_dimensions]);
         unless (exists $point_index{$point_key}) {
             $point_index{$point_key} = scalar @points;
@@ -1262,7 +1263,7 @@ sub _graph ($class, $result, $model) {
             unless ($series_seen{$series_key}++) {
                 push @series_values, {
                     key => $series_key,
-                    label => _display($series_value),
+                    label => _display(Selecto::Components::GroupValue->display($series_dimension, $series_value)),
                     value => $series_value, selection_value => $identity,
                 };
             }
@@ -1271,7 +1272,7 @@ sub _graph ($class, $result, $model) {
     }
     if ($series_dimension && $series_dimension->{pivot_values}) {
         @series_values = map { +{
-            key => to_json(["$_->{selection_value}"]), label => _display($_->{value}),
+            key => to_json(["$_->{selection_value}"]), label => _display(Selecto::Components::GroupValue->display($series_dimension, $_->{value})),
             value => $_->{value}, selection_value => $_->{selection_value},
         } } Selecto::Components::PivotValues->layout($series_dimension);
     } elsif ($series_dimension && $series_dimension->{value_order}) {
@@ -1429,7 +1430,7 @@ sub _graph ($class, $result, $model) {
     my $bars = join '', map {
         my $record_index = $_;
         my $record = $records[$record_index];
-        my $group_label = join(' · ', map { _display($record->{$_->{key}}) } @dimensions);
+        my $group_label = join(' · ', map { _display(Selecto::Components::GroupValue->display($_, $record->{$_->{key}})) } @dimensions);
         join '', map {
             my $measure = $_;
             my $display_value = $display_values{$measure->{key}}[$record_index];

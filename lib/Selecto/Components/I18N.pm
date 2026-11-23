@@ -112,6 +112,7 @@ sub _field_terms ($domain, $contract, $add) {
         my $column = ref($source->{columns}) eq 'HASH' ? $source->{columns}{$field} : undef;
         my $default = $by_key->{$field} // _column_label($column, humanize($field));
         $add->("fields.$field.label", $default);
+        _boolean_terms($column, "fields.$field", $add);
         $add->("fields.$field.description", $column->{description})
             if ref($column) eq 'HASH' && defined($column->{description});
     }
@@ -130,12 +131,20 @@ sub _field_terms ($domain, $contract, $add) {
             my $default = $by_display->{$path}
                 // humanize($association_name) . ' - ' . _column_label($column, humanize($field));
             $add->("fields.$path.label", $default);
+            _boolean_terms($column, "fields.$path", $add);
             $add->("fields.$path.description", $column->{description})
                 if ref($column) eq 'HASH' && defined($column->{description});
             $add->("fields.$path.nested_label", _column_label($column, humanize($field)))
                 if $association->cardinality eq 'many';
         }
     }
+}
+
+sub _boolean_terms ($column, $semantic, $add) {
+    return unless ref($column) eq 'HASH' && ($column->{type} // '') =~ /\A(?:bool|boolean)\z/i;
+    my $display = ref($column->{display}) eq 'HASH' ? $column->{display} : {};
+    $add->("$semantic.display.true", $display->{true} // 'Yes');
+    $add->("$semantic.display.false", $display->{false} // 'No');
 }
 
 sub _star_dimension_labels ($domain) {

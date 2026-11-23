@@ -13,6 +13,7 @@ use Scalar::Util qw(blessed looks_like_number);
 use Math::BigFloat ();
 use Time::HiRes qw(time);
 use Selecto::Components::NumberFormat ();
+use Selecto::Components::GroupValue ();
 use Selecto::Components::PivotValues ();
 use Selecto::Components::QueryBuilder ();
 use Selecto::Components::RoundTrips ();
@@ -1065,6 +1066,12 @@ sub _resolve_pivot_labels ($config, $engine, $state) {
         my $catalog = $config->filter_map($engine->domain, $state->retarget)->{$source} // {};
         $labels{"$_->{value}"} = $_->{label} for @{$catalog->{filter_choices} // []};
     }
+    my $type = $config->field_map($engine->domain, $state->retarget)->{$source}{type};
+    if (!$dimension && $config->boolean_type($type)) {
+        # Boolean presentation belongs to the column, not the chosen-key map.
+        # Keep it raw here so a host label is never formatted twice.
+        $labels{$_} = "$_" for @{$gc->{pivot_values}};
+    }
     $labels{$gc->{pivot_null_value}} = '[NULL]' if defined($gc->{pivot_null_value});
     $gc->{pivot_labels} = \%labels;
 }
@@ -1122,6 +1129,14 @@ sub _sort_grid_entries ($entries, $column) {
 sub _grid_entry_order ($column) {
     return Selecto::Components::PivotValues->entry_order($column)
         if $column->{pivot_values} || $column->{value_order};
+    if ($column->{boolean_labels}) {
+        return sub ($left, $right) {
+            !defined($left->{value}) <=> !defined($right->{value})
+                || (defined($left->{value}) && defined($right->{value})
+                    ? ((Selecto::Components::GroupValue->boolean_key($left->{value}) // '') eq 'true')
+                        <=> ((Selecto::Components::GroupValue->boolean_key($right->{value}) // '') eq 'true') : 0)
+        };
+    }
     my $format = $column->{format} // '';
     my $type = $column->{source_type} // $column->{type} // '';
     my $has_sort_key = defined($column->{sort_key}) ? 1 : 0;
@@ -1315,7 +1330,7 @@ sub stream_export ($self, $controller, $format) {
                 $first_json_row = 0;
             } else {
                 $chunk .= join($delimiter, map {
-                    _delimited_cell($record->{$_->{key}})
+                    _delimited_cell(Selecto::Components::GroupValue->display($_, $record->{$_->{key}}))
                 } @columns) . "\r\n";
             }
             $batch_count++;
@@ -1434,7 +1449,7 @@ sub xlsx_file_export ($self, $controller) {
             _prepare_nested_records($built, \@record);
             _prepare_rollup_records($built, \@record);
             for my $column_index (0 .. $#columns) {
-                my $value = $record{$columns[$column_index]{key}};
+                my $value = Selecto::Components::GroupValue->display($columns[$column_index], $record{$columns[$column_index]{key}});
                 if (!defined($value)) {
                     $reserve_cell->('');
                     $worksheet->write_blank($row_index, $column_index, undef);
@@ -1547,7 +1562,7 @@ sub xlsx ($self, $model) {
     my $row_index = 1;
     for my $record (@$records) {
         for my $column_index (0 .. $#columns) {
-            my $value = $record->{$columns[$column_index]{key}};
+            my $value = Selecto::Components::GroupValue->display($columns[$column_index], $record->{$columns[$column_index]{key}});
             if (!defined($value)) {
                 $worksheet->write_blank($row_index, $column_index, undef);
                 next;
@@ -1592,7 +1607,7 @@ sub _delimited ($self, $model, $delimiter) {
     push @lines, join($delimiter, map { _delimited_cell($_->{label}) } @columns);
     for my $record (@$records) {
         push @lines, join($delimiter, map {
-            _delimited_cell($record->{$_->{key}})
+            _delimited_cell(Selecto::Components::GroupValue->display($_, $record->{$_->{key}}))
         } @columns);
     }
     return join("\r\n", @lines) . "\r\n";
@@ -1615,14 +1630,14 @@ sub _export_dataset ($model) {
     return _pivot_export_dataset($grid) if $grid->{pivot};
 
     my @columns = ({
-        key => '__selecto_grid_row',
+        %{$grid->{row_axis}}, key => '__selecto_grid_row',
         label => $grid->{row_axis}{label},
     });
     for my $column_index (0 .. $#{$grid->{columns}}) {
         push @columns, {
             %{$grid->{measure}},
             key => '__selecto_grid_column_' . $column_index,
-            label => Selecto::Components::PivotValues->rank_prefix($grid->{column_axis}, $grid->{columns}[$column_index]) . _grid_export_label($grid->{columns}[$column_index]{value}),
+            label => Selecto::Components::PivotValues->rank_prefix($grid->{column_axis}, $grid->{columns}[$column_index]) . _grid_export_label($grid->{columns}[$column_index]{value}, $grid->{column_axis}),
         };
     }
     my @records;
@@ -1647,7 +1662,7 @@ sub _pivot_export_dataset ($grid) {
     my @measures = @{$grid->{measures}};
     my $totals = $grid->{totals};
     my @columns = map {
-        {key => '__selecto_grid_row_' . $_, label => $grid->{row_axes}[$_]{label}}
+        {%{$grid->{row_axes}[$_]}, key => '__selecto_grid_row_' . $_}
     } 0 .. $#{$grid->{row_axes}};
     my @value_columns;
     for my $column_index (0 .. $#{$grid->{columns}}) {
@@ -1655,7 +1670,7 @@ sub _pivot_export_dataset ($grid) {
             push @value_columns, {
                 %{$measures[$measure_index]},
                 key => "__selecto_grid_column_${column_index}_$measure_index",
-                label => Selecto::Components::PivotValues->rank_prefix($grid->{column_axis}, $grid->{columns}[$column_index]) . _grid_export_label($grid->{columns}[$column_index]{value}) . " \x{b7} " . $measures[$measure_index]{label},
+                label => Selecto::Components::PivotValues->rank_prefix($grid->{column_axis}, $grid->{columns}[$column_index]) . _grid_export_label($grid->{columns}[$column_index]{value}, $grid->{column_axis}) . " \x{b7} " . $measures[$measure_index]{label},
                 column => $grid->{columns}[$column_index]{key}, measure => $measures[$measure_index]{key},
             };
         }
@@ -1695,13 +1710,13 @@ sub _summary_pivot_export_dataset ($model) {
     my $pivot = $result->{pivot_data};
     my @groups = grep { !$_->{measure} && !$_->{action_id} } @{$result->{columns}};
     my @measures = @{$pivot->{measures}};
-    my @columns = map { {key => $_->{key}, label => $_->{label}} } @groups;
+    my @columns = map { {%$_} } @groups;
     my @value_columns;
     for my $column_index (0 .. $#{$pivot->{columns}}) {
         push @value_columns, map { {
             %{$measures[$_]},
             key => "__selecto_pivot_${column_index}_$_",
-            label => Selecto::Components::PivotValues->rank_prefix($pivot->{column_axis}, $pivot->{columns}[$column_index]) . _grid_export_label($pivot->{columns}[$column_index]{value}) . " \x{b7} " . $measures[$_]{label},
+            label => Selecto::Components::PivotValues->rank_prefix($pivot->{column_axis}, $pivot->{columns}[$column_index]) . _grid_export_label($pivot->{columns}[$column_index]{value}, $pivot->{column_axis}) . " \x{b7} " . $measures[$_]{label},
             column => $pivot->{columns}[$column_index]{key}, measure => $measures[$_]{key},
         } } 0 .. $#measures;
     }
@@ -1723,7 +1738,8 @@ sub _summary_pivot_export_dataset ($model) {
     return (\@columns, \@records);
 }
 
-sub _grid_export_label ($value) {
+sub _grid_export_label ($value, $column = undef) {
+    $value = Selecto::Components::GroupValue->display($column, $value);
     return defined($value) && !ref($value) ? "$value" : '[NULL]';
 }
 
