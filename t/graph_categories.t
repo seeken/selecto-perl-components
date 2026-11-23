@@ -41,4 +41,9 @@ is $data->{axes}{y1}{unit}{kind}, 'count', 'second axis retains count unit';
 $data = $get->(measure => ['revenue', 'revenue'], measure_series_id => ['first', 'second'], measure_stack => ['money', 'money']);
 ok $data->{axes}{y}{stacked}, 'horizontal stack has a stacked value axis';
 is_deeply [map { $_->{stack} } @{$data->{datasets}}], ['money', 'money'], 'horizontal stack groups retained';
+# Past the grid cell cap a graph reads no further, so its total is a lower bound.
+$t->get_ok('/sales-capped' => form => {%input})->status_is(200);
+is scalar(@{from_json($t->tx->res->dom->at('[data-sc-chart]')->attr('data-chart-data'))->{labels}}), 15,
+    'capped graph still shows its top categories';
+$t->text_is('.sc-chart-categories', 'Top 15 of more than 100 categories');
 done_testing;

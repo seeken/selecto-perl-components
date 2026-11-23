@@ -1487,7 +1487,8 @@ sub _graph ($class, $result, $model) {
     my $categories = $result->{graph_categories};
     my $category_note = $categories ? '<p class="sc-chart-categories" role="status">' .
         ($categories->{shown} < $categories->{total} ? 'Top ' : 'Showing ') .
-        _h($categories->{shown}) . ' of ' . _h($categories->{total}) . ' categories</p>' : '';
+        _h($categories->{shown}) . ' of ' . ($categories->{more} ? 'more than ' : '') .
+        _h($categories->{total}) . ' categories</p>' : '';
     return $category_note . '<div class="sc-chart sc-chart-' . _h($model->{state}->chart_type) .
         '" role="group" aria-label="Selected measures by selected groups" aria-busy="true" data-sc-chart ' .
         'data-chart-type="' . _h($model->{state}->chart_type) . '" data-chart-data="' .

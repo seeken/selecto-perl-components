@@ -38,6 +38,10 @@ $app->plugin('Selecto::Components' => {websocket_mode => 'public', explorers => 
     engine_factory => sub { $engine },
     measures => [{id => 'revenue', label => 'Revenue', aggregate => 'sum', field => 'revenue'},
         {id => 'volume', label => 'Volume', aggregate => 'count'}],
+}, sales_capped => {
+    path => '/sales-capped', default_fields => ['id'], max_limit => 500, max_grid_result_cells => 100,
+    engine_factory => sub { $engine },
+    measures => [{id => 'revenue', label => 'Revenue', aggregate => 'sum', field => 'revenue'}],
 }}});
 $app->start unless caller;
 $app;

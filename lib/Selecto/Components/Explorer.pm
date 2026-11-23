@@ -166,6 +166,10 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         # still bounded by max_grid_result_cells and the engine's response budget.
         my $graph_categories;
         if ($built->{graph}) {
+            # Past the cell cap the category total is only a lower bound; drop
+            # the probe row so a category is never shown cut short.
+            my $capped = @records > $config->max_grid_result_cells ? 1 : 0;
+            splice @records, $config->max_grid_result_cells if $capped;
             my @dimensions = grep { !$_->{measure}
                 && ($_->{field} // '') ne ($state->graph_series_group // '') } @{$built->{columns}};
             my %rank;
@@ -176,7 +180,8 @@ sub model ($self, $controller, $input = undef, $options = undef) {
                 $rank{$key} //= ++$total;
                 $rank{$key} <= $state->limit;
             } @records;
-            $graph_categories = {shown => $total < $state->limit ? $total : $state->limit, total => $total};
+            $graph_categories = {shown => $total < $state->limit ? $total : $state->limit, total => $total,
+                ($capped ? (more => 1) : ())};
         }
         my $returned_count = scalar(@records);
         _prepare_pivot_records($built, \@records);
