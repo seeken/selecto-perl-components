@@ -2464,3 +2464,24 @@ test("graph numeric labels use en-US grouping and percentage scale", async ({pag
     "Value: 8.0 hour", "Value: 0.35 day", "Value: 12 day"
   ]);
 });
+
+test("a live submit made before the WebSocket opens is sent once it connects", async ({page}) => {
+  await load(page, `<section id="selecto-channel-early" hx-ws:connect="/explorer/early/ws">
+    <span data-selecto-connection>Connecting</span>
+    <form action="/explorer/early" method="get" hx-ws:send data-sc-graph-drilldown="0">
+      <input name="view" value="detail">
+    </form>
+  </section>`);
+  await page.evaluate(() => {
+    // HTMX is present but has not opened the channel's socket yet.
+    window.htmx = {process() {}};
+    window.sent = 0;
+    document.addEventListener("submit", event => { window.sent += 1; event.preventDefault(); });
+    document.querySelector("form").requestSubmit();
+  });
+  // Held: nothing reaches the page's handlers and the page does not navigate.
+  expect(await page.evaluate(() => window.sent)).toBe(0);
+  await expect(page).toHaveURL("about:blank");
+  await page.evaluate(() => document.dispatchEvent(new CustomEvent("htmx:ws:after:connection", {bubbles: true})));
+  await expect.poll(() => page.evaluate(() => window.sent)).toBe(1);
+});

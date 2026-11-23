@@ -1,6 +1,11 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - A live submit (a drilldown, page or run) made before HTMX has opened
+      the WebSocket is held and sent once it connects, instead of being
+      cancelled and lost; if it does not connect within five seconds the
+      submit finishes over HTTP.
+    - All-rows graph exports are no longer capped at the graph's cell limit.
     - Horizontal bars retain dimension labels, measure units, dual axes and
       stack groups; long labels use ellipses with full tooltip titles. Size
       charts for every category and scroll above 900px. Graph limit selects

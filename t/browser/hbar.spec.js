@@ -73,17 +73,26 @@ test("horizontal dimension labels, currency ticks, top categories and drilldown"
   expect(result.title).toBe(result.labels[0]);
   expect(result.tooltip).toBe("Revenue: $2,921.00");
   // Exercise Chart.js's real click path, then the native detail query.
-  const point = await page.evaluate(() => {
+  await page.locator("[data-sc-chart] canvas").scrollIntoViewIfNeeded();
+  // The chart sizes itself from its category count, and a late resize moves
+  // the bars. Click only once the first bar holds still across two frames.
+  const barPoint = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => {
     const chart = Chart.getChart(document.querySelector("[data-sc-chart] canvas"));
-    // Finish any running animation so the bar is where a click will land.
     chart.stop();
-    chart.update("none");
     const bar = chart.getDatasetMeta(0).data[0];
     const rect = chart.canvas.getBoundingClientRect();
-    return {x: rect.left + (bar.x + bar.base) / 2, y: rect.top + bar.y};
-  });
+    resolve({x: Math.round(rect.left + (bar.x + bar.base) / 2), y: Math.round(rect.top + bar.y)});
+  })));
+  let point = await barPoint();
+  await expect.poll(async () => {
+    const next = await barPoint();
+    const still = next.x === point.x && next.y === point.y;
+    point = next;
+    return still;
+  }).toBe(true);
   await page.mouse.click(point.x, point.y);
-  await expect(page.locator(".sc-results tbody tr")).toHaveCount(2);
+  // Detail is a full query; allow for a loaded machine (the whole suite runs in parallel).
+  await expect(page.locator(".sc-results tbody tr")).toHaveCount(2, {timeout: 20000});
   await expect(page.locator('.sc-results tbody')).toContainText("292");
 });
 

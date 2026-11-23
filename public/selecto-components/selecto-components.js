@@ -2304,6 +2304,44 @@
       && form.closest('[hx-ws\\:connect]'));
   }
 
+  // A page can show its results before HTMX has opened its WebSocket, and
+  // HTMX binds hx-ws:send forms only once it has, so a submit in that window
+  // would be cancelled and never sent. Hold it until the connection opens and
+  // submit again; if it does not open in time, finish through the HTTP route.
+  var pendingConnectionSubmits = [];
+  function deferUntilConnected(form, event, buttonLabel) {
+    var channel = form.closest('[hx-ws\\:connect]');
+    var connection = channel && channel._htmx && channel._htmx.ws && channel._htmx.ws.connection;
+    var socket = connection && connection.socket;
+    // Without HTMX there is no WebSocket transport to wait for.
+    if (!channel || !window.htmx || connectionStatus === "Live"
+        || (socket && socket.readyState === WebSocket.OPEN)) return false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (pendingConnectionSubmits.some(function (pending) { return pending.form === form; })) return true;
+    var submitter = event.submitter && event.submitter.form === form ? event.submitter : null;
+    var pending = {form: form, submitter: submitter, timer: null};
+    pending.timer = window.setTimeout(function () {
+      pendingConnectionSubmits = pendingConnectionSubmits.filter(function (item) { return item !== pending; });
+      submitWithoutWebSocket(form, buttonLabel, submitter);
+    }, 5000);
+    pendingConnectionSubmits.push(pending);
+    return true;
+  }
+  document.addEventListener("htmx:ws:after:connection", function () {
+    var ready = pendingConnectionSubmits;
+    pendingConnectionSubmits = [];
+    // Let HTMX bind the channel's forms first.
+    window.setTimeout(function () {
+      ready.forEach(function (pending) {
+        window.clearTimeout(pending.timer);
+        if (!pending.form.isConnected) return;
+        if (typeof pending.form.requestSubmit === "function") pending.form.requestSubmit(pending.submitter || undefined);
+        else submitWithoutWebSocket(pending.form, undefined, pending.submitter);
+      });
+    }, 0);
+  });
+
   function restoreSelectoHistory(state) {
     var key = state && state.selectoSnapshot;
     var snapshot = key && loadSelectoHistorySnapshot(key);
@@ -2426,6 +2464,7 @@
       }
       var connection = document.querySelector("[data-selecto-connection]");
       if (usesSelectoWebSocket(gridForm)) {
+        if (deferUntilConnected(gridForm, event, "Opening details…")) return;
         // Do not depend on the WebSocket extension's form listener to cancel
         // native navigation. Freshly swapped forms can be submitted before
         // HTMX has initialized them; the event must still bubble so an
@@ -2464,6 +2503,7 @@
       rememberSelectoHistory(window.location.pathname + window.location.search + window.location.hash, false);
       var websocketConnection = document.querySelector("[data-selecto-connection]");
       if (usesSelectoWebSocket(websocketForm)) {
+        if (deferUntilConnected(websocketForm, event, "Loading…")) return;
         event.preventDefault();
         beginSelectoNavigation(websocketForm, event.submitter);
         showPaginationLoading(websocketForm, event.submitter);
@@ -2503,6 +2543,7 @@
     setBuilderTrayCollapsed(form.closest("[data-sc-builder-shell]"), true);
     var connection = document.querySelector("[data-selecto-connection]");
     if (usesSelectoWebSocket(form)) {
+      if (deferUntilConnected(form, event, "Running…")) return;
       event.preventDefault();
       beginSelectoNavigation(form);
       return;
