@@ -1038,10 +1038,6 @@ sub _parse_pagination ($config, $input, $view, $errors) {
         if defined($limit_input) && $limit_input !~ /\A[1-9]\d*\z/;
     my ($default_limit, $max_limit) = $config->page_limits($view);
     my $limit = _positive_integer($limit_input, $default_limit);
-    if ($view eq 'graph') {
-        my $minimum = $max_limit < 250 ? $max_limit : 250;
-        $limit = $minimum if $limit < $minimum;
-    }
     if ($limit > $max_limit) {
         push @$errors, "$limit_label limit is above the configured maximum.";
         $limit = $max_limit;

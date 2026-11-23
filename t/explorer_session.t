@@ -80,13 +80,13 @@ my $full = {headers => {}, selecto_request_id => 'one', q => 1,
 $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json($full)})->message_ok;
 my $first = decode_json($t->message->[1]);
 is $first->{selecto}{session}{revision}, 1, 'socket acknowledges initial full state';
-my $executions = $TestSelectoComponents::Adapter::COUNT_EXECUTIONS;
+my $executions = $TestSelectoComponents::Adapter::DATA_EXECUTIONS;
 $t->send_ok({text => encode_json({headers => {}, selecto_request_id => 'two',
     selecto_session => {revision => 1, set => {measure_color => '#aa0000'}, remove => []}})})->message_ok;
 my $second = decode_json($t->message->[1]);
 is $second->{selecto}{session}{revision}, 2, 'socket accepts presentation patch';
 is $second->{selecto}{session}{cache_hit}, 1, 'presentation change reuses compiled results';
-is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $executions, 'count did not execute again';
+is $TestSelectoComponents::Adapter::DATA_EXECUTIONS, $executions, 'data query did not execute again';
 is $checks, 2, 'authorization runs even on cache hit';
 $t->send_ok({text => encode_json({headers => {}, selecto_request_id => 'invalid',
     selecto_session => {revision => 2, set => {field => ['does_not_exist']}, remove => []}})})->message_ok;
@@ -96,9 +96,9 @@ is $invalid->{selecto}{session}{revision}, 2, 'invalid selections do not advance
 $t->send_ok({text => encode_json({headers => {}, selecto_request_id => 'stale',
     selecto_session => {revision => 1, set => {page => 2}, remove => []}})})->message_ok;
 ok decode_json($t->message->[1])->{selecto}{session}{resync}, 'stale patch requests resynchronization';
-is $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, $executions, 'stale patch executes no query';
+is $TestSelectoComponents::Adapter::DATA_EXECUTIONS, $executions, 'stale patch executes no query';
 $t->send_ok({text => encode_json({%$full, selecto_refresh => 1})})->message_ok;
-cmp_ok $TestSelectoComponents::Adapter::COUNT_EXECUTIONS, '>', $executions, 'refresh executes fresh SQL';
+cmp_ok $TestSelectoComponents::Adapter::DATA_EXECUTIONS, '>', $executions, 'refresh executes fresh SQL';
 $actor = 'bob';
 $t->send_ok({text => encode_json({headers => {},
     selecto_session => {revision => 3, set => {page => 2}, remove => []}})})->message_ok;

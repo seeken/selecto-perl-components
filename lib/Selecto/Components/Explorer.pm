@@ -120,6 +120,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         _validate_result($raw, $config->limits);
         my $grid_limit_exceeded = $grid_all_rows
             && @{$raw->{rows}} > $config->max_grid_result_cells ? 1 : 0;
+        my $unpaged = $all_rows || $grid_all_rows || $built->{graph};
         my $total_count;
         my $count_stats = {};
         # A peeked page (QueryBuilder fetched one row beyond it) needs no count query
@@ -128,14 +129,14 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         # Detail (count_beyond_page) counts, as it does for an empty page past the
         # first, which may lie past the end.
         my $more_pages;
-        my $count = !$built->{peek} && !$all_rows && !$grid_all_rows;
+        my $count = !$built->{peek} && !$unpaged;
         if ($built->{peek}) {
             $more_pages = @{$raw->{rows}} > $state->limit ? 1 : 0;
             $raw = {%$raw, rows => [@{$raw->{rows}}[0 .. $state->limit - 1]]} if $more_pages;
             $total_count = $more_pages ? undef : ($state->page - 1) * $state->limit + @{$raw->{rows}};
             $count = $built->{count_beyond_page} && ($more_pages || (!@{$raw->{rows}} && $state->page > 1));
             $total_count = undef if $count;
-        } elsif ($all_rows || $grid_all_rows) {
+        } elsif ($unpaged) {
             $total_count = scalar @{$raw->{rows}};
         }
         if ($count) {
@@ -149,7 +150,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             $total_count = $counted;
         }
         my $elapsed_ms = _elapsed_ms($started);
-        my $total_pages = $all_rows || $grid_all_rows ? 1
+        my $total_pages = $unpaged ? 1
             : !defined($total_count) ? $state->page + 1   # at least the next one
             : int(($total_count + $state->limit - 1) / $state->limit);
         $total_pages = 1 if $total_pages < 1;
@@ -160,6 +161,23 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             \%record;
         } @{$raw->{rows}};
         @records = () if $grid_limit_exceeded;
+        # Graph limits count axis categories, not cells: keep all breakout series
+        # for the first N categories in the query's existing order. Execution is
+        # still bounded by max_grid_result_cells and the engine's response budget.
+        my $graph_categories;
+        if ($built->{graph}) {
+            my @dimensions = grep { !$_->{measure}
+                && ($_->{field} // '') ne ($state->graph_series_group // '') } @{$built->{columns}};
+            my %rank;
+            my $total = 0;
+            @records = grep {
+                my $record = $_;
+                my $key = to_json([map { $record->{$_->{drilldown_key} // $_->{key}} } @dimensions]);
+                $rank{$key} //= ++$total;
+                $rank{$key} <= $state->limit;
+            } @records;
+            $graph_categories = {shown => $total < $state->limit ? $total : $state->limit, total => $total};
+        }
         my $returned_count = scalar(@records);
         _prepare_pivot_records($built, \@records);
         _prepare_nested_records($built, \@records);
@@ -198,6 +216,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             %$built,
             columns => $built->{columns},
             records => \@records,
+            ($graph_categories ? (graph_categories => $graph_categories) : ()),
             drilldowns => $drilldowns,
             graph_axis_drilldowns => $graph_axis_drilldowns,
             (defined($grid_data) ? (grid_data => $grid_data) : ()),
@@ -209,7 +228,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
             total_known => defined($total_count) ? 1 : 0,   # an aggregate page with more after it: no
             ($count_stats->{deferred} ? (count_deferred => 1) : ()),   # Detail: counted after the page
             total_pages => $total_pages,
-            has_more => !$all_rows && !$grid_all_rows && $state->page < $total_pages ? 1 : 0,
+            has_more => !$unpaged && $state->page < $total_pages ? 1 : 0,
             all_rows => $all_rows,
             grid_all_rows => $grid_all_rows,
             elapsed_ms => $elapsed_ms,
@@ -627,6 +646,8 @@ sub _drilldown_for_group_indexes ($state, $groups, $record, $indexes, $grain = u
         %{$state->as_hash},
         view => 'detail',
         limit => undef,   # Detail's own page size, not the summary's
+        # Aggregate measure aliases cannot order the underlying Detail rows.
+        orders => [grep { $_->{field} !~ /\Ameasure:/ } @{$state->orders // []}],
         filters => \@filters,
         page => 1,
         errors => [],

@@ -1245,7 +1245,7 @@ sub _graph ($class, $result, $model) {
     for my $record_index (0 .. $#records) {
         my $record = $records[$record_index];
         my @axis_values = map { $record->{$_->{key}} } @axis_dimensions;
-        my $point_key = to_json(\@axis_values);
+        my $point_key = to_json([map { $record->{$_->{drilldown_key} // $_->{key}} } @axis_dimensions]);
         unless (exists $point_index{$point_key}) {
             $point_index{$point_key} = scalar @points;
             push @points, {
@@ -1290,6 +1290,7 @@ sub _graph ($class, $result, $model) {
     my %axes;
     my $global_type = $model->{state}->chart_type;
     my $mixed_series = $global_type =~ /\A(?:bar|line|area)\z/ ? 1 : 0;
+    my $value_axes = $mixed_series || $global_type eq 'horizontal_bar' || $global_type eq 'stacked_bar';
     for my $measure_index (0 .. $#measures) {
         my $measure = $measures[$measure_index];
         for my $series_index (0 .. $#series_values) {
@@ -1358,14 +1359,14 @@ sub _graph ($class, $result, $model) {
                 ? (displayDecimals => $duration_profile->{decimals}) : ();
 
             my $stack = $series->{stack} // '';
-            if ($mixed_series) {
+            if ($value_axes) {
                 $axes{$axis_id} //= {
                     side => $resolved_axis,
                     label => _graph_unit_label($series->{unit}),
                     %duration_display,
                     (defined($series->{unit}) ? (unit => $series->{unit}) : ()),
                 };
-                $axes{$axis_id}{stacked} = 1 if length($stack);
+                $axes{$axis_id}{stacked} = 1 if length($stack) || $global_type eq 'stacked_bar';
             }
             my $dataset_label = $series_dimension
                 ? (@measures > 1
@@ -1394,13 +1395,15 @@ sub _graph ($class, $result, $model) {
                 transforms => [map { $_->{type} } @{$series->{transforms} // []}],
                 unit => $analysis->{unit},
                 %duration_display,
+                ($value_axes ? (
+                    yAxisID => $axis_id,
+                    (length($stack) ? (stack => $stack) : ()),
+                ) : ()),
                 ($mixed_series ? (
                     type => $series_type eq 'area' ? 'line' : $series_type,
                     scType => $series_type,
-                    yAxisID => $axis_id,
                     seriesId => ($series->{id} // 'series_' . ($measure_index + 1)) .
                         ($series_dimension ? '_breakout_' . ($series_index + 1) : ''),
-                    (length($stack) ? (stack => $stack) : ()),
                 ) : ()),
             };
         }
@@ -1412,7 +1415,7 @@ sub _graph ($class, $result, $model) {
         labels => \@labels,
         datasets => \@datasets,
         axisDrilldownIndices => \@axis_drilldown_indices,
-        ($mixed_series ? (axes => \%axes) : ()),
+        ($value_axes ? (axes => \%axes) : ()),
     });
     my @values = map {
         my $record_index = $_;
@@ -1481,7 +1484,11 @@ sub _graph ($class, $result, $model) {
             : $column
     } @{$result->{columns}};
     my %raw_result = (%$result, columns => \@raw_columns);
-    return '<div class="sc-chart sc-chart-' . _h($model->{state}->chart_type) .
+    my $categories = $result->{graph_categories};
+    my $category_note = $categories ? '<p class="sc-chart-categories" role="status">' .
+        ($categories->{shown} < $categories->{total} ? 'Top ' : 'Showing ') .
+        _h($categories->{shown}) . ' of ' . _h($categories->{total}) . ' categories</p>' : '';
+    return $category_note . '<div class="sc-chart sc-chart-' . _h($model->{state}->chart_type) .
         '" role="group" aria-label="Selected measures by selected groups" aria-busy="true" data-sc-chart ' .
         'data-chart-type="' . _h($model->{state}->chart_type) . '" data-chart-data="' .
         _h($chart_data) . '"><div class="sc-chart-canvas"><canvas role="img" aria-label="' .

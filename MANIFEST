@@ -135,3 +135,6 @@ t/browser/fixtures/pivot-values.pl
 lib/Selecto/Components/PivotValues.pm
 t/computed_key_dimension.t
 t/top_n_column_order.t
+t/graph_categories.t
+t/browser/hbar.spec.js
+t/browser/fixtures/hbar.pl

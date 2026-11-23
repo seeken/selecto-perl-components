@@ -634,7 +634,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
         # A pair of high-cardinality dimensions can otherwise materialize an
         # effectively unbounded matrix in both PostgreSQL and the browser.
         $query = $query->limit($config->max_grid_result_cells + 1);
-    } elsif (!exists($options->{paginate}) || $options->{paginate}) {
+    } elsif ($state->view ne 'graph' && (!exists($options->{paginate}) || $options->{paginate})) {
         # An aggregate page is counted from its own rows rather than a second, equally
         # expensive count query: one row beyond the page says whether another follows
         # (Explorer model, peek).

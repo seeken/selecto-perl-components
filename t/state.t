@@ -229,8 +229,7 @@ ok $configured->valid, 'configured graph state is valid';
 is $configured->chart_type, 'area', 'configured chart type is retained';
 ok $configured->graph_show_table, 'the optional graph aggregate table is retained';
 is $configured->measure, 'total_price', 'configured measure is retained';
-is $configured->limit, $config->max_limit,
-    'graph point limits are raised to the largest configured test limit';
+is $configured->limit, 50, 'explicit graph category limit is retained';
 is $configured->page, 1, 'graph results always use their first point set';
 like join('&', @{$configured->query_pairs}), qr/graph_show_table&1/,
     'canonical graph state retains the aggregate-table preference';

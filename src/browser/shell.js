@@ -344,8 +344,8 @@
     var limit = root.querySelector("[data-sc-limit]");
     if (limit) {
       // Each view has its own page sizes (data-sc-limit-views): Summary
-      // pages are bigger than Detail ones, and a graph plots at least 250
-      // points. A size left at the last view's default follows the view.
+      // pages are bigger than Detail ones. A size left at the last view's
+      // default follows the view; explicit small graph limits are retained.
       var options = Array.from(limit.options);
       var maximum = options.reduce(function (value, option) {
         return Math.max(value, Number(option.value) || 0);
@@ -354,10 +354,9 @@
       try { views = JSON.parse(limit.getAttribute("data-sc-limit-views") || "{}") || {}; } catch (error) { views = {}; }
       var sizes = views[view] || {default: maximum, max: maximum};
       var previous = views[limit.getAttribute("data-sc-limit-view")];
-      var graphMinimum = graphActive ? Math.min(250, sizes.max) : 0;
       var allowed = function (option) {
         var value = Number(option.value);
-        return value <= sizes.max && value >= graphMinimum;
+        return value > 0 && value <= sizes.max;
       };
       options.forEach(function (option) {
         option.hidden = !allowed(option);
@@ -368,10 +367,9 @@
       var fits = options.filter(allowed);
       var byDefault = fits.find(function (option) { return Number(option.value) === sizes.default; });
       // A size the user chose is kept where it fits, or brought to the
-      // largest this view allows; one too small for a graph takes its default.
+      // largest this view allows.
       var next = (previous && current === previous.default) || !selected ? byDefault
         : current > sizes.max ? fits[fits.length - 1]
-        : current < graphMinimum ? byDefault || fits[0]
         : null;
       if (next) limit.value = next.value;
       limit.setAttribute("data-sc-limit-view", view);

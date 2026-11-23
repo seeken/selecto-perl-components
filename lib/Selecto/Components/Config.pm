@@ -332,7 +332,7 @@ sub allows_view ($self, $view) {
 }
 
 # A view's page size and the largest it allows: summary pages have their
-# own, and a graph plots at least 250 points (up to 500 by default).
+# own, and a graph defaults to up to 500 categories, bounded by max_limit.
 sub page_limits ($self, $view) {
     my $max = $self->max_limit;
     return ($self->aggregate_default_limit, $self->aggregate_max_limit) if ($view // '') eq 'aggregate';

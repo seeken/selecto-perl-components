@@ -1338,7 +1338,7 @@ test("a legacy Chart global does not prevent Chart.js from loading", async ({pag
   expect(await page.evaluate(() => window.Chart.version)).toBe("loaded-chartjs");
 });
 
-test("switching to graph mode raises the point limit and removes page selection", async ({page}) => {
+test("switching to graph mode keeps a small category limit and removes page selection", async ({page}) => {
   await load(page, `
     <form data-sc-builder>
       <input type="radio" name="view" value="detail" checked>
@@ -1357,8 +1357,8 @@ test("switching to graph mode raises the point limit and removes page selection"
   `);
   await page.locator('input[name="view"][value="graph"]').check();
   await expect(page.locator('[data-sc-limit-label]')).toHaveText("Points");
-  await expect(page.locator('[data-sc-limit]')).toHaveValue("500");
-  await expect(page.locator('[data-sc-limit] option[value="50"]')).toHaveAttribute("disabled", "");
+  await expect(page.locator('[data-sc-limit]')).toHaveValue("50");
+  await expect(page.locator('[data-sc-limit] option[value="50"]')).toBeEnabled();
   await expect(page.locator('[data-sc-page-control]')).toBeHidden();
   await expect(page.locator('[data-sc-page-control] input')).toBeDisabled();
   await expect(page.locator('[data-sc-page-control] input')).toHaveValue("1");
@@ -1419,9 +1419,9 @@ test("a host limit below 250 remains selectable in graph mode", async ({page}) =
     </form>
   `);
   await page.locator('input[name="view"][value="graph"]').check();
-  await expect(page.locator('[data-sc-limit]')).toHaveValue("100");
+  await expect(page.locator('[data-sc-limit]')).toHaveValue("25");
   await expect(page.locator('[data-sc-limit] option[value="100"]')).not.toBeDisabled();
-  expect(await page.locator("form").evaluate(form => new FormData(form).get("limit"))).toBe("100");
+  expect(await page.locator("form").evaluate(form => new FormData(form).get("limit"))).toBe("25");
 });
 
 test("the Rows menu follows each view's page sizes", async ({page}) => {

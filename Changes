@@ -1,6 +1,11 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Horizontal bars retain dimension labels, measure units, dual axes and
+      stack groups; long labels use ellipses with full tooltip titles. Size
+      charts for every category and scroll above 900px. Graph limit selects
+      categories after ordering, retains complete breakout series and own-key
+      drilldowns, and reports shown/total categories. Vertical labels rotate.
     - Freeze summary pivot row labels while the table scrolls sideways: with
       one row group each row is named by a th, which stayed behind its
       frozen heading. Shared CSS from selecto-api-console d15d366.

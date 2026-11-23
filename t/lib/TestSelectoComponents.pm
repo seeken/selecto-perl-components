@@ -511,7 +511,7 @@ use Selecto::Statement ();
 
 our (
     $LAST_QUERY, $LAST_COUNT_QUERY, $LAST_COUNT_STATEMENT,
-    $LAST_COMPILED_QUERY, $LAST_DATA_QUERY, $COUNT_EXECUTIONS, $LAST_WRITE, $WRITE_ERROR,
+    $LAST_COMPILED_QUERY, $LAST_DATA_QUERY, $COUNT_EXECUTIONS, $DATA_EXECUTIONS, $LAST_WRITE, $WRITE_ERROR,
 );
 our $RECORD_PRODUCT_NAME = 'Test Widget';
 # Rows a page query returns (one with a limit). Of the 42 rows matched, 2 by
@@ -555,6 +555,7 @@ sub execute_query ($self, $statement) {
         $COUNT_EXECUTIONS++;
         return { columns => $statement->columns, rows => [[42]] };
     }
+    $DATA_EXECUTIONS++;
     $LAST_DATA_QUERY = $LAST_COMPILED_QUERY;
     # This fixture has two editable records. Identify the row by the actual
     # bound identity, independent of the handler's paging/lookahead size.
@@ -570,8 +571,9 @@ sub execute_query ($self, $statement) {
     my $rollup = grep { $_ eq '__selecto_rollup_grouping' } @{$statement->columns};
     my $group_count = $rollup ? scalar(@{$LAST_DATA_QUERY->groups}) : 0;
     my @rows;
-    my $row_count = defined($LAST_DATA_QUERY->limit_value)
-        && $LAST_DATA_QUERY->limit_value <= 1000
+    my $row_count = !defined($LAST_DATA_QUERY->limit_value)
+        ? ($PAGE_ROWS eq 'full' ? 42 : $PAGE_ROWS)
+        : $LAST_DATA_QUERY->limit_value <= 1000
         ? ($PAGE_ROWS eq 'full' ? $LAST_DATA_QUERY->limit_value : $PAGE_ROWS) : 42;
     for my $row_index (1 .. $row_count) {
         my $row = [map {

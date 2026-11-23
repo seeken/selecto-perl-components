@@ -368,8 +368,8 @@
     var limit = root.querySelector("[data-sc-limit]");
     if (limit) {
       // Each view has its own page sizes (data-sc-limit-views): Summary
-      // pages are bigger than Detail ones, and a graph plots at least 250
-      // points. A size left at the last view's default follows the view.
+      // pages are bigger than Detail ones. A size left at the last view's
+      // default follows the view; explicit small graph limits are retained.
       var options = Array.from(limit.options);
       var maximum = options.reduce(function (value, option) {
         return Math.max(value, Number(option.value) || 0);
@@ -378,10 +378,9 @@
       try { views = JSON.parse(limit.getAttribute("data-sc-limit-views") || "{}") || {}; } catch (error) { views = {}; }
       var sizes = views[view] || {default: maximum, max: maximum};
       var previous = views[limit.getAttribute("data-sc-limit-view")];
-      var graphMinimum = graphActive ? Math.min(250, sizes.max) : 0;
       var allowed = function (option) {
         var value = Number(option.value);
-        return value <= sizes.max && value >= graphMinimum;
+        return value > 0 && value <= sizes.max;
       };
       options.forEach(function (option) {
         option.hidden = !allowed(option);
@@ -392,10 +391,9 @@
       var fits = options.filter(allowed);
       var byDefault = fits.find(function (option) { return Number(option.value) === sizes.default; });
       // A size the user chose is kept where it fits, or brought to the
-      // largest this view allows; one too small for a graph takes its default.
+      // largest this view allows.
       var next = (previous && current === previous.default) || !selected ? byDefault
         : current > sizes.max ? fits[fits.length - 1]
-        : current < graphMinimum ? byDefault || fits[0]
         : null;
       if (next) limit.value = next.value;
       limit.setAttribute("data-sc-limit-view", view);
@@ -529,6 +527,7 @@
   }
 
   function chartOptions(root, type, data) {
+    var horizontal = type === "horizontal_bar";
     var styles = window.getComputedStyle(root);
     var ink = styles.getPropertyValue("--sc-ink").trim() || "#dce6e8";
     var muted = styles.getPropertyValue("--sc-muted").trim() || "#9fb0b3";
@@ -545,8 +544,9 @@
           return raw && raw.label ? raw.label : items[0].label;
         }, label: function (context) {
           var dataset = context.dataset || {};
-          var value = context.parsed && typeof context.parsed.y !== "undefined"
-            ? context.parsed.y : context.raw;
+          var valueAxis = horizontal ? "x" : "y";
+          var value = context.parsed && typeof context.parsed[valueAxis] !== "undefined"
+            ? context.parsed[valueAxis] : context.raw;
           return (dataset.label ? dataset.label + ": " : "") + formatChartValue(value, dataset.unit, dataset.displayDecimals);
         }, afterLabel: function (context) {
           var dataset = context.dataset || {};
@@ -585,13 +585,26 @@
         grid: {color: chartColorWithAlpha(border, 0.45)},
         border: {color: border}
       };
-      options.scales = {x: Object.assign({}, axis)};
+      var categoryAxis = horizontal ? "y" : "x";
+      options.scales = {};
+      options.scales[categoryAxis] = Object.assign({}, axis, {
+        ticks: Object.assign({}, axis.ticks, horizontal ? {
+          autoSkip: false,
+          callback: function (value) {
+            var label = String(this.getLabelForValue(value));
+            return label.length > 36 ? label.slice(0, 35) + "…" : label;
+          }
+        } : {minRotation: 30, maxRotation: 60})
+      });
       var axes = data && data.axes ? data.axes : {y: {side: "left"}};
       Object.keys(axes).forEach(function (axisId) {
         var definition = axes[axisId] || {};
+        if (horizontal) axisId = definition.side === "right" ? "x2" : "x";
         options.scales[axisId] = Object.assign({}, axis, {
+          axis: horizontal ? "x" : "y",
           beginAtZero: true,
-          position: definition.side === "right" ? "right" : "left",
+          position: horizontal ? (definition.side === "right" ? "top" : "bottom")
+            : (definition.side === "right" ? "right" : "left"),
           title: {display: Boolean(definition.label), text: definition.label || "", color: ink}
         });
         options.scales[axisId].stacked = Boolean(definition.stacked);
@@ -607,7 +620,7 @@
         }
       });
       if (Object.keys(axes).some(function (axisId) { return Boolean(axes[axisId].stacked); })) {
-        options.scales.x.stacked = true;
+        options.scales[categoryAxis].stacked = true;
       }
     }
     if (type === "horizontal_bar") options.indexAxis = "y";
@@ -616,6 +629,27 @@
       options.scales.y.stacked = true;
     }
     return options;
+  }
+
+  function sizeHorizontalChart(root, canvas, count) {
+    var viewport = root.querySelector(".sc-chart-canvas");
+    if (!viewport) return;
+    var plot = viewport.querySelector("[data-sc-chart-plot]");
+    if (!plot) {
+      plot = document.createElement("div");
+      plot.dataset.scChartPlot = "";
+      plot.style.position = "relative";
+      viewport.appendChild(plot);
+      plot.appendChild(canvas);
+    }
+    // Chart.js sizes to its immediate parent. Cap the viewport, not the
+    // plotting surface, so even a scrolled chart keeps a tick for every bar.
+    var minimum = parseFloat(window.getComputedStyle(viewport).minHeight) || 320;
+    var current = parseFloat(window.getComputedStyle(viewport).height) || 420;
+    var height = Math.max(minimum, current, count * 22 + 100);
+    viewport.style.height = Math.min(height, 900) + "px";
+    viewport.style.overflowY = "auto";
+    plot.style.height = height + "px";
   }
 
   function initializeChart(root, attempt) {
@@ -647,6 +681,11 @@
         dataset.backgroundColor = brand;
       }
       var seriesType = dataset.scType || type;
+      if (type === "horizontal_bar") {
+        var definition = (data.axes || {})[dataset.yAxisID || "y"] || {};
+        dataset.xAxisID = definition.side === "right" || dataset.yAxisID === "y1" ? "x2" : "x";
+        dataset.yAxisID = "y";
+      }
       if (seriesType === "line" || seriesType === "area") dataset.tension = 0.28;
       if (seriesType === "area") {
         dataset.fill = "origin";
@@ -661,6 +700,7 @@
         dataset.showLine = false;
       }
     });
+    if (type === "horizontal_bar") sizeHorizontalChart(root, canvas, (data.labels || []).length);
     try {
       if (typeof window.Chart.getChart === "function") {
         var stale = window.Chart.getChart(canvas);

@@ -695,3 +695,27 @@ stepped buckets follow their numeric lower bounds. Ordering is done before
 paging. An explicit measure sort (`order=measure:total_price&direction=desc`)
 takes precedence; a curated measure ID that does not name a source field
 also works without the `measure:` prefix.
+
+### Graph categories and horizontal bars
+
+In Graph, `limit` (the Points menu) caps the number of axis categories after
+query ordering, rather than the number of breakout cells. For example,
+`view=graph&chart_type=horizontal_bar&limit=15&order=measure:revenue&direction=desc`
+shows the first 15 categories by descending revenue. Without a measure order,
+the existing group order applies. The chart reports “Top 15 of 146 categories”
+(or “Showing 15 of 15 categories”); no remainder/Other category is added by this
+limit. Each selected category keeps all its breakout series and original
+key-based drilldowns. Permalinks and saved state retain `limit`.
+
+Explicit positive graph limits can be as small as 1. The existing default is
+`min(500, max_limit)`, and `max_limit` still bounds the requested limit.
+Category counting reads the ordered aggregate result through the existing
+bounded executor (`max_grid_result_cells` and engine response budgets); a
+result exceeding that bound is rejected instead of showing a partial total.
+
+Horizontal bars put measure axes below/above the chart, retaining unit
+formatting and compatible stack groups. They allow 22px per category plus
+100px for chart furniture, with the existing chart height as the minimum.
+The viewport grows to 900px, then scrolls while every category keeps its tick.
+Axis names longer than 36 characters use an ellipsis; tooltip titles retain
+the full name. Vertical bars and lines rotate category labels before skipping.
