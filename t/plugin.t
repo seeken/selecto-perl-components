@@ -1296,6 +1296,8 @@ $t->get_ok('/explore/products?q=1&view=aggregate&field=product_name&field_alias=
     ->element_exists('[data-sc-picker-kind="group"] [data-field="unit_price"] input[name="group_bucket_ranges"][value="0-10, 11+"]')
     ->content_like(qr/Price counts: 0-10/);
 
+# A graph reads up to its cell cap; this fixture matches two categories there.
+$TestSelectoComponents::Adapter::CAPPED_ROWS = 2;
 $t->get_ok('/explore/products?q=1&view=graph&chart_type=area&graph_show_table=1&field=product_name&group=category.category_name&measure=count&measure_alias=&measure_function=count&measure_series_id=volume&measure_chart_type=bar&measure_axis=auto&measure_stack=&measure_color=&measure_transform=&measure_transform_window=&measure=total_price&measure_alias=Smoothed+price&measure_function=sum&measure_series_id=revenue&measure_chart_type=line&measure_axis=auto&measure_stack=&measure_color=%23112233&measure_transform=moving_average&measure_transform_window=2&order=product_name&direction=asc&limit=25&page=3')
     ->status_is(200)
     ->element_exists('.sc-chart[aria-label="Selected measures by selected groups"][aria-busy="true"]')
@@ -1384,6 +1386,7 @@ for my $chart_type (qw(bar horizontal_bar stacked_bar line pie doughnut scatter)
         ->element_exists_not('.sc-chart + .sc-table-wrap')
         ->element_exists_not('.sc-pagination');
 }
+$TestSelectoComponents::Adapter::CAPPED_ROWS = 42;
 
 $t->get_ok('/explore/products?q=1&view=detail&field=drop_table&order=drop_table&limit=25&page=1')
     ->status_is(422)

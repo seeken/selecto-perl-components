@@ -518,6 +518,8 @@ our $RECORD_PRODUCT_NAME = 'Test Widget';
 # default: a short last page. 'full' returns as many as the query asks for (a
 # page and the row beyond it), so the Explorer counts.
 our $PAGE_ROWS = 2;
+# Rows a capped read (a grid's or graph's cell cap, above 1000) returns.
+our $CAPPED_ROWS = 42;
 
 sub name { return 'test'; }
 sub bounded_result_statement ($self, $statement, %options) {
@@ -574,7 +576,7 @@ sub execute_query ($self, $statement) {
     my $row_count = !defined($LAST_DATA_QUERY->limit_value)
         ? ($PAGE_ROWS eq 'full' ? 42 : $PAGE_ROWS)
         : $LAST_DATA_QUERY->limit_value <= 1000
-        ? ($PAGE_ROWS eq 'full' ? $LAST_DATA_QUERY->limit_value : $PAGE_ROWS) : 42;
+        ? ($PAGE_ROWS eq 'full' ? $LAST_DATA_QUERY->limit_value : $PAGE_ROWS) : $CAPPED_ROWS;
     for my $row_index (1 .. $row_count) {
         my $row = [map {
                 $_ eq '__selecto_rollup_grouping' ? 0

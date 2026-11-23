@@ -75,6 +75,9 @@ test("horizontal dimension labels, currency ticks, top categories and drilldown"
   // Exercise Chart.js's real click path, then the native detail query.
   const point = await page.evaluate(() => {
     const chart = Chart.getChart(document.querySelector("[data-sc-chart] canvas"));
+    // Finish any running animation so the bar is where a click will land.
+    chart.stop();
+    chart.update("none");
     const bar = chart.getDatasetMeta(0).data[0];
     const rect = chart.canvas.getBoundingClientRect();
     return {x: rect.left + (bar.x + bar.base) / 2, y: rect.top + bar.y};
@@ -105,6 +108,8 @@ test("horizontal stack groups use both matching axes", async ({page}) => {
   await graph(page, {measure: ["revenue", "revenue"], measure_series_id: ["first", "second"], measure_stack: ["money", "money"]});
   const stack = await page.evaluate(() => {
     const chart = Chart.getChart(document.querySelector("[data-sc-chart] canvas"));
+    chart.stop();
+    chart.update("none");
     return {x: chart.scales.x.options.stacked, y: chart.scales.y.options.stacked,
       groups: chart.data.datasets.map(dataset => dataset.stack),
       bases: chart.getDatasetMeta(1).data.map(bar => bar.base),
