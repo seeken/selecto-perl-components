@@ -8,7 +8,7 @@ our @EXPORT_OK = qw(asset_revision api_console_revision);
 my $ASSET_REVISION = '0.1.1-ffe8c133c512';
 
 sub asset_revision { return $ASSET_REVISION; }
-sub api_console_revision { return '0.5.0-84f8e50ffb39'; }
+sub api_console_revision { return '0.5.0-481237789c8a'; }
 
 1;
 

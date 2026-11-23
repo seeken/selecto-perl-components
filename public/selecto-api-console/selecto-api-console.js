@@ -185,6 +185,18 @@ function validDate(value) {
   const date = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
+// remote-query v1: shape plus calendar/time/offset correctness (no clock access).
+function assertAsOf(value) {
+  const match = typeof value === "string" && value.length <= 45
+    && /^([0-9]{4}-[0-9]{2}-[0-9]{2})(?:T([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})?)?$/.exec(value);
+  const zone = match && match[6];
+  if (!match || value.startsWith("0000-") || !validDate(match[1])
+      || (match[2] !== undefined && (+match[2] > 23 || +match[3] > 59 || +match[4] > 59))
+      || (zone && zone !== "Z" && (+zone.slice(1, 3) > 23 || +zone.slice(4) > 59))) {
+    throw new CanonicalWireError("as_of", "must be a valid ISO date or timestamp");
+  }
+  return value;
+}
 function jsonScalar(value) {
   if (typeof value === "number") return Number.isFinite(value) && (!Number.isInteger(value) || Number.isSafeInteger(value));
   if (value === null || ["string", "boolean"].includes(typeof value)) return true;
@@ -276,7 +288,7 @@ function assertExactResultNumbers(value, numberTokens) {
 
 function buildRemoteRequest(fingerprint, query, requestId) {
   nonEmptyString(fingerprint, "domain.fingerprint");
-  keys(query, ["select", "projection", "view", "filters", "group_by", "segments", "parameters", "order_by", "ordering", "limit", "offset", "timezone", "row_format"], "query");
+  keys(query, ["select", "projection", "view", "filters", "group_by", "segments", "parameters", "order_by", "ordering", "limit", "offset", "timezone", "row_format", "as_of"], "query");
   if (["select", "projection", "view"].filter((key) => Object.hasOwn(query, key)).length !== 1) throw new CanonicalWireError("query", "exactly one authoring mode is required");
   if (query.select !== undefined) {
     const selected = array(query.select, "query.select");
@@ -286,6 +298,7 @@ function buildRemoteRequest(fingerprint, query, requestId) {
   if (query.offset !== undefined) integer(query.offset, "query.offset");
   if (query.row_format !== undefined) oneOf(query.row_format, ["arrays", "objects"], "query.row_format");
   if (query.timezone !== undefined) nonEmptyString(query.timezone, "query.timezone");
+  if (query.as_of !== undefined) assertAsOf(query.as_of);
   if (!jsonScalar(query)) throw new CanonicalWireError("query", "must contain finite JSON values");
   const result = {format: "selecto.remote-query", format_version: 1, domain: {fingerprint}, query};
   if (requestId !== undefined) { nonEmptyString(requestId, "request_id"); if (requestId.length > 128) throw new CanonicalWireError("request_id", "too long"); result.request_id = requestId; }
@@ -754,7 +767,8 @@ function assertNestedDetailScalar(value,field,path="nested.scalar",options={}) {
   if(!valid)throw new CanonicalWireError(path,`invalid nested ${field.type}/${field.encoding}`);return value;
 }
 function assertNestedDetailQuery(query,features,options={}) {
-  assertNestedDetailFeatures(features);keys(query,["select","filters","order_by","limit","offset","row_format","timezone"],"nested.query");nestedSelection(query.select,features);
+  assertNestedDetailFeatures(features);keys(query,["select","filters","order_by","limit","offset","row_format","timezone","as_of"],"nested.query");
+  if (query.as_of !== undefined) assertAsOf(query.as_of);nestedSelection(query.select,features);
   const byPath=new Map(features.root_fields.map(f=>[f.path,f]));
   if(Object.hasOwn(query,"filters")) {
     const filters=array(query.filters,"nested.filters");if(filters.length>20)throw new CanonicalWireError("nested.filters","filter bound");
@@ -780,7 +794,7 @@ function parseNestedDetailRequestText(text,options) {
 }
 function nestedEcho(meta,context,required) {
   if(meta===undefined){if(required)throw new CanonicalWireError("nested.meta","context required");return;}
-  keys(meta,["selecto_nested_detail","request_id"],"nested.meta");if(Object.hasOwn(meta,"request_id"))nestedRequestId(meta.request_id);
+  keys(meta,["selecto_nested_detail","request_id","as_of"],"nested.meta");if(Object.hasOwn(meta,"as_of"))assertAsOf(meta.as_of);if(Object.hasOwn(meta,"request_id"))nestedRequestId(meta.request_id);
   if(Object.hasOwn(meta,"selecto_nested_detail")){exactKeys(meta.selecto_nested_detail,["profile","fingerprint","publication","revision"],"nested.meta.context");if(Object.keys(context).some(k=>meta.selecto_nested_detail[k]!==context[k]))throw new CanonicalWireError("nested.meta.context","context drift");}
   else if(required)throw new CanonicalWireError("nested.meta.context","missing admitted context");
 }
@@ -895,12 +909,13 @@ function assertExplorerFeatures(value, context = {}) {
 function buildExplorerRequest(features, query, requestId) {
   record(features, "features"); record(features.domain, "features.domain");
   nonEmptyString(features.domain.fingerprint, "domain.fingerprint");
-  keys(query, ["select", "filters", "group_by", "order_by", "segments", "parameters", "limit", "offset", "timezone", "row_format", "rollup", "complete", "count", "export"], "query");
+  keys(query, ["select", "filters", "group_by", "order_by", "segments", "parameters", "limit", "offset", "timezone", "row_format", "rollup", "complete", "count", "export", "as_of"], "query");
   const selected = array(query.select, "query.select");
   if (!selected.length) throw new CanonicalWireError("query.select", "selection cannot be empty");
   if (query.limit !== undefined) integer(query.limit, "query.limit");
   if (query.offset !== undefined) integer(query.offset, "query.offset");
   if (query.row_format !== undefined) oneOf(query.row_format, ["arrays", "objects"], "query.row_format");
+  if (query.as_of !== undefined) assertAsOf(query.as_of);
   if (query.count !== undefined) oneOf(query.count, ["none", "exact"], "query.count");
   for (const key of ["rollup", "complete"]) if (query[key] !== undefined) bool(query[key], `query.${key}`);
   if (query.timezone !== undefined) assertTimezone(query.timezone);
@@ -1009,7 +1024,7 @@ function assertExplorerResult(value, {features, query = {}, requestId} = {}) {
   return value;
 }
 
-return {CanonicalWireError,CanonicalHttpError,nestedDetailRefusal,markNestedDetailRefusal,safePath,record,nonEmptyString,integer,keys,assertCatalog,assertManifest,routePath,assertDomain,assertError,assertColumn,assertScalar,assertQueryResult,assertExactResultNumbers,buildRemoteRequest,createCanonicalClient,assertUnicode,parseStrictJSON,canonicalRootFields,assertRootPredicateFeatures,assertRootScalar,assertRootPredicateQuery,assertTimezone,buildRootPredicateRequest,parseCanonicalRequestText,assertRootPredicateResult,assertNestedDetailFeatures,nestedDetailContext,encodeNestedDetailContext,assertNestedDetailScalar,assertNestedDetailQuery,buildNestedDetailRequest,parseNestedDetailRequestText,assertNestedDetailResult,EXPLORER_PROFILE,explorerExportMediaTypes,explorerFieldTypes,explorerGroupFormats,explorerAggregates,assertExplorerFeatures,buildExplorerRequest,assertExplorerResult};
+return {CanonicalWireError,CanonicalHttpError,nestedDetailRefusal,markNestedDetailRefusal,safePath,record,nonEmptyString,integer,keys,assertCatalog,assertManifest,routePath,assertDomain,assertError,assertColumn,assertAsOf,assertScalar,assertQueryResult,assertExactResultNumbers,buildRemoteRequest,createCanonicalClient,assertUnicode,parseStrictJSON,canonicalRootFields,assertRootPredicateFeatures,assertRootScalar,assertRootPredicateQuery,assertTimezone,buildRootPredicateRequest,parseCanonicalRequestText,assertRootPredicateResult,assertNestedDetailFeatures,nestedDetailContext,encodeNestedDetailContext,assertNestedDetailScalar,assertNestedDetailQuery,buildNestedDetailRequest,parseNestedDetailRequestText,assertNestedDetailResult,EXPLORER_PROFILE,explorerExportMediaTypes,explorerFieldTypes,explorerGroupFormats,explorerAggregates,assertExplorerFeatures,buildExplorerRequest,assertExplorerResult};
 })();
 global.SelectoExplorerClient = (function() {
 const canonical = global.SelectoCanonicalClient;
@@ -2181,7 +2196,8 @@ function nestedID(value,path,max=256) {
 }
 function nestedIntentShape(intent) {
   try {
-    requiredKeys(intent,["format","format_version","mode","binding","collection_id","select","filters","order_by","limit","offset","row_format","presentation"],"nested.intent");
+    requiredKeys(intent,["format","format_version","mode","binding","collection_id","select","filters","order_by","limit","offset","row_format","presentation",...(Object.hasOwn(intent,"as_of")?["as_of"]:[])],"nested.intent");
+    if (Object.hasOwn(intent,"as_of")) canonical.assertAsOf(intent.as_of);
   } catch (error) {
     if (intent && typeof intent === "object" && !Array.isArray(intent) && ["where", "child_order_by", "formatter"].some(key => Object.hasOwn(intent, key))) throw nestedValidationFailure(error, "closed-intent-violation");
     throw error;
@@ -2222,7 +2238,7 @@ function validateNestedDetailIntent(intent,context) {
 }
 function toNestedDetailQuery(intent,context) {
   assertNestedDetailIntent(intent,context);const collection=context.features.collections[0],roots=new Map(context.features.root_fields.map(f=>[f.id,f])),children=new Map(collection.fields.map(f=>[f.id,f]));
-  const query={select:intent.select.map(s=>Array.isArray(s)?s.map(id=>children.get(id).path):roots.get(s).path),filters:intent.filters.map(f=>({field:roots.get(f.field).path,op:f.op,...(Object.hasOwn(f,"value")?{value:f.value}:{})})),order_by:intent.order_by.map(o=>({field:roots.get(o.field).path,direction:o.direction})),limit:intent.limit,offset:intent.offset,row_format:intent.row_format,timezone:intent.presentation.timezone};canonical.assertNestedDetailQuery(query,context.features);return query;
+  const query={select:intent.select.map(s=>Array.isArray(s)?s.map(id=>children.get(id).path):roots.get(s).path),filters:intent.filters.map(f=>({field:roots.get(f.field).path,op:f.op,...(Object.hasOwn(f,"value")?{value:f.value}:{})})),order_by:intent.order_by.map(o=>({field:roots.get(o.field).path,direction:o.direction})),limit:intent.limit,offset:intent.offset,row_format:intent.row_format,timezone:intent.presentation.timezone};if (intent.as_of !== undefined) query.as_of = intent.as_of;canonical.assertNestedDetailQuery(query,context.features);return query;
 }
 function parseNestedDetailState(raw,context) {
   try {
@@ -2402,6 +2418,21 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     const advertised = QUERY_RESPONSE_FORMATS.filter((format) => Object.prototype.hasOwnProperty.call(content, format.mediaType));
     return advertised.length ? advertised.map((format) => Object.assign({}, format))
       : [Object.assign({}, QUERY_RESPONSE_FORMATS[0])];
+  }
+
+  // Resolve only local OpenAPI references; never fetch a schema-supplied URL.
+  function schemaParts(openapi, schema, seen = new Set()) {
+    if (!isPlainObject(schema) || seen.has(schema)) return [];
+    seen.add(schema);
+    const parts = [schema];
+    if (typeof schema.$ref === "string" && schema.$ref.startsWith("#/")) {
+      const target = schema.$ref.slice(2).split("/").reduce((value, key) => value?.[key.replace(/~1/g, "/").replace(/~0/g, "~")], openapi);
+      parts.push(...schemaParts(openapi, target, seen));
+    }
+    for (const key of ["allOf", "anyOf", "oneOf"]) {
+      for (const item of schema[key] || []) parts.push(...schemaParts(openapi, item, seen));
+    }
+    return parts;
   }
 
   // The resource GET's date_format values, from its OpenAPI query parameter:
@@ -3044,6 +3075,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         orders: [],
         ordering: "",
         timezone: "",
+        asOf: "",
         rowFormat: "arrays",
         responseFormat: "json",
         responseFilename: "selecto-query.json",
@@ -3149,6 +3181,11 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
           }
         }
         this.render();
+        if (initialRequest && this.queryProfile !== "flat") {
+          this.applyQueryProfile();
+          if (this.queryProfile === "aggregate") {this.renderAggregateBuilder(); this.syncAggregateRequest();}
+          else this.syncNestedRequest();
+        }
         if (initialNested) {
           await this.restoreNestedState(initialNested.raw);
         } else if (this.nestedInitialError) {
@@ -3307,6 +3344,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
                   <label class="sac-label" for="sac-resource-id">Resource ID</label>
                   <input id="sac-resource-id" type="text" inputmode="numeric" placeholder="7001" data-sac-resource-id>
                   <p class="sac-help">The resource GET always returns the ID. Selected fields are added through <code>fields=</code>; choose Aggregate Version, when the domain publishes it, for the resource version and its ETag.</p>
+                  <div data-sac-resource-as-of-slot></div>
                   <div data-sac-date-format-wrap hidden>
                     <label class="sac-label" for="sac-date-format">Date format</label>
                     <select id="sac-date-format" data-sac-date-format></select>
@@ -3346,6 +3384,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
                 </div>
                 <div class="sac-segment-groups" data-sac-segment-groups></div>
                 <div class="sac-parameters" data-sac-parameters></div>
+                <div data-sac-as-of-slot></div>
                 <div class="sac-filter-list" data-sac-filters></div>
                 <label class="sac-label" for="sac-filter-search">Available filters</label>
                 <input id="sac-filter-search" type="search" placeholder="Search filter fields" data-sac-filter-search>
@@ -3404,7 +3443,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
               </section>
               <section class="sac-response-card">
                 <div class="sac-response-heading">
-                  <div><h2>Response</h2><span class="sac-response-status" data-sac-response-status>Ready</span><p data-sac-page-info hidden></p></div>
+                  <div><h2>Response</h2><span class="sac-response-status" data-sac-response-status>Ready</span><p data-sac-page-info hidden></p><p data-sac-response-as-of hidden></p></div>
                   <div class="sac-result-tabs" role="tablist">
                     <button type="button" class="is-active" data-sac-result-tab="table">Table</button>
                     <button type="button" data-sac-result-tab="json">JSON</button>
@@ -3662,6 +3701,16 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       return Object.entries(relationships).filter(([_name, spec]) => {
         return spec && spec.writable && spec.cardinality !== "many"
           && spec.domain && spec.domain.writes;
+      });
+    }
+
+    relationshipWriteOperations(spec, rootOperation = this.writeState.operation) {
+      if (!["insert", "update"].includes(rootOperation)) return [];
+      const allowed = new Set(Array.isArray(spec.allowed_ops) ? spec.allowed_ops : []);
+      return ["insert", "update", "delete"].filter(operation => {
+        const rule = spec.domain.writes.operations?.[operation];
+        return allowed.has(operation) && rule?.enabled
+          && (operation === "insert" || rootOperation === "update");
       });
     }
 
@@ -3979,12 +4028,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       container.append(element("span", "sac-label", "Related records"));
       relationships.forEach(([name, spec]) => {
         const nestedWrites = spec.domain.writes || {};
-        const allowed = new Set(Array.isArray(spec.allowed_ops) ? spec.allowed_ops : []);
-        const operations = ["insert", "update"].filter((operation) => {
-          const operationSpec = nestedWrites.operations && nestedWrites.operations[operation];
-          return allowed.has(operation) && operationSpec && operationSpec.enabled
-            && !(operation === "update" && this.writeState.operation !== "update");
-        });
+        const operations = this.relationshipWriteOperations(spec);
         if (!operations.length) return;
         const state = this.writeState.relationships[name] || (this.writeState.relationships[name] = {
           enabled: false, operation: operations[0], assignments: {}, included: {}, returning: [],
@@ -4005,6 +4049,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         operation.dataset.sacWriteRelationshipOperation = name;
         appendOptions(operation, operations.map((value) => ({value, label: humanize(value)})), state.operation);
         fieldset.append(operationLabel, operation);
+        if (state.operation === "delete") {container.append(fieldset); return;}
 
         const fields = this.writeFieldsForOperation(
           this.relationshipFields(spec), nestedWrites.fields || {}, state.operation,
@@ -4247,6 +4292,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       this.root.querySelector("[data-sac-resource-id-wrap]").hidden = !resourceGet;
       this.root.querySelector("[data-sac-resource-id]").value = this.state.resourceId;
       this.renderDateFormats();
+      this.renderAsOf(this.root.querySelector("[data-sac-resource-as-of-slot]"), "flat");
       this.root.querySelector("[data-sac-post-source]").hidden = resourceGet;
       this.root.querySelectorAll("[data-sac-post-query-card]").forEach((card) => (card.hidden = resourceGet));
       this.root.querySelector("[data-sac-post-editor-actions]").hidden = resourceGet;
@@ -4276,6 +4322,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       this.renderViewHelp();
       this.renderParameters();
       this.renderFilters();
+      this.renderAsOf(this.root.querySelector("[data-sac-as-of-slot]"), "flat");
       this.renderFilterFieldList();
       this.renderOrders();
       this.syncRequest();
@@ -4652,6 +4699,64 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       return this.fields.filter((field) => field.sortable !== false);
     }
 
+    supportsAsOf(profile = this.queryProfile) {
+      // Recursive v2 is a separate closed contract, without the v1 read clock.
+      if (profile === "root") return false;
+      const resource = profile === "flat" && this.state.queryMethod === "get" && this.resourcePath;
+      const path = resource ? this.resourcePath : profile === "aggregate" ? this.aggregateQueryPath : this.queryPath;
+      const pathSpec = this.openapi?.paths?.[path];
+      const operation = pathSpec?.[resource ? "get" : "post"];
+      if (resource) return [...(pathSpec?.parameters || []), ...(operation?.parameters || [])]
+        .flatMap(item => schemaParts(this.openapi, item)).some(item => item.in === "query" && item.name === "as_of");
+      const body = schemaParts(this.openapi, operation?.requestBody).find(item => item.content)?.content;
+      const schemas = schemaParts(this.openapi, body?.["application/json"]?.schema);
+      return schemas.some(schema => Object.hasOwn(schema.properties || {}, "as_of")
+        || schemaParts(this.openapi, schema.properties?.query).some(query => Object.hasOwn(query.properties || {}, "as_of")));
+    }
+
+    asOfValue(profile = this.queryProfile) {
+      return profile === "nested" ? this.nestedState?.intent.as_of || ""
+        : profile === "aggregate" ? this.aggregateState?.asOf || "" : this.state.asOf || "";
+    }
+
+    applyAsOf(query, value, profile = this.queryProfile) {
+      if (value === "" || value === undefined) return;
+      if (!this.supportsAsOf(profile)) throw new Error("This request schema does not publish as_of.");
+      query.as_of = global.SelectoCanonicalClient.assertAsOf(value);
+    }
+
+    validateRequestAsOf(request, profile = this.queryProfile) {
+      const query = request?.format ? request.query : request;
+      if (isPlainObject(query) && Object.hasOwn(query, "as_of")) {
+        global.SelectoCanonicalClient.assertAsOf(query.as_of);
+        this.applyAsOf({}, query.as_of, profile);
+      }
+    }
+
+    renderAsOf(container, profile = this.queryProfile) {
+      if (!container) return;
+      container.replaceChildren();
+      container.hidden = !this.supportsAsOf(profile);
+      if (container.hidden) return;
+      const row = element("div", "sac-inline-controls"), label = element("label", "", "As of");
+      const input = element("input", ""); input.type = "text"; input.maxLength = 45;
+      input.placeholder = "YYYY-MM-DD or timestamp"; input.value = this.asOfValue(profile);
+      input.setAttribute("aria-label", "As of"); input.dataset.sacAsOf = profile;
+      const today = element("button", "sac-text-button", "Today"); today.type = "button"; today.dataset.sacAsOfClear = profile;
+      label.append(input); row.append(label, today);
+      container.append(row, element("p", "sac-help", "Optional ISO date or timestamp, e.g. 2026-01-15T14:30:00+02:00. Today clears it and uses the real clock."));
+    }
+
+    changeAsOf(value, profile = this.queryProfile) {
+      if (!this.supportsAsOf(profile)) return;
+      if (profile === "nested") this.nestedChanged(intent => {if (value) intent.as_of = value; else delete intent.as_of;}, false);
+      else if (profile === "aggregate") {
+        this.cancelQuery(); this.state.response = null; this.clearQueryResult();
+        this.aggregateState.asOf = value; this.syncAggregateRequest();
+      }
+      else {this.state.asOf = value; this.syncRequest(true);}
+    }
+
     filterPayloads(filter) {
       const field = this.filterFieldMap.get(filter.field);
       const payload = {field: filter.field, op: this.remoteMode && filter.op === "not_null" ? "is_not_null" : filter.op};
@@ -4676,6 +4781,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         if (this.nestedBlocked || !this.nestedState) throw new Error("Nested state remains blocked; restore valid bound state or explicitly start a new draft.");
         const context = this.nestedDetailContext;
         const query = global.SelectoExplorerClient.toNestedDetailQuery(this.nestedState.intent, context);
+        this.validateRequestAsOf(query, "nested");
         return global.SelectoCanonicalClient.buildNestedDetailRequest(this.nestedState.intent.binding.fingerprint, query,
           {features: context.features, context: global.SelectoCanonicalClient.nestedDetailContext(context.features)});
       }
@@ -4724,6 +4830,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (this.state.ordering) payload.ordering = this.state.ordering;
       else if (this.state.orders.length || this.remoteMode) payload.order_by = this.state.orders.map((order) => ({field: order.field, direction: order.direction}));
       if (String(this.state.timezone || "").trim()) payload.timezone = String(this.state.timezone).trim();
+      this.applyAsOf(payload, this.state.asOf, "flat");
       // The shared Detail adapter uses the protocol's array default. Keep
       // handoff intent identical while retaining the explicit object choice.
       if (!this.remoteMode || this.state.rowFormat !== "arrays") payload.row_format = this.state.rowFormat;
@@ -4762,8 +4869,12 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (dateFormat && !this.resourceDateFormats.values.includes(dateFormat)) {
         errors.push(`The API does not offer the date format ${dateFormat}.`);
       }
+      const clock = {};
+      try { if (this.supportsAsOf("flat")) this.applyAsOf(clock, this.state.asOf, "flat"); } catch (error) { errors.push(error.message); }
+      let path = resourceRequestPath(this.resourcePath, id, fields, dateFormat);
+      if (clock.as_of) path += `${path.includes("?") ? "&" : "?"}as_of=${encodeURIComponent(clock.as_of)}`;
       return {
-        path: errors.length ? "" : resourceRequestPath(this.resourcePath, id, fields, dateFormat),
+        path: errors.length ? "" : path,
         fields,
         errors,
       };
@@ -4779,7 +4890,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         if (payload.format_version !== 1 || !payload.domain || payload.domain.fingerprint !== this.manifest.domain.fingerprint) throw new Error("The request targets a different Domain fingerprint.");
         payload = payload.query;
       }
-      const allowed = ["select", "projection", "view", "segments", "parameters", "filters", "ordering", "order_by", "timezone", "row_format", "limit", "offset"];
+      const allowed = ["select", "projection", "view", "segments", "parameters", "filters", "ordering", "order_by", "timezone", "row_format", "limit", "offset", "as_of"];
       const unknown = onlyKeys(payload, allowed);
       if (unknown.length) throw new Error(`Unsupported request properties: ${unknown.join(", ")}.`);
       const sources = ["select", "projection", "view"].filter((key) => Object.prototype.hasOwnProperty.call(payload, key));
@@ -4792,7 +4903,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       const draft = {
         mode: sources[0], selectedFields: [], configuredField: "",
         projection: "", view: "", segments: [], parameters: {}, filters: [],
-        orders: [], ordering: "", timezone: "", rowFormat: "arrays", subtables: [],
+        orders: [], ordering: "", timezone: "", asOf: "", rowFormat: "arrays", subtables: [],
         limit: 100, offset: 0,
       };
       let selectedId = this.nextSelectedFieldId;
@@ -4912,6 +5023,10 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
           return {id: String(orderId++), field: order.field, direction: order.direction};
         });
       }
+      if (payload.as_of !== undefined) {
+        this.validateRequestAsOf(payload, "flat");
+        draft.asOf = payload.as_of;
+      }
       if (payload.timezone !== undefined) {
         if (typeof payload.timezone !== "string") throw new Error("timezone must be a string.");
         draft.timezone = payload.timezone;
@@ -4929,12 +5044,80 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     }
 
     loadPayloadIntoChooser(payload) {
+      if (payload.format === "selecto.explorer-query") return this.loadAggregatePayload(payload);
+      if (payload.format === "selecto.remote-query" && (this.queryProfile === "nested"
+          || this.nestedDetailContext && payload.query?.select?.some(Array.isArray))) return this.loadNestedPayload(payload);
       const converted = this.chooserStateFromPayload(payload);
       Object.assign(this.state, converted.draft, {rawDirty: false});
       this.nextSelectedFieldId = converted.counters.selectedId;
       this.nextFilterId = converted.counters.filterId;
       this.nextOrderId = converted.counters.orderId;
       return this.state;
+    }
+
+    loadNestedPayload(payload) {
+      const context = this.nestedDetailContext;
+      const parsed = global.SelectoCanonicalClient.parseNestedDetailRequestText(JSON.stringify(payload), {
+        features: context.features, context: global.SelectoCanonicalClient.nestedDetailContext(context.features),
+      }).request;
+      if (payload.request_id !== undefined) throw new Error("Request IDs stay in manual JSON mode.");
+      const query = parsed.query;
+      this.validateRequestAsOf(query, "nested");
+      if (query.timezone !== undefined && query.timezone !== "UTC") throw new Error("The nested chooser requires UTC.");
+      const intent = global.SelectoExplorerClient.createNestedDetailIntent(context.features);
+      const roots = new Map(context.features.root_fields.map(field => [field.path, field.id]));
+      const children = new Map(context.features.collections[0].fields.map(field => [field.path, field.id]));
+      intent.select = query.select.map(slot => Array.isArray(slot) ? slot.map(path => children.get(path)) : roots.get(slot));
+      intent.filters = (query.filters || []).map((filter, index) => ({id: `import-${index}`, field: roots.get(filter.field), op: filter.op,
+        ...(Object.hasOwn(filter, "value") ? {value: typeof filter.value === "number" ? String(filter.value) : filter.value} : {})}));
+      intent.order_by = (query.order_by || []).map(order => ({field: roots.get(order.field), direction: order.direction}));
+      intent.limit = query.limit ?? context.features.defaults.limit;
+      intent.offset = query.offset ?? context.features.defaults.offset;
+      intent.row_format = query.row_format || "arrays";
+      if (query.as_of !== undefined) intent.as_of = query.as_of;
+      global.SelectoExplorerClient.assertNestedDetailIntent(intent, context);
+      this.nestedState = {format: "selecto.nested-detail-state", format_version: 1, intent};
+      this.queryProfile = "nested"; this.nestedBlocked = false; this.nestedInitialError = null; this.state.rawDirty = false;
+      return this.nestedState;
+    }
+
+    loadAggregatePayload(payload) {
+      const features = this.aggregateFeatures;
+      if (!features || payload.format_version !== 1 || payload.domain?.fingerprint !== features.domain.fingerprint
+          || payload.features?.revision !== features.revision) throw new Error("The aggregate request does not match the published features.");
+      if (onlyKeys(payload, ["format", "format_version", "domain", "features", "query"]).length
+          || onlyKeys(payload.domain, ["fingerprint"]).length || onlyKeys(payload.features, ["revision"]).length) throw new Error("Unsupported aggregate envelope properties.");
+      const query = payload.query;
+      if (!isPlainObject(query) || onlyKeys(query, ["select", "group_by", "rollup", "cube", "grouping_sets", "limit", "offset", "as_of"]).length) throw new Error("Unsupported aggregate chooser properties.");
+      this.validateRequestAsOf(query, "aggregate");
+      const state = this.newAggregateState();
+      state.groupBy = query.group_by || [];
+      if (!Array.isArray(state.groupBy) || !Array.isArray(query.select)) throw new Error("Aggregate selection and groups must be arrays.");
+      if (query.select.slice(0, state.groupBy.length).some((item, index) => item !== state.groupBy[index])) throw new Error("Group columns must lead the aggregate selection.");
+      state.aggregates = query.select.slice(state.groupBy.length).map(item => {
+        if (!isPlainObject(item) || onlyKeys(item, ["aggregate", "field", "alias"]).length || !this.aggregateFunctions().includes(item.aggregate)) throw new Error("Unsupported aggregate selection.");
+        return {fn: item.aggregate, field: item.field || "", alias: item.alias};
+      });
+      if (["rollup", "cube", "grouping_sets"].filter(key => Object.hasOwn(query, key)).length > 1) throw new Error("Choose one subtotal mode.");
+      state.grouping = query.rollup === true ? "rollup" : query.cube === true ? "cube" : query.grouping_sets ? "sets" : "none";
+      if (state.grouping !== "none" && !this.aggregateGroupingModes().some(mode => mode.value === state.grouping)) throw new Error("Subtotal mode is not published.");
+      if (query.grouping_sets) {
+        if (!Array.isArray(query.grouping_sets) || query.grouping_sets.some(set => !Array.isArray(set) || set.some(i => !Number.isInteger(i) || i < 0 || i >= state.groupBy.length))) throw new Error("Invalid grouping sets.");
+        state.sets = query.grouping_sets.map(set => set.join(","));
+      }
+      state.limit = query.limit ?? state.limit; state.offset = query.offset ?? 0; state.asOf = query.as_of || "";
+      const previous = this.aggregateState;
+      this.aggregateState = state;
+      const model = this.buildAggregateRequest();
+      // Compare every member, allowing property order but never dropping intent.
+      const normalize = value => Array.isArray(value) ? value.map(normalize) : isPlainObject(value)
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, normalize(value[key])])) : value;
+      if (model.errors.length || JSON.stringify(normalize(model.request.query)) !== JSON.stringify(normalize(query))) {
+        this.aggregateState = previous;
+        throw new Error(model.errors.join(" ") || "The aggregate chooser cannot retain the complete request.");
+      }
+      this.queryProfile = "aggregate"; this.state.rawDirty = false;
+      return state;
     }
 
     setImportMessage(message, kind, error) {
@@ -4973,7 +5156,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       const builder = this.root.querySelector(".sac-builder"); if (builder) builder.hidden = this.queryProfile !== "flat";
       const panel = this.root.querySelector("[data-sac-nested-builder]"); if (panel) panel.hidden = !nested;
       const aggregate = this.root.querySelector("[data-sac-aggregate-builder]"); if (aggregate) aggregate.hidden = this.queryProfile !== "aggregate";
-      const actions = this.root.querySelector("[data-sac-post-editor-actions]"); if (actions) actions.hidden = this.queryProfile === "root" || this.queryProfile === "aggregate";
+      const actions = this.root.querySelector("[data-sac-post-editor-actions]"); if (actions) actions.hidden = this.queryProfile === "root";
       if (nested) this.renderNestedBuilder();
     }
 
@@ -5155,6 +5338,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       }
       const intent = this.nestedState.intent, features = this.nestedDetailContext.features, collection = features.collections[0];
       const roots = new Map(features.root_fields.map(f => [f.id, f])), children = new Map(collection.fields.map(f => [f.id, f]));
+      const clock = element("div", ""); this.renderAsOf(clock, "nested"); target.append(clock);
       target.append(element("h2", "", "Complete nested Detail"), element("p", "sac-help", "Choose parent fields and one complete collection. UTC · en-US · exact scalar text."));
       const button = (text, action, index, group) => {
         const node = element("button", "sac-text-button", text); node.type = "button";
@@ -5326,10 +5510,6 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     loadRequestIntoChooser() {
       const editor = this.root.querySelector("[data-sac-request]");
-      if (this.queryProfile === "nested") {
-        this.setImportMessage("The nested chooser uses its complete bound state. Restore nested state to change it; the manual query editor remains available.", "error");
-        return false;
-      }
       let payload;
       try {
         payload = this.remoteMode ? global.SelectoCanonicalClient.parseStrictJSON(editor.value) : JSON.parse(editor.value);
@@ -5340,7 +5520,9 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         this.setImportMessage(`The chooser cannot represent this JSON: ${error.message} You can still run it, but the chooser will not track it; you are in manual JSON mode.`, "error");
         return false;
       }
-      this.renderAll();
+      if (this.queryProfile === "nested") {this.applyQueryProfile(); this.syncNestedRequest();}
+      else if (this.queryProfile === "aggregate") {this.applyQueryProfile(); this.renderAggregateBuilder(); this.syncAggregateRequest();}
+      else this.renderAll();
       this.setImportMessage("Chooser updated from the request JSON.", "success");
       return true;
     }
@@ -5680,7 +5862,12 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
           const extra = onlyKeys(related, ["operation", "assignments", "returning"]);
           if (extra.length) throw new Error(`${humanize(name)} has unsupported properties: ${extra.join(", ")}.`);
           const nestedOperation = related.operation;
-          if (!["insert", "update"].includes(nestedOperation)) throw new Error(`${humanize(name)} requires an insert or update operation.`);
+          if (!this.relationshipWriteOperations(spec, operation).includes(nestedOperation)) throw new Error(`${humanize(name)} does not allow ${nestedOperation} with a root ${operation}.`);
+          if (nestedOperation === "delete") {
+            if (Object.hasOwn(related, "assignments") || Object.hasOwn(related, "returning")) throw new Error(`${humanize(name)} delete accepts only an operation.`);
+            draft.relationships[name] = {enabled: true, operation: "delete", assignments: {}, included: {}, returning: []};
+            return;
+          }
           const nestedWrites = spec.domain.writes || {};
           const nestedFields = new Map(this.relationshipFields(spec).map((field) => [field.name, field]));
           const nested = this.writeAssignmentState(
@@ -5767,7 +5954,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
           payload.assignments[name] = converted.value;
           if (converted.error) errors.push(converted.error);
         });
-        if (!Object.keys(payload.assignments).length) errors.push("Choose at least one assignment.");
+        if (operation !== "update" && !Object.keys(payload.assignments).length) errors.push("Choose at least one assignment.");
       }
 
       if (["update", "delete"].includes(operation)) {
@@ -5817,15 +6004,13 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         const state = this.writeState.relationships[name];
         if (!state || !state.enabled) return;
         const nestedWrites = spec.domain.writes || {};
-        const allowed = new Set(Array.isArray(spec.allowed_ops) ? spec.allowed_ops : []);
         const nestedOperation = state.operation;
-        const operationSpec = nestedWrites.operations && nestedWrites.operations[nestedOperation];
-        if (!allowed.has(nestedOperation) || !operationSpec || !operationSpec.enabled) {
-          errors.push(`${humanize(name)} does not allow ${nestedOperation}.`);
+        if (!this.relationshipWriteOperations(spec, operation).includes(nestedOperation)) {
+          errors.push(`${humanize(name)} does not allow ${nestedOperation} with a root ${operation}.`);
           return;
         }
-        if (nestedOperation === "update" && operation !== "update") {
-          errors.push(`${humanize(name)} can only be updated with a root update.`);
+        if (nestedOperation === "delete") {
+          related[name] = {operation: "delete"};
           return;
         }
         const permission = nestedOperation === "insert" ? "insertable" : "updatable";
@@ -5859,6 +6044,10 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         if (state.returning && state.returning.length) related[name].returning = state.returning.slice();
       });
       if (Object.keys(related).length) payload.relationships = related;
+      if (operation === "update" && !Object.keys(payload.assignments).length && !Object.keys(related).length) {
+        const offersRelated = this.writeRelationships().some(([, spec]) => this.relationshipWriteOperations(spec, operation).length);
+        errors.push(offersRelated ? "Choose at least one assignment or related record." : "Choose at least one assignment.");
+      }
       this.writeExtensions(operation).forEach((spec) => {
         const state = (this.writeState.extensions || {})[spec.name];
         if (!state || !state.included) return;
@@ -6274,6 +6463,13 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         this.changed();
         return;
       }
+      const clearClock = event.target.closest("[data-sac-as-of-clear]");
+      if (clearClock) {
+        const profile = clearClock.dataset.sacAsOfClear;
+        this.changeAsOf("", profile);
+        const input = clearClock.parentElement.querySelector("[data-sac-as-of]"); if (input) input.value = "";
+        return;
+      }
       if (event.target.closest("[data-sac-root-restore]")) return this.rootStateAction("restore");
       if (event.target.closest("[data-sac-root-link]")) return this.rootStateAction("link");
       if (event.target.closest("[data-sac-root-save]")) return this.rootStateAction("save");
@@ -6322,6 +6518,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     onChange(event) {
       const target = event.target;
+      if (target.matches("[data-sac-as-of]")) return this.changeAsOf(target.value, target.dataset.sacAsOf);
       if (target.matches("[data-sac-aggregate-control]")) return this.aggregateControl(target);
       if (target.matches("[data-sac-nested-control]")) return this.nestedControl(target);
       if (target.matches("[data-sac-query-method]")) {
@@ -6479,6 +6676,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     onInput(event) {
       const target = event.target;
+      if (target.matches("[data-sac-as-of]")) return this.changeAsOf(target.value, target.dataset.sacAsOf);
       if (target.matches("[data-sac-aggregate-control]") && target.tagName === "INPUT" && target.type !== "checkbox") return this.aggregateControl(target);
       if (target.matches("[data-sac-nested-control]") && target.tagName === "INPUT") return this.nestedControl(target);
       if (target.matches("[data-sac-resource-id]")) {
@@ -6653,6 +6851,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       try {
         if (this.blockedInitialRequestText && editor.value === this.blockedInitialRequestText) throw this.queryProfile === "nested" ? nestedError("URL state remains blocked. Restore valid bound state or explicitly start a new query.", global.SelectoCanonicalClient.nestedDetailRefusal(this.nestedInitialError)?.reason || "invalid-nested-state") : new Error("URL state remains blocked. Restore valid bound state or explicitly start a new query.");
         request = this.remoteMode ? global.SelectoCanonicalClient.parseStrictJSON(editor.value) : JSON.parse(editor.value);
+        this.validateRequestAsOf(request);
+        if (!this.state.rawDirty) this.applyAsOf({}, this.asOfValue());
       } catch (error) {
         if (this.queryProfile === "nested") global.SelectoCanonicalClient.markNestedDetailRefusal(error, "invalid-selected-raw");
         this.setStatus("Invalid request JSON", "error", error);
@@ -6867,6 +7067,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (!state.aggregates.length) errors.push("Add at least one aggregate.");
       if (limits.max_aggregates && state.aggregates.length > limits.max_aggregates) errors.push(`At most ${limits.max_aggregates} aggregates are allowed.`);
       const query = {select};
+      try { this.applyAsOf(query, state.asOf, "aggregate"); } catch (error) { errors.push(error.message); }
       if (groups.length) query.group_by = groups;
       if (state.grouping !== "none") {
         if (!groups.length) errors.push("Subtotals need at least one group.");
@@ -6930,6 +7131,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         wrapper.append(node); return wrapper;
       };
       target.append(element("h2", "", "Aggregates"), element("p", "sac-help", "Group rows and summarise them. Subtotals come from the database, one grouped query for each combination."));
+      const clock = element("div", ""); this.renderAsOf(clock, "aggregate"); target.append(clock);
       const groupFields = this.aggregateGroupFields();
       const labelOf = new Map(groupFields.map((field) => [field.id, field.label]));
       target.append(element("h3", "", "Group by"), selector("Add group", "add-group",
@@ -7014,6 +7216,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       let request;
       try {
         request = JSON.parse(editor.value);
+        this.validateRequestAsOf(request, "aggregate");
+        if (!this.state.rawDirty) this.applyAsOf({}, this.aggregateState.asOf, "aggregate");
       } catch (error) {
         this.setStatus("Invalid request JSON", "error", error);
         this.showLocalError(error.message, error);
@@ -7138,6 +7342,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     clearQueryResult() {
       setNestedRefusal(this.root.querySelector("[data-sac-response-status]"), null);
+      const clock = this.root.querySelector("[data-sac-response-as-of]"); if (clock) {clock.hidden = true; clock.textContent = "";}
       for (const selector of ["[data-sac-result-head]", "[data-sac-result-body]"]) this.root.querySelector(selector)?.replaceChildren();
       const json = this.root.querySelector("[data-sac-response-json]"); if (json) json.textContent = "";
       const empty = this.root.querySelector("[data-sac-empty-response]"); if (empty) empty.hidden = false;
@@ -7181,6 +7386,12 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     }
 
     renderResponse(payload) {
+      const clock = this.root.querySelector("[data-sac-response-as-of]");
+      if (clock) {
+        const value = payload?.ok === true && payload?.meta?.as_of;
+        clock.hidden = typeof value !== "string" || !value;
+        clock.textContent = clock.hidden ? "" : `As of ${value}`;
+      }
       this.root.querySelector("[data-sac-empty-response]").hidden = true;
       this.root.querySelector("[data-sac-response-json]").textContent = JSON.stringify(payload, null, 2);
       this.updateCurl();

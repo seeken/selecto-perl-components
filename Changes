@@ -1,6 +1,17 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - The bundled API Console (selecto-api-console a2a7799) adds an optional
+      As of date or timestamp to plain, aggregate and nested query builders
+      whose OpenAPI request schema publishes as_of. It round-trips through
+      imports, console URLs, drafts and the curl preview, is refused before
+      Run when invalid, and the response's meta.as_of echo shows beside the
+      result.
+    - The bundled API Console builds relationship-only updates: a root update
+      with an enabled related record no longer needs a root assignment and
+      sends assignments: {}. A to-one relationship whose allowed_ops and
+      nested write contract enable delete offers a related Delete, sent as
+      {operation: "delete"}.
     - Add an optional As of date in Explorer's Filters panel, with a Today
       reset and localized applied-filter label. Carry the validated bound
       clock through every read, counts, drilldowns, exports, saved/library
