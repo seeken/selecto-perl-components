@@ -827,7 +827,7 @@ is scalar(grep { $_ eq 'created_on' } @repeated_column_pairs), 3,
     'repeated detail fields survive canonical URL serialization alongside ordering';
 is_deeply $configured_columns->group_configs->{created_on},
     {
-        alias => 'Month', format => 'month', bucket_ranges => '',
+        field => 'created_on', alias => 'Month', format => 'month', bucket_ranges => '',
         prefix_length => 2, exclude_articles => 1,
     },
     'aggregate group column retains independent configuration';

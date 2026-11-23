@@ -349,31 +349,7 @@
     articles.setAttribute("aria-label", "Leading articles for " + label);
     appendOptions(articles, [["1", "Exclude a, an, the"], ["0", "Keep articles"]], "1");
     appendConfigLabel(grid, "Leading articles", articles, "data-sc-group-prefix");
-  }
-
-  function measureFunctionsForType(type) {
-    if (type === "rows") return [["count", "Count"]];
-    if (numericFilterType(type)) {
-      return [
-        ["count", "Count"], ["count_distinct", "Count distinct"],
-        ["avg", "Average"], ["sum", "Sum"], ["min", "Minimum"], ["max", "Maximum"],
-        ["buckets", "Buckets"]
-      ];
-    }
-    if (temporalFilterType(type)) {
-      return [
-        ["count", "Count"], ["count_distinct", "Count distinct"],
-        ["min", "Minimum"], ["max", "Maximum"], ["age_buckets", "Age buckets"]
-      ];
-    }
-    if (booleanFilterType(type)) {
-      return [["count", "Count"], ["true_count", "True count"], ["false_count", "False count"]];
-    }
-    return [
-      ["count", "Count"], ["count_distinct", "Count distinct"],
-      ["min", "Minimum"], ["max", "Maximum"]
-    ];
-      // One group may become the aggregate grid's columns. syncPickerConfig
+    // One group may become the aggregate grid's columns. syncPickerConfig
     // gives the box its group's field and hides it outside the aggregate view.
     var gridColumn = document.createElement("label");
     gridColumn.className = "sc-option-check";
@@ -442,6 +418,31 @@
     excludeMissingHelp.textContent = "Adds a filter, so totals leave them out too. Bucket ranges already leave out everything outside them.";
     excludeMissing.appendChild(excludeMissingHelp);
     grid.appendChild(excludeMissing);
+  }
+
+  function measureFunctionsForType(type) {
+    if (type === "rows") return [["count", "Count"]];
+    if (numericFilterType(type)) {
+      return [
+        ["count", "Count"], ["count_distinct", "Count distinct"],
+        ["avg", "Average"], ["sum", "Sum"], ["min", "Minimum"], ["max", "Maximum"],
+        ["buckets", "Buckets"]
+      ];
+    }
+    if (temporalFilterType(type)) {
+      return [
+        ["count", "Count"], ["count_distinct", "Count distinct"],
+        ["min", "Minimum"], ["max", "Maximum"], ["age_buckets", "Age buckets"]
+      ];
+    }
+    if (booleanFilterType(type)) {
+      return [["count", "Count"], ["true_count", "True count"], ["false_count", "False count"]];
+    }
+    return [
+      ["count", "Count"], ["count_distinct", "Count distinct"],
+      ["min", "Minimum"], ["max", "Maximum"]
+    ];
+
   }
 
   // Show Total columns appears, and is sent, only for the group shown as
@@ -623,6 +624,8 @@
     if (excludeMissingChoice && !excludeMissingChoice.value) excludeMissingChoice.value = item.dataset.field || "";
     var groupFormat = item.querySelector("[data-sc-group-format]");
     if (groupFormat) {
+      var groupRoot = item.closest('[data-sc-picker-kind="group"]');
+      if (groupRoot) syncGroupReferences(groupRoot, setItems(groupRoot));
       var buckets = /^(?:buckets|age_buckets|custom_buckets|year_buckets|month_buckets)$/.test(groupFormat.value);
       item.querySelectorAll("[data-sc-group-buckets]").forEach(function (node) { node.hidden = !buckets; });
       var rangesInput = item.querySelector('input[name="group_bucket_ranges"]');
@@ -691,8 +694,38 @@
     list.insertBefore(row, button);
   }
 
+  function syncGroupReferences(root, items) {
+    var form = root.closest("form");
+    var series = form && form.querySelector('select[name="graph_series_group"]');
+    var selectedItem = series && items.find(function (item) {
+      return (item.dataset.scGroupId || item.dataset.field) === series.value;
+    });
+    var counts = {};
+    items.forEach(function (item) { counts[item.dataset.field] = (counts[item.dataset.field] || 0) + 1; });
+    items.forEach(function (item, index) {
+      var id = counts[item.dataset.field] > 1 ? "group:" + (index + 1) : item.dataset.field;
+      item.dataset.scGroupId = id;
+      item.querySelectorAll('[name="pivot_column"], [name="group_exclude_missing"]').forEach(function (input) {
+        input.value = id;
+      });
+    });
+    if (series) {
+      series.replaceChildren(new Option("One series per measure", ""));
+      items.forEach(function (item) {
+        var format = item.querySelector('[name="group_format"]');
+        var alias = item.querySelector('[name="group_alias"]');
+        var label = alias && alias.value || item.dataset.label;
+        if (!(alias && alias.value) && counts[item.dataset.field] > 1 && format) {
+          label += " (" + format.options[format.selectedIndex].textContent + ")";
+        }
+        series.add(new Option(label, item.dataset.scGroupId, false, item === selectedItem));
+      });
+    }
+  }
+
   function refreshColumnPicker(root) {
     var items = setItems(root);
+    if (root.dataset.scPickerKind === "group") syncGroupReferences(root, items);
     var available = Array.from(root.querySelectorAll("[data-sc-picker-available-item]"));
     refreshPickerHighlights(items, available);
     var availableList = root.querySelector("[data-sc-picker-available]");

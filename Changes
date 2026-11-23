@@ -9,6 +9,11 @@ Unreleased
       cancelled and lost; if it does not connect within five seconds the
       submit finishes over HTTP.
     - All-rows graph exports are no longer capped at the graph's cell limit.
+    - Group a plain field with distinct formats or options, including month
+      of year by year seasonality pivots. Qualified group references retain
+      independent settings, result keys, labels and ANDed Detail predicates
+      across summaries, rollups, pivots, grids, graphs, saved URLs and exports.
+      Single groups keep their existing names; star dimensions stay unique.
     - Horizontal bars retain dimension labels, measure units, dual axes and
       stack groups; long labels use ellipses with full tooltip titles. Size
       charts for every category and scroll above 900px. Graph limit selects

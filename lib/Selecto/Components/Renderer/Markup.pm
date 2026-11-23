@@ -89,7 +89,7 @@ sub _selection_hidden ($kind, $values, $configs, $config_list = undef) {
         my $field = $values->[$index];
         my $config = ref($config_list) eq 'ARRAY' ? ($config_list->[$index] // {})
             : ($configs->{$field} // {});
-        _hidden($kind, $field) .
+        _hidden($kind, $kind eq 'group' ? $config->{field} // $field : $field) .
             _hidden($kind . '_alias', $config->{alias} // '') .
             _hidden($kind . '_format', $config->{format} // '') .
             ($kind eq 'group'

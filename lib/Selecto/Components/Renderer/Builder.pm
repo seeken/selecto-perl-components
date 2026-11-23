@@ -432,7 +432,7 @@ sub _query_summary ($class, $state, $catalog, $governed_segments) {
     my $clause_count = scalar(keys %clause);
     my %grid_fields = map { $_ => 1 } @{$state->groups // []};
     my $grid_mode = keys(%grid_fields) == 2
-        && !grep { !$grid_fields{$_->{field}} }
+        && !grep { !$grid_fields{$_->{grouped} && $_->{grouped} ne '1' ? $_->{grouped} : $_->{field}} }
             grep { defined($_->{clause}) } @{$state->filters};
     push @chips, '<span data-sc-filter-clause-summary>' .
         ($grid_mode ? 'Grid selection: ' : 'Alternatives: ') .
@@ -687,7 +687,7 @@ sub _chart_type_picker ($class, $state, $catalog, $config) {
     my $series_options = '<option value="">One series per measure</option>' . join '', map {
         my $field = $_;
         my $label = $state->group_configs->{$field}{alias}
-            || $field_labels{$field} || _humanize($field);
+            || $field_labels{$state->group_field($field)} || _humanize($field);
         '<option value="' . _h($field) . '"' .
             ($series_group eq $field ? ' selected' : '') . '>' .
             _h($label) . '</option>'
@@ -821,7 +821,7 @@ sub _selection_picker ($class, $state, $catalog, %options) {
     my %selected = map { $_ => 1 } @$selected_values;
     my @available = $kind eq 'field'
         ? grep { !$_->{picker_hidden} && (($_->{type} // '') ne 'action' || !$selected{$_->{path}}) } @$catalog
-        : $kind eq 'measure' ? grep { !$_->{picker_hidden} } @$catalog
+        : $kind eq 'measure' || $kind eq 'group' ? grep { !$_->{picker_hidden} && ($kind ne 'group' || !$_->{dimension} || !$selected{$_->{path}}) } @$catalog
         : grep { !$_->{picker_hidden} && !$selected{$_->{path}} } @$catalog;
     my $at_limit = @$selected_values >= $options{maximum};
     my $available_items = _grouped_picker_items(\@available, $options{root_label}, sub {
@@ -835,7 +835,7 @@ sub _selection_picker ($class, $state, $catalog, %options) {
         _h(lc(join ' ', $_->{label}, $_->{type}, $_->{path}, $_->{description} // ())) . '" data-default-function="' .
         _h($_->{default_function} // '') . '" data-measure-field="' .
         _h($_->{field} // '') . '"' .
-        (($kind eq 'field' && ($_->{type} // '') ne 'action') || $kind eq 'measure'
+        (($kind eq 'field' && ($_->{type} // '') ne 'action') || $kind eq 'measure' || ($kind eq 'group' && !$_->{dimension})
             ? ' data-sc-picker-repeatable' : '') .
         '><span><strong>' . _h(_picker_leaf_label($_)) .
         '</strong><small>' . _h($_->{path} . ' - ' . $_->{type}) .
@@ -847,13 +847,15 @@ sub _selection_picker ($class, $state, $catalog, %options) {
     my $set_items = join '', map {
         my $index = $_;
         my $path = $selected_values->[$index];
-        my $field = $by_path{$path} // {
+        my $source = $kind eq 'group' ? $state->group_field($path) : $path;
+        my $field = $by_path{$source} // {
             path => $path,
             label => 'Unavailable action',
             type => 'action',
         };
         my $item_config = ref($options{config_list}) eq 'ARRAY'
             ? ($options{config_list}->[$index] // {}) : ($configs->{$path} // {});
+        my $control_field = $kind eq 'group' ? {%$field, path => $path} : $field;
         my $up_disabled = $index == 0 ? ' disabled' : '';
         my $down_disabled = $index == $selected_count - 1 ? ' disabled' : '';
         my $remove_disabled = $selected_count == 1 ? ' disabled' : '';
@@ -866,18 +868,18 @@ sub _selection_picker ($class, $state, $catalog, %options) {
                 ($direction eq 'desc' ? ' selected' : '') . '>Descending</option></select></label>';
         } else {
             $config_controls = _picker_config_controls(
-                $options{config}, $kind, $field, $item_config, $options{date_formats}, $state->view,
+                $options{config}, $kind, $control_field, $item_config, $options{date_formats}, $state->view,
                 $state->pivot_column, $state->pivot_totals // 1, $state,
             );
         }
         '<article class="sc-picker-set-item" draggable="true" data-sc-picker-set-item data-field="' .
-        _h($path) . '" data-label="' . _h($field->{label}) . '" data-type="' . _h($field->{type}) .
+        _h($source) . '" data-sc-group-id="' . _h($path) . '" data-label="' . _h($field->{label}) . '" data-type="' . _h($field->{type}) .
         '"' . _description_data($field->{description}) . ' data-default-function="' . _h($field->{default_function} // '') .
         '" data-measure-field="' . _h($field->{field} // '') .
         '" data-sc-picker-group-key="' . _h(_picker_group_key($field)) .
-        '"' . (($kind eq 'field' && ($field->{type} // '') ne 'action') || $kind eq 'measure'
+        '"' . (($kind eq 'field' && ($field->{type} // '') ne 'action') || $kind eq 'measure' || ($kind eq 'group' && !$field->{dimension})
             ? ' data-sc-picker-repeatable' : '') .
-        '><input type="hidden" name="' . _h($kind) . '" value="' . _h($path) . '">' .
+        '><input type="hidden" name="' . _h($kind) . '" value="' . _h($source) . '">' .
         '<button class="sc-picker-grip" type="button" title="Drag to reorder" aria-label="Drag ' .
         _h($field->{label}) . ' to reorder">⠿</button><span class="sc-picker-set-label"><strong>' .
         _h($field->{label}) . '</strong><small>' . _h($path . ' - ' . $field->{type}) . '</small>' .
@@ -1215,7 +1217,7 @@ sub _filter_picker ($class, $state, $catalog, $config, $root_label = 'Main recor
         _h($filter->{grouped} ? 'string' : $field->{type}) . '"' .
         ($filter->{grouped} ? '' : _filter_choice_attribute($field)) . '>' .
         '<input type="hidden" name="filter_field" value="' . _h($filter->{field}) . '">' .
-        _hidden('filter_group', $filter->{grouped} ? 1 : 0) .
+        _hidden('filter_group', $filter->{grouped} // 0) .
         _hidden('filter_clause', '') .
         '<div class="sc-filter-set-heading"><span><strong>' . _h($field->{label}) . '</strong>' .
         _description_text($field->{description}) . '<small>' .
@@ -1281,7 +1283,7 @@ sub _filter_clause_picker ($class, $state, $by_path, $config) {
     return '' unless @order;
     my %grid_fields = map { $_ => 1 } @{$state->groups // []};
     my $grid_mode = keys(%grid_fields) == 2
-        && !grep { !$grid_fields{$_->{field}} } map { @$_ } values %by_clause;
+        && !grep { !$grid_fields{$_->{grouped} && $_->{grouped} ne '1' ? $_->{grouped} : $_->{field}} } map { @$_ } values %by_clause;
     my $cards = join '', map {
         my $clause = $_;
         my $conditions = join '', map {
@@ -1298,7 +1300,7 @@ sub _filter_clause_picker ($class, $state, $by_path, $config) {
                 _h($filter->{grouped} ? 'string' : $field->{type}) . '"' .
                 ($filter->{grouped} ? '' : _filter_choice_attribute($field)) . '>' .
                 _hidden('filter_field', $filter->{field}) .
-                _hidden('filter_group', $filter->{grouped} ? 1 : 0) .
+                _hidden('filter_group', $filter->{grouped} // 0) .
                 _hidden('filter_clause', $clause) .
                 ($grid_mode
                     ? _hidden('filter_op', $filter->{op}) .

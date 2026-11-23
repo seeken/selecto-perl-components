@@ -959,12 +959,12 @@ sub _group_filter_inputs ($state, $groups, $filters) {
     my %key_field = map { ($_->{field} => $_->{drilldown_field} // $_->{field}) } @{$groups // []};
     my %fixed = map { ($_->{field} => 1) } grep { ($_->{op} // '') =~ /\A(?:eq|not_null)\z/ && !$_->{grouped} } @$filters;
     # A row that already names its bucket is inside the ranges.
-    my %bucket_fixed = map { ($_->{field} => 1) } grep { ($_->{op} // '') eq 'eq' && $_->{grouped} } @$filters;
+    my %bucket_fixed = map { (($_->{grouped} eq '1' ? $_->{field} : $_->{grouped}) => 1) } grep { ($_->{op} // '') eq 'eq' && $_->{grouped} } @$filters;
     return [map {
         my $field = $key_field{$_->{from_group}} // $_->{field};
         $_->{grouped}
-            ? ($bucket_fixed{$_->{field}} ? ()
-                : {field => $_->{field}, op => 'ne', value => $_->{value}, value_end => '', grouped => 1})
+            ? ($bucket_fixed{$_->{from_group}} ? ()
+                : {field => $_->{field}, op => 'ne', value => $_->{value}, value_end => '', grouped => $_->{grouped}})
             : $fixed{$field} ? () : {field => $field, op => 'not_null', value => '', value_end => '', grouped => 0}
     } @{$state->group_filters}];
 }
@@ -1001,6 +1001,7 @@ sub _resolve_top_columns ($config, $engine, $state) {
     my $missing = '__selecto_pivot_missing__'; $missing .= '_' while $used{$missing};
     my $other = '__selecto_pivot_other__'; $other .= '_' while $used{$other};
     my $gc = $state->group_configs->{$field};
+    my $source = $state->group_field($field);
     for my $i (0 .. $#values) {
         if (!defined($values[$i])) {
             $values[$i] = $missing;
@@ -1010,9 +1011,9 @@ sub _resolve_top_columns ($config, $engine, $state) {
     }
     # An empty source has no ranked column values.
     return unless @values;
-    my $dimension = $config->field_map($engine->domain, $state->retarget)->{$field}{dimension};
+    my $dimension = $config->field_map($engine->domain, $state->retarget)->{$source}{dimension};
     @{$gc}{qw(pivot_values pivot_other pivot_other_value pivot_key_field)} =
-        (\@values, $state->pivot_column_other ? 1 : 0, $other, $dimension ? $dimension->{key_field} : $field);
+        (\@values, $state->pivot_column_other ? 1 : 0, $other, $dimension ? $dimension->{key_field} : $source);
     $gc->{pivot_ranked} = ($state->pivot_column_top_order // 'rank') eq 'rank' ? 1 : 0;
     # Detail must keep the global list rather than rerank its narrower rows.
     $state->{_pivot_resolved_values} = [@values];
@@ -1025,17 +1026,18 @@ sub _resolve_top_columns ($config, $engine, $state) {
 sub _resolve_formatted_pivot_values ($config, $engine, $state) {
     my $field = $state->pivot_column // return;
     my $gc = $state->group_configs->{$field} // return;
+    my $source = $state->group_field($field);
     return unless @{$gc->{pivot_values} // []}
         && length($gc->{format} // '') && $gc->{format} ne 'default';
     my %original = %$gc;
     delete $original{pivot_values};
-    my $type = $config->field_map($engine->domain, $state->retarget)->{$field}{type};
-    my $group = Selecto::Components::QueryBuilder::_group_expression({field => $field, type => $type}, \%original);
+    my $type = $config->field_map($engine->domain, $state->retarget)->{$source}{type};
+    my $group = Selecto::Components::QueryBuilder::_group_expression({field => $source, type => $type}, \%original);
     my @values = grep { !defined($gc->{pivot_null_value}) || $_ ne $gc->{pivot_null_value} } @{$gc->{pivot_values}};
     my @conditions = ((@values ? (Selecto::Expression->in($group, \@values)) : ()),
         (defined($gc->{pivot_null_value}) ? (Selecto::Expression->is_null($group)) : ()));
-    my $query = Selecto::Query->new->select(Selecto::Expression->field($field)->as('source_value'), $group->as('group_value'))
-        ->group_by([$field, $group])->where(Selecto::Expression->any(\@conditions));
+    my $query = Selecto::Query->new->select(Selecto::Expression->field($source)->as('source_value'), $group->as('group_value'))
+        ->group_by([$source, $group])->where(Selecto::Expression->any(\@conditions));
     my $raw = Selecto::BoundedQuery->all($engine, $query, limits => $config->limits);
     my %matches;
     for my $row (@{$raw->{rows}}) {
@@ -1050,16 +1052,17 @@ sub _resolve_formatted_pivot_values ($config, $engine, $state) {
 sub _resolve_pivot_labels ($config, $engine, $state) {
     my $field = $state->pivot_column // return;
     my $gc = $state->group_configs->{$field} // return;
+    my $source = $state->group_field($field);
     return unless @{$gc->{pivot_values} // []};
     my %labels = map { ("$_" => "$_") } @{$gc->{pivot_values}};
-    my $dimension = $config->field_map($engine->domain, $state->retarget)->{$field}{dimension};
+    my $dimension = $config->field_map($engine->domain, $state->retarget)->{$source}{dimension};
     if ($dimension) {
         my @keys = grep { !defined($gc->{pivot_null_value}) || $_ ne $gc->{pivot_null_value} } @{$gc->{pivot_values}};
         my $rows = @keys ? Selecto::Components::PivotValues->dimension_rows($engine, $dimension, values => \@keys, limit => scalar(@keys)) : [];
         %labels = ();
         $labels{"$_->[0]"} = $_->[1] for @$rows;
     } else {
-        my $catalog = $config->filter_map($engine->domain, $state->retarget)->{$field} // {};
+        my $catalog = $config->filter_map($engine->domain, $state->retarget)->{$source} // {};
         $labels{"$_->{value}"} = $_->{label} for @{$catalog->{filter_choices} // []};
     }
     $labels{$gc->{pivot_null_value}} = '[NULL]' if defined($gc->{pivot_null_value});

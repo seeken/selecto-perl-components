@@ -139,3 +139,7 @@ t/graph_categories.t
 t/browser/hbar.spec.js
 t/browser/fixtures/hbar.pl
 t/browser/test-perl.js
+t/browser/fixtures/same-field-groups.pl
+t/browser/same-field-groups.spec.js
+t/lib/SameFieldGroupsFixture.pm
+t/same_field_groups.t

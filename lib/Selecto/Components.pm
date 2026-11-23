@@ -1216,6 +1216,19 @@ C<query_library_param_value> pairs
 
 =back
 
+Plain fields can be grouped more than once when their format or format
+options differ; identical groups are deduplicated. Star dimensions remain
+single selections. Group references (C<pivot_column>, C<graph_series_group>,
+C<group_exclude_missing> and grouped C<filter_group>) use the plain field name
+when it is unambiguous. Shared fields use C<field@format>, for example
+C<created_on@year>; same-format option variants append C<:> and a stable
+12-character options fingerprint. C<group:N> also selects the Nth group
+(one-based), and is serialized as its canonical name. The repeated C<group>
+parameters still carry source field names, with aligned format options.
+C<filter_group=1> remains supported for a field with one selected group;
+qualified references distinguish ANDed drilldown predicates on a shared field.
+Grid axes keep their existing zero-based positions.
+
 The server parses every request, whether GET, POST or WebSocket, with the same
 validator (L<Selecto::Components::State>). A value outside the domain or the
 allowlists makes the state invalid (HTTP 422) rather than being silently

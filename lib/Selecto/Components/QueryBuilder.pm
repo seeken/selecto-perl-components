@@ -367,14 +367,18 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
     my $rollup = $state->view eq 'aggregate' && @{$state->groups}
         && ($options->{rollup} // 1) ? 1 : 0;
     my @group_columns = map {
-        my $field = $_;
-        my $column_config = $state->group_configs->{$field} // {};
+        my $id = $_;
+        my $column_config = $state->group_configs->{$id} // {};
+        my $field = $column_config->{field} // $id;
         my $dimension = $field_map->{$field}{dimension};
         {
-            key => _field_alias($field),
-            field => $field,
+            key => _field_alias($id),
+            field => $id,
+            source_field => $field,
+            drilldown_field => $field,
             label => $column_config->{alias}
-                || ($dimension ? $dimension->{label} : $field_map->{$field}{label}),
+                || ($dimension ? $dimension->{label} : $field_map->{$field}{label}) .
+                    ($id ne $field ? ' (' . _group_format_label($config, $field_map->{$field}{type}, $column_config->{format}) . ')' : ''),
             (defined($field_map->{$field}{description})
                 ? (description => $field_map->{$field}{description}) : ()),
             type => $dimension ? $dimension->{display_type}
@@ -382,7 +386,7 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
             source_type => $field_map->{$field}{type},
             format => $column_config->{format} // '',
             drilldown_grouped => length($column_config->{format} // '')
-                && ($column_config->{format} // '') ne 'default' ? 1 : 0,
+                && ($column_config->{format} // '') ne 'default' ? ($id eq $field ? 1 : $id) : 0,
             _bucket_order($column_config),
             (!length($column_config->{format} // '') || $column_config->{format} eq 'default'
                 ? _declared_value_order($domain, $field) : ()),
@@ -392,18 +396,25 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                 pivot_other => $column_config->{pivot_other},
                 pivot_other_value => $column_config->{pivot_other_value},
                 pivot_labels => $column_config->{pivot_labels},
-                drilldown_grouped => 1,
-                drilldown_key => '__selecto_dimension_key_' . _field_alias($field),
+                drilldown_grouped => $id eq $field ? 1 : $id,
+                drilldown_key => '__selecto_dimension_key_' . _field_alias($id),
             ) : ()),
             (defined($field_map->{$field}{html_format})
                 ? (html_format => $field_map->{$field}{html_format}) : ()),
             ($dimension ? (
                 dimension => {%$dimension},
                 drilldown_field => $dimension->{key_field},
-                drilldown_key => '__selecto_dimension_key_' . _field_alias($field),
+                drilldown_key => '__selecto_dimension_key_' . _field_alias($id),
             ) : ()),
         }
     } @{$state->groups};
+    my %used_group_keys;
+    for my $column (@group_columns) {
+        my $base = $column->{key};
+        my $n = 1;
+        $column->{key} = $base . '_' . ++$n while $used_group_keys{$column->{key}};
+        $used_group_keys{$column->{key}} = 1;
+    }
     my (
         @groups, @group_selections, @group_orders,
         @group_sort_selections, @dimension_key_selections,
@@ -457,21 +468,21 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                 push @group_sort_selections, $aggregate_order->as($sort_key);
                 if (!$rollup && ($column->{bucket_order} // '') eq 'lower_bound') {
                     my $missing = Selecto::Expression->max(Selecto::Expression->value(
-                        ['case', [['is_null', $column->{field}], ['literal', 1]], ['else', ['literal', 0]]],
+                        ['case', [['is_null', $column->{source_field} // $column->{field}], ['literal', 1]], ['else', ['literal', 0]]],
                     ));
                     push @group_sort_selections, $missing->as($sort_key . '_missing');
                     push @group_orders, $missing;
                 }
                 push @group_orders, $aggregate_order;
                 if ($column->{value_order}) {
-                    my $text = Selecto::Expression->value(['cast', ['field', $column->{field}], 'string']);
+                    my $text = Selecto::Expression->value(['cast', ['field', $column->{source_field} // $column->{field}], 'string']);
                     my $text_order = $rollup ? Selecto::Expression->dimension_display($text, $group) : Selecto::Expression->min($text);
                     push @group_sort_selections, $text_order->as($sort_key . '_text');
                     push @group_orders, $text_order;
                 }
             } else {
                 push @group_orders, Selecto::Expression->min(Selecto::Expression->value(
-                    ['case', [['is_null', $column->{field}], ['literal', 1]], ['else', ['literal', 0]]]))
+                    ['case', [['is_null', $column->{source_field} // $column->{field}], ['literal', 1]], ['else', ['literal', 0]]]))
                     if $options->{top_ranking};
                 push @group_orders, $group;
             }
@@ -691,7 +702,7 @@ sub pivot_cells ($class, $config, $domain, $state, $level, $keys = undef) {
             my @conditions = map {
                 my $type = ($field_map->{$_->{field}} // {})->{type};
                 my $operand = $_->{grouped}
-                    ? _group_expression({field => $_->{field}, type => $type}, $state->group_configs->{$_->{field}} // {})
+                    ? _group_expression({field => $_->{field}, type => $type}, _filter_group_config($state, $_->{field}, $_))
                     : _temporal_expression($_->{field}, $type);
                 defined($_->{value}) ? Selecto::Expression->eq($operand, "$_->{value}")
                     : Selecto::Expression->is_null($operand)
@@ -745,15 +756,20 @@ sub _column_expression ($column) {
         $column->{association},
         [map { $_->{field} } @{$column->{nested_fields}}],
     ) if $column->{nested};
-    my $field = _temporal_expression($column->{field}, $column->{source_type} // $column->{type});
+    my $field = _temporal_expression($column->{source_field} // $column->{field}, $column->{source_type} // $column->{type});
     return $column->{format}
         ? Selecto::Expression->datetime_format($field, $column->{format})
         : $field;
 }
 
+sub _group_format_label ($config, $type, $format) {
+    my ($choice) = grep { $_->[0] eq ($format || 'default') } @{$config->group_formats($type)};
+    return $choice ? $choice->[1] : $format;
+}
+
 sub _group_expression ($column, $config) {
     if (@{$config->{pivot_values} // []}) {
-        my $field = $config->{pivot_key_field} // $column->{field};
+        my $field = $config->{pivot_key_field} // $column->{source_field} // $column->{field};
         if (my $matches = $config->{pivot_value_matches}) {
             my @branches = map {
                 my $value = $_;
@@ -775,7 +791,7 @@ sub _group_expression ($column, $config) {
             ['else', ['literal', $config->{pivot_other_value}, 'string']]]);
     }
     my $format = $config->{format} // '';
-    my $field = _temporal_expression($column->{field}, $column->{source_type} // $column->{type});
+    my $field = _temporal_expression($column->{source_field} // $column->{field}, $column->{source_type} // $column->{type});
     return $field unless length($format) && $format ne 'default';
     if (my $kind = Selecto::Components::BucketParser->group_kind($format)) {
         $kind = 'numeric_ranges' if $format eq 'age_buckets'
@@ -825,7 +841,7 @@ sub _declared_value_order ($domain, $field) {
 
 sub _group_natural_order_expression ($column, $config) {
     if ($column->{value_order} && !$column->{pivot_values}) {
-        my $field = $column->{dimension} ? $column->{dimension}{key_field} : $column->{field};
+        my $field = $column->{dimension} ? $column->{dimension}{key_field} : $column->{source_field} // $column->{field};
         my $rank = 0;
         my @branches = map { [['eq', $field, "$_"], ['literal', $rank++]] } @{$column->{value_order}};
         return Selecto::Expression->value(['case', @branches,
@@ -833,7 +849,7 @@ sub _group_natural_order_expression ($column, $config) {
     }
     my $format = $config->{format} // '';
     my $field = _temporal_expression(
-        $column->{field}, $column->{source_type} // $column->{type},
+        $column->{source_field} // $column->{field}, $column->{source_type} // $column->{type},
     );
     # Rank the same ranges used by the label expression, preserving first-match
     # semantics for overlapping ranges. The SQL key also orders paged results.
@@ -929,7 +945,8 @@ sub _with_filters ($query, $state, $config, $domain) {
 }
 
 sub _filter_group_config ($state, $field, $filter) {
-    my $gc = $state->group_configs->{$field} // {};
+    my $id = $filter->{grouped} && $filter->{grouped} ne '1' ? $filter->{grouped} : $field;
+    my $gc = $state->group_configs->{$id} // {};
     return $gc unless $filter->{ranges} || (($filter->{op} // 'ne') eq 'ne'
         && ($filter->{value} // '') eq 'Other' && Selecto::Components::State::_ranged_buckets($gc));
     my %original = %$gc;

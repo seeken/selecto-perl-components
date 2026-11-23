@@ -91,7 +91,7 @@ sub from_input ($class, $config, $domain, $input) {
         $carry ? undef : $grain,
     );
     my $graph_series_group = _parse_graph_series_group(
-        $view, $input, $valid_groups, \@errors,
+        $view, $input, $valid_groups, $group_configs, \@errors,
     );
     my ($valid_measures, $measure_configs, $measure_config_list, $measure) = _parse_measures(
         $config, $domain, $input, $group_map, $view, \@errors, $grain, $carry,
@@ -113,7 +113,7 @@ sub from_input ($class, $config, $domain, $input) {
     push @errors, 'The top column measure must be a selected measure.'
         if length(_scalar(_first($input, 'pivot_column_top_measure')))
             && !grep { $_ eq $top_measure } @$valid_measures;
-    my $pivot_column = _parse_pivot_column($view, $input, $valid_groups, \@errors);
+    my $pivot_column = _parse_pivot_column($view, $input, $valid_groups, $group_configs, \@errors);
     push @errors, 'Chosen or top graph values require the same group as Separate series by.'
         if $view eq 'graph' && (@{_values($input, 'pivot_column_value')} || length($top))
             && (!length($graph_series_group // '') || ($pivot_column // '') ne $graph_series_group);
@@ -139,14 +139,15 @@ sub from_input ($class, $config, $domain, $input) {
     }
     my $pivot_other = grep { _truthy($_, 0) } @{_values($input, 'pivot_column_other')};
     if (defined($pivot_column) && @pivot_values) {
-        my $dimension = $group_map->{$pivot_column}{dimension};
+        my $pivot_field = $group_configs->{$pivot_column}{field} // $pivot_column;
+        my $dimension = $group_map->{$pivot_field}{dimension};
         my $other_value = '__selecto_pivot_other__';
         $other_value .= '_' while $seen_pivot_value{$other_value};
         $group_configs->{$pivot_column}{pivot_other_value} = $other_value;
         $group_configs->{$pivot_column}{pivot_values} = [@pivot_values];
         $group_configs->{$pivot_column}{pivot_null_value} = $pivot_values[$null_index] if length($null_index);
         $group_configs->{$pivot_column}{pivot_other} = $pivot_other ? 1 : 0;
-        $group_configs->{$pivot_column}{pivot_key_field} = $dimension ? $dimension->{key_field} : $pivot_column;
+        $group_configs->{$pivot_column}{pivot_key_field} = $dimension ? $dimension->{key_field} : $pivot_field;
     }
     # The pivot's Total columns are on unless pivot_totals says otherwise. The
     # form sends 0 and, with the box ticked, 1 as well.
@@ -209,6 +210,16 @@ sub from_input ($class, $config, $domain, $input) {
     return $state;
 }
 
+# Group references are validated against selected instances, never used as SQL.
+sub group_field ($self, $id) { return ($self->group_configs->{$id} // {})->{field} // $id; }
+
+sub _resolve_group ($name, $groups, $configs) {
+    return $groups->[$1 - 1] if $name =~ /\Agroup:([1-9][0-9]*)\z/ && $1 <= @$groups;
+    return $name if grep { $_ eq $name } @$groups;
+    my @matches = grep { ($configs->{$_}{field} // $_) eq $name } @$groups;
+    return @matches == 1 ? $matches[0] : undef;
+}
+
 sub valid ($self) { return @{$self->errors} ? 0 : 1; }
 
 # Filters a Group By asks for itself: "leave out rows with no value" is a
@@ -225,7 +236,8 @@ sub valid ($self) { return @{$self->errors} ? 0 : 1; }
 sub group_filters ($self, $field_map = undef) {
     return [map {
         my $group = $_;
-        my $dimension = $field_map ? ($field_map->{$group} // {})->{dimension} : undef;
+        my $field = $self->group_field($group);
+        my $dimension = $field_map ? ($field_map->{$field} // {})->{dimension} : undef;
         my $group_config = $self->group_configs->{$group} // {};
         my $format = $group_config->{format} // '';
         my $bucketed = !$dimension && Selecto::Components::BucketParser->group_kind($format);
@@ -233,13 +245,13 @@ sub group_filters ($self, $field_map = undef) {
         # stepped buckets (*/10) cover every value and filter only on request.
         my $ranged = $bucketed && _ranged_buckets($group_config);
         my @chosen_filter = @{$group_config->{pivot_values} // []} && !$group_config->{pivot_other}
-            ? ({field => $group, op => 'ne', value => $group_config->{pivot_other_value}, value_end => '',
-                grouped => 1, from_group => $group, pivot_values => 1}) : ();
+            ? ({field => $field, op => 'ne', value => $group_config->{pivot_other_value}, value_end => '',
+                grouped => $group eq $field ? 1 : $group, from_group => $group, pivot_values => 1}) : ();
         (@chosen_filter, !$ranged && !$group_config->{exclude_missing} ? ()
             : $bucketed
-                ? {field => $group, op => 'ne', value => 'Other', value_end => '', grouped => 1, from_group => $group,
+                ? {field => $field, op => 'ne', value => 'Other', value_end => '', grouped => $group eq $field ? 1 : $group, from_group => $group,
                     ($ranged ? (ranges => 1) : ())}
-                : {field => $dimension ? $dimension->{key_field} : $group, op => 'not_null', value => '',
+                : {field => $dimension ? $dimension->{key_field} : $field, op => 'not_null', value => '',
                     value_end => '', from_group => $group})
     } @{$self->filter_groups // $self->groups}];
 }
@@ -320,7 +332,7 @@ sub query_pairs ($self) {
             filter_values_json => ref($filter->{values}) eq 'ARRAY'
                 ? to_json($filter->{values}) : '',
             filter_value_end => $filter->{value_end} // '',
-            filter_group => $filter->{grouped} ? 1 : 0,
+            filter_group => $filter->{grouped} // 0,
             filter_clause => $filter->{clause} // '';
         if ($filter->{promoted}) {
             push @pairs, $filter_field_count{$filter->{field}} == 1
@@ -331,7 +343,7 @@ sub query_pairs ($self) {
     for my $group (@{$self->groups}) {
         my $column = $self->group_configs->{$group} // {};
         push @pairs,
-            group => $group,
+            group => $self->group_field($group),
             group_alias => $column->{alias} // '',
             group_format => $column->{format} // '',
             group_bucket_ranges => $column->{bucket_ranges} // '',
@@ -567,7 +579,7 @@ sub _parse_aggregate_grid ($view, $input) {
 # The group shown as columns in the aggregate view (pivot_column=<group field>;
 # grid_column is the same thing under its first name). Every other group is a
 # row dimension. It applies to the summary table and to the grid alike.
-sub _parse_pivot_column ($view, $input, $groups, $errors) {
+sub _parse_pivot_column ($view, $input, $groups, $configs, $errors) {
     return undef unless $view eq 'aggregate' || @{_values($input, 'pivot_column_value')} || length(_scalar(_first($input, 'pivot_column_top')));
     my @requested = grep { length } map { _scalar($_) }
         @{_values($input, 'pivot_column')}, @{_values($input, 'grid_column')};
@@ -579,11 +591,12 @@ sub _parse_pivot_column ($view, $input, $groups, $errors) {
         push @$errors, 'Only one group can be shown as columns.';
         return undef;
     }
-    unless (grep { $_ eq $requested[0] } @$groups) {
+    my $resolved = _resolve_group($requested[0], $groups, $configs);
+    unless (defined $resolved) {
         push @$errors, 'The group shown as columns must be one of the selected groups.';
         return undef;
     }
-    return $requested[0];
+    return $resolved;
 }
 
 sub _parse_row_click_action ($config, $domain, $input, $configured) {
@@ -672,15 +685,14 @@ sub _parse_groups ($config, $domain, $input, $field_map, $view, $configured, $er
     my %seen_group_identity;
     for my $index (0 .. $#$group_values) {
         my $group = _scalar($group_values->[$index]);
-        next unless length($group) && !$seen_group{$group}++;
+        next unless length($group);
         if (!$field_map->{$group}) {
             push @$errors, 'A selected group field is not available.';
-        } elsif (@valid_groups >= 3) {
-            push @$errors, 'Choose no more than three group fields.';
         } else {
             my $dimension = $field_map->{$group}{dimension};
-            my $group_identity = $dimension ? $dimension->{key_field} : $group;
-            if ($seen_group_identity{$group_identity}++) {
+            my $group_identity = $dimension ? $dimension->{key_field} : undef;
+            next if $dimension && $seen_group{$group}++;
+            if ($dimension && $seen_group_identity{$group_identity}++) {
                 push @$errors, 'Choose a star dimension only once.';
                 next;
             }
@@ -709,8 +721,17 @@ sub _parse_groups ($config, $domain, $input, $field_map, $view, $configured, $er
             my $prefix_length = _scalar($group_prefix_lengths->[$index]);
             $prefix_length = 2 unless $prefix_length =~ /\A(?:[1-9]|10)\z/;
             my $exclude_articles = _truthy($group_exclude_articles->[$index], 1);
-            push @valid_groups, $group;
-            $group_configs{$group} = {
+            my $identity = to_json([$group, $format || 'default',
+                @{_group_identity_options($format, $bucket_ranges, $prefix_length, $exclude_articles)}]);
+            next if !$dimension && $seen_group_identity{$identity}++;
+            if (@valid_groups >= 3) {
+                push @$errors, 'Choose no more than three group fields.';
+                next;
+            }
+            my $id = 'group:' . (1 + @valid_groups);
+            push @valid_groups, $id;
+            $group_configs{$id} = {
+                field => $group,
                 alias => $alias,
                 format => $format,
                 bucket_ranges => $bucket_ranges,
@@ -728,18 +749,62 @@ sub _parse_groups ($config, $domain, $input, $field_map, $view, $configured, $er
             exclude_articles => 1,
         } } @valid_groups;
     }
-    return (\@valid_groups, \%group_configs);
+    # Plain field names remain canonical for old links. Qualify only shared
+    # fields, and include an options fingerprint for same-format variants.
+    my (%fields, %formats);
+    for my $id (@valid_groups) {
+        my $gc = $group_configs{$id};
+        $gc->{field} //= $id;
+        $fields{$gc->{field}}++;
+        $formats{$gc->{field} . '@' . ($gc->{format} || 'default')}++;
+    }
+    my (@named, %named_configs);
+    for my $id (@valid_groups) {
+        my $gc = $group_configs{$id};
+        my $name = $gc->{field};
+        if ($fields{$name} > 1) {
+            $name .= '@' . ($gc->{format} || 'default');
+            $name .= ':' . substr(sha256_hex(encode('UTF-8', to_json(_group_identity_options(
+                $gc->{format}, $gc->{bucket_ranges}, $gc->{prefix_length}, $gc->{exclude_articles})))), 0, 12)
+                if $formats{$name} > 1;
+        }
+        push @named, $name;
+        $named_configs{$name} = $gc;
+    }
+    for my $requested (keys %exclude_missing) {
+        my $id = _resolve_group($requested, \@named, \%named_configs);
+        push @$errors, 'A missing-value exclusion must name a selected group unambiguously.'
+            if !defined($id) && (grep { ($named_configs{$_}{field} // $_) eq $requested } @named) > 1;
+        $named_configs{$id}{exclude_missing} = 1 if defined $id;
+    }
+    return (\@named, \%named_configs);
 }
 
-sub _parse_graph_series_group ($view, $input, $groups, $errors) {
+# Compare effective options, so a default prefix and an explicit "2", or
+# equivalent range spacing, do not create different groups. Month identities
+# use relative bounds, never the calendar labels that change with the month.
+sub _group_identity_options ($format, $ranges, $prefix, $articles) {
+    if (Selecto::Components::BucketParser->group_kind($format)) {
+        my $increment = Selecto::Components::BucketParser->increment($ranges);
+        return ['increment', $increment] if defined $increment;
+        $ranges =~ s/(\d+)\s*-\s*(\d+)/$1 <= $2 ? "$1-$2" : "$2-$1"/ge if $format eq 'month_buckets';
+        return ['ranges', [map { [@{$_}{qw(minimum maximum label)}] }
+            @{Selecto::Components::BucketParser->parse($ranges)}]];
+    }
+    return [0 + $prefix, $articles ? 1 : 0] if $format eq 'text_prefix';
+    return [];
+}
+
+sub _parse_graph_series_group ($view, $input, $groups, $configs, $errors) {
     return '' unless $view eq 'graph';
     my $field = _scalar(_first($input, 'graph_series_group'));
     return '' unless length($field);
-    unless (grep { $_ eq $field } @$groups) {
+    my $resolved = _resolve_group($field, $groups, $configs);
+    unless (defined $resolved) {
         push @$errors, 'The graph series group must be one of the selected group fields.';
         return '';
     }
-    return $field;
+    return $resolved;
 }
 
 sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows_of = undef, $carry = 0) {
@@ -1103,7 +1168,16 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
         my $value = _scalar($filter_values->[$index]);
         my $values_json = _scalar($filter_values_json->[$index]);
         my $value_end = _scalar($filter_end_values->[$index]);
-        my $group_filter = _truthy($filter_groups->[$index], 0);
+        my $group_filter = _scalar($filter_groups->[$index]);
+        if (length($group_filter) && $group_filter ne '0') {
+            $group_filter = _resolve_group($group_filter eq '1' ? $field : $group_filter, $valid_groups, $group_configs);
+            if (!defined($group_filter) || ($group_configs->{$group_filter}{field} // $group_filter) ne $field) {
+                push @$errors, 'An aggregate drilldown filter is not available.';
+                next;
+            }
+            # Preserve the legacy boolean flag for unambiguous field groups.
+            $group_filter = 1 if $group_filter eq $field;
+        } else { $group_filter = 0; }
         my $clause = _scalar($filter_clauses->[$index]);
         next unless length($field) || length($value) || length($value_end);
         if (length($clause) && ($clause !~ /\A[1-9]\d*\z/
@@ -1127,7 +1201,7 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
             push @$errors, 'A filter field is not available.';
             next;
         }
-        my $filter_identity = "clause:$clause\0$field";
+        my $filter_identity = "clause:$clause\0$field\0$group_filter";
         if (length($clause) && $seen_filter_field{$filter_identity}++) {
             push @$errors, 'A filter field can be set only once.';
             next;
@@ -1137,7 +1211,7 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
             push @$errors, 'A filter operator is not available.';
             next;
         }
-        if ($group_filter && (!$valid_group_field{$field} || ($op ne 'eq' && $op ne 'ne' && $op ne 'is_null'))) {
+        if ($group_filter && (!$valid_group_field{$group_filter eq '1' ? $field : $group_filter} || ($op ne 'eq' && $op ne 'ne' && $op ne 'is_null'))) {
             push @$errors, 'An aggregate drilldown filter is not available.';
             next;
         }
@@ -1208,11 +1282,11 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
             value_end => $value_end,
         };
         $filter->{values} = $membership_values if $membership_values;
-        $filter->{grouped} = 1 if $group_filter;
+        $filter->{grouped} = $group_filter if $group_filter;
         $filter->{clause} = 0 + $clause if length($clause);
         $filter->{promoted} = 1 if !length($clause)
             && ($promoted_filter_index{$index + 1} || $promoted_filter_field{$field});
-        $filter->{draft} = 1 if !($group_filter && $op eq 'eq' && grep { $_ eq $value } @{$group_configs->{$field}{pivot_values} // []}) && $op !~ /_null\z/
+        $filter->{draft} = 1 if !($group_filter && $op eq 'eq' && grep { $_ eq $value } @{$group_configs->{$group_filter eq '1' ? $field : $group_filter}{pivot_values} // []}) && $op !~ /_null\z/
             && ($op =~ /in\z/ ? !length($value) && !$membership_values
                 : !length($value) || ($op eq 'between' && !length($value_end)));
         push @filters, $filter;
@@ -1325,11 +1399,12 @@ sub _grid_cell_filter_inputs ($config, $grid_cells, $grid_axes, $field_map, $val
 sub _grid_group_filters ($field_map, $valid_groups, $group_configs) {
     return [map {
         my $group = $_;
-        my $dimension = $field_map->{$group}{dimension};
+        my $field = $group_configs->{$group}{field} // $group;
+        my $dimension = $field_map->{$field}{dimension};
         my $format = $group_configs->{$group}{format} // '';
         {
-            field => @{$group_configs->{$group}{pivot_values} // []} ? $group : $dimension ? $dimension->{key_field} : $group,
-            grouped => @{$group_configs->{$group}{pivot_values} // []} || (!$dimension && length($format) && $format ne 'default') ? 1 : 0,
+            field => $dimension && !@{$group_configs->{$group}{pivot_values} // []} ? $dimension->{key_field} : $field,
+            grouped => @{$group_configs->{$group}{pivot_values} // []} || (!$dimension && length($format) && $format ne 'default') ? ($group eq $field ? 1 : $group) : 0,
         }
     } @$valid_groups];
 }
@@ -1366,7 +1441,7 @@ sub auto_retarget ($class, $config, $domain, $fields) {
 sub aggregate_grain ($class, $config, $domain, $state) {
     return $state->retarget if defined $state->retarget;
     my %associations;
-    my @fields = @{$state->groups};
+    my @fields = map { $state->group_field($_) } @{$state->groups};
     for my $measure_id (@{$state->measures}) {
         my $measure = $config->measure($measure_id, $domain);
         push @fields, $measure->{field} if $measure && defined $measure->{field};
