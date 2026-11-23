@@ -422,7 +422,7 @@
     var values = document.createElement("div");
     values.setAttribute("data-sc-pivot-values", "");
     values.hidden = true;
-    values.innerHTML = '<label>Choose column values<input type="search" data-sc-pivot-search autocomplete="off" aria-label="Search column values"></label><div data-sc-pivot-options role="list"></div><ol data-sc-pivot-chosen></ol><label><input type="checkbox" name="pivot_column_other" value="1" disabled>Include Other</label>';
+    values.innerHTML = '<label>Choose column values<input type="search" data-sc-pivot-search autocomplete="off" aria-label="Search column values"></label><div data-sc-pivot-options role="list"></div><ol data-sc-pivot-chosen></ol><label>Top columns<input type="number" name="pivot_column_top" min="1" max="500" disabled></label><label>Rank by<select name="pivot_column_top_measure" disabled></select></label><small>Top columns applies when no values are chosen.</small><label><input type="checkbox" name="pivot_column_other" value="1" disabled>Include Other</label>';
     grid.appendChild(values);
 
     // Leaving out rows with no value is a filter on the group's field.
@@ -452,7 +452,7 @@
       var choice = item && item.querySelector("[data-sc-grid-column-choice]");
       var active = viewName === "aggregate" && !!choice && choice.checked;
       node.hidden = !active;
-      node.querySelectorAll("input").forEach(function (input) { input.disabled = !active; });
+      node.querySelectorAll("input, select").forEach(function (input) { input.disabled = !active; });
     });
   }
 
@@ -589,6 +589,16 @@
     item.querySelectorAll("[data-sc-group-grid-column]").forEach(function (node) { node.hidden = viewName !== "aggregate"; });
     var gridColumnChoice = item.querySelector("[data-sc-grid-column-choice]");
     if (gridColumnChoice && !gridColumnChoice.value) gridColumnChoice.value = item.dataset.field || "";
+    var topMeasure = item.querySelector('[name="pivot_column_top_measure"]');
+    if (topMeasure && form) {
+      var selectedTop = topMeasure.value;
+      topMeasure.replaceChildren();
+      form.querySelectorAll('[data-sc-picker-kind="measure"] [data-sc-picker-set-item]').forEach(function (measure) {
+        var option = document.createElement("option"); option.value = measure.dataset.field;
+        option.textContent = measure.dataset.label || option.value;
+        option.selected = option.value === selectedTop; topMeasure.appendChild(option);
+      });
+    }
     syncPivotTotals(item, viewName);
     var excludeMissingChoice = item.querySelector('[data-sc-group-exclude-missing] input');
     if (excludeMissingChoice && !excludeMissingChoice.value) excludeMissingChoice.value = item.dataset.field || "";

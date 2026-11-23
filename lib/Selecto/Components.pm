@@ -1446,3 +1446,15 @@ filter applied before totals and retained in Detail drilldowns. Configure
 provides a searchable chooser using the filter catalog and dimension labels.
 
 =cut
+
+=head2 Top pivot columns
+
+C<pivot_column_top> accepts 1 through 500. C<pivot_column_top_measure>
+selects a measure already in the report and defaults to its first measure.
+With no explicit chosen values, columns rank by that measure descending,
+then by label and stable key. The global list is resolved before paging.
+C<pivot_column_other> and totals behave as for chosen values. Drilldowns
+carry the resolved list, including C<pivot_column_value_null> (a zero-based
+index identifying a missing-value column), so Detail never reranks its rows.
+
+=cut

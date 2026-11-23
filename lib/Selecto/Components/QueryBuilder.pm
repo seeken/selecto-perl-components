@@ -420,7 +420,10 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                 : Selecto::Expression->min($dimension->{display_field});
             push @groups, $key;
             push @group_selections, $display->as($column->{key});
-            push @group_orders, $display;
+            push @group_orders, Selecto::Expression->min(Selecto::Expression->value(
+                ['case', [['is_null', $dimension->{key_field}], ['literal', 1]], ['else', ['literal', 0]]]))
+                if $options->{top_ranking};
+            push @group_orders, $display, $key;
             push @dimension_key_selections, $key->as($column->{drilldown_key});
         } else {
             my $group = _group_expression(
@@ -449,6 +452,9 @@ sub _aggregate ($class, $config, $domain, $state, $options) {
                 }
                 push @group_orders, $aggregate_order;
             } else {
+                push @group_orders, Selecto::Expression->min(Selecto::Expression->value(
+                    ['case', [['is_null', $column->{field}], ['literal', 1]], ['else', ['literal', 0]]]))
+                    if $options->{top_ranking};
                 push @group_orders, $group;
             }
         }
@@ -641,7 +647,8 @@ sub pivot_cells ($class, $config, $domain, $state, $level, $keys = undef) {
         pivot_column => undef,
         page => 1,
     );
-    my $built = $class->_aggregate($config, $domain, $cells_state, {paginate => 0, rollup => 0, pivot_part => 1});
+    my $built = $class->_aggregate($config, $domain, $cells_state, {paginate => 0, rollup => 0, pivot_part => 1,
+        top_ranking => !$level && $state->pivot_column_top && !@{$state->group_configs->{$column_field}{pivot_values} // []}});
     if ($level > 0) {
         my $field_map = $config->field_map($domain, $state->retarget);
         my @alternatives = map {
@@ -712,7 +719,8 @@ sub _group_expression ($column, $config) {
     if (@{$config->{pivot_values} // []}) {
         my $field = $config->{pivot_key_field} // $column->{field};
         return Selecto::Expression->value(['case',
-            (map { [['eq', $field, "$_"], ['literal', "$_", 'string']] } @{$config->{pivot_values}}),
+            (map { [(defined($config->{pivot_null_value}) && $_ eq $config->{pivot_null_value}
+                ? ['is_null', $field] : ['eq', $field, "$_"]), ['literal', "$_", 'string']] } @{$config->{pivot_values}}),
             ['else', ['literal', $config->{pivot_other_value}, 'string']]]);
     }
     my $format = $config->{format} // '';

@@ -95,6 +95,7 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         my $setup_ms = _elapsed_ms($setup_started);
         return $model unless $state->valid;
 
+        _resolve_top_columns($config, $engine, $state);
         _resolve_pivot_labels($config, $engine, $state);
         my $build_started = time;
         my $built = Selecto::Components::QueryBuilder->build(
@@ -944,8 +945,40 @@ sub _group_filter_inputs ($state, $groups, $filters) {
 # given. A pivot shows each as a column whether or not any row falls in it:
 # the ranges are the report's layout.
 
-# Values are always keys. Fetch an empty dimension's heading from its governed
-# lookup relation too; never infer identity from a display label.
+# Resolve the global column list before any rows query or page limit. The
+# same list governs every rollup level, grid, export and Detail drilldown.
+sub _resolve_top_columns ($config, $engine, $state) {
+    return unless $state->pivot_column_top && !@{$state->pivot_column_values // []};
+    my $field = $state->pivot_column // return;
+    my $ranking = Selecto::Components::State->new(%{$state->as_hash},
+        orders => [{field => 'measure:' . $state->pivot_column_top_measure, direction => 'desc'}]);
+    my $top = Selecto::Components::QueryBuilder->pivot_cells($config, $engine->domain, $ranking, 0);
+    my ($axis) = grep { !$_->{measure} } @{$top->{columns}};
+    my $raw = Selecto::BoundedQuery->all($engine, $top->{query}->limit($state->pivot_column_top), limits => $config->limits);
+    my %index; @index{@{$raw->{columns}}} = 0 .. $#{$raw->{columns}};
+    my @values = map { $_->[$index{$axis->{drilldown_key} // $axis->{key}}] } @{$raw->{rows}};
+    my %used = map { defined($_) ? ("$_" => 1) : () } @values;
+    my $missing = '__selecto_pivot_missing__'; $missing .= '_' while $used{$missing};
+    my $other = '__selecto_pivot_other__'; $other .= '_' while $used{$other};
+    my $gc = $state->group_configs->{$field};
+    for my $i (0 .. $#values) {
+        if (!defined($values[$i])) {
+            $values[$i] = $missing;
+            $gc->{pivot_null_value} = $missing;
+            $state->pivot_column_value_null($i);
+        }
+    }
+    # An empty source has no ranked column values.
+    return unless @values;
+    my $dimension = $config->field_map($engine->domain, $state->retarget)->{$field}{dimension};
+    @{$gc}{qw(pivot_values pivot_other pivot_other_value pivot_key_field)} =
+        (\@values, $state->pivot_column_other ? 1 : 0, $other, $dimension ? $dimension->{key_field} : $field);
+    # Detail must keep the global list rather than rerank its narrower rows.
+    $state->{_pivot_resolved_values} = [@values];
+}
+
+# Values are always keys. Fetch empty dimension headings from the lookup
+# relation too; never infer identity from a display label.
 sub _resolve_pivot_labels ($config, $engine, $state) {
     my $field = $state->pivot_column // return;
     my $gc = $state->group_configs->{$field} // return;
@@ -961,14 +994,16 @@ sub _resolve_pivot_labels ($config, $engine, $state) {
             my $dbh = $engine->adapter->dbh;
             my ($table, $key, $display) = map { $dbh->quote_identifier($_) }
                 ($association->table, $association->related_key, $association->display_field);
-            my $marks = join ',', ('?') x @{$gc->{pivot_values}};
-            my $rows = $dbh->selectall_arrayref("SELECT $key, $display FROM $table WHERE $key IN ($marks)", undef, @{$gc->{pivot_values}});
+            my @keys = grep { !defined($gc->{pivot_null_value}) || $_ ne $gc->{pivot_null_value} } @{$gc->{pivot_values}};
+            my $marks = join ',', ('?') x @keys;
+            my $rows = @keys ? $dbh->selectall_arrayref("SELECT $key, $display FROM $table WHERE $key IN ($marks)", undef, @keys) : [];
             $labels{"$_->[0]"} = $_->[1] for @$rows;
         }
     } else {
         my $catalog = $config->filter_map($engine->domain, $state->retarget)->{$field} // {};
         $labels{"$_->{value}"} = $_->{label} for @{$catalog->{filter_choices} // []};
     }
+    $labels{$gc->{pivot_null_value}} = '[NULL]' if defined($gc->{pivot_null_value});
     $gc->{pivot_labels} = \%labels;
 }
 

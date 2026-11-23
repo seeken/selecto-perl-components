@@ -125,7 +125,9 @@ sub view_controls ($class, $model, $mode, $catalog = undef, $detail_catalog = un
             _selection_hidden('group', $state->groups, $state->group_configs) .
             (defined($state->pivot_column) ? _hidden('pivot_column', $state->pivot_column) .
                 join('', map { _hidden('pivot_column_value', $_) } @{$state->pivot_column_values // []}) .
-                _hidden('pivot_column_other', $state->pivot_column_other // 0) : '');
+                _hidden('pivot_column_other', $state->pivot_column_other // 0) .
+                ($state->pivot_column_top ? _hidden('pivot_column_top', $state->pivot_column_top) . _hidden('pivot_column_top_measure', $state->pivot_column_top_measure) : '') .
+                (defined($state->pivot_column_value_null) ? _hidden('pivot_column_value_null', $state->pivot_column_value_null) : '') : '');
     }
     die "Unknown view control panel\n" unless $mode eq 'summary';
     return $class->_aggregate_grid_picker($state) .
@@ -963,7 +965,14 @@ sub _pivot_value_controls ($state, $field, $column) {
                 '<button type="button" data-sc-pivot-move="up" aria-label="Move value up">↑</button>' .
                 '<button type="button" data-sc-pivot-move="down" aria-label="Move value down">↓</button>' .
                 '<button type="button" data-sc-pivot-remove aria-label="Remove value">Remove</button></li>'
-        } @$values) . '</ol><label><input type="checkbox" name="pivot_column_other" value="1"' . $disabled .
+        } @$values) . '</ol>' .
+        '<label>Top columns<input type="number" name="pivot_column_top" min="1" max="500" value="' .
+            _h($active && $state ? $state->pivot_column_top // '' : '') . '"' . $disabled . '></label>' .
+        '<label>Rank by<select name="pivot_column_top_measure"' . $disabled . '>' .
+            join('', map { '<option value="' . _h($_) . '"' .
+                ($active && $state && ($state->pivot_column_top_measure // '') eq $_ ? ' selected' : '') . '>' . _h($_) . '</option>' }
+                @{$state ? $state->measures : []}) . '</select></label>' .
+        '<small>Top columns applies when no values are chosen.</small><label><input type="checkbox" name="pivot_column_other" value="1"' . $disabled .
         ($active && $state && $state->pivot_column_other ? ' checked' : '') . '>Include Other</label></div>';
 }
 
@@ -1246,7 +1255,7 @@ sub _group_filter_list ($class, $state, $by_path) {
             '<article class="sc-filter-set-item sc-group-filter" ' .
             ($_->{ranges} ? 'data-sc-group-range-filter' : 'data-sc-group-filter') . '="' . _h($_->{from_group}) .
             '"><div class="sc-filter-set-heading"><span><strong>' . _h($field ? $field->{label} : $_->{from_group}) .
-            '</strong><small>' . ($_->{pivot_values} ? 'is one of the chosen column values &middot; from Group By' : $_->{ranges} ? 'is in one of its ranges &middot; from the group\'s buckets'
+            '</strong><small>' . ($_->{pivot_values} ? ($state->pivot_column_top && !@{$state->pivot_column_values // []} ? 'is one of the top column values &middot; from Group By' : 'is one of the chosen column values &middot; from Group By') : $_->{ranges} ? 'is in one of its ranges &middot; from the group\'s buckets'
                 : ($_->{grouped} ? 'is in a bucket' : 'has a value') . ' &middot; from Group By') .
             '</small></span></div></article>'
         } @filters) . '</div>';

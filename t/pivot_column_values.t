@@ -87,6 +87,35 @@ for my $backend (qw(sqlite postgresql)) {
         $bad=$e->model($c,{%base,pivot_column_value=>[1..101]});ok !$bad->{state}->valid,'value count bounded';
         my $injection=$model->(pivot_column_value=>["P' OR 1=1 --",'G']);
         is scalar(@{$injection->{result}{records}}),2,'chosen text is bound, never SQL';
+        my $top=$model->(pivot_column_top=>2,pivot_column_top_measure=>'revenue');
+        is_deeply $heads->($top),['[NULL]','C'],'top N descends by selected measure including missing';
+        my $top_csv=$e->export($top,'csv');$top_csv =~ s/"//g;
+        like $top_csv,qr/Total,50,1,40,1,90,2/, 'top N totals exclude values outside the columns';
+        my $top_other=$model->(pivot_column_top=>2,pivot_column_top_measure=>'revenue',pivot_column_other=>1);
+        is_deeply $heads->($top_other),['[NULL]','C','Other'],'top N with Other';
+        my $top_other_csv=$e->export($top_other,'csv');$top_other_csv =~ s/"//g;
+        like $top_other_csv,qr/Total,50,1,40,1,60,3,150,5/, 'top N plus Other preserves unfiltered total';
+        my $tie=$model->(pivot_column_top=>3,pivot_column_top_measure=>'loads');
+        is_deeply $heads->($tie),[qw(C D G)],'ties break deterministically by label';
+        my $top2=$model->(pivot_column_top=>2,pivot_column_top_measure=>'revenue',page=>2,limit=>1);
+        is_deeply $heads->($top2),$heads->($top),'page two shares the global top columns';
+        my $top_grid=$model->(pivot_column_top=>2,pivot_column_top_measure=>'revenue',aggregate_grid=>1,pivot_column_other=>1);
+        is_deeply [map {$_->{value}} @{$top_grid->{result}{grid_data}{columns}}],['[NULL]','C','Other'],'grid shares top order';
+        my $top_url=$e->canonical_url($top->{state},$domain);
+        my $top_again=$e->model($c,Selecto::Components::Dashboard->new->input_from_url($top_url));
+        is_deeply $heads->($top_again),$heads->($top),'top N URL roundtrip';
+        my $override=$model->(pivot_column_top=>1,pivot_column_value=>[qw(G P)]);
+        is_deeply $heads->($override),[qw(G P)],'explicit choices override top N';
+        for my $invalid (0, -1, 501, '2.5', 'bad') {
+            my $m=$e->model($c,{%base,pivot_column_top=>$invalid});ok !$m->{state}->valid,"reject invalid N $invalid";
+        }
+        my $invalid_measure=$e->model($c,{%base,pivot_column_top=>2,pivot_column_top_measure=>'unknown'});
+        ok !$invalid_measure->{state}->valid,'top measure must be selected';
+        $t->get_ok('/loads'=>form=>{%base,pivot_column_top=>2,pivot_column_other=>1})->status_is(200);
+        $form=$t->tx->res->dom->at('.sc-pivot-drill-form');%drill=();
+        push @{$drill{$_->attr('name')}},$_->attr('value') for @{$form->find('input')};
+        $t->get_ok('/loads'=>form=>{%drill,grid_axis=>to_json({axis=>1,value=>'__selecto_pivot_other__'})})->status_is(200);
+        is_deeply [sort map {$_->all_text} @{$t->tx->res->dom->find('.sc-results tbody tr td:first-child')}],[1,2,3],'top Other drill retains global list';
         my $insert=$dbh->prepare("INSERT INTO $table VALUES (?, 'East', ?, NULL, 0)");
         $insert->execute(1000+$_, 'S'.$_) for 1..367;
         my $wide=$model->();ok $wide->{result}{pivot_data}{limit},'unselected high cardinality refused';

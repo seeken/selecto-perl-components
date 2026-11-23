@@ -32,7 +32,7 @@ sub _results ($class, $model) {
             && ($result->{grid_limit} // {})->{kind} && $result->{grid_limit}{kind} eq 'columns'
         ? '<div class="sc-grid-warning" role="status">This grid has more than ' .
           _h($result->{grid_limit}{limit}) .
-          ' columns. Add filters or show a lower-cardinality group as columns before displaying it.</div>'
+          ' columns. Choose the values, or show the top N; add filters or show a lower-cardinality group as columns before displaying it.</div>'
         : $result->{grid_limit_exceeded}
         ? '<div class="sc-grid-warning" role="status">This grid requires more than ' .
           _h($model->{config}->max_grid_result_cells) .
@@ -48,7 +48,7 @@ sub _results ($class, $model) {
     my $pivot_limit = $pivot ? $pivot->{limit} : undef;
     $grid_warning = '<div class="sc-grid-warning" role="status">' . ($pivot_limit->{kind} eq 'columns'
         ? 'Showing this group as columns needs more than ' . _h($pivot_limit->{limit}) .
-          ' columns. Add filters or show a lower-cardinality group as columns.'
+          ' columns. Choose the values, or show the top N; add filters or show a lower-cardinality group as columns.'
         : 'This page needs more than ' . _h($pivot_limit->{limit}) .
           ' display cells. Show fewer rows per page, add filters, or show a lower-cardinality group as columns.') .
         '</div>' if $pivot_limit;

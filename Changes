@@ -1,6 +1,9 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Limit pivot columns to the top N by a selected measure, resolving the
+      global ordered list before paging and totals; optionally combine the
+      remaining values and missing rows in Other.
     - Choose ordered pivot column values by stored key, including empty
       dimensions and an optional Other column; keep totals, drilldowns,
       grids, exports, saved queries and permalinks on the same selection.
