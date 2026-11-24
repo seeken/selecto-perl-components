@@ -26,3 +26,6 @@
 ^src/
 ^script/
 ^t/browser/
+# Repository CI configuration is not part of the CPAN distribution.
+^ci/
+^docs/beep_ci\.md$

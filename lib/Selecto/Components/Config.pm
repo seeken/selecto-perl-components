@@ -1512,6 +1512,8 @@ sub _default_measure_function ($type) {
 
 __END__
 
+=encoding utf8
+
 =head1 NAME
 
 Selecto::Components::Config - Validated configuration for one Selecto explorer
