@@ -150,11 +150,12 @@ current session's X-CSRF-Token and same-origin policy. Publication identifiers
 are host-derived cache identities, never row authority. Complete domain
 publication requires C<canonical_publish_domain =E<gt> 1>.
 
-Set C<canonical_explorer> to a hash of explorer host options (C<clock>,
+The canonical base also serves C<remote_query.explorer.v1>, advertised in the
+manifest: C<GET .../explorer-features> and C<POST .../explorer-query> over
+L<Selecto::API::Explorer>. That gives the API Console its grouped aggregate
+queries. C<canonical_explorer> is a hash of explorer host options (C<clock>,
 C<count_exact>, C<limits>, C<collection_limit>, C<supports>, C<services>,
-C<links>) to add C<remote_query.explorer.v1>: C<GET .../explorer-features>
-and C<POST .../explorer-query> over L<Selecto::API::Explorer>, advertised in
-the manifest. The explorer POST has the same X-CSRF-Token and same-origin
+C<links>), empty by default; set it to C<0> to leave these routes out. The explorer POST has the same X-CSRF-Token and same-origin
 rules as C<POST .../query>. C<clock> is the trusted instant "today" is taken
 from (an RFC 3339 string or a callback receiving the controller; default the
 server clock).

@@ -18,12 +18,12 @@ has database_url => sub { $ENV{SELECTO_PERL_STACK_POSTGRES_URL} };
 # An independently authored seed of the same shape may replace the protocol corpus copy.
 has seed_path => sub ($self) { $ENV{SELECTO_PERL_STACK_SEED}
     // path($self->workspace, 'selecto-protocol/spec/fixtures/detail/pilot-seed.v1.json')->to_string };
-# SELECTO_PERL_STACK_EXPLORER=1 also serves remote_query.explorer.v1 on the
-# canonical base (canonical_explorer; SELECTO_PERL_STACK_CLOCK pins "today").
+# The canonical base also serves remote_query.explorer.v1 (canonical_explorer;
+# SELECTO_PERL_STACK_CLOCK pins "today"); SELECTO_PERL_STACK_EXPLORER=0 turns it off.
 # SELECTO_PERL_STACK_SPA_ROUTES=1 mounts the selecto.spa/v1 routes
 # (Selecto::API::Spa) at /api/spa as a reference: the same SPA request runs on
 # both transports against the same session-scoped engine.
-has explorer => sub { ($ENV{SELECTO_PERL_STACK_EXPLORER} // '') eq '1' };
+has explorer => sub { ($ENV{SELECTO_PERL_STACK_EXPLORER} // '1') ne '0' };
 has spa_routes => sub { ($ENV{SELECTO_PERL_STACK_SPA_ROUTES} // '') eq '1' };
 
 sub connection ($self) {
@@ -145,7 +145,7 @@ sub startup ($self) {
             }, canonical_field_encodings => {large_integer => 'decimal-string'},
             ($self->explorer ? (canonical_explorer => {count_exact => 1,
                 links => {api_console => '/api/items/console'},
-                ($ENV{SELECTO_PERL_STACK_CLOCK} ? (clock => $ENV{SELECTO_PERL_STACK_CLOCK}) : ())}) : ()),
+                ($ENV{SELECTO_PERL_STACK_CLOCK} ? (clock => $ENV{SELECTO_PERL_STACK_CLOCK}) : ())}) : (canonical_explorer => 0)),
         }},
     });
     $self->_spa_routes($protected, $factory) if $self->spa_routes;

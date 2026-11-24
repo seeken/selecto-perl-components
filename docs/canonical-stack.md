@@ -183,18 +183,21 @@ remain separate from formal transport/SPA qualification. See workspace
 
 ## Explorer queries
 
-Add `canonical_explorer => {clock => ..., count_exact => 1, limits => {...}}` to
-serve `remote_query.explorer.v1` from the same base: `GET .../explorer-features`
-and `POST .../explorer-query` (`Selecto::API::Explorer`), advertised in the
-manifest. The POST needs the session's `X-CSRF-Token` and a same-origin request,
+The canonical base also serves `remote_query.explorer.v1`, advertised in the
+manifest: `GET .../explorer-features` and `POST .../explorer-query`
+(`Selecto::API::Explorer`). The API Console uses it for grouped aggregate
+queries. It is on by default; pass options with
+`canonical_explorer => {clock => ..., count_exact => 1, limits => {...}}`, or
+turn it off with `canonical_explorer => 0`. The POST needs the session's `X-CSRF-Token` and a same-origin request,
 like `POST .../query`. `clock` is the trusted instant "today" is taken from (an
 RFC 3339 string or a callback receiving the controller; the server clock by
 default); `limits` are the profile's host limits, `max_limit` defaulting to the
 explorer's own.
 
-The example stack enables this with `SELECTO_PERL_STACK_EXPLORER=1`
-(`count_exact`, the API Console link, and `SELECTO_PERL_STACK_CLOCK` as the
-trusted clock when set). `SELECTO_PERL_STACK_SPA_ROUTES=1` also mounts the
+The example stack serves it with `count_exact`, the API Console link, and
+`SELECTO_PERL_STACK_CLOCK` as the trusted clock when set;
+`SELECTO_PERL_STACK_EXPLORER=0` turns it off. `SELECTO_PERL_STACK_SPA_ROUTES=1`
+also mounts the
 `selecto.spa/v1` routes (`Selecto::API::Spa`) at `/api/spa` over the same
 session-scoped engine, with SPA descriptor field ids (`source.<path>`), so
 one SPA request can be compared on both transports

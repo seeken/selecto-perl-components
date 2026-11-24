@@ -4,6 +4,7 @@ use warnings;
 use Test::More;
 use Test::Mojo;
 use DBI ();
+use Mojo::JSON ();
 use Mojolicious ();
 use Selecto;
 use Selecto::Components::Canonical ();
@@ -66,12 +67,24 @@ $t->post_ok('/api/items/explorer-query' => {'X-CSRF-Token' => $csrf, Accept => '
     ->status_is(200)->content_type_like(qr{\Atext/csv})->content_is("id,name\r\n1,Bolt\r\n2,Nut\r\n3,Drill\r\n")
     ->header_like('Content-Disposition' => qr/attachment/);
 
-my $plain = Selecto::Components::Config->new(%$config, canonical_explorer => undef);
+my $plain = Selecto::Components::Config->new(%$config, canonical_explorer => 0);
 my $without = Mojolicious->new;
 Selecto::Components::Canonical->register($without->routes, $plain, '/api/items');
 my $w = Test::Mojo->new($without);
 $w->get_ok('/api/items')->status_is(200)->json_is('/profiles' => ['remote_query.v1']);
 $w->get_ok('/api/items/explorer-features')->status_is(404);
+
+my %defaults = %$config;
+delete $defaults{canonical_explorer};
+my $default = Mojolicious->new;
+Selecto::Components::Canonical->register($default->routes, Selecto::Components::Config->new(%defaults), '/api/items');
+my $d = Test::Mojo->new($default);
+$d->get_ok('/api/items')->status_is(200)->json_is('/profiles/1' => 'remote_query.explorer.v1');
+$d->get_ok('/api/items/explorer-features')->status_is(200)->json_is('/supports/aggregate' => Mojo::JSON::true);
+
+my %no_canonical = %defaults;
+delete @no_canonical{qw(canonical_api_path canonical_authorizer canonical_publication)};
+ok eval { Selecto::Components::Config->new(%no_canonical) }, 'the default needs no canonical base' or diag $@;
 
 eval { Selecto::Components::Config->new(%$config, canonical_explorer => {colour => 1}) };
 like $@, qr/unknown options: colour/, 'explorer options are closed';

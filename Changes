@@ -1,6 +1,10 @@
 Revision history for Selecto-Components
 
 Unreleased
+    - Serve remote_query.explorer.v1 on every canonical base by default, so
+      the API Console's Aggregates profile (group by, rollup, cube, grouping
+      sets) works without host configuration. canonical_explorer still takes
+      host options; set it to 0 to leave the explorer routes out.
     - Add host-declared query_options across Explorer state, links, saved
       queries, exports and WebSocket patches. Validate and stash choices
       before every engine factory call, retain the one-argument API for
