@@ -41,7 +41,7 @@ sub new ($class, $backend = 'sqlite', $url = undef) {
                 return 0 if $ctx->{deny_row} && $row && $row->{name} eq $ctx->{deny_row};
                 return 1;
             },
-            engine_factory => sub ($ctx, $config, $source, $destination = undef) {
+            engine_factory => sub ($ctx, $config = undef, $source = undef, $destination = undef) {
                 my $roles = $name eq 'role_link' && $ctx->{role_destinations};
                 my $domain = Selecto::Domain->parse({name => 'SavedPanels',
                     source => {source_table => $table, primary_key => 'id', ($roles ? (tenant_field => 'tenant_id') : ()), fields => [sort keys %types],
