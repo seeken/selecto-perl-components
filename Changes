@@ -243,8 +243,8 @@ Unreleased
       and Explorer shows them: a tooltip on picker choices and column headings, and
       text under the label of chosen fields and filters. Needs selecto-perl with
       field_description.
-    - The Query Assistant (WebMCP query form editor) is removed. Move any
-      query_assistant.palettes to the explorer option graph_palettes.
+    - Remove the unused WebMCP query form editor. Graph palettes are
+      configured with the explorer option graph_palettes.
     - Resource::Composer and Resource::Registry are removed; nothing used them.
     - Set up the shared API Console in the authenticated PostgreSQL stack
       example, with Explorer query handoff, session CSRF and logout checks.
