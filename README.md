@@ -110,7 +110,7 @@ plugin 'Selecto::Components' => {
     explorers => {
         products => {
             title => 'Products',
-            engine_factory => sub ($c) {
+            engine_factory => sub ($c, $context = {}) {
                 Selecto::Engine->new(domain => $domain, adapter => $adapter);
             },
             default_fields => [qw(product_name category.category_name unit_price)],
@@ -180,17 +180,67 @@ options are:
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `path`, `title` | `/explore/<id>`, humanized ID | Public URL and page heading |
+| `query_options` | none | Host-declared string choices carried with query state; see below |
+| `results_note_resolver` | none | Escaped results note; JSON metadata and XLSX A1 comment |
+| `label_domain` | none | Original page domain for title localization when engines change |
 | `views`, `default_view` | all three, `detail` | Any of `detail`, `aggregate`, `graph` |
 | `default_fields`, `default_group` | first fields | Initial Detail columns and Aggregate groups |
 | `measures` | row count | Curated presets such as `{id, label, aggregate, field}` |
 | `default_limit`, `max_limit` | 25, 100 | Page size and its upper bound |
-| `export_authorizer`, `max_export_rows` | allow, 10,000 | Who may export, and the finite row cap |
+| `export_authorizer`, `max_export_rows` | allow, 10,000 | Who may export, and the finite row cap (integer or per-request callback) |
 | `theme_resolver`, `page_shell_resolver` | none | Per-request colors, and host navigation markup |
 | `localizer` | none | Translation callback |
 | `action_handlers`, `action_authorizer`, … | none | Selected-row actions |
 | `saved_query_store` | none | Enables the Saved queries tab |
 | `graph_palettes` | built-in palettes | Extra named graph palettes, e.g. `{brand => ['#2563eb', '#f97316']}` |
 | `show_sql` | 0 | Query Debug panel. **Never enable this in production** |
+
+A host can offer a per-query backend choice without exposing adapter selection:
+
+```perl
+query_options => [{
+    name => 'backend', label => 'Query backend',
+    choices => [[postgresql => 'PostgreSQL (live)'], [duckdb => 'DuckDB snapshot']],
+    default => 'postgresql', control => 'checkbox',
+    checkbox_label => 'Use DuckDB snapshot',
+    help_link => {href => '/snapshot-status', label => 'snapshot status'},
+    offered => sub ($c, $config) { ... },
+}],
+engine_factory => sub ($c, $request) {
+    # Only the host maps declared choices to trusted engines.
+    return $request->{query_options}{backend} eq 'duckdb'
+        ? snapshot_engine($c, $request->{input}) : live_engine($c);
+},
+max_export_rows => sub ($c, $config) {
+    return $c->stash('selecto_components_query_options')->{backend} eq 'duckdb'
+        ? 50_000 : 10_000;
+},
+results_note_resolver => sub ($c, $config, $model) { ... },
+```
+
+`control => 'select'` is the default. A checkbox uses exactly two choices,
+with the first as its default. `offered` may also be a boolean; false hides
+the control and refuses non-default values. Invalid choices are query errors.
+Non-defaults travel through links, saved queries, exports and WebSocket
+patches, and partition result caches. Defaults stay out of URLs.
+
+The factory context includes all effective options and a deep copy of raw
+request input (or the full effective WebSocket message after its patch).
+Changes to the copy do not affect the request or parsed query state. A factory
+for an explorer with query options must accept a second argument, e.g.
+`sub ($c, $context = {})`. Declared options mean a `($controller, $context)`
+call; no declared options mean a `($controller)` call, exactly as before. The
+`selecto_components_query_options` stash lasts for the request or message,
+including authorization, export-limit, note and cleanup callbacks. Only the
+host factory chooses engines; no arbitrary adapter names are accepted.
+
+A results note appears above every result view, in JSON's `meta.results_note`,
+and as an XLSX A1 header-cell comment. CSV/TSV omit it to preserve machine
+reads. The export resolver sees query metadata before streaming, so it must
+not depend on result rows. Explorers with options keep their configured
+`title`; set `label_domain` to the original page domain for its localized
+title. API Console links carry options in URL parameters; the host Console
+integration must propagate them to API requests.
 
 Some settings belong to the domain rather than the explorer. They go under the
 domain contract's `components` key: `query_params` (see *Private URL mode*
@@ -233,7 +283,8 @@ Each explorer `path` must start with the bridge `prefix`.
 
 ### Per-request engines and tenant scope
 
-`engine_factory` receives the controller. Build the tenant or row-level scope
+`engine_factory` receives the controller and the optional context described above.
+Build the tenant or row-level scope
 from trusted server-side state, never from request parameters. A required
 predicate is combined with every data, count, export and drilldown query the
 user can build:
@@ -324,7 +375,7 @@ plugin 'Selecto::Components' => {
         product_search => {
             path => '/products', title => 'Product Search',
             domain => $domain,
-            engine_factory => sub ($c) { $engine },
+            engine_factory => sub ($c, $context = {}) { $engine },
             dataset => {query => Selecto::Query->new, entity_key => ['id']},
             views => [
                 {id => 'list', kind => 'detail', label => 'Products',

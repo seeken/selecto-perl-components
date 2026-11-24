@@ -70,7 +70,7 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         $saved_tab . '</div>';
     my $view_panel = '<section class="sc-builder-panel" role="tabpanel" id="' . $view_panel_id .
         '" aria-labelledby="' . $view_tab_id . '" data-sc-builder-panel="view">' .
-        $query_library_views . $rows_of_picker .
+        $class->query_options_control($model) . $query_library_views . $rows_of_picker .
         '<div class="sc-view-tabs" role="radiogroup" aria-label="Result view">' . $views . '</div>' .
         '<p class="sc-note" data-sc-controls-status role="status" aria-live="polite" hidden></p>' .
         $view_controls . '</section>';
@@ -107,6 +107,39 @@ sub _form ($class, $model, $catalog, $detail_catalog = undef) {
         '<button class="sc-button sc-primary" type="submit">Run query</button>' .
         '<noscript><p class="sc-note">JavaScript is off; Run query submits this form normally. After changing views, run it to display the new controls.</p></noscript></form>' .
         $saved_queries . '</div></aside>';
+}
+
+sub query_options_hidden ($class, $model) {
+    my $state = $model->{state};
+    my $values = $state ? ($state->query_options // {})
+        : (($model->{config}{_query_options_context} // {})->{values} // {});
+    return join '', map { '<input type="hidden" data-sc-query-option-value name="' . _h($_->{name}) . '" value="' . _h($values->{$_->{name}}) . '">' }
+        grep { defined($values->{$_->{name}}) && $values->{$_->{name}} ne $_->{default} } @{$model->{config}->query_options};
+}
+
+sub query_options_control ($class, $model) {
+    my $config = $model->{config};
+    my $parsed = $config->{_query_options_context}
+        // Selecto::Components::QueryOptions->parse($config, $model->{input} // {}, $config->{_localization_controller});
+    my $values = $model->{state} ? $model->{state}->query_options : $parsed->{values};
+    return join '', map {
+        my $option = $_;
+        my $name = $option->{name};
+        my $value = ($values // {})->{$name} // $option->{default};
+        my $control = $option->{control} eq 'checkbox'
+            ? _hidden($name, $option->{default}) . '<label><input type="checkbox" data-sc-query-option name="' .
+                _h($name) . '" data-sc-query-option-default="' . _h($option->{default}) . '" value="' . _h($option->{choices}[1][0]) . '"' .
+                ($value eq $option->{choices}[1][0] ? ' checked' : '') . '>' .
+                _h($option->{checkbox_label} // $option->{label}) . '</label>'
+            : '<select data-sc-query-option name="' . _h($name) . '" data-sc-query-option-default="' . _h($option->{default}) . '">' . join('', map {
+                '<option value="' . _h($_->[0]) . '"' . ($value eq $_->[0] ? ' selected' : '') . '>' .
+                _h($_->[1]) . '</option>'
+            } @{$option->{choices}}) . '</select>';
+        my $link = $option->{help_link};
+        $parsed->{offered}{$name} ? '<fieldset class="sc-query-option"><legend>' . _h($option->{label}) .
+            '</legend>' . $control . ($link ? '<a href="' . _h($link->{href}) . '">' . _h($link->{label}) . '</a>' : '') .
+            '</fieldset>' : '';
+    } @{$config->query_options};
 }
 
 sub view_controls ($class, $model, $mode, $catalog = undef, $detail_catalog = undef) {

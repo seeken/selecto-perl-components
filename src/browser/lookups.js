@@ -241,6 +241,7 @@
     url.searchParams.set("q", term);
     var form = query.closest("[data-sc-action-form]");
     var root = form && form.closest("[data-sc-bulk-action]");
+    appendQueryOptions(url.searchParams, form);
     var rawIndex = query.dataset.scLookupGroupIndex;
     var variants = form && form.querySelector("[data-sc-action-variants]");
     var variantState = variants && actionVariantState(variants);

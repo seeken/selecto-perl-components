@@ -320,6 +320,7 @@ sub _form ($controller, $context, $record, $snapshot, $signature, $signed_at) {
         '<input type="hidden" name="csrf_token" value="' .
         _h(Selecto::Components::_csrf_token($controller)) . '">' .
         '<input type="hidden" name="return_to" value="' . _h($return_to) . '">' .
+        Selecto::Components::Renderer::Builder->query_options_hidden({config => $context->{config}}) .
         '<input type="hidden" name="record_snapshot" value="' . _h($snapshot) . '">' .
         '<input type="hidden" name="record_signature" value="' . _h($signature) . '">' .
         '<input type="hidden" name="record_signed_at" value="' . _h($signed_at) . '">' .
@@ -404,6 +405,7 @@ sub _actions ($controller, $context, $return_to) {
             '<input type="hidden" name="csrf_token" value="' .
             _h(Selecto::Components::_csrf_token($controller)) . '">' .
             '<input type="hidden" name="return_to" value="' . _h($return_to) . '">' .
+        Selecto::Components::Renderer::Builder->query_options_hidden({config => $context->{config}}) .
             '<input type="hidden" name="selected_id" value="' . _h($context->{target}) . '">' .
             '<fieldset><div class="sc-action-inputs">' .
             $inputs . '</div><button type="submit" class="sc-button sc-secondary">' .

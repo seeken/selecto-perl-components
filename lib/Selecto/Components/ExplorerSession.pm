@@ -76,6 +76,7 @@ sub bind_scope ($self, $scope) {
 sub bind_domain ($self, $fingerprint) {
     if (!defined($self->domain) || $self->domain ne $fingerprint) {
         $self->clear_results;
+        $self->clear_catalogs;
         $self->domain($fingerprint);
     }
 }

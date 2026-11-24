@@ -841,6 +841,11 @@
     var body = new URLSearchParams({field: item.dataset.field, term: input.value,
       csrf_token: form.dataset.scColumnValuesCsrf || ""});
     var clock = new FormData(form).get("as_of");
+    var optionData = new FormData(form);
+    form.querySelectorAll("[data-sc-query-option]").forEach(function (control) {
+      var values = optionData.getAll(control.name);
+      if (values.length) body.set(control.name, values[values.length - 1]);
+    });
     body.set("q", "1");
     if (clock) body.set("as_of", clock);
     var sequence = (input._scSequence || 0) + 1;

@@ -205,6 +205,7 @@
           if (name === "selecto_request_id" || (name === "as_of" && !value)) return;
           query.append(name, value);
         });
+        normalizeQueryOptions(query, form);
         target.search = query.toString();
       }
       return target.pathname + target.search + target.hash;
@@ -577,6 +578,7 @@
       if (name === "as_of" && !value) return;
       query.append(name, value);
     });
+    normalizeQueryOptions(query, form);
     query.set("format", format);
     target.search = query.toString();
     return target.pathname + target.search + target.hash;
@@ -878,6 +880,12 @@
   }
 
   document.addEventListener("change", function (event) {
+    if (event.target.matches("[data-sc-query-option]")) {
+      var form = event.target.form;
+      var page = form && form.querySelector('[name="page"]');
+      if (page) page.value = "1";
+      if (form) form.requestSubmit();
+    }
     if (event.target.matches("[data-sc-as-of-date]")) updateAsOfDate(event.target);
   });
 

@@ -50,7 +50,7 @@ sub check ($self) {
 }
 sub row ($self, $row) {
     $self->check;
-    die "Export row limit exceeded\n" if ++$self->{rows} > $self->{config}->max_export_rows;
+    die "Export row limit exceeded\n" if ++$self->{rows} > $self->{config}->export_row_limit;
     # Bound decoded cell/nested values before formatting or serialization.
     my ($size, $nodes) = (0,0);
     my $walk;

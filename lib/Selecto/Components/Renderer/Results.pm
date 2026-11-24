@@ -229,7 +229,7 @@ sub _action_dialog ($model, $action, $dialog_id, $dialog_title_id, $single_row =
         'data-sc-action-close aria-label="Close action form">×</button></header>' .
         $description . $summary . '<input type="hidden" name="csrf_token" value="' .
         _h($model->{csrf_token} // '') . '"><input type="hidden" name="return_to" value="' .
-        _h($model->{canonical_url}) . '"><div data-sc-action-targets></div>' .
+        _h($model->{canonical_url}) . '">' . Selecto::Components::Renderer::Builder->query_options_hidden($model) . '<div data-sc-action-targets></div>' .
         '<div class="sc-action-inputs" data-sc-action-fields>' . $inputs . '</div>' .
         '<div class="sc-action-result" data-sc-action-result role="status" hidden></div>' .
         '<footer><button type="button" class="sc-button sc-secondary" data-sc-action-close>Cancel</button>' .
@@ -261,6 +261,7 @@ sub _grouped_action_panel ($model, $action) {
         'loads from <strong data-sc-action-selection-count>0</strong> selected rows.</p>' .
         '<input type="hidden" name="csrf_token" value="' . _h($model->{csrf_token} // '') . '">' .
         '<input type="hidden" name="return_to" value="' . _h($model->{canonical_url}) . '">' .
+        Selecto::Components::Renderer::Builder->query_options_hidden($model) .
         '<input type="hidden" name="action_groups" value="[]" data-sc-action-groups>' .
         '<div data-sc-action-targets></div><div class="sc-action-inputs">' .
         _action_inputs($action) . '</div><div class="sc-group-action-groups" ' .
@@ -391,6 +392,7 @@ sub _row_inline_action ($model, $action, $target, $row_number) {
         _h($model->{config}->path . '/actions/' . $id) . '" data-sc-action-form' . $title . '>' .
         '<input type="hidden" name="csrf_token" value="' . _h($model->{csrf_token} // '') . '">' .
         '<input type="hidden" name="return_to" value="' . _h($model->{canonical_url}) . '">' .
+        Selecto::Components::Renderer::Builder->query_options_hidden($model) .
         '<div data-sc-action-targets></div><fieldset' . $disabled . '><div class="sc-row-inline-inputs">' .
         $inputs . '</div><button type="submit" class="sc-button sc-primary">' .
         _h($action->{submit_label}) . '</button></fieldset>' .
@@ -461,6 +463,11 @@ sub _table ($class, $result, $model) {
                     url_escape($row_action->{target_id}) . '/edit?editor=' .
                     url_escape($row_action->{editor}) . '&return_to=' .
                     url_escape($model->{canonical_url});
+                my $url = Mojo::URL->new($row_action->{url});
+                $url->query->param($_ => $model->{state}->query_options->{$_})
+                    for grep { $model->{state}->query_options->{$_} ne $model->{state}->query_option_defaults->{$_} }
+                        sort keys %{$model->{state}->query_options // {}};
+                $row_action->{url} = $url->to_string;
             }
             $row_class = ' class="sc-clickable-row" tabindex="0" data-sc-row-click ' .
                 'data-sc-row-click-type="' . _h($row_action->{type}) . '" ' .

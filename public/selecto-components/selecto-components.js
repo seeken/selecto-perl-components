@@ -21,6 +21,24 @@
     ["day_of_week", "Day of Week"], ["hour", "Hour of Day"]
   ];
 
+  // Requests made by an action dialog carry the page's effective host options.
+  function appendQueryOptions(params, form) {
+    if (!form) return;
+    form.querySelectorAll("[data-sc-query-option-value]").forEach(function (input) {
+      params.set(input.name, input.value);
+    });
+  }
+
+  function normalizeQueryOptions(params, form) {
+    form.querySelectorAll("[data-sc-query-option]").forEach(function (control) {
+      var values = params.getAll(control.name);
+      if (!values.length) return;
+      params.delete(control.name);
+      var value = values[values.length - 1];
+      if (value !== control.dataset.scQueryOptionDefault) params.set(control.name, value);
+    });
+  }
+
   // Source: shell.js
   function activateBuilderTab(root, name, remember) {
     if (!root) return;
@@ -2249,6 +2267,7 @@
           if (name === "selecto_request_id" || (name === "as_of" && !value)) return;
           query.append(name, value);
         });
+        normalizeQueryOptions(query, form);
         target.search = query.toString();
       }
       return target.pathname + target.search + target.hash;
@@ -2621,6 +2640,7 @@
       if (name === "as_of" && !value) return;
       query.append(name, value);
     });
+    normalizeQueryOptions(query, form);
     query.set("format", format);
     target.search = query.toString();
     return target.pathname + target.search + target.hash;
@@ -2922,6 +2942,12 @@
   }
 
   document.addEventListener("change", function (event) {
+    if (event.target.matches("[data-sc-query-option]")) {
+      var form = event.target.form;
+      var page = form && form.querySelector('[name="page"]');
+      if (page) page.value = "1";
+      if (form) form.requestSubmit();
+    }
     if (event.target.matches("[data-sc-as-of-date]")) updateAsOfDate(event.target);
   });
 
@@ -3778,6 +3804,11 @@
     var body = new URLSearchParams({field: item.dataset.field, term: input.value,
       csrf_token: form.dataset.scColumnValuesCsrf || ""});
     var clock = new FormData(form).get("as_of");
+    var optionData = new FormData(form);
+    form.querySelectorAll("[data-sc-query-option]").forEach(function (control) {
+      var values = optionData.getAll(control.name);
+      if (values.length) body.set(control.name, values[values.length - 1]);
+    });
     body.set("q", "1");
     if (clock) body.set("as_of", clock);
     var sequence = (input._scSequence || 0) + 1;
@@ -5089,6 +5120,7 @@
     fields.textContent = "Loading action form…";
     var url = new URL(form.dataset.scActionFormUrl, window.location.href);
     ids.forEach(function (id) { url.searchParams.append("selected_id", id); });
+    appendQueryOptions(url.searchParams, form);
     window.fetch(url, {credentials: "same-origin", cache: "no-store", signal: abort.signal,
       headers: {"Accept": "application/json"}}).then(async function (response) {
       var body = await response.json();
@@ -5378,6 +5410,7 @@
     url.searchParams.set("q", term);
     var form = query.closest("[data-sc-action-form]");
     var root = form && form.closest("[data-sc-bulk-action]");
+    appendQueryOptions(url.searchParams, form);
     var rawIndex = query.dataset.scLookupGroupIndex;
     var variants = form && form.querySelector("[data-sc-action-variants]");
     var variantState = variants && actionVariantState(variants);

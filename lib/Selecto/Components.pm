@@ -143,10 +143,11 @@ sub register ($self, $app, $plugin_config) {
         my $path = $spec->{path} // "/pages/$id";
         die "duplicate Selecto Components route $path\n" if $registered_path{$path}++;
         my %definition = %$spec;
-        delete @definition{qw(engine_factory scope_factory path title record_link websocket_enabled websocket_mode websocket_context column_layout limits)};
+        delete @definition{qw(engine_factory scope_factory path title record_link websocket_enabled websocket_mode websocket_context column_layout limits query_options)};
         my $page = Selecto::CannedPage->new(%definition, id => $id);
         my $component = Selecto::Components::CannedPage->new(
             page => $page, engine_factory => $engine_factory,
+            query_options => $spec->{query_options} // [],
             websocket_mode => $spec->{websocket_mode} // $plugin_config->{websocket_mode} // 'protected',
             websocket_context => $spec->{websocket_context} // $plugin_config->{websocket_context},
             scope_factory => $scope_factory,
@@ -230,7 +231,7 @@ sub _routes (
     $routes->post($route_path)->to(cb => sub ($controller) {
         my $model = Selecto::Components::Controller::Explorer::_decorate_model(
             $controller,
-            $explorer->model($controller, $explorer->input_from_controller($controller)),
+            $explorer->model($controller, $controller->req->params->to_hash),
         );
         return _render_page($controller, $model);
     });
@@ -313,6 +314,8 @@ sub _routes (
             });
         }
         $controller->on(message => sub ($socket, $message) {
+            local $socket->stash->{selecto_components_query_options};
+            local $socket->stash->{selecto_components_query_input};
             return $socket->finish(1009 => 'WebSocket message is too large')
                 if !defined($message) || length($message) > 131_072;
             my $envelope;
@@ -347,9 +350,7 @@ sub _routes (
                     } else {
                         my %options = $config->result_cache_namespace ? (
                             result_cache => $session,
-                            cache_namespace => encode_json([$scope,
-                                Selecto::Components::Explorer::_cache_identity(
-                                    $config->result_cache_namespace->($socket, $config), 'namespace')]),
+                            cache_scope => $scope,
                         ) : (defer_count => $config->defer_count);
                         # (The socket's catalogs, kept from its earlier messages.)
                         $options{catalog_cache} = $session->catalogs;
@@ -593,7 +594,7 @@ Selecto::Components - Browser exploration UI for Selecto domains, as a Mojolicio
         explorers => {
             products => {
                 title          => 'Products',
-                engine_factory => sub ($c) {
+                engine_factory => sub ($c, $context = {}) {
                     Selecto::Engine->new(domain => $domain, adapter => $adapter);
                 },
                 default_fields => [qw(product_name category.category_name unit_price)],
@@ -717,7 +718,11 @@ Each entry under C<explorers> is validated by L<Selecto::Components::Config>.
 
 =item engine_factory
 
-Required. A coderef C<($controller)> that returns a L<Selecto::Engine>. It is
+Required. A coderef C<($controller, $context)> that returns a L<Selecto::Engine>.
+When query options are declared the factory must accept the second argument,
+e.g. C<sub ($c, $context = {})>. Without declared options it receives only the
+controller. The context contains C<query_options> and a deep copy of C<input>
+(see below). It is
 called for every request, WebSocket message, export, action and lookup. This
 is where the host decides the domain, database handle and trusted scope, for
 example by returning an engine over
@@ -738,6 +743,70 @@ C<domain.title> term.
 =head2 Query defaults and limits
 
 =over 4
+
+=item query_options
+
+A host-declared array of closed string choices, parsed before the engine is
+built. For example:
+
+    query_options => [{
+        name => 'backend', label => 'Query backend',
+        choices => [[postgresql => 'Live'], [duckdb => 'DuckDB snapshot']],
+        default => 'postgresql', control => 'checkbox',
+        checkbox_label => 'Use DuckDB snapshot',
+        help_link => {href => '/snapshot-status', label => 'Snapshot status'},
+        offered => sub ($c, $config) { ... },
+    }],
+
+C<control> defaults to C<select>. A checkbox needs exactly two choices: its
+first choice is the default, and its second is the checked value. Names must
+be unique lowercase identifiers, distinct from builder and transport keys.
+C<offered> is an optional boolean or callback C<($controller, $config)>;
+false hides the control and refuses non-default input. Invalid values are
+errors. Missing and explicit default values select the default, which is
+omitted from serialized URLs and saved queries. Changing the control runs
+the query; ordinary form submission also works without JavaScript.
+
+The component does not accept client-selected adapters: it only validates
+these host-declared strings. Only the host's C<engine_factory> maps an option
+to an engine, connection, adapter or trusted scope.
+
+The factory receives C<($controller, {query_options =E<gt> {backend =E<gt>
+'duckdb'}, input =E<gt> $raw_input})>. C<query_options> includes defaults.
+C<input> is a deep copy of the request's raw parameter hash or the effective
+WebSocket message after applying its patch. Changes to the copy do not affect
+the request or parsed state.
+
+A factory for an explorer with query options must accept a second argument,
+e.g. C<sub ($c, $context = {})>. With declared options it is called as
+C<($controller, $context)>; without declarations it is called as
+C<($controller)>, exactly as before. There is no signature inspection or retry.
+
+C<selecto_components_query_options> is stashed before the factory, action
+and export authorizers, row-limit resolver and note resolver run. It lasts
+through HTTP request rendering, or through one WebSocket message and its
+cleanup callback, then is restored. Nested engine reads on that message use
+the same raw input. Options participate in result/count cache and socket
+session identities. API Console links carry non-default options as URL
+parameters; the host Console integration must propagate them to its API.
+
+=item results_note_resolver
+
+An optional C<($controller, $config, $model)> callback returning plain text or
+undef. HTML escapes the note above results in every view. Export callbacks
+receive a query model (config, engine, domain, input, state and result query
+metadata), before streaming; they must not require materialized rows.
+JSON includes C<meta.results_note>. XLSX stores the note as a comment on
+header cell A1, preserving the first-row header and data positions. CSV/TSV
+omit it because an extra title/comment row would break machine readers.
+
+=item label_domain
+
+An optional L<Selecto::Domain> used to localize the page's C<domain.title>.
+With C<query_options>, the page uses the Explorer's own C<title>, rather than
+an alternative engine's title. Supply the page's original domain as
+C<label_domain> to retain its localization namespace and title term. Without
+query options, existing engine-domain localization is unchanged.
 
 =item default_as_of, as_of_control
 
@@ -886,8 +955,10 @@ authorizer, exports are allowed.
 
 =item max_export_rows
 
-An optional positive integer, up to 10000000, that caps every all-rows export
-query. The download controls show the cap.
+A positive integer up to 10000000 (default 10000), or a callback
+C<($controller, $config)> returning one, that caps every all-rows export
+query. The callback sees C<selecto_components_query_options> in the stash.
+The download controls show the resolved cap.
 
 =back
 

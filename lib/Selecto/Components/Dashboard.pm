@@ -17,10 +17,12 @@ my $SEGMENT_CHOICE = qr/\Aquery_library_segment_choice_[A-Za-z][A-Za-z0-9_]*\z/;
 
 # The Explorer input (as Explorer::input_from_controller would build it) held in
 # a saved view URL such as "/explorer/load?q=1&view=graph&...". Unknown
-# parameters are ignored.
-sub input_from_url ($class, $url) {
+# parameters are ignored. Pass the Explorer config as the third argument
+# when the URL may contain host-declared query options.
+sub input_from_url ($class, $url, $config = undef) {
     my $query = Mojo::URL->new($url // '')->query;
     my %known = map { $_ => 1 } @{Selecto::Components::State->parameter_names};
+    $known{$_->{name}} = 1 for $config ? @{$config->query_options} : ();
     my %input;
     for my $name (@{$query->names}) {
         next unless $known{$name} || ($name =~ $SEGMENT_CHOICE && length($name) <= 128);

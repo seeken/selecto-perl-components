@@ -78,9 +78,25 @@ sub surface ($class, $model) {
 sub _bounded_surface ($class, $model) {
     my $config = $model->{config};
     my $state = $model->{state};
-    return '<section id="selecto-surface-' . _h($config->id) . '" class="sc-surface">' .
-        '<div class="sc-alert" role="alert">Explorer configuration is unavailable.</div></section>'
-        unless $state && $model->{domain};
+    unless ($state && $model->{domain}) {
+        my %options = map { ($_->{name} => 1) } @{$config->query_options};
+        my %allowed = map { ($_ => 1) } @{Selecto::Components::State->parameter_names};
+        my $hidden = '';
+        for my $name (sort keys %{$model->{input} // {}}) {
+            next if $options{$name} || !$allowed{$name};
+            my $raw = $model->{input}{$name};
+            for my $value (ref($raw) eq 'ARRAY' ? @$raw : ($raw)) {
+                $hidden .= '<input type="hidden" name="' . _h($name) . '" value="' . _h($value) . '">'
+                    if defined($value) && !ref($value);
+            }
+        }
+        my $controls = Selecto::Components::Renderer::Builder->query_options_control($model);
+        return '<section id="selecto-surface-' . _h($config->id) . '" class="sc-surface">' .
+            '<h1>' . _h($class->_page_title($model)) . '</h1><div class="sc-alert" role="alert">' .
+            _h($model->{runtime_error} // 'Explorer configuration is unavailable.') . '</div>' .
+            (length($controls) ? '<form method="post" action="' . _h($config->path) .
+                '" hx-ws:send>' . $hidden . $controls . '<button type="submit">Run query</button></form>' : '') . '</section>';
+    }
     my $grain = $state->grain;
     my $field_catalog = $config->field_catalog($model->{domain}, {rows_of => $grain});
     my $detail_catalog = $config->detail_column_catalog(
@@ -135,7 +151,7 @@ sub _page_title ($class, $model) {
     }
     my $config = $model->{config};
     return $config->localize(
-        $model->{domain}, 'domain.title', $config->title,
+        (@{$config->query_options} ? $config->label_domain : $model->{domain}), 'domain.title', $config->title,
         {kind => 'domain', id => $config->id, attribute => 'title'},
     );
 }
@@ -153,6 +169,7 @@ sub _bounded_results_fragment ($class, $model, $filter_catalog = undef) {
     return '<section id="selecto-results-' . _h($model->{config}->id) .
         '" class="sc-results" aria-live="polite">' .
         $class->_promoted_filter_header($model, $filter_catalog) .
+        (defined($model->{results_note}) ? '<p class="sc-note sc-results-note">' . _h($model->{results_note}) . '</p>' : '') .
         $class->_results($model) . '</section>';
 }
 
@@ -192,8 +209,8 @@ sub websocket_message ($class, $model) {
                 render_ms => $render_ms,
                 response_chars => length($content),
                 results_only => $results_only ? 1 : 0,
-                query_signature => $model->{state}->query_signature,
-                page => $model->{state}->page,
+                query_signature => $model->{state} ? $model->{state}->query_signature : undef,
+                page => $model->{state} ? $model->{state}->page : undef,
             },
         },
     };
@@ -216,9 +233,9 @@ sub _hero_actions_control ($class, $model) {
             '" href="' . _h(_format_url($model->{canonical_url}, $format)) . '">' .
             _h($label) . '</a>'
     } ([xlsx => 'Excel'], [csv => 'CSV'], [tsv => 'TSV'], [json => 'JSON']);
-    my $export_label = $config->max_export_rows
-        ? 'Export (up to ' . $config->max_export_rows . ' rows)' : 'Export all';
-    my $export_aria_label = $config->max_export_rows ? $export_label : 'Export all matched rows';
+    my $export_label = $config->export_row_limit
+        ? 'Export (up to ' . $config->export_row_limit . ' rows)' : 'Export all';
+    my $export_aria_label = $config->export_row_limit ? $export_label : 'Export all matched rows';
     my $export_options = $config->export_allowed
         ? '<div class="sc-export-options" role="group" aria-label="' . _h($export_aria_label) . '">' .
           '<span>' . _h($export_label) . '</span>' . $export_links . '</div>'
@@ -235,6 +252,10 @@ sub _api_console_control ($class, $model) {
         && $config->query_params_enabled($model->{domain});
     my $api_console_url = $config->api_console_url($model);
     return '' unless length($api_console_url);
+    my $console_url = Mojo::URL->new($api_console_url);
+    $console_url->query->param($_ => $state->query_options->{$_})
+        for grep { $state->query_options->{$_} ne $state->query_option_defaults->{$_} } sort keys %{$state->query_options // {}};
+    $api_console_url = $console_url->to_string;
     my $payload = $state->api_query_payload($config, $model->{domain});
     return $payload
         ? '<a class="sc-button sc-secondary" data-sc-api-console ' .

@@ -27,7 +27,9 @@ sub register ($class, $routes, $config, $mounted_path) {
         my $response;
         my $ok = eval {
             my $request_config = $config->for_request($controller);
-            my $engine = $request_config->engine($controller);
+            my $body = $controller->req->json;
+            my $input = {%{$controller->req->params->to_hash}, (ref($body) eq 'HASH' ? %$body : ())};
+            my $engine = $request_config->engine($controller, $input);
             my $host = Selecto::API::RemoteQuery->new(
                 base_path => $config->canonical_api_path,
                 limits => $request_config->limits->intersect($engine->limits),

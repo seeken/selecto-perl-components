@@ -13,11 +13,15 @@ use Selecto::Analytics::UnitRegistry ();
 use Selecto::Retarget ();
 use Selecto::Limits ();
 use File::Spec ();
+use Selecto::Components::QueryOptions ();
 
 has [qw(id title path engine_factory)];
 has views         => sub { return [qw(detail aggregate graph)] };
 has default_view  => 'detail';
 has 'default_as_of';
+has query_options => sub { [] };
+has 'results_note_resolver';
+has 'label_domain';
 has as_of_control => 1;
 has default_row_click_action => '';
 has default_fields => sub { return [] };
@@ -100,6 +104,11 @@ my @DATE_FORMATS = @{Selecto::DateFormat->choices};
 
 sub new ($class, @args) {
     my $self = $class->SUPER::new(@args);
+    Selecto::Components::QueryOptions->validate($self);
+    die "label_domain must be a Selecto::Domain\n"
+        if defined($self->label_domain) && !(blessed($self->label_domain) && $self->label_domain->isa('Selecto::Domain'));
+    die "results_note_resolver must be a coderef\n"
+        if defined($self->results_note_resolver) && ref($self->results_note_resolver) ne 'CODE';
     Selecto::AsOf->validate($self->default_as_of) if defined $self->default_as_of;
     die "limits must be a Selecto::Limits object\n" unless blessed($self->limits) && $self->limits->isa('Selecto::Limits');
     die "explorer id must be a lowercase identifier\n"
@@ -217,8 +226,7 @@ sub new ($class, @args) {
     die "export concurrency cannot exceed 64\n" if $self->max_concurrent_exports > 64 || $self->max_actor_exports > 64;
     die "export_actor must be a coderef\n" if defined($self->export_actor) && ref($self->export_actor) ne 'CODE';
     die "max_export_rows must be a positive integer up to 10000000\n"
-        if !defined($self->max_export_rows)
-            || ($self->max_export_rows !~ /\A[1-9]\d{0,7}\z/ || $self->max_export_rows > 10_000_000);
+        unless ref($self->max_export_rows) eq 'CODE' || _valid_export_rows($self->max_export_rows);
     die "record_editor_handler must be a coderef\n"
         if defined($self->record_editor_handler)
             && ref($self->record_editor_handler) ne 'CODE';
@@ -300,8 +308,26 @@ sub new ($class, @args) {
     return $self;
 }
 
-sub engine ($self, $controller) {
-    my $engine = $self->engine_factory->($controller);
+sub _valid_export_rows ($value) {
+    return defined($value) && !ref($value) && $value =~ /\A[1-9]\d{0,7}\z/ && $value <= 10_000_000;
+}
+
+sub export_row_limit ($self, $controller = undef) {
+    return $self->{_resolved_export_rows} if exists($self->{_resolved_export_rows});
+    my $limit = $self->max_export_rows;
+    $controller //= $self->{_localization_controller};
+    $limit = $limit->($controller, $self) if ref($limit) eq 'CODE';
+    die "max_export_rows callback must return a positive integer up to 10000000\n"
+        unless _valid_export_rows($limit);
+    $self->{_resolved_export_rows} = $limit if defined $self->{_localization_controller};
+    return $limit;
+}
+
+sub engine ($self, $controller, $input = undef) {
+    return $self->for_request($controller)->engine($controller, $input) unless $self->{_request_config};
+    my $context = Selecto::Components::QueryOptions->context($self, $controller, $input);
+    my $engine = Selecto::Components::QueryOptions->call_factory($self->engine_factory, $controller, $context, scalar @{$self->query_options});
+    $self->export_row_limit($controller);
     die "engine_factory did not return a Selecto::Engine\n"
         unless blessed($engine) && $engine->isa('Selecto::Engine');
     $engine->assert_tenant_boundary(access => 'read');
@@ -391,6 +417,9 @@ sub localize ($self, $domain, $semantic, $default, $context = undef) {
 # request on the same connection (an Explorer WebSocket's session).
 sub for_request ($self, $controller, %options) {
     my $copy = bless {%$self}, ref($self);
+    $copy->{_request_config} = 1;
+    delete $copy->{_resolved_export_rows};
+    delete $copy->{_query_options_context};
     $copy->{_localization_controller} = $controller;
     delete $copy->{_resolved_theme};
     delete $copy->{_resolved_page_shell};
@@ -408,11 +437,14 @@ sub for_request ($self, $controller, %options) {
 # request copy (for_request) remembers the answer; the shared configuration
 # asks the authorizer every time.
 sub export_allowed ($self, $controller = undef) {
+    return $self->for_request($controller)->export_allowed($controller) unless $self->{_request_config};
     my $authorizer = $self->export_authorizer or return 1;
     my $request_copy = defined $self->{_localization_controller};
     return $self->{_export_allowed}
         if $request_copy && exists $self->{_export_allowed};
     $controller //= $self->{_localization_controller};
+    Selecto::Components::QueryOptions->context($self, $controller)
+        unless $controller->stash('selecto_components_query_options');
     my $allowed = $authorizer->($controller, $self) ? 1 : 0;
     $self->{_export_allowed} = $allowed if $request_copy;
     return $allowed;
@@ -1112,7 +1144,8 @@ sub _dimension_choice_rows ($self, $domain, $controller, $path) {
         # A filtered or tenant-scoped relation is not a plain lookup table.
         die "conditional dimension\n" if keys %{$association->where}
             || defined($association->target_tenant_field) || $association->through;
-        my $dbh = $self->engine($controller)->adapter->dbh;
+        my $request = $self->{_request_config} ? $self : $self->for_request($controller);
+        my $dbh = $request->engine($controller)->adapter->dbh;
         my ($table, $key, $display) = ($association->table, $association->related_key, $association->display_field);
         die "incomplete dimension\n" unless defined($table) && defined($key) && defined($display);
         my $sql = sprintf 'SELECT %s, %s FROM %s WHERE %s IS NOT NULL AND %s IS NOT NULL ORDER BY %s LIMIT %d',
@@ -1493,7 +1526,7 @@ Selecto::Components::Config - Validated configuration for one Selecto explorer
         id             => 'products',
         title          => 'Products',
         path           => '/explore/products',
-        engine_factory => sub ($c) { $engine },
+        engine_factory => sub ($c, $context = {}) { $engine },
         default_limit  => 50,
     );
 
@@ -1537,7 +1570,10 @@ L<Selecto::Components::Explorer/model> does this for you.
 
     my $engine = $config->engine($controller);
 
-Calls C<engine_factory> and checks that it returned a L<Selecto::Engine>.
+Parses host query options, stashes their effective values and calls
+C<engine_factory>, checking that it returned a L<Selecto::Engine>.
+C<engine($controller, $input)> explicitly supplies message or saved-query
+input; omitted input comes from the current request or message.
 
 =head2 export_allowed
 
@@ -1578,6 +1614,70 @@ measures.
 
 =over 4
 
+=item query_options
+
+A host-declared array of closed string choices, parsed before the engine is
+built. For example:
+
+    query_options => [{
+        name => 'backend', label => 'Query backend',
+        choices => [[postgresql => 'Live'], [duckdb => 'DuckDB snapshot']],
+        default => 'postgresql', control => 'checkbox',
+        checkbox_label => 'Use DuckDB snapshot',
+        help_link => {href => '/snapshot-status', label => 'Snapshot status'},
+        offered => sub ($c, $config) { ... },
+    }],
+
+C<control> defaults to C<select>. A checkbox needs exactly two choices: its
+first choice is the default, and its second is the checked value. Names must
+be unique lowercase identifiers, distinct from builder and transport keys.
+C<offered> is an optional boolean or callback C<($controller, $config)>;
+false hides the control and refuses non-default input. Invalid values are
+errors. Missing and explicit default values select the default, which is
+omitted from serialized URLs and saved queries. Changing the control runs
+the query; ordinary form submission also works without JavaScript.
+
+The component does not accept client-selected adapters: it only validates
+these host-declared strings. Only the host's C<engine_factory> maps an option
+to an engine, connection, adapter or trusted scope.
+
+The factory receives C<($controller, {query_options =E<gt> {backend =E<gt>
+'duckdb'}, input =E<gt> $raw_input})>. C<query_options> includes defaults.
+C<input> is a deep copy of the request's raw parameter hash or the effective
+WebSocket message after applying its patch. Changes to the copy do not affect
+the request or parsed state.
+
+A factory for an explorer with query options must accept a second argument,
+e.g. C<sub ($c, $context = {})>. With declared options it is called as
+C<($controller, $context)>; without declarations it is called as
+C<($controller)>, exactly as before. There is no signature inspection or retry.
+
+C<selecto_components_query_options> is stashed before the factory, action
+and export authorizers, row-limit resolver and note resolver run. It lasts
+through HTTP request rendering, or through one WebSocket message and its
+cleanup callback, then is restored. Nested engine reads on that message use
+the same raw input. Options participate in result/count cache and socket
+session identities. API Console links carry non-default options as URL
+parameters; the host Console integration must propagate them to its API.
+
+=item results_note_resolver
+
+An optional C<($controller, $config, $model)> callback returning plain text or
+undef. HTML escapes the note above results in every view. Export callbacks
+receive a query model (config, engine, domain, input, state and result query
+metadata), before streaming; they must not require materialized rows.
+JSON includes C<meta.results_note>. XLSX stores the note as a comment on
+header cell A1, preserving the first-row header and data positions. CSV/TSV
+omit it because an extra title/comment row would break machine readers.
+
+=item label_domain
+
+An optional L<Selecto::Domain> used to localize the page's C<domain.title>.
+With C<query_options>, the page uses the Explorer's own C<title>, rather than
+an alternative engine's title. Supply the page's original domain as
+C<label_domain> to retain its localization namespace and title term. Without
+query options, existing engine-domain localization is unchanged.
+
 =item show_sql
 
 Defaults to false. When true, every explorer response renders the Query Debug
@@ -1601,6 +1701,10 @@ false to count before every such page returns.
 =item export_authorizer, max_export_rows
 
 Decide who may export, and cap the size of every all-rows query.
+C<max_export_rows> is a positive integer up to 10000000 (default 10000), or a
+callback C<($controller, $config)> returning such an integer. The callback
+runs with validated options in the stash. C<export_row_limit> returns the
+resolved value; a request copy remembers it for rendering and streaming.
 
 =item action_authorizer
 

@@ -23,11 +23,13 @@ use Selecto::Components::Util qw(decode_driver_json humanize);
 # page uses the stylesheet's own (dark) palette.
 has [qw(page engine_factory scope_factory path title record_link websocket_enabled websocket_context column_layout theme)];
 
+has query_options => sub { [] };
 has websocket_mode => 'protected';
 has limits => sub { Selecto::Limits->new };
 
 sub new ($class, @args) {
     my $self = $class->SUPER::new(@args);
+    Selecto::Components::QueryOptions->validate($self);
     die "canned page limits must be a Selecto::Limits\n" unless blessed($self->limits) && $self->limits->isa('Selecto::Limits');
     die "canned page must be a Selecto::CannedPage\n"
         unless blessed($self->page) && $self->page->isa('Selecto::CannedPage');
@@ -243,7 +245,16 @@ sub _validate_column_layout ($self) {
     }
 }
 
+sub for_request ($self, $controller) {
+    my $copy = bless {%$self}, ref($self);
+    $copy->{_request_config} = 1;
+    $copy->{_localization_controller} = $controller;
+    delete $copy->{_query_options_context};
+    return $copy;
+}
+
 sub handle ($self, $controller) {
+    $self = $self->for_request($controller);
     my $domain = $self->page->domain;
     my $public = ($domain->components->{query_params} // 1) ? 1 : 0;
     $controller->res->headers->cache_control('no-store') unless $public;
@@ -253,7 +264,8 @@ sub handle ($self, $controller) {
     }
     my ($result, $error, $html);
     eval {
-        my $engine = $self->engine_factory->($controller);
+        my $context = Selecto::Components::QueryOptions->context($self, $controller);
+        my $engine = Selecto::Components::QueryOptions->call_factory($self->engine_factory, $controller, $context, scalar @{$self->query_options});
         my $scope = $self->scope_factory
             ? $self->scope_factory->($controller, $engine) : undef;
         my $limits = $engine->can('limits') ? $self->limits->intersect($engine->limits) : $self->limits;
@@ -276,6 +288,9 @@ sub handle ($self, $controller) {
 
 sub handle_websocket ($self, $controller) {
     $controller->on(message => sub ($socket, $message) {
+        local $socket->stash->{selecto_components_query_options};
+        local $socket->stash->{selecto_components_query_input};
+        my $request = $self->for_request($socket);
         return $socket->finish(1009 => 'WebSocket message is too large')
             if !defined($message) || length($message) > 131_072;
         my $payload = eval { from_json($message) };
@@ -285,22 +300,23 @@ sub handle_websocket ($self, $controller) {
         return $socket->finish(1003 => 'Invalid request id')
             unless defined($request_id) && !ref($request_id)
                 && "$request_id" =~ /\A[0-9]{1,12}\z/;
-        my $scope_key = eval { $self->websocket_context
-            ? $self->websocket_context->($socket, $self)
-            : $self->websocket_mode eq 'public' ? 'public' : undef };
+        my $scope_key = eval { $request->websocket_context
+            ? $request->websocket_context->($socket, $request)
+            : $request->websocket_mode eq 'public' ? 'public' : undef };
         return $socket->finish(1008 => 'Page access is no longer allowed')
             if $@ || !defined($scope_key) || ref($scope_key);
         my ($result, $response);
         my $ok = eval {
-            my $engine = $self->engine_factory->($socket);
-            my $scope = $self->scope_factory
-                ? $self->scope_factory->($socket, $engine) : undef;
-            my $limits = $engine->can('limits') ? $self->limits->intersect($engine->limits) : $self->limits;
-            $result = $self->page->run($engine, $self->_input($socket, $payload), $scope, {limits => $limits, max_rows => 1000});
-            my $public = ($self->page->domain->components->{query_params} // 1) ? 1 : 0;
-            my $content = Selecto::Components::ResponseBudget->render($limits, sub { $self->_surface($result, $public) });
+            my $context = Selecto::Components::QueryOptions->context($request, $socket, $payload);
+            my $engine = Selecto::Components::QueryOptions->call_factory($request->engine_factory, $socket, $context, scalar @{$request->query_options});
+            my $scope = $request->scope_factory
+                ? $request->scope_factory->($socket, $engine) : undef;
+            my $limits = $engine->can('limits') ? $request->limits->intersect($engine->limits) : $request->limits;
+            $result = $request->page->run($engine, $request->_input($socket, $payload), $scope, {limits => $limits, max_rows => 1000});
+            my $public = ($request->page->domain->components->{query_params} // 1) ? 1 : 0;
+            my $content = Selecto::Components::ResponseBudget->render($limits, sub { $request->_surface($result, $public) });
             $response = Selecto::Components::ResponseBudget->json({content => $content,
-                target => '#selecto-page-' . $self->page->id, swap => 'outerHTML',
+                target => '#selecto-page-' . $request->page->id, swap => 'outerHTML',
                 selecto => {request_id => "$request_id"}}, $limits);
             1;
         };
@@ -396,7 +412,7 @@ sub _surface ($self, $result, $public) {
         : '<div class="sc-hero-actions"><span class="sc-private-mode">Private URL mode</span></div>';
     my $controls = $self->page->controls;
     # A single view with no controls leaves the reader nothing to choose.
-    my $choices = @$controls || @{$self->page->views} > 1 || $state->{drilldown};
+    my $choices = @{$self->query_options} || @$controls || @{$self->page->views} > 1 || $state->{drilldown};
     $html .= '</header><div class="sc-workspace' .
         ($choices ? '' : ' selecto-canned-no-controls') . '">';
     $html .= $self->_controls($result, $method, $ws_send) if $choices;
@@ -431,6 +447,7 @@ sub _controls ($self, $result, $method, $ws_send) {
         $html .= '<p class="sc-note">Showing matching detail rows from ' . _escape($state->{drilldown}{view})
             . '.</p><button class="sc-button sc-secondary" type="submit" name="clear_drilldown" value="1">Clear drilldown</button>';
     }
+    $html .= Selecto::Components::Renderer::Builder->query_options_control({config => $self});
     $html .= '<p class="sc-eyebrow">Views and filters</p>';
     $html .= '<label for="selecto-page-view">View</label><select id="selecto-page-view" name="view">';
     for my $view (@{$self->page->views}) {
@@ -504,7 +521,8 @@ sub _pagination ($self, $state, $total_pages, $public, $position) {
 }
 
 sub _hidden_state ($self, $state) {
-    my $html = '<input type="hidden" name="submitted" value="1"><input type="hidden" name="view" value="' .
+    my $options = Selecto::Components::Renderer::Builder->query_options_hidden({config => $self});
+    my $html = $options . '<input type="hidden" name="submitted" value="1"><input type="hidden" name="view" value="' .
         _escape($state->{view}) . '"><input type="hidden" name="limit" value="' .
         _escape($state->{limit}) . '">';
     for my $control (@{$self->page->controls}) {
@@ -709,7 +727,7 @@ Selecto::Components::CannedPage - Render and serve a Selecto::CannedPage as a se
             product_search => {
                 path => '/products', title => 'Product Search',
                 domain => $domain,
-                engine_factory => sub ($c) { $engine },
+                engine_factory => sub ($c, $context = {}) { $engine },
                 scope_factory  => sub ($c, $engine) { $visible_predicate },
                 dataset  => {query => Selecto::Query->new, entity_key => ['id']},
                 views    => [...],
@@ -724,7 +742,7 @@ Selecto::Components::CannedPage - Render and serve a Selecto::CannedPage as a se
         page           => Selecto::CannedPage->new(id => 'rows', domain => $domain, ...),
         path           => '/rows',
         title          => 'Rows',
-        engine_factory => sub ($c) { $engine },
+        engine_factory => sub ($c, $context = {}) { $engine },
         theme          => {scheme => 'light', primary => '#0B5FFF'},
     );
     $r->get('/rows')->to(cb => sub ($c) { $component->handle($c) });
@@ -745,6 +763,14 @@ C<< components => {query_params => 0} >>, the form posts instead, GET query
 strings redirect to the bare path, and responses are C<Cache-Control: no-store>.
 Every path works without JavaScript.
 
+C<query_options> accepts the same host-declared choices as
+L<Selecto::Components::Config>. They are validated and stashed before each
+HTTP or WebSocket engine factory call, and the factory receives the same
+deep-copy input context. A factory for a page declaring query options must
+accept a second argument, e.g. C<sub ($c, $context = {})>. With no declared
+options it receives only the controller. Controls and pagination forms carry
+the choices.
+
 =head1 ATTRIBUTES
 
 These are the arguments to C<new>. Through the plugin, the page's
@@ -757,8 +783,9 @@ Required. A L<Selecto::CannedPage>.
 
 =head2 engine_factory
 
-Required. C<($controller)> returns the L<Selecto::Engine> authorized for the
-request.
+Required. Returns the L<Selecto::Engine> authorized for the request. With
+C<query_options> it receives C<($controller, $context)>; otherwise it receives
+C<($controller)>. Use C<sub ($c, $context = {})> to support either form.
 
 =head2 scope_factory
 

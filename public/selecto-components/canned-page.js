@@ -103,7 +103,15 @@
       const target = new URL(form.action, window.location.href);
       const pairs = new FormData(form, event.submitter || undefined);
       pairs.delete("selecto_request_id");
-      target.search = new URLSearchParams(pairs).toString();
+      const query = new URLSearchParams(pairs);
+      form.querySelectorAll("[data-sc-query-option]").forEach(control => {
+        const values = query.getAll(control.name);
+        if (!values.length) return;
+        query.delete(control.name);
+        const value = values[values.length - 1];
+        if (value !== control.dataset.scQueryOptionDefault) query.set(control.name, value);
+      });
+      target.search = query.toString();
       channel.dataset.latestCannedUrl = target.pathname + target.search;
     }
   }, true);

@@ -101,6 +101,7 @@
     fields.textContent = "Loading action form…";
     var url = new URL(form.dataset.scActionFormUrl, window.location.href);
     ids.forEach(function (id) { url.searchParams.append("selected_id", id); });
+    appendQueryOptions(url.searchParams, form);
     window.fetch(url, {credentials: "same-origin", cache: "no-store", signal: abort.signal,
       headers: {"Accept": "application/json"}}).then(async function (response) {
       var body = await response.json();

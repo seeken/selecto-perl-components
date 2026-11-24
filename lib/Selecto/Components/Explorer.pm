@@ -25,7 +25,7 @@ has 'config';
 
 sub input_from_controller ($self, $controller) {
     my %input;
-    for my $name (@{Selecto::Components::State->parameter_names}) {
+    for my $name (@{Selecto::Components::State->parameter_names}, map { $_->{name} } @{$self->config->query_options}) {
         my @values = $controller->every_param($name);
         next unless @values;
         $input{$name} = @values == 1 ? $values[0] : \@values;
@@ -58,9 +58,8 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     my $input_supplied = defined $input;
     my $config = $self->config->for_request($controller, catalog_cache => $options->{catalog_cache});
     $cache_namespace = $options->{cache_namespace};
-    $cache_namespace //= $config->result_cache_namespace->($controller, $config)
-        if $config->result_cache_namespace;
-    _cache_identity($cache_namespace, 'namespace') if $result_cache || defined($cache_namespace);
+    _cache_identity($cache_namespace, 'namespace')
+        if defined($cache_namespace) || ($result_cache && !$config->result_cache_namespace);
     my $engine;
     my $round_trips;
     my $state;
@@ -68,19 +67,25 @@ sub model ($self, $controller, $input = undef, $options = undef) {
     my $grid_all_rows = 0;
     my $model = {
         config => $config,
-        input => undef,
+        input => $input // $self->input_from_controller($controller),
         result => undef,
         runtime_error => undef,
     };
     my $ok = eval {
         my $setup_started = time;
-        $engine = $config->engine($controller);
+        $engine = $config->engine($controller, $input);
+        $cache_namespace //= $config->result_cache_namespace->($controller, $config)
+            if $config->result_cache_namespace;
+        $cache_namespace = encode_json([$options->{cache_scope}, $cache_namespace]) if exists($options->{cache_scope});
+        _cache_identity($cache_namespace, 'namespace') if $result_cache || defined($cache_namespace);
         # (Query Debug: the round trips the rest of the model makes.)
         $round_trips = Selecto::Components::RoundTrips->start($engine->adapter) if $config->show_sql;
         my $phase = sub ($name, $code) { $round_trips ? $round_trips->during($name, $code) : $code->() };
         $config->limits($config->limits->intersect($engine->limits)) if $engine->can('limits');
-        $result_cache->bind_domain($engine->domain->fingerprint)
-            if $result_cache && $result_cache->can('bind_domain');
+        if ($result_cache && $result_cache->can('bind_domain')) {
+            $result_cache->bind_domain($engine->domain->fingerprint . Selecto::Components::QueryOptions->fingerprint($config));
+            $config->{_catalog_cache} = $result_cache->catalogs if $result_cache->can('catalogs');
+        }
         $all_rows = $options->{all_rows}
             && $config->query_params_enabled($engine->domain) ? 1 : 0;
         $input = $input_supplied || $config->query_params_enabled($engine->domain)
@@ -283,12 +288,13 @@ sub model ($self, $controller, $input = undef, $options = undef) {
                 },
             ) : ()),
         };
+        $self->_results_note($controller, $model);
         1;
     };
     unless ($ok) {
         my $error = $@;
         $controller->app->log->error("Selecto explorer model failed: $error")
-            if $controller->can('app');
+            if $controller && $controller->can('app');
         $model->{runtime_error} = _public_error($error, $config);
         if (!$state && $engine) {
             $state = Selecto::Components::State->from_input(
@@ -300,6 +306,14 @@ sub model ($self, $controller, $input = undef, $options = undef) {
         }
     }
     return $model;
+}
+
+sub _results_note ($self, $controller, $model) {
+    my $resolver = $model->{config}->results_note_resolver or return;
+    my $note = $resolver->($controller, $model->{config}, $model);
+    die "results_note_resolver must return plain text or undef\n" if defined($note) && ref($note);
+    $model->{results_note} = $note;
+    return $note;
 }
 
 # A trusted namespace identifies data source and authorization context.
@@ -334,7 +348,7 @@ sub _execute ($engine, $prepared, $cache, $info, $namespace, $config, %options) 
     my %bounds = (limits => $config->limits, max_rows => $options{max_rows} // $config->max_grid_result_cells + 1,
         canonical_values => 1, timeout_ms => $config->query_timeout_seconds * 1000);
     return Selecto::BoundedQuery->execute($engine, $prepared, %bounds) unless $cache;
-    my $key = __PACKAGE__->result_cache_key($statement, $namespace, $engine->domain->fingerprint);
+    my $key = __PACKAGE__->result_cache_key($statement, $namespace, $engine->domain->fingerprint . Selecto::Components::QueryOptions->fingerprint($config));
     my $entry = $cache->fetch($key);
     if (ref($entry) eq 'HASH' && ref($entry->{result}) eq 'HASH'
         && eval { Selecto::BoundedQuery->validate_result($entry->{result}, $config->limits, $collections); 1 }) {
@@ -354,7 +368,7 @@ sub _execute ($engine, $prepared, $cache, $info, $namespace, $config, %options) 
 
 sub prepare ($self, $controller, $input = undef) {
     my $config = $self->config->for_request($controller);
-    my $engine = $config->engine($controller);
+    my $engine = $config->engine($controller, $input);
     $input //= $config->query_params_enabled($engine->domain)
         ? $self->input_from_controller($controller) : {};
     my $state = Selecto::Components::State->from_input($config, $engine->domain, $input);
@@ -396,7 +410,7 @@ sub _matched_rows ($controller, $engine, $built, $prepared, $config, $options) {
     $stats{statement} = _count_statement($engine->compile($count_query));
     $stats{compile_ms} = _elapsed_ms($compile_started);
     my $count_key = defined($cache_namespace) ? __PACKAGE__->result_cache_key(
-        $stats{statement}, $cache_namespace, $engine->domain->fingerprint) : undef;
+        $stats{statement}, $cache_namespace, $engine->domain->fingerprint . Selecto::Components::QueryOptions->fingerprint($config)) : undef;
     my $total = !$result_cache && defined($count_key) && _wants_cached_count($options->{input})
         ? _cached_count($controller, $count_key) : undef;
     if (defined $total) {
@@ -1244,7 +1258,7 @@ sub canonical_url ($self, $state, $domain = undef) {
 use constant EXPORT_FETCH_ROWS => 100;
 
 sub _cap_export ($config, $built) {
-    my $max = $config->max_export_rows or return;
+    my $max = $config->export_row_limit or return;
     my $query = $built->{query};
     my $current = $query->limit_value;
     $built->{query} = $query->limit($max) if !defined($current) || $current > $max;
@@ -1272,6 +1286,10 @@ sub stream_export ($self, $controller, $format) {
     die "Aggregate grid exports require a bounded job\n" if $built->{aggregate_grid};
     die "Pivot exports require a bounded job\n" if $built->{pivot};
     _cap_export($config, $built);
+    my $note = $self->_results_note($controller, {
+        config => $config, engine => $engine, domain => $engine->domain, state => $state,
+        input => $input, result => $built,
+    });
     my $budget = Selecto::Components::ExportBudget->new($config, $engine, $controller);
     my $stream = $engine->stream($built->{query}, fetch_size => EXPORT_FETCH_ROWS, bounded => 1,
         canonical_values => 1);
@@ -1305,8 +1323,8 @@ sub stream_export ($self, $controller, $format) {
         unless ($started) {
             $started = 1;
             if ($format eq 'json') {
-                $chunk = '{"scope":"all","row_limit":' . $config->max_export_rows . ',"page":1,"total_pages":1,"columns":' .
-                    to_json(\@headers) . ',"rows":[';
+                $chunk = '{"scope":"all","row_limit":' . $config->export_row_limit . ',"page":1,"total_pages":1,"columns":' .
+                    to_json(\@headers) . (defined($note) ? ',"meta":' . to_json({results_note => $note}) : '') . ',"rows":[';
             } else {
                 $chunk = join($delimiter, map { _delimited_cell($_) } @headers) . "\r\n";
             }
@@ -1370,6 +1388,10 @@ sub xlsx_file_export ($self, $controller) {
     die "Aggregate grid exports require a bounded job\n" if $built->{aggregate_grid};
     die "Pivot exports require a bounded job\n" if $built->{pivot};
     _cap_export($config, $built);
+    my $note = $self->_results_note($controller, {
+        config => $config, engine => $engine, domain => $engine->domain, state => $state,
+        input => $input, result => $built,
+    });
     my $budget = Selecto::Components::ExportBudget->new($config, $engine, $controller);
     my $spool = File::Temp->newdir('selecto-xlsx-XXXXXX', TMPDIR => 1, CLEANUP => 1);
     my ($output_handle, $output_path) = tempfile(DIR => "$spool", SUFFIX => '.xlsx', UNLINK => 0);
@@ -1421,6 +1443,11 @@ sub xlsx_file_export ($self, $controller) {
                 $reserve_cell->($label);
                 $worksheet->write_string(0, $column_index, $label, $header_format);
                 $widths[$column_index] = length($label);
+            }
+            if (defined($note)) {
+                $reserve_cell->($note);
+                $budget->output($note);
+                $worksheet->write_comment(0, 0, $note);
             }
             $worksheet->freeze_panes(1, 0);
             $row_index = 1;
@@ -1524,6 +1551,7 @@ sub json ($self, $model) {
         }
     } @$records;
     return to_json({
+        (defined($model->{results_note}) ? (meta => {results_note => $model->{results_note}}) : ()),
         scope => $model->{result}{all_rows} ? 'all' : 'page',
         page => $model->{result}{all_rows} ? 1 : $model->{state}->page,
         total_pages => $model->{result}{total_pages},
@@ -1544,6 +1572,7 @@ sub xlsx ($self, $model) {
     my $workbook = Excel::Writer::XLSX->new($output_handle)
         or die "could not create Excel export\n";
     my $worksheet = $workbook->add_worksheet('Export');
+    $worksheet->write_comment(0, 0, $model->{results_note}) if defined($model->{results_note});
     my $header_format = $workbook->add_format(
         bold => 1,
         bg_color => '#DCE6F1',

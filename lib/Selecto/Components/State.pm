@@ -18,7 +18,7 @@ use Selecto::AsOf ();
 use Selecto::QueryLibrary ();
 use Selecto::Components::InputBudget ();
 
-has [qw(as_of rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column pivot_totals pivot_column_values pivot_column_other pivot_column_top pivot_column_top_order pivot_column_top_measure pivot_column_value_null filter_groups row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters query_library_choices query_library_defaults query_library_defaults_view)];
+has [qw(query_options query_option_defaults as_of rows_of retarget retarget_auto view chart_type graph_show_table graph_series_group graph_palette graph_category_colors aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column pivot_totals pivot_column_values pivot_column_other pivot_column_top pivot_column_top_order pivot_column_top_measure pivot_column_value_null filter_groups row_click_action fields field_configs field_config_list filters groups group_configs measures measure_configs measure_config_list measure orders order direction limit page errors query_library_view query_library_materialized_view query_library_segments query_library_parameters query_library_choices query_library_defaults query_library_defaults_view)];
 
 sub parameter_names ($class) {
     return [qw(
@@ -39,6 +39,9 @@ sub from_input ($class, $config, $domain, $input) {
     my $detail_map = $config->detail_column_map($domain);
     my @errors = $budget_ok ? () : ('Query state exceeds the configured input budget.');
     my $configured = _first($input, 'q') ? 1 : 0;
+    require Selecto::Components::QueryOptions;
+    my $query_options = Selecto::Components::QueryOptions->parse($config, $input, $config->{_localization_controller});
+    push @errors, @{$query_options->{errors}};
     my $as_of = $class->_parse_as_of($config, $input, \@errors);
     my $query_library = _query_library_state($domain, $input, \@errors, $config->limits, $config);
     my $view = _parse_view($config, $input, $query_library, \@errors);
@@ -164,6 +167,8 @@ sub from_input ($class, $config, $domain, $input) {
     );
 
     my $state = $class->new(
+        query_options => {%{$query_options->{values}}},
+        query_option_defaults => {map { ($_->{name} => $_->{default}) } @{$config->query_options}},
         as_of => $as_of,
         rows_of => $rows_of,
         retarget => $retarget,
@@ -298,6 +303,9 @@ sub grain ($self) { return $self->retarget_auto ? undef : $self->retarget; }
 
 sub query_pairs ($self) {
     my @pairs = (q => 1, view => $self->view);
+    push @pairs, map { ($_ => $self->query_options->{$_}) }
+        grep { $self->query_options->{$_} ne ($self->query_option_defaults // {})->{$_} }
+        sort keys %{$self->query_options // {}};
     push @pairs, rows_of => $self->rows_of if length($self->rows_of // '');
     push @pairs, as_of => $self->as_of if defined $self->as_of;
     push @pairs, query_library_view => $self->query_library_view
@@ -536,6 +544,8 @@ sub _api_repeat_alias ($field, $names) {
 
 sub as_hash ($self) {
     return {
+        query_options => {%{$self->query_options // {}}},
+        query_option_defaults => {%{$self->query_option_defaults // {}}},
         as_of => $self->as_of,
         rows_of => $self->rows_of,
         retarget => $self->retarget,
