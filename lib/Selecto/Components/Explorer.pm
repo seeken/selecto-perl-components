@@ -26,7 +26,8 @@ has 'config';
 sub input_from_controller ($self, $controller) {
     my %input;
     for my $name (@{Selecto::Components::State->parameter_names}, map { $_->{name} } @{$self->config->query_options}) {
-        my @values = $controller->every_param($name);
+        my @values = map { ref($_) eq 'ARRAY' ? @$_ : $_ }
+            ($controller->every_param($name), $controller->every_param("$name\[\]"));
         next unless @values;
         $input{$name} = @values == 1 ? $values[0] : \@values;
     }

@@ -3,6 +3,7 @@ package Selecto::Components::Controller::SavedQueries;
 use Mojo::Base -base, -signatures;
 use Mojo::URL ();
 use Selecto::Components::State ();
+use Selecto::Components::SavedView ();
 
 sub _expand_saved_query ($controller, $explorer) {
     my $request_query = $controller->req->url->query;
@@ -169,10 +170,10 @@ sub _delete_saved_query ($controller, $explorer) {
     };
     unless ($delete_ok) {
         my $error = "$@";
-        if ($error =~ /\ASAVED_QUERY_(?:STALE|FORBIDDEN):\s*(.+)/) {
+        if ($error =~ /\ASAVED_QUERY_(?:CONFLICT|STALE|FORBIDDEN):\s*(.+)/) {
             my $message = $1;
             return _saved_query_response($controller, $return_to, {
-                ok => 0, status => $error =~ /\ASAVED_QUERY_STALE:/ ? 409 : 403,
+                ok => 0, status => $error =~ /\ASAVED_QUERY_(?:CONFLICT|STALE):/ ? 409 : 403,
                 message => $message,
             });
         }
@@ -215,29 +216,12 @@ sub _saved_query_name ($value, $max_length = 30) {
 }
 
 sub _canonical_saved_query_url ($controller, $explorer, $value) {
-    die "saved query URL is required\n"
-        unless defined($value) && !ref($value) && length($value);
-    my $config = $explorer->config->for_request($controller);
-    my $url = Mojo::URL->new("$value");
-    die "saved query URL must be local\n"
-        if $url->is_abs || defined($url->host) || defined($url->userinfo);
-    die "saved query URL has an invalid path\n"
-        unless $url->path->to_string eq $config->path;
-    die "saved query URL cannot contain a fragment\n"
-        if defined($url->fragment) && length($url->fragment);
-
-    my %input;
-    for my $name (@{Selecto::Components::State->parameter_names}, map { $_->{name} } @{$config->query_options}) {
-        my $values = $url->query->every_param($name);
-        next unless ref($values) eq 'ARRAY' && @$values;
-        $input{$name} = @$values == 1 ? $values->[0] : [@$values];
-    }
-    my $engine = $config->engine($controller, \%input);
-    die "saved queries require URL query state\n"
-        unless $config->query_params_enabled($engine->domain);
-    my $state = Selecto::Components::State->from_input($config, $engine->domain, \%input);
-    die join(' ', @{$state->errors}) . "\n" unless $state->valid;
-    return $explorer->canonical_url($state->with_page(1), $engine->domain);
+    my $checked = Selecto::Components::SavedView->check(
+        $explorer->config, $controller, $value,
+    );
+    die join(' ', map { $_->{message} } @{$checked->{errors}}) . "\n"
+        unless $checked->{ok};
+    return $checked->{url};
 }
 
 sub _normalize_saved_queries ($config, $queries) {
@@ -254,19 +238,22 @@ sub _normalize_saved_queries ($config, $queries) {
         next unless $parsed->path->to_string eq $config->path;
         next if defined($parsed->fragment) && length($parsed->fragment);
         my $id = defined($query->{id}) && !ref($query->{id}) &&
-            "$query->{id}" =~ /\A[[:print:]]{1,160}\z/ ? "$query->{id}" : undef;
+            "$query->{id}" =~ /\A[[:print:]]{1,4096}\z/ ? "$query->{id}" : undef;
         next if $seen{defined($id) ? $id : $name}++;
         push @normalized, {
             name => $name, url => $parsed->to_string,
             (defined($id) ? (id => $id) : ()),
             (defined($query->{revision}) && !ref($query->{revision})
-                && "$query->{revision}" =~ /\A[0-9a-f]{64}\z/
+                && length("$query->{revision}") <= 4096
+                && length("$query->{revision}") && "$query->{revision}" !~ /[\x00-\x1f\x7f]/
                 ? (revision => "$query->{revision}") : ()),
             (defined($query->{scope}) && !ref($query->{scope})
-                && $query->{scope} =~ /\A(?:user|client|priv)\z/
+                && $query->{scope} =~ /\A[a-z][a-z0-9_-]{0,159}\z/
                 ? (scope => $query->{scope}) : ()),
             (defined($query->{folder}) && !ref($query->{folder})
                 ? (folder => "$query->{folder}") : ()),
+            (defined($query->{scope_label}) && !ref($query->{scope_label})
+                ? (scope_label => "$query->{scope_label}") : ()),
             ($query->{readonly} ? (readonly => 1) : ()),
         };
     }

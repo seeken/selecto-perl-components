@@ -252,8 +252,8 @@ sub _saved_queries ($class, $model, $panel_id, $tab_id) {
         $saved_url->query->param(saved_query_name => $_->{name});
         $saved_url->query->param(saved_query_id => $_->{id}) if $_->{id};
         my $scope = $_->{scope} // ($_->{readonly} ? 'client' : 'user');
-        my $scope_label = $scope eq 'priv' ? 'Privilege' :
-            $scope eq 'client' ? 'Client' : 'Personal';
+        my $scope_label = $_->{scope_label} // ($scope eq 'priv' ? 'Privilege' :
+            $scope eq 'client' ? 'Client' : $scope eq 'user' ? 'Personal' : $scope);
         '<li><a href="' . _h($saved_url->to_string) . '">' . _h($_->{name}) . '</a>' .
         '<span class="sc-saved-query-shared">' . _h($scope_label) . '</span>' .
         ($_->{folder} ? '<small>' . _h($_->{folder}) . '</small>' : '') .

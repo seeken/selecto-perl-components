@@ -232,9 +232,11 @@ sub new ($class, @args) {
         unless $self->record_editor_max_age =~ /\A[1-9]\d*\z/ && $self->record_editor_max_age <= 86_400;
     if (defined(my $store = $self->saved_query_store)) {
         die "saved_query_store must be an object\n" unless blessed($store);
-        for my $method (qw(list save delete)) {
+        for my $method (qw(list delete)) {
             die "saved_query_store must provide $method\n" unless $store->can($method);
         }
+        die "saved_query_store must provide save or save_new\n"
+            unless $store->can('save') || $store->can('save_new');
     }
     for my $id (keys %{$self->action_handlers}) {
         die "action handler id must be a lowercase identifier\n"

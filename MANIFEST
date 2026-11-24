@@ -163,3 +163,9 @@ t/browser/query-options.spec.js
 script/denylist-hashes
 t/data/denylist.sha256
 t/denylist.t
+lib/Selecto/Components/SavedView.pm
+lib/Selecto/Components/SavedQueryStore/Domains.pm
+t/saved_view.t
+t/saved_query_domains.t
+t/lib/SavedViewsFixture.pm
+docs/saved-views.md

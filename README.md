@@ -802,3 +802,6 @@ unit. Only host-declared ratios of sums over public numeric fields at the
 owner grain (including to-one paths) are accepted. Select a ratio by its ID,
 for example `measure=revenue_per_unit`; its canonical function state is
 `measure_function=ratio_of_sums`. Ratios cannot be authored by the browser.
+
+Governed saved-view stores and the public check/explain API are documented in
+[docs/saved-views.md](docs/saved-views.md). Existing host stores remain supported.

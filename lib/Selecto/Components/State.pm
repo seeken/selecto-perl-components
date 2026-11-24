@@ -30,8 +30,26 @@ sub parameter_names ($class) {
     )];
 }
 
+# MCP and form encoders may suffix repeated parameters with []. Keep the
+# page loader and saved-view APIs on one interpretation of that spelling.
+sub normalize_input ($class, $input) {
+    my %copy = %$input;
+    for my $name (@{$class->parameter_names}) {
+        my $brackets = "$name\[\]";
+        next unless exists $copy{$brackets};
+        my @values;
+        for my $key ($name, $brackets) {
+            next unless exists $copy{$key};
+            push @values, ref($copy{$key}) eq 'ARRAY' ? @{$copy{$key}} : $copy{$key};
+        }
+        $copy{$name} = \@values;
+        delete $copy{$brackets};
+    }
+    return \%copy;
+}
+
 sub from_input ($class, $config, $domain, $input) {
-    $input = {} unless ref($input) eq 'HASH';
+    $input = ref($input) eq 'HASH' ? $class->normalize_input($input) : {};
     my $budget_ok = eval { Selecto::Components::InputBudget->input($config->limits, $input); 1 };
     $input = {} unless $budget_ok;
     $config->validate_domain($domain);
@@ -1328,6 +1346,17 @@ sub _parse_filters ($config, $input, $field_map, $valid_groups, $group_configs, 
             && length($value) && $value !~ /\A(?:true|false|0|1)\z/i) {
             push @$errors, 'A boolean filter value is not available.';
             next;
+        }
+        if (!$group_filter && $config->numeric_type($field_type) && $op !~ /_null\z/) {
+            my @numbers = $membership_values ? @$membership_values
+                : $op =~ /in\z/ ? map { _trim($_) } split /,/, $value
+                : ($value, ($op eq 'between' ? ($value_end) : ()));
+            my $integer = $field_type =~ /\A(?:integer|int|smallint|bigint|id)\z/i;
+            if (grep { length($_) && ($integer ? !/\A[+-]?[0-9]+\z/
+                : !/\A[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\z/) } @numbers) {
+                push @$errors, "Numeric filter value for $field is not available.";
+                next;
+            }
         }
         my $filter = {
             field => $field,

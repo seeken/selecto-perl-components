@@ -25,6 +25,8 @@ use_ok 'Selecto::Components::Renderer::Markup';
 use_ok 'Selecto::Components::Renderer::Results';
 use_ok 'Selecto::Components::RowActions';
 use_ok 'Selecto::Components::State';
+use_ok 'Selecto::Components::SavedView';
+use_ok 'Selecto::Components::SavedQueryStore::Domains';
 use_ok 'Selecto::Components::ThemeStylesheet';
 use_ok 'Selecto::Components::Util';
 use_ok 'Selecto::Components::WebSocketPolicy';
