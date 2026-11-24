@@ -312,7 +312,13 @@ function assertExactResultNumbers(value, numberTokens) {
 
 function buildRemoteRequest(fingerprint, query, requestId) {
   nonEmptyString(fingerprint, "domain.fingerprint");
-  keys(query, ["select", "projection", "view", "filters", "group_by", "segments", "parameters", "order_by", "ordering", "limit", "offset", "timezone", "row_format", "as_of"], "query");
+  keys(query, ["select", "projection", "view", "filters", "group_by", "segments", "segment_choices", "parameters", "order_by", "ordering", "limit", "offset", "timezone", "row_format", "as_of"], "query");
+  if (query.segment_choices !== undefined) {
+    record(query.segment_choices, "query.segment_choices");
+    for (const [group, choice] of Object.entries(query.segment_choices)) {
+      if (typeof choice !== "string") throw new CanonicalWireError(`query.segment_choices.${group}`, "must be a string (empty means Off)");
+    }
+  }
   if (["select", "projection", "view"].filter((key) => Object.hasOwn(query, key)).length !== 1) throw new CanonicalWireError("query", "exactly one authoring mode is required");
   if (query.select !== undefined) {
     const selected = array(query.select, "query.select");
@@ -3157,6 +3163,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         projection: "",
         view: "",
         segments: [],
+        segmentChoices: {},
         parameters: {},
         filters: [],
         orders: [],
@@ -3678,16 +3685,38 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         description: spec.description || "",
         offLabel: spec.off_label || "Off",
         choices: spec.choices || [],
+        default: spec.default,
+        defaultViews: spec.default_views,
       }));
     }
 
     setSegmentGroupChoice(groupId, choice) {
       const group = this.segmentGroups().find((entry) => entry.id === groupId);
-      if (!group || (choice && !group.choices.some((entry) => entry.segment === choice))) return false;
+      // null is unset (use the server default); an empty string is explicit Off.
+      if (!group || (choice !== null && choice !== "" && !group.choices.some((entry) => entry.segment === choice))) return false;
+      this.state.segmentChoices = {...this.state.segmentChoices, [groupId]: choice};
+      if (choice === null) delete this.state.segmentChoices[groupId];
       const choices = new Set(group.choices.map((entry) => entry.segment));
       this.state.segments = this.state.segments.filter((id) => !choices.has(id));
       if (choice) this.state.segments.push(choice);
       return true;
+    }
+
+    effectiveSegmentIds(state = this.state) {
+      const library = this.domain.query_library || {};
+      let ids = state.segments.slice();
+      if (state.mode === "view") ids.push(...(((library.views || {})[state.view] || {}).segments || []));
+      for (const group of this.segmentGroups()) {
+        const belongs = (id) => group.choices.some((choice) => choice.segment === id);
+        if (Object.hasOwn(state.segmentChoices || {}, group.id)) {
+          ids = ids.filter((id) => !belongs(id));
+          if (state.segmentChoices[group.id]) ids.push(state.segmentChoices[group.id]);
+        } else if (!ids.some(belongs) && group.default !== undefined
+            && (!group.defaultViews || group.defaultViews.includes("detail"))) {
+          ids.push(group.default);
+        }
+      }
+      return ids;
     }
 
     setUngroupedSegments(ids) {
@@ -3736,25 +3765,30 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         const fieldset = element("fieldset", "sac-segment-group");
         fieldset.append(element("legend", "", group.label));
         if (group.description) fieldset.append(element("small", "sac-help", group.description));
+        const override = Object.hasOwn(this.state.segmentChoices || {}, group.id);
         const selected = group.choices.filter((choice) =>
           this.state.segments.includes(choice.segment) || viewSegments.includes(choice.segment));
-        const inherited = group.choices.some((choice) => viewSegments.includes(choice.segment));
-        fieldset.disabled = inherited;
-        const choices = [{segment: "", label: group.offLabel}, ...group.choices];
-        if (selected.length > 1) choices.push({segment: "__conflict__", label: "Multiple selected; choose one"});
+        const defaultChoice = group.choices.find((choice) => choice.segment === group.default);
+        const defaultLabel = defaultChoice ? `Default (${defaultChoice.label})` : "Default (unset)";
+        const choices = [{unset: true, segment: "", label: defaultLabel}, {segment: "", label: group.offLabel}, ...group.choices];
+        if (!override && selected.length > 1) choices.push({segment: "__conflict__", label: "Multiple selected; choose one"});
         for (const choice of choices) {
           const label = element("label", "sac-segment-group-choice");
           const radio = element("input");
           radio.type = "radio";
           radio.name = `sac-segment-group-${group.id}`;
-          radio.value = choice.segment;
+          radio.value = choice.unset ? "__default__" : choice.segment;
           radio.dataset.sacSegmentGroup = group.id;
-          radio.checked = selected.length > 1 ? choice.segment === "__conflict__"
-            : selected.length ? choice.segment === selected[0].segment : choice.segment === "";
+          if (choice.unset) radio.dataset.sacSegmentUnset = "true";
+          radio.checked = override ? !choice.unset && choice.segment === this.state.segmentChoices[group.id]
+            : selected.length > 1 ? choice.segment === "__conflict__"
+            : selected.length ? !choice.unset && choice.segment === selected[0].segment : !!choice.unset;
           label.append(radio, document.createTextNode(choice.label));
           fieldset.append(label);
         }
-        if (inherited) fieldset.append(element("small", "sac-help", "Set by the named view; change the view to change this choice."));
+        if (!override && viewSegments.some((id) => group.choices.some((choice) => choice.segment === id))) {
+          fieldset.append(element("small", "sac-help", "Set by the named view; choose a segment or Off to override it."));
+        }
         container.append(fieldset);
       }
     }
@@ -4630,12 +4664,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     activeParameterSpecs() {
       const library = this.domain.query_library || {};
-      const ids = this.state.segments.slice();
-      if (this.state.mode === "view" && this.state.view) {
-        const view = (library.views || {})[this.state.view] || {};
-        ids.push(...(view.segments || []));
-      }
-      return segmentParameterSpecs(library, ids);
+      return segmentParameterSpecs(library, this.effectiveSegmentIds());
     }
 
     renderParameters() {
@@ -5097,6 +5126,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (this.state.mode === "projection") payload.projection = this.state.projection;
       if (this.state.mode === "view") payload.view = this.state.view;
       if (this.state.segments.length) payload.segments = this.state.segments.slice();
+      if (Object.keys(this.state.segmentChoices || {}).length) payload.segment_choices = {...this.state.segmentChoices};
       const specs = this.activeParameterSpecs();
       const parameters = {};
       Object.keys(specs).forEach((name) => {
@@ -5168,7 +5198,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         if (payload.format_version !== 1 || !payload.domain || payload.domain.fingerprint !== this.manifest.domain.fingerprint) throw new Error("The request targets a different Domain fingerprint.");
         payload = payload.query;
       }
-      const allowed = ["select", "projection", "view", "segments", "parameters", "filters", "ordering", "order_by", "timezone", "row_format", "limit", "offset", "as_of"];
+      const allowed = ["select", "projection", "view", "segments", "segment_choices", "parameters", "filters", "ordering", "order_by", "timezone", "row_format", "limit", "offset", "as_of"];
       const unknown = onlyKeys(payload, allowed);
       if (unknown.length) throw new Error(`Unsupported request properties: ${unknown.join(", ")}.`);
       const sources = ["select", "projection", "view"].filter((key) => Object.prototype.hasOwnProperty.call(payload, key));
@@ -5180,7 +5210,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       const library = this.domain && this.domain.query_library || {};
       const draft = {
         mode: sources[0], selectedFields: [], configuredField: "",
-        projection: "", view: "", segments: [], parameters: {}, filters: [],
+        projection: "", view: "", segments: [], segmentChoices: {}, parameters: {}, filters: [],
         orders: [], ordering: "", timezone: "", asOf: "", rowFormat: "arrays", subtables: [],
         limit: 100, offset: 0,
       };
@@ -5252,15 +5282,30 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         if (new Set(payload.segments).size !== payload.segments.length) throw new Error("The chooser cannot represent repeated named segments.");
         draft.segments = payload.segments.slice();
       }
-      const selectedSegmentIds = draft.segments.slice();
-      if (draft.mode === "view") selectedSegmentIds.push(...(((library.views || {})[draft.view] || {}).segments || []));
-      const segmentConflict = this.conflictingSegmentGroup(selectedSegmentIds);
+      if (payload.segment_choices !== undefined) {
+        if (!isPlainObject(payload.segment_choices)) throw new Error("segment_choices must be a JSON object.");
+        for (const [id, choice] of Object.entries(payload.segment_choices)) {
+          const group = this.segmentGroups().find((entry) => entry.id === id);
+          if (!group) throw new Error(`Unknown segment picker group ${id}.`);
+          const belongs = (segment) => group.choices.some((entry) => entry.segment === segment);
+          if (typeof choice !== "string" || (choice !== "" && !belongs(choice))) {
+            throw new Error(`Invalid choice for segment picker group ${id}.`);
+          }
+          const selected = draft.segments.filter(belongs);
+          if (choice !== "" && (selected.length > 1 || selected.some((segment) => segment !== choice))) {
+            throw new Error(`Segment picker group ${id} disagrees with segments.`);
+          }
+          // The server removes all group segments for Off, even conflicting ones.
+          draft.segments = draft.segments.filter((segment) => !belongs(segment));
+          if (choice) draft.segments.push(choice);
+        }
+        draft.segmentChoices = {...payload.segment_choices};
+      }
+      const segmentConflict = this.conflictingSegmentGroup(this.effectiveSegmentIds(draft));
       if (segmentConflict) throw new Error(`${segmentConflict.label} allows only one choice.`);
       if (payload.parameters !== undefined) {
         if (!isPlainObject(payload.parameters)) throw new Error("parameters must be a JSON object.");
-        const segmentIds = draft.segments.slice();
-        if (draft.mode === "view") segmentIds.push(...(((library.views || {})[draft.view] || {}).segments || []));
-        const specs = segmentParameterSpecs(library, segmentIds);
+        const specs = segmentParameterSpecs(library, this.effectiveSegmentIds(draft));
         const unsupported = Object.keys(payload.parameters).filter((name) => !Object.prototype.hasOwnProperty.call(specs, name));
         if (unsupported.length) throw new Error(`Parameters not exposed by the selected segments: ${unsupported.join(", ")}.`);
         if (Object.values(payload.parameters).some((value) => value !== null && typeof value === "object")) throw new Error("The chooser only supports scalar parameter values.");
@@ -6932,7 +6977,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
           .filter((choice) => !choice.disabled).map((choice) => choice.value));
       }
       else if (target.matches("[data-sac-segment-group]")) {
-        if (!this.setSegmentGroupChoice(target.dataset.sacSegmentGroup, target.value)) return;
+        if (!this.setSegmentGroupChoice(target.dataset.sacSegmentGroup, target.dataset.sacSegmentUnset === "true" ? null : target.value)) return;
       }
       else if (target.matches("[data-sac-ordering]")) this.state.ordering = target.value;
       else if (target.matches("[data-sac-row-format]")) this.state.rowFormat = target.value;
