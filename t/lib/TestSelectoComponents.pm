@@ -34,30 +34,30 @@ sub private_domain {
 sub carrier_domain {
     return Selecto::Domain->parse({
         schema_version => 1,
-        name => 'Clients',
+        name => 'Carriers',
         source => {
-            source_table => 'client_profile', primary_key => 'id',
-            fields => [qw(id co_name cl_key city state status)],
+            source_table => 'parties', primary_key => 'id',
+            fields => [qw(id party_name site_code city region active)],
             columns => {
-                id => {type => 'integer', label => 'Client ID'},
-                co_name => {type => 'string', label => 'Company'},
-                cl_key => {type => 'string', label => 'Key'},
+                id => {type => 'integer', label => 'Party ID'},
+                party_name => {type => 'string', label => 'Company'},
+                site_code => {type => 'string', label => 'Site code'},
                 city => {type => 'string', label => 'City'},
-                state => {type => 'string', label => 'State'},
-                status => {type => 'string'},
+                region => {type => 'string', label => 'Region'},
+                active => {type => 'string'},
             },
             associations => {},
         },
         schemas => {}, joins => {},
         query_library => {
             segments => {
-                carriers => {filters => [['eq', 'status', 'A']]},
+                carriers => {filters => [['eq', 'active', 'yes']]},
             },
             projections => {
-                carrier_lookup => {fields => [qw(id co_name cl_key city state)]},
+                carrier_lookup => {fields => [qw(id party_name site_code city region)]},
             },
             orderings => {
-                company_name => {order_by => [['co_name', 'asc'], ['id', 'asc']]},
+                company_name => {order_by => [['party_name', 'asc'], ['id', 'asc']]},
             },
             views => {
                 carrier_lookup => {
@@ -80,7 +80,7 @@ sub _domain {
             primary_key => 'id',
             fields => [qw(
                 id product_name category_id unit_price units_in_stock created_on discontinued
-                build_shipments_eligible
+                consolidate_ready
             )],
             columns => {
                 id => { type => 'integer' },
@@ -100,7 +100,7 @@ sub _domain {
                 units_in_stock => { type => 'integer' },
                 created_on => { type => 'date' },
                 discontinued => { type => 'boolean' },
-                build_shipments_eligible => {
+                consolidate_ready => {
                     type => 'boolean',
                     internal => 1,
                     computed => {
@@ -197,14 +197,14 @@ sub _domain {
         },
         co_domains => {
             carriers => {
-                domain => 'client', view => 'carrier_lookup',
+                domain => 'parties', view => 'carrier_lookup',
                 search => {
-                    fields => [qw(id co_name cl_key city state)],
+                    fields => [qw(id party_name site_code city region)],
                     mode => 'prefix', rank => 1,
                 },
                 result => {
-                    value_field => 'id', label_field => 'co_name',
-                    description_fields => [qw(id cl_key city state)],
+                    value_field => 'id', label_field => 'party_name',
+                    description_fields => [qw(id site_code city region)],
                 },
             },
         },
@@ -300,29 +300,29 @@ sub _domain {
                 }},
                 execution => {kind => 'host', operation => 'set_reorder_level'},
             },
-            build_shipments => {
-                label => 'Build Shipments',
-                description => 'Group selected products into shipments.',
+            consolidate => {
+                label => 'Consolidate',
+                description => 'Consolidate selected products into orders.',
                 type => 'bulk_action',
                 scope => 'bulk',
                 selection => {
                     mode => 'groups',
                     palette => 'lucky_charms',
                     max_groups => 6,
-                    eligibility_field => 'build_shipments_eligible',
+                    eligibility_field => 'consolidate_ready',
                     row_details => [{
                         id => 'stock', label => 'Stock', field => 'units_in_stock',
                     }],
                     group_inputs => [{
-                        id => 'carrier_id', label => 'Carrier', type => 'lookup',
+                        id => 'carrier_party_id', label => 'Carrier', type => 'lookup',
                         co_domain => 'carriers', value_type => 'integer',
                         direct_entry => 1, minimum_query_length => 2,
-                        placeholder => 'Carrier name, key, ID, city, or state',
+                        placeholder => 'Carrier name, site code, ID, city, or region',
                         required => 1, minimum => 1,
                     }],
                 },
-                submit_label => 'Build shipments',
-                execution => {kind => 'host', operation => 'build_shipments'},
+                submit_label => 'Consolidate',
+                execution => {kind => 'host', operation => 'consolidate'},
             },
         },
         (defined($components) ? (components => $components) : ()),
@@ -363,19 +363,19 @@ sub config {
                 return [
                     {
                         value => 501,
-                        label => 'Acme Transport',
-                        description => 'ID 501 · Key ACME · Detroit, MI',
+                        label => 'North Yard Carrier',
+                        description => 'ID 501 · Site NORTH · Detroit, MI',
                     },
                     {
                         value => 777,
-                        label => 'Arrow Logistics',
+                        label => 'South Yard Carrier',
                         description => 'ID 777 · Chicago, IL',
                     },
                 ];
             },
         },
         co_domain_engines => {
-            client => sub {
+            parties => sub {
                 return Selecto::Engine->new(
                     domain => carrier_domain(),
                     adapter => TestSelectoComponents::CarrierAdapter->new(
@@ -426,14 +426,14 @@ sub config {
                     message => 'Reorder level set.',
                 };
             },
-            build_shipments => sub {
+            consolidate => sub {
                 my ($controller, $request) = @_;
                 push @ACTION_REQUESTS, $request;
                 return {
                     ok => 1,
                     applied_count => scalar(@{$request->{selected_ids}}),
                     built_count => scalar(@{$request->{groups}}),
-                    message => 'Shipments built.',
+                    message => 'Orders consolidated.',
                 };
             },
         },
@@ -581,9 +581,9 @@ sub execute_query ($self, $statement) {
         my $row = [map {
                 $_ eq '__selecto_rollup_grouping' ? 0
                 : $_ eq '__selecto_action_target' ? 100 + $row_index
-                : $_ eq 'build_shipments_eligible'
+                : $_ eq 'consolidate_ready'
                     ? ($row_index == 1 ? 1 : 0)
-                : $_ eq '__selecto_action_build_shipments_stock' ? 20 + $row_index
+                : $_ eq '__selecto_action_consolidate_stock' ? 20 + $row_index
                 : /\A__selecto_link_/ ? 100 + $row_index
                 : $_ eq 'product_name' && $row_index == 1 ? '=2+2'
                 : /(?:count|price)\z/ ? (($_ eq 'count' ? 2 : 10) * $row_index)
@@ -685,10 +685,10 @@ use Mojo::Base 'Selecto::PostgreSQL', -signatures;
 sub execute_query ($self, $statement) {
     my %values = (
         id => 501,
-        co_name => 'Acme Transport',
-        cl_key => 'ACME',
+        party_name => 'North Yard Carrier',
+        site_code => 'NORTH',
         city => 'Detroit',
-        state => 'MI',
+        region => 'MI',
     );
     return {
         columns => $statement->columns,

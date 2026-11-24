@@ -49,9 +49,9 @@ sub rows_of {
 
 my @groups = (group => [qw(origin destination days)], group_alias => ['', '', ''],
     group_format => ['', '', 'buckets'], group_bucket_ranges => ['', '', '5-9, 10-20, 21+']);
-my @summary = (q => 1, view => 'aggregate', field => 'id', @groups, measure => [qw(price pay loads)], page => 1);
+my @summary = (q => 1, view => 'aggregate', field => 'id', @groups, measure => [qw(quoted_amount haul_cost orders)], page => 1);
 
-# What each row holds under 5-9, 10-20, 21+ and Total (price, pay, count).
+# What each row holds under 5-9, 10-20, 21+ and Total (quoted_amount, haul_cost, count).
 my %expected = (
     'Total|'  => '180|135|4|270|210|2|300|250|1|750|595|7',
     'MI|'     => '160|125|3|200|150|1|300|250|1|660|525|5',
@@ -67,28 +67,28 @@ for my $backend (qw(sqlite postgresql)) {
     my $dbh = $connect{$backend}->() or next;
     $ran++;
     subtest $backend => sub {
-        $dbh->do("CREATE TABLE $table (id integer primary key, origin varchar(4), destination varchar(4), days integer, price integer, pay integer)");
+        $dbh->do("CREATE TABLE $table (id integer primary key, origin varchar(4), destination varchar(4), days integer, quoted_amount integer, haul_cost integer)");
         push @cleanup, $dbh if $backend eq 'postgresql';
         $dbh->do("INSERT INTO $table VALUES (1,'MI','OH',7,100,80), (2,'MI','OH',15,200,150), (3,'MI','TX',8,50,40),
             (4,'MI','TX',30,300,250), (5,'OH','TX',12,70,60), (6,'MI','OH',6,10,5), (7,'OH',NULL,9,20,10)");
-        my $domain = Selecto::Domain->new(name => 'Loads', table => $table,
+        my $domain = Selecto::Domain->new(name => 'Orders', table => $table,
             fields => {id => 'integer', origin => 'string', destination => 'string', days => 'integer',
-                price => 'integer', pay => 'integer'});
+                quoted_amount => 'integer', haul_cost => 'integer'});
         my $adapter = Selecto->adapter($backend => (dbh => $dbh));
         my %explorer = (
-            path => '/loads', title => 'Loads', default_fields => [qw(id origin destination)],
+            path => '/orders', title => 'Orders', default_fields => [qw(id origin destination)],
             engine_factory => sub { Selecto::Engine->new(domain => $domain, adapter => $adapter) },
             measures => [
-                {id => 'price', label => 'Price', aggregate => 'sum', field => 'price'},
-                {id => 'pay', label => 'Pay', aggregate => 'sum', field => 'pay'},
-                {id => 'loads', label => 'Count', aggregate => 'count'},
+                {id => 'quoted_amount', label => 'Amount', aggregate => 'sum', field => 'quoted_amount'},
+                {id => 'haul_cost', label => 'Cost', aggregate => 'sum', field => 'haul_cost'},
+                {id => 'orders', label => 'Count', aggregate => 'count'},
             ],
         );
         my $app = Mojolicious->new;
         $app->secrets(['summary-pivot-test']);
         $app->log->level('fatal');
         $app->plugin('Selecto::Components' => {websocket_mode => 'public', explorers => {
-            loads => {%explorer},
+            orders => {%explorer},
             narrow => {%explorer, path => '/narrow', max_grid_columns => 2},
             small => {%explorer, path => '/small', max_grid_result_cells => 100},
             shown => {%explorer, path => '/shown', show_sql => 1},
@@ -102,12 +102,12 @@ for my $backend (qw(sqlite postgresql)) {
         };
 
         # The plain summary of the row groups is what the pivot's rows must be.
-        my $plain = $get->('/loads', q => 1, view => 'aggregate', field => 'id', group => [qw(origin destination)],
-            measure => [qw(price pay loads)], limit => 25, page => 1);
+        my $plain = $get->('/orders', q => 1, view => 'aggregate', field => 'id', group => [qw(origin destination)],
+            measure => [qw(quoted_amount haul_cost orders)], limit => 25, page => 1);
         my $plain_rows = rows_of($plain, '.sc-results tbody tr');
         is scalar(@$plain_rows), 7, 'four detail rows, two subtotals and the total';
 
-        my $dom = $get->('/loads', @summary, limit => 25, pivot_column => 'days');
+        my $dom = $get->('/orders', @summary, limit => 25, pivot_column => 'days');
         ok $dom->at('table.sc-pivot-table'), 'the summary table is pivoted';
         ok !$dom->at('table.sc-aggregate-grid'), 'and it is not the grid';
         is_deeply [map { text_of($_) } @{$dom->find('.sc-pivot-table thead tr:nth-child(1) > th')}],
@@ -116,7 +116,7 @@ for my $backend (qw(sqlite postgresql)) {
         is_deeply [map { text_of($_) } @{$dom->find('.sc-pivot-table thead tr:nth-child(2) > th')}],
             ['5-9', '10-20', '21+'], 'bucket columns in the order the ranges were given';
         is_deeply [map { text_of($_) } @{$dom->find('.sc-pivot-table thead tr:nth-child(3) > th')}],
-            [('Price', 'Pay', 'Count') x 4], 'one sub-column per measure under each';
+            [('Amount', 'Cost', 'Count') x 4], 'one sub-column per measure under each';
 
         my $rows = rows_of($dom, '.sc-pivot-table tbody tr');
         is scalar(@$rows), 7, 'the same seven rows';
@@ -149,7 +149,7 @@ for my $backend (qw(sqlite postgresql)) {
             my %header = map { ($_->attr('id') => text_of($_)) } @{$dom->find('.sc-pivot-table th[id]')};
             my ($row) = grep { text_of($_) =~ /\A\|?OH110/ || text_of($_) =~ /OH11085/ } @{$dom->find('.sc-pivot-table tbody tr')};
             my $cell = $row->find('td[headers]')->[1];
-            is_deeply [map { $header{$_} } split ' ', $cell->attr('headers')], [qw(OH Days 5-9 Pay)],
+            is_deeply [map { $header{$_} } split ' ', $cell->attr('headers')], [qw(OH Days 5-9 Cost)],
                 'a cell names its row, its column value and its measure';
         };
 
@@ -169,7 +169,7 @@ for my $backend (qw(sqlite postgresql)) {
             push @{$base{$_->attr('name')}}, $_->attr('value') for @{$form->find('input[type="hidden"]')};
             my $ids = sub {
                 my (%more) = @_;
-                $t->get_ok('/loads' => form => {%base, %more})->status_is(200);
+                $t->get_ok('/orders' => form => {%base, %more})->status_is(200);
                 return [sort { $a <=> $b } map { text_of($_) } @{$t->tx->res->dom->find('.sc-results tbody tr td:first-child')}];
             };
             is $base{view}[0], 'detail', 'the drilldown opens the Detail view';
@@ -179,7 +179,7 @@ for my $backend (qw(sqlite postgresql)) {
         };
 
         subtest 'paging keeps the columns and the totals' => sub {
-            my @pages = map { $get->('/loads', @summary, limit => 3, page => $_, pivot_column => 'days') } 1 .. 3;
+            my @pages = map { $get->('/orders', @summary, limit => 3, page => $_, pivot_column => 'days') } 1 .. 3;
             my @heads = map { join ',', map { text_of($_) } @{$_->find('.sc-pivot-table thead th')} } @pages;
             is $heads[1], $heads[0], 'page 2 has the same columns as page 1';
             is $heads[2], $heads[0], 'and so has page 3';
@@ -211,10 +211,10 @@ for my $backend (qw(sqlite postgresql)) {
             $get->('/small', @summary, limit => 25, pivot_column => 'days');   # 7 x (3 + 1) x 3 = 84
             ok $t->tx->res->dom->at('table.sc-pivot-table'), '84 cells fit a limit of 100';
             # Destination across: 8 rows x (3 columns + Total) x 4 measures = 128.
-            $get->('/small', @summary, measure => [qw(price pay loads price)], limit => 25, pivot_column => 'destination');
+            $get->('/small', @summary, measure => [qw(quoted_amount haul_cost orders quoted_amount)], limit => 25, pivot_column => 'destination');
             ok !$t->tx->res->dom->at('table.sc-pivot-table'), '128 cells do not';
             like $t->tx->res->dom->at('.sc-grid-warning')->all_text, qr/more than 100 display cells/, 'the cell limit is named';
-            my $one = $get->('/loads', q => 1, view => 'aggregate', field => 'id', group => 'origin', measure => 'loads',
+            my $one = $get->('/orders', q => 1, view => 'aggregate', field => 'id', group => 'origin', measure => 'orders',
                 limit => 25, page => 1, pivot_column => 'origin');
             ok !$one->at('table.sc-pivot-table'), 'a lone group stays a plain table';
             like $one->at('.sc-grid-warning')->all_text, qr/needs at least one other Group By/;
@@ -222,15 +222,15 @@ for my $backend (qw(sqlite postgresql)) {
 
         subtest 'state, links and export' => sub {
             like $dom->to_string, qr/[?&;]pivot_column=days(?:&|")/, 'pivot_column is carried in generated links';
-            my $old = $get->('/loads', @summary, limit => 25, grid_column => 'days');
+            my $old = $get->('/orders', @summary, limit => 25, grid_column => 'days');
             is_deeply rows_of($old, '.sc-pivot-table tbody tr'), $rows, 'the old grid_column spelling still works';
             like $old->to_string, qr/[?&;]pivot_column=days(?:&|")/, 'and is written back as pivot_column';
             unlike $old->to_string, qr/[?&;]grid_column=/;
-            $t->get_ok('/loads' => form => {@summary, limit => 25, pivot_column => 'nowhere'})->status_is(422);
-            $t->get_ok('/loads' => form => {@summary, limit => 25, pivot_column => [qw(days origin)]})->status_is(422);
+            $t->get_ok('/orders' => form => {@summary, limit => 25, pivot_column => 'nowhere'})->status_is(422);
+            $t->get_ok('/orders' => form => {@summary, limit => 25, pivot_column => [qw(days origin)]})->status_is(422);
 
             my $controller = $app->build_controller;
-            my $explorer = $controller->selecto_components_explorer('loads');
+            my $explorer = $controller->selecto_components_explorer('orders');
             my $model = $explorer->model($controller, {@summary, limit => 25, pivot_column => 'days'});
             is $model->{state}->pivot_column, 'days';
             my $again = $explorer->model($controller, Selecto::Components::Dashboard->new->input_from_url(
@@ -238,22 +238,22 @@ for my $backend (qw(sqlite postgresql)) {
             is $again->{state}->pivot_column, 'days', 'a saved view URL restores it';
             ok $again->{result}{pivot_data}, 'and pivots again';
             my @lines = map { s/"//gr } split /\r?\n/, $explorer->export($model, 'csv');
-            is $lines[0], join(',', 'Origin', 'Destination', map { my $c = $_; map { "$c \x{b7} $_" } qw(Price Pay Count) } '5-9', '10-20', '21+', 'Total'),
+            is $lines[0], join(',', 'Origin', 'Destination', map { my $c = $_; map { "$c \x{b7} $_" } qw(Amount Cost Count) } '5-9', '10-20', '21+', 'Total'),
                 'export headers are "<column value> · <measure>"';
             is scalar(@lines), 8, 'with the subtotal and total rows';
             ok scalar(grep { $_ eq 'Total,,180,135,4,270,210,2,300,250,1,750,595,7' } @lines), 'the total row';
             ok scalar(grep { $_ eq 'MI,,160,125,3,200,150,1,300,250,1,660,525,5' } @lines), 'a subtotal row';
             ok scalar(grep { $_ eq 'MI,OH,110,85,2,200,150,1,,,,310,235,3' } @lines), 'a detail row with its full key';
-            $t->get_ok('/loads' => form => {@summary, limit => 25, pivot_column => 'days', format => 'csv'});
+            $t->get_ok('/orders' => form => {@summary, limit => 25, pivot_column => 'days', format => 'csv'});
             isnt $t->tx->res->code, 200, 'the streamed web export refuses a pivot, as it refuses a grid';
         };
 
         subtest 'the Total columns can be turned off' => sub {
-            my $off = $get->('/loads', @summary, limit => 25, pivot_column => 'days', pivot_totals => 0);
+            my $off = $get->('/orders', @summary, limit => 25, pivot_column => 'days', pivot_totals => 0);
             is_deeply [map { text_of($_) } @{$off->find('.sc-pivot-table thead tr > th')}[0 .. 5]],
                 ['Origin', 'Destination', 'Days', '5-9', '10-20', '21+'], 'no Total column group';
             is_deeply [map { text_of($_) } @{$off->find('.sc-pivot-table thead tr:nth-child(3) > th')}],
-                [('Price', 'Pay', 'Count') x 3], 'and no sub-columns for it';
+                [('Amount', 'Cost', 'Count') x 3], 'and no sub-columns for it';
             is_deeply rows_of($off, '.sc-pivot-table tbody tr'),
                 [map { join '|', (split /\|/, $_, -1)[0 .. 10] } @$rows],
                 'every other cell is unchanged, with the subtotal and total rows';
@@ -266,30 +266,30 @@ for my $backend (qw(sqlite postgresql)) {
             is $dom->find('[data-sc-group-pivot-totals]:not([hidden]) input[type="checkbox"][name="pivot_totals"][checked]:not([disabled])')->size,
                 1, 'Show Total columns is ticked by default, in the panel of the group shown as columns';
             unlike $dom->at('.sc-results')->to_string, qr/pivot_totals/, 'and left out of the links when on';
-            my $on = $get->('/loads', @summary, limit => 25, pivot_column => 'days', pivot_totals => [0, 1]);
+            my $on = $get->('/orders', @summary, limit => 25, pivot_column => 'days', pivot_totals => [0, 1]);
             is_deeply rows_of($on, '.sc-pivot-table tbody tr'), $rows, 'the form\'s ticked box renders as before';
-            my $plain_off = $get->('/loads', q => 1, view => 'aggregate', field => 'id', group => [qw(origin destination)],
-                measure => [qw(price pay loads)], limit => 25, page => 1, pivot_totals => 0);
+            my $plain_off = $get->('/orders', q => 1, view => 'aggregate', field => 'id', group => [qw(origin destination)],
+                measure => [qw(quoted_amount haul_cost orders)], limit => 25, page => 1, pivot_totals => 0);
             is_deeply rows_of($plain_off, '.sc-results tbody tr'), $plain_rows, 'it means nothing without a column group';
             unlike $plain_off->to_string, qr/[?&;]pivot_totals=/;
 
-            my $page = $get->('/loads', @summary, limit => 2, page => 2, pivot_column => 'days', pivot_totals => 0);
-            my $with = $get->('/loads', @summary, limit => 2, page => 2, pivot_column => 'days');
+            my $page = $get->('/orders', @summary, limit => 2, page => 2, pivot_column => 'days', pivot_totals => 0);
+            my $with = $get->('/orders', @summary, limit => 2, page => 2, pivot_column => 'days');
             is_deeply rows_of($page, '.sc-pivot-table tbody tr'),
                 [map { join '|', (split /\|/, $_, -1)[0 .. 10] } @{rows_of($with, '.sc-pivot-table tbody tr')}],
                 'paging is the same';
             my %drill;
             push @{$drill{$_->attr('name')}}, $_->attr('value') for @{$off->find('form.sc-pivot-drill-form input[type="hidden"]')};
-            $t->get_ok('/loads' => form => {%drill, grid_axis => '{"axis":2,"value":"5-9"}'})->status_is(200);
+            $t->get_ok('/orders' => form => {%drill, grid_axis => '{"axis":2,"value":"5-9"}'})->status_is(200);
             is_deeply [sort map { text_of($_) } @{$t->tx->res->dom->find('.sc-results tbody tr td:first-child')}], [1, 3, 6, 7],
                 'a column header drills as before';
 
             # 8 rows x 3 columns x 4 measures = 96, where Total made it 128.
-            $get->('/small', @summary, measure => [qw(price pay loads price)], limit => 25, pivot_column => 'destination', pivot_totals => 0);
+            $get->('/small', @summary, measure => [qw(quoted_amount haul_cost orders quoted_amount)], limit => 25, pivot_column => 'destination', pivot_totals => 0);
             ok $t->tx->res->dom->at('table.sc-pivot-table'), 'a pivot refused for its cells fits without the Total columns';
 
             my $controller = $app->build_controller;
-            my $explorer = $controller->selecto_components_explorer('loads');
+            my $explorer = $controller->selecto_components_explorer('orders');
             my $model = $explorer->model($controller, {@summary, limit => 25, pivot_column => 'days', pivot_totals => 0});
             is $model->{state}->pivot_totals, 0;
             my $shown = $controller->selecto_components_explorer('shown');
@@ -301,7 +301,7 @@ for my $backend (qw(sqlite postgresql)) {
                 $explorer->canonical_url($model->{state}, $model->{domain})));
             is $again->{state}->pivot_totals, 0, 'a saved view URL restores it';
             my @lines = map { s/"//gr } split /\r?\n/, $explorer->export($model, 'csv');
-            is $lines[0], join(',', 'Origin', 'Destination', map { my $c = $_; map { "$c \x{b7} $_" } qw(Price Pay Count) } '5-9', '10-20', '21+'),
+            is $lines[0], join(',', 'Origin', 'Destination', map { my $c = $_; map { "$c \x{b7} $_" } qw(Amount Cost Count) } '5-9', '10-20', '21+'),
                 'export has no Total columns';
             ok scalar(grep { $_ eq 'Total,,180,135,4,270,210,2,300,250,1' } @lines), 'and keeps the total row';
             ok scalar(grep { $_ eq 'MI,,160,125,3,200,150,1,300,250,1' } @lines), 'and the subtotal rows';
@@ -311,15 +311,15 @@ for my $backend (qw(sqlite postgresql)) {
             # 30 days is outside every range, and nothing falls in 40-50.
             my @ranged = (q => 1, view => 'aggregate', field => 'id', group => [qw(origin days)], group_alias => ['', ''],
                 group_format => ['', 'buckets'], group_bucket_ranges => ['', '5-9, 40-50, 10-20'],
-                measure => [qw(price loads)], limit => 25, page => 1);
+                measure => [qw(quoted_amount orders)], limit => 25, page => 1);
             my $heads = sub { [map { text_of($_) } @{$_[0]->find('.sc-pivot-table thead tr:nth-child(2) > th')}] };
-            my $all = $get->('/loads', @ranged, pivot_column => 'days');
+            my $all = $get->('/orders', @ranged, pivot_column => 'days');
             is_deeply $heads->($all), ['5-9', '40-50', '10-20'],
                 'every range is a column, in the order given, even with nothing in it, and there is no Other';
             is rows_of($all, '.sc-pivot-table tbody tr')->[0], 'Total|180|4|—|—|270|2|450|6', 'an empty range has no values';
             is $all->find('input[name="group_exclude_missing"][checked]')->size, 0, 'without any box ticked';
             unlike $all->to_string, qr/[?&;]group_exclude_missing=/;
-            my $stepped = $get->('/loads', @ranged, group_bucket_ranges => ['', '*/10'], pivot_column => 'days');
+            my $stepped = $get->('/orders', @ranged, group_bucket_ranges => ['', '*/10'], pivot_column => 'days');
             is rows_of($stepped, '.sc-pivot-table tbody tr')->[0] =~ s/.*\|(\d+\|\d+)\z/$1/r, '750|7', 'stepped buckets leave nothing out';
             ok !$stepped->at('[data-sc-group-range-filter]');
 
@@ -331,15 +331,15 @@ for my $backend (qw(sqlite postgresql)) {
             my %drill;
             push @{$drill{$_->attr('name')}}, $_->attr('value') for @{$in->find('form.sc-pivot-drill-form input[type="hidden"]')};
             my $ids = sub { [sort { $a <=> $b } map { text_of($_) } @{$t->tx->res->dom->find('.sc-results tbody tr td:first-child')}] };
-            $t->get_ok('/loads' => form => {%drill, grid_axis => '{"axis":0,"value":"MI"}'})->status_is(200)
+            $t->get_ok('/orders' => form => {%drill, grid_axis => '{"axis":0,"value":"MI"}'})->status_is(200)
                 or diag explain(\%drill), $t->tx->res->dom->find('.sc-error, [role=alert]')->map('all_text')->join('; ');
             is_deeply $ids->(), [1, 2, 3, 6], 'a drill to Detail leaves the same rows out';
-            $t->get_ok('/loads' => form => {%drill, grid_axis => '{"axis":1,"value":"5-9"}'})->status_is(200);
+            $t->get_ok('/orders' => form => {%drill, grid_axis => '{"axis":1,"value":"5-9"}'})->status_is(200);
             is_deeply $ids->(), [1, 3, 6, 7], 'a column header drills to its bucket';
-            $t->get_ok('/loads' => form => {%drill, grid_axis => '{"axis":1,"value":"40-50"}'})->status_is(200);
+            $t->get_ok('/orders' => form => {%drill, grid_axis => '{"axis":1,"value":"40-50"}'})->status_is(200);
             like $t->tx->res->dom->at('.sc-results tbody')->all_text, qr/No rows matched/, 'and an empty one to no rows';
 
-            my $plain = $get->('/loads', @ranged, group => 'days', group_alias => '', group_format => 'buckets',
+            my $plain = $get->('/orders', @ranged, group => 'days', group_alias => '', group_format => 'buckets',
                 group_bucket_ranges => '5-9, 40-50, 10-20');
             is_deeply [sort @{rows_of($plain, '.sc-results tbody tr')}], ['10-20|270|2', '5-9|180|4', 'Total|450|6'],
                 'the plain summary leaves them out too';
@@ -351,7 +351,7 @@ for my $backend (qw(sqlite postgresql)) {
             is $dom->find('input[name="group_exclude_missing"]')->size, 3, 'every group offers the option';
             is $dom->find('input[name="group_exclude_missing"][checked]')->size, 0;
 
-            my $left_out = $get->('/loads', @off, group_exclude_missing => 'destination');
+            my $left_out = $get->('/orders', @off, group_exclude_missing => 'destination');
             my $kept = rows_of($left_out, '.sc-pivot-table tbody tr');
             is scalar(@$kept), 6, 'the row with no destination is gone';
             ok !grep({ /\[NULL\]/ } @$kept), 'by value';
@@ -369,29 +369,29 @@ for my $backend (qw(sqlite postgresql)) {
             like $left_out->to_string, qr/[?&;]group_exclude_missing=destination(?:&|")/, 'it is carried in generated links';
             unlike $left_out->to_string, qr/filter_op=not_null/, 'and never as a filter parameter';
 
-            my $moved = $get->('/loads', q => 1, view => 'aggregate', field => 'id', group => [qw(origin days)],
+            my $moved = $get->('/orders', q => 1, view => 'aggregate', field => 'id', group => [qw(origin days)],
                 group_format => ['', 'buckets'], group_bucket_ranges => ['', '5-9, 10-20, 21+'],
-                measure => [qw(price pay loads)], limit => 25, page => 1, group_exclude_missing => 'destination');
+                measure => [qw(quoted_amount haul_cost orders)], limit => 25, page => 1, group_exclude_missing => 'destination');
             ok !$moved->at('[data-sc-group-filter]'), 'removing the group removes its filter';
             is rows_of($moved, '.sc-results tbody tr')->[0], 'Total||750|595|7', 'and the rows come back';
 
-            my $plain_left_out = $get->('/loads', q => 1, view => 'aggregate', field => 'id', group => [qw(origin destination)],
-                measure => [qw(price pay loads)], limit => 25, page => 1, group_exclude_missing => 'destination');
+            my $plain_left_out = $get->('/orders', q => 1, view => 'aggregate', field => 'id', group => [qw(origin destination)],
+                measure => [qw(quoted_amount haul_cost orders)], limit => 25, page => 1, group_exclude_missing => 'destination');
             is_deeply rows_of($plain_left_out, '.sc-results tbody tr'),
                 ['Total||730|585|6', 'MI||660|525|5', '|OH|310|235|3', '|TX|350|290|2', 'OH||70|60|1', '|TX|70|60|1'],
                 'the plain summary table leaves them out of rows and totals';
-            my $grid = $get->('/loads', q => 1, view => 'aggregate', aggregate_grid => 1, field => 'id',
-                group => [qw(origin destination)], measure => 'loads', limit => 25, page => 1, group_exclude_missing => 'destination');
+            my $grid = $get->('/orders', q => 1, view => 'aggregate', aggregate_grid => 1, field => 'id',
+                group => [qw(origin destination)], measure => 'orders', limit => 25, page => 1, group_exclude_missing => 'destination');
             is_deeply [map { text_of($_) =~ s/\x{2713}//gr } @{$grid->find('.sc-aggregate-grid tbody tr.sc-grid-total-row > *')}],
                 [qw(Total 3 3 6)], 'the grid leaves them out of its totals';
-            my $graph = $get->('/loads', q => 1, view => 'graph', field => 'id', group => 'destination',
-                measure => 'loads', group_exclude_missing => 'destination');
+            my $graph = $get->('/orders', q => 1, view => 'graph', field => 'id', group => 'destination',
+                measure => 'orders', group_exclude_missing => 'destination');
             is $graph->find('input[name="group_exclude_missing"][checked]')->size, 1, 'the graph view offers and keeps it';
             unlike $graph->to_string, qr/\[NULL\]/, 'and its data has no missing-value point';
 
             my %drill;
             push @{$drill{$_->attr('name')}}, $_->attr('value') for @{$left_out->find('form.sc-pivot-drill-form input[type="hidden"]')};
-            $t->get_ok('/loads' => form => {%drill, grid_axis => '{"axis":2,"value":"5-9"}'})->status_is(200);
+            $t->get_ok('/orders' => form => {%drill, grid_axis => '{"axis":2,"value":"5-9"}'})->status_is(200);
             is_deeply [sort map { text_of($_) } @{$t->tx->res->dom->find('.sc-results tbody tr td:first-child')}], [1, 3, 6],
                 'drilling from a column leaves the same rows out';
         };

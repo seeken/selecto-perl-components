@@ -381,7 +381,7 @@ $at->get_ok('/explore/products?q=1&backend=duckdb&field=id&field=action%3Aedit_o
     ->element_exists('form[data-sc-action-form] input[data-sc-query-option-value][name=backend][value=duckdb]');
 $at->get_ok('/explore/products/actions/edit_one_product/form?selected_id=101&backend=duckdb')->status_is(200);
 is $action_options[-1], 'duckdb', 'action form factory gets page option';
-$at->get_ok('/explore/products/actions/build_shipments/lookups/carrier_id?q=acme&selected_id=101&backend=duckdb')
+$at->get_ok('/explore/products/actions/consolidate/lookups/carrier_party_id?q=north&selected_id=101&backend=duckdb')
     ->status_is(200)->json_is('/results/0/value', '501');
 is $action_options[-1], 'duckdb', 'action lookup factory gets page option';
 $at->get_ok('/explore/products/records/101/edit?editor=product_profile&backend=duckdb')->status_is(200)

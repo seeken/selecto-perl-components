@@ -38,10 +38,10 @@ sub declarations ($class, $kind, $theme) {
     if ($kind eq 'console') {
         my $secondary = $color{secondary} // $color{primary};
         return [
-            ($color{primary} ? (['--sac-accent', $color{primary}], ['--cgt-brand', $color{primary}]) : ()),
-            ($secondary ? (['--sac-teal', $secondary], ['--cgt-accent', $secondary]) : ()),
+            ($color{primary} ? (['--sac-accent', $color{primary}]) : ()),
+            ($secondary ? (['--sac-teal', $secondary]) : ()),
             ($color{on_primary}
-                ? (['--sac-on-accent', $color{on_primary}], ['--cgt-on-brand', $color{on_primary}]) : ()),
+                ? (['--sac-on-accent', $color{on_primary}]) : ()),
         ];
     }
     return [

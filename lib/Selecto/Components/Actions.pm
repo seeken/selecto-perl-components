@@ -842,9 +842,9 @@ C<min_rows> and C<max_rows> whatever the presentation.
 
     selection => {
         mode => 'groups', palette => 'lucky_charms', max_groups => 6,
-        eligibility_field => 'load_build_eligible',
+        eligibility_field => 'consolidate_ready',
         row_details => [{id => 'origin', label => 'Origin', field => 'origin.city'}],
-        group_inputs => [{id => 'carrier_id', label => 'Carrier', type => 'lookup',
+        group_inputs => [{id => 'carrier_party_id', label => 'Carrier', type => 'lookup',
             lookup_source => 'carriers', value_type => 'integer', required => 1}],
     },
 
@@ -855,6 +855,19 @@ handler receives C<groups>, ordered by marker index, each with its
 server-resolved C<marker>, its own C<selected_ids> and its C<inputs>. The
 browser cannot submit marker colours, shapes or labels. C<row_details> are
 hidden governed fields that are shown only in the confirmation card.
+
+A successful handler may return C<records> for result cards. Each record has
+C<id>, an optional C<label>, C<url>, C<summary>, C<marker>, and C<details>
+(C<< [{text => '...', url => '/...'}] >>). Labels, summaries and detail text
+are rendered as text; links must stay on the same origin. A marker matches a
+result to its existing group card; other results appear below the message.
+Business-specific metadata is prepared by the host, for example:
+
+    return {ok => 1, message => 'Orders consolidated.', records => [{
+        id => 42, label => 'Order 42', url => '/orders/42',
+        details => [{text => '3 orders'},
+                    {text => 'North Yard Carrier', url => '/parties/501'}],
+    }]};
 
 =head2 Row eligibility
 
@@ -907,13 +920,13 @@ library:
 
     co_domains => {
         carriers => {
-            domain => 'client', view => 'carrier_lookup',
-            search => {fields => [qw(id co_name city)], mode => 'prefix', rank => 1},
-            result => {value_field => 'id', label_field => 'co_name',
+            domain => 'parties', view => 'carrier_lookup',
+            search => {fields => [qw(id party_name city)], mode => 'prefix', rank => 1},
+            result => {value_field => 'id', label_field => 'party_name',
                        description_fields => [qw(id city)]},
         },
     },
-    # input: {id => 'carrier_id', type => 'lookup', co_domain => 'carriers'}
+    # input: {id => 'carrier_party_id', type => 'lookup', co_domain => 'carriers'}
 
 For a co-domain, the explorer supplies C<co_domain_engines> (the target
 domain's engine for the request) and, optionally, C<co_domain_scopes>

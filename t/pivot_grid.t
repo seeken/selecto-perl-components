@@ -52,7 +52,7 @@ sub layout {
 my @pivot = (q => 1, view => 'aggregate', aggregate_grid => 1, field => 'id',
     group => [qw(origin destination days)], group_alias => ['', '', ''],
     group_format => ['', '', 'buckets'], group_bucket_ranges => ['', '', '5-9, 10-20, 21+'],
-    measure => [qw(price pay loads)], limit => 25, page => 1);
+    measure => [qw(quoted_amount haul_cost orders)], limit => 25, page => 1);
 
 my $ran = 0;
 my $some_state;
@@ -60,35 +60,35 @@ for my $backend (qw(sqlite postgresql)) {
     my $dbh = $connect{$backend}->() or next;
     $ran++;
     subtest $backend => sub {
-        $dbh->do("CREATE TABLE $table (id integer primary key, origin varchar(4), destination varchar(4), days integer, price integer, pay integer)");
+        $dbh->do("CREATE TABLE $table (id integer primary key, origin varchar(4), destination varchar(4), days integer, quoted_amount integer, haul_cost integer)");
         push @cleanup, $dbh if $backend eq 'postgresql';
         $dbh->do("INSERT INTO $table VALUES (1,'MI','OH',7,100,80), (2,'MI','OH',15,200,150), (3,'MI','TX',8,50,40),
             (4,'MI','TX',30,300,250), (5,'OH','TX',12,70,60), (6,'MI','OH',6,10,5)");
-        my $domain = Selecto::Domain->new(name => 'Loads', table => $table,
+        my $domain = Selecto::Domain->new(name => 'Orders', table => $table,
             fields => {id => 'integer', origin => 'string', destination => 'string', days => 'integer',
-                price => 'integer', pay => 'integer'});
+                quoted_amount => 'integer', haul_cost => 'integer'});
         my $adapter = Selecto->adapter($backend => (dbh => $dbh));
         plan skip_all => 'this selecto-perl has no grouping sets' unless $adapter->supports('grouping_sets');
         my %explorer = (
-            path => '/loads', title => 'Loads', default_fields => [qw(id origin destination)],
+            path => '/orders', title => 'Orders', default_fields => [qw(id origin destination)],
             engine_factory => sub { Selecto::Engine->new(domain => $domain, adapter => $adapter) },
             measures => [
-                {id => 'price', label => 'Price', aggregate => 'sum', field => 'price'},
-                {id => 'pay', label => 'Pay', aggregate => 'sum', field => 'pay'},
-                {id => 'loads', label => 'Count', aggregate => 'count'},
+                {id => 'quoted_amount', label => 'Amount', aggregate => 'sum', field => 'quoted_amount'},
+                {id => 'haul_cost', label => 'Cost', aggregate => 'sum', field => 'haul_cost'},
+                {id => 'orders', label => 'Count', aggregate => 'count'},
             ],
         );
         my $app = Mojolicious->new;
         $app->secrets(['pivot-grid-test']);
         $app->log->level('fatal');
         $app->plugin('Selecto::Components' => {websocket_mode => 'public', explorers => {
-            loads => {%explorer},
+            orders => {%explorer},
             narrow => {%explorer, path => '/narrow', max_grid_columns => 2},
             shown => {%explorer, path => '/shown', show_sql => 1},
         }});
         my $t = Test::Mojo->new($app);
 
-        $t->get_ok('/loads' => form => {@pivot, grid_column => 'days'})->status_is(200)
+        $t->get_ok('/orders' => form => {@pivot, grid_column => 'days'})->status_is(200)
             ->element_exists('table.sc-aggregate-grid.sc-pivot-grid')
             or diag $t->tx->res->dom->find('.sc-error, [role=alert], .sc-grid-warning')->map('all_text')->join('; ');
         my $dom = $t->tx->res->dom;
@@ -96,7 +96,7 @@ for my $backend (qw(sqlite postgresql)) {
         is_deeply layout($dom),
             ['Origin', 'Destination', '5-9', '10-20', '21+', 'Total'],
             'row group headers, then bucket columns in the order the ranges were given, then Total';
-        is_deeply texts($dom, '.sc-pivot-grid thead tr:nth-child(3) > th'), [('Price', 'Pay', 'Count') x 4],
+        is_deeply texts($dom, '.sc-pivot-grid thead tr:nth-child(3) > th'), [('Amount', 'Cost', 'Count') x 4],
             'each column value and the total have one sub-column per measure';
         is_deeply texts($dom, '.sc-pivot-grid tbody tr:nth-child(1) > *'),
             [qw(MI OH 110 85 2 200 150 1), '—', '—', '—', qw(310 235 3)], 'MI to OH, with its row totals';
@@ -117,7 +117,7 @@ for my $backend (qw(sqlite postgresql)) {
             is $dom->find('.sc-pivot-grid thead tr:nth-child(3) > th[scope="col"]')->size, 12, 'measure headers';
             my $cell = $dom->at('.sc-pivot-grid tbody tr:nth-child(1) > td:nth-of-type(2)');
             my %header = map { ($_->attr('id') => $_->all_text =~ s/\s+//gr) } @{$dom->find('.sc-pivot-grid th[id]')};
-            is_deeply [map { $header{$_} } split ' ', $cell->attr('headers')], [qw(MI OH Days 5-9 Pay)],
+            is_deeply [map { $header{$_} } split ' ', $cell->attr('headers')], [qw(MI OH Days 5-9 Cost)],
                 'a cell names its row values, the column group, its column value and its measure';
             my %seen;
             ok !grep({ $seen{$_}++ } keys %header) && keys(%header) == $dom->find('.sc-pivot-grid th[id]')->size, 'header ids are distinct';
@@ -138,10 +138,10 @@ for my $backend (qw(sqlite postgresql)) {
             my @detail = (q => 1, view => 'detail', field => [qw(id origin destination days)],
                 group => [qw(origin destination days)], group_alias => ['', '', ''],
                 group_format => ['', '', 'buckets'], group_bucket_ranges => ['', '', '5-9, 10-20, 21+'],
-                measure => 'loads', order => 'id', direction => 'asc', limit => 25, page => 1);
+                measure => 'orders', order => 'id', direction => 'asc', limit => 25, page => 1);
             my $ids = sub {
                 my %more = @_;
-                $t->get_ok('/loads' => form => {@detail, %more})->status_is(200);
+                $t->get_ok('/orders' => form => {@detail, %more})->status_is(200);
                 return [map { $_->all_text =~ s/\s+//gr } @{$t->tx->res->dom->find('.sc-results tbody tr td:first-child')}];
             };
             is_deeply $ids->(grid_cell => '["MI","OH","5-9"]'), [1, 6], 'a cell filters on row values and the column value';
@@ -149,12 +149,12 @@ for my $backend (qw(sqlite postgresql)) {
             is_deeply $ids->(grid_axis => '{"axis":2,"value":"10-20"}'), [2, 5], 'a column header filters on the column value';
             is_deeply $ids->(grid_axis => '{"axes":[0,1],"values":["MI","TX"]}', grid_cell => ['["MI","TX","5-9"]', '["OH","TX","10-20"]']),
                 [3, 4, 5], 'a cell inside a selected row adds nothing; another cell is an alternative';
-            $t->get_ok('/loads' => form => {@detail, grid_cell => '["MI","OH"]'})->status_is(422);
-            $t->get_ok('/loads' => form => {@detail, grid_axis => '{"axes":[0,7],"values":["MI","TX"]}'})->status_is(422);
+            $t->get_ok('/orders' => form => {@detail, grid_cell => '["MI","OH"]'})->status_is(422);
+            $t->get_ok('/orders' => form => {@detail, grid_axis => '{"axes":[0,7],"values":["MI","TX"]}'})->status_is(422);
         };
 
         subtest 'the column group need not be last' => sub {
-            $t->get_ok('/loads' => form => {@pivot, grid_column => 'destination'})->status_is(200);
+            $t->get_ok('/orders' => form => {@pivot, grid_column => 'destination'})->status_is(200);
             my $other = $t->tx->res->dom;
             is_deeply layout($other), ['Origin', 'Days', 'OH', 'TX', 'Total'], 'destination across';
             is_deeply texts($other, '.sc-pivot-grid tbody tr:nth-child(1) > *'),
@@ -166,8 +166,8 @@ for my $backend (qw(sqlite postgresql)) {
         };
 
         subtest 'two groups and several measures' => sub {
-            $t->get_ok('/loads' => form => {q => 1, view => 'aggregate', aggregate_grid => 1, field => 'id',
-                group => [qw(origin destination)], measure => [qw(price loads)], grid_column => 'origin', limit => 25, page => 1})->status_is(200);
+            $t->get_ok('/orders' => form => {q => 1, view => 'aggregate', aggregate_grid => 1, field => 'id',
+                group => [qw(origin destination)], measure => [qw(quoted_amount orders)], grid_column => 'origin', limit => 25, page => 1})->status_is(200);
             my $two = $t->tx->res->dom;
             is_deeply layout($two), [qw(Destination MI OH Total)], 'the first group across';
             is_deeply texts($two, '.sc-pivot-grid tbody tr > *'),
@@ -178,8 +178,8 @@ for my $backend (qw(sqlite postgresql)) {
 
         subtest 'the original shape is untouched' => sub {
             my @legacy = (q => 1, view => 'aggregate', aggregate_grid => 1, field => 'id',
-                group => [qw(origin destination)], measure => 'loads', limit => 25, page => 1);
-            $t->get_ok('/loads' => form => {@legacy})->status_is(200)->element_exists('table.sc-aggregate-grid')
+                group => [qw(origin destination)], measure => 'orders', limit => 25, page => 1);
+            $t->get_ok('/orders' => form => {@legacy})->status_is(200)->element_exists('table.sc-aggregate-grid')
                 ->element_exists_not('table.sc-pivot-grid');
             my $legacy = $t->tx->res->dom;
             is $legacy->find('.sc-aggregate-grid thead tr')->size, 1, 'one header row';
@@ -189,22 +189,22 @@ for my $backend (qw(sqlite postgresql)) {
             is_deeply from_json($legacy->at('.sc-aggregate-grid tbody input[data-sc-grid-row-toggle]')->attr('value')), {axis => 0, value => 'MI'};
             is_deeply from_json($legacy->at('.sc-aggregate-grid thead input[data-sc-grid-column-toggle]')->attr('value')), {axis => 1, value => 'OH'};
 
-            $t->get_ok('/loads' => form => {@legacy, grid_column => 'origin'})->status_is(200)->element_exists_not('table.sc-pivot-grid');
+            $t->get_ok('/orders' => form => {@legacy, grid_column => 'origin'})->status_is(200)->element_exists_not('table.sc-pivot-grid');
             my $swapped = $t->tx->res->dom;
             is_deeply texts($swapped, '.sc-aggregate-grid thead th'), ['Destination/Origin', 'MI', 'OH', 'Total'], 'grid_column swaps the axes';
             is_deeply from_json($swapped->at('.sc-aggregate-grid tbody input[name="grid_cell"]')->attr('value')), ['MI', 'OH'], 'cell values stay in group order';
             is_deeply from_json($swapped->at('.sc-aggregate-grid tbody input[data-sc-grid-row-toggle]')->attr('value')), {axis => 1, value => 'OH'};
 
-            $t->get_ok('/loads' => form => {@pivot})->status_is(200)->element_exists_not('table.sc-aggregate-grid')
+            $t->get_ok('/orders' => form => {@pivot})->status_is(200)->element_exists_not('table.sc-aggregate-grid')
                 ->text_like('.sc-grid-warning' => qr/exactly two Group By fields and one Aggregate\. For more, mark one Group By as Show as columns\./);
         };
 
         subtest 'the Total columns can be turned off' => sub {
-            $t->get_ok('/loads' => form => {@pivot, pivot_column => 'days', pivot_totals => 0})->status_is(200);
+            $t->get_ok('/orders' => form => {@pivot, pivot_column => 'days', pivot_totals => 0})->status_is(200);
             my $off = $t->tx->res->dom;
             is_deeply layout($off),
                 ['Origin', 'Destination', '5-9', '10-20', '21+'], 'no Total column group';
-            is_deeply texts($off, '.sc-pivot-grid thead tr:nth-child(3) > th'), [('Price', 'Pay', 'Count') x 3];
+            is_deeply texts($off, '.sc-pivot-grid thead tr:nth-child(3) > th'), [('Amount', 'Cost', 'Count') x 3];
             is_deeply texts($off, '.sc-pivot-grid tbody tr:nth-child(1) > *'),
                 [qw(MI OH 110 85 2 200 150 1), '—', '—', '—'], 'the cells are unchanged';
             is_deeply texts($off, '.sc-pivot-grid tbody tr:nth-child(2) > *'),
@@ -215,7 +215,7 @@ for my $backend (qw(sqlite postgresql)) {
             unlike $dom->at('.sc-results')->to_string, qr/pivot_totals/, 'and left out when on';
 
             my $controller = $app->build_controller;
-            my $explorer = $controller->selecto_components_explorer('loads');
+            my $explorer = $controller->selecto_components_explorer('orders');
             my $model = $explorer->model($controller, {@pivot, pivot_column => 'days', pivot_totals => 0});
             my $shown = $controller->selecto_components_explorer('shown');
             my $sql_on = $shown->model($controller, {@pivot, pivot_column => 'days'})->{result}{sql};
@@ -230,7 +230,7 @@ for my $backend (qw(sqlite postgresql)) {
             is $again->{state}->pivot_totals, 0, 'a saved view URL restores it';
             ok !$again->{result}{grid_data}{total_columns}, 'and the grid has no Total columns again';
             my @lines = map { s/"//gr } split /\r?\n/, $explorer->export($model, 'csv');
-            is $lines[0], join(',', 'Origin', 'Destination', map { my $c = $_; map { "$c \x{b7} $_" } qw(Price Pay Count) } '5-9', '10-20', '21+'),
+            is $lines[0], join(',', 'Origin', 'Destination', map { my $c = $_; map { "$c \x{b7} $_" } qw(Amount Cost Count) } '5-9', '10-20', '21+'),
                 'export has no Total columns';
             is $lines[1], 'MI,OH,110,85,2,200,150,1,,,', 'a row without its totals';
             is $lines[-1], 'Total,,160,125,3,270,210,2,300,250,1', 'the total row';
@@ -238,23 +238,23 @@ for my $backend (qw(sqlite postgresql)) {
             # Two groups, one measure: with a column group the option applies;
             # without one the grid keeps its Total column.
             my @two = (q => 1, view => 'aggregate', aggregate_grid => 1, field => 'id',
-                group => [qw(origin destination)], measure => 'loads', limit => 25, page => 1);
-            $t->get_ok('/loads' => form => {@two, pivot_totals => 0})->status_is(200);
+                group => [qw(origin destination)], measure => 'orders', limit => 25, page => 1);
+            $t->get_ok('/orders' => form => {@two, pivot_totals => 0})->status_is(200);
             is_deeply texts($t->tx->res->dom, '.sc-aggregate-grid thead th'), ['Origin/Destination', 'OH', 'TX', 'Total'],
                 'a grid without a column group keeps its Total column';
-            $t->get_ok('/loads' => form => {@two, pivot_column => 'destination', pivot_totals => 0})->status_is(200);
+            $t->get_ok('/orders' => form => {@two, pivot_column => 'destination', pivot_totals => 0})->status_is(200);
             is_deeply texts($t->tx->res->dom, '.sc-aggregate-grid thead th'), ['Origin/Destination', 'OH', 'TX'];
             is_deeply texts($t->tx->res->dom, '.sc-aggregate-grid tbody tr > *'), [qw(MI 3 2 OH), '—', qw(1 Total 3 3)];
         };
 
         subtest 'every bucket range is a column' => sub {
             my %ranged = (@pivot, group_bucket_ranges => ['', '', '5-9, 40-50, 10-20, 21+'], pivot_column => 'days');
-            $t->get_ok('/loads' => form => \%ranged)->status_is(200);
+            $t->get_ok('/orders' => form => \%ranged)->status_is(200);
             is_deeply layout($t->tx->res->dom),
                 ['Origin', 'Destination', '5-9', '40-50', '10-20', '21+', 'Total'], 'the empty range has its column';
             is_deeply texts($t->tx->res->dom, '.sc-pivot-grid tbody tr.sc-grid-total-row > *'),
                 [qw(Total 160 125 3), '—', '—', '—', qw(270 210 2 300 250 1 730 585 6)], 'with nothing in it';
-            $t->get_ok('/loads' => form => {%ranged, group_bucket_ranges => ['', '', '5-9, 40-50, 10-20']})->status_is(200);
+            $t->get_ok('/orders' => form => {%ranged, group_bucket_ranges => ['', '', '5-9, 40-50, 10-20']})->status_is(200);
             is_deeply layout($t->tx->res->dom),
                 ['Origin', 'Destination', '5-9', '40-50', '10-20', 'Total'], 'ranges leave out what is outside them';
             is_deeply texts($t->tx->res->dom, '.sc-pivot-grid tbody tr.sc-grid-total-row > *'),
@@ -270,14 +270,14 @@ for my $backend (qw(sqlite postgresql)) {
         };
 
         subtest 'state and export' => sub {
-            $t->get_ok('/loads' => form => {@pivot, grid_column => 'nowhere'})->status_is(422);
-            $t->get_ok('/loads' => form => {@pivot, grid_column => [qw(days origin)]})->status_is(422);
-            $t->get_ok('/loads' => form => {@pivot, grid_column => 'days'})->status_is(200);
+            $t->get_ok('/orders' => form => {@pivot, grid_column => 'nowhere'})->status_is(422);
+            $t->get_ok('/orders' => form => {@pivot, grid_column => [qw(days origin)]})->status_is(422);
+            $t->get_ok('/orders' => form => {@pivot, grid_column => 'days'})->status_is(200);
             like $t->tx->res->body, qr/[?&;]pivot_column=days(?:&|")/, 'the old grid_column spelling is read and written back as pivot_column';
 
             # The web export refuses every grid; a host exports one from its model.
             my $controller = $app->build_controller;
-            my $explorer = $controller->selecto_components_explorer('loads');
+            my $explorer = $controller->selecto_components_explorer('orders');
             my %input = @pivot;
             my $model = $explorer->model($controller, {%input, grid_column => 'days'});
             ok $model->{state}->valid && $model->{result}{grid_data}{pivot}, 'a pivot model';
@@ -291,13 +291,13 @@ for my $backend (qw(sqlite postgresql)) {
             ok $again->{result}{grid_data}{pivot}, 'and renders the same pivot';
 
             my @lines = map { s/"//gr } split /\r?\n/, $explorer->export($model, 'csv');   # every field is quoted
-            is $lines[0], join(',', 'Origin', 'Destination', map { my $c = $_; map { "$c \x{b7} $_" } qw(Price Pay Count) } '5-9', '10-20', '21+', 'Total'),
+            is $lines[0], join(',', 'Origin', 'Destination', map { my $c = $_; map { "$c \x{b7} $_" } qw(Amount Cost Count) } '5-9', '10-20', '21+', 'Total'),
                 'export headers are "<column value> · <measure>"';
             is $lines[1], 'MI,OH,110,85,2,200,150,1,,,,310,235,3', 'a row with its empty cells and totals';
             is $lines[-1], 'Total,,160,125,3,270,210,2,300,250,1,730,585,6', 'the total row';
             ok length($explorer->export($model, 'xlsx')) > 1000, 'the workbook builds';
 
-            $t->get_ok('/loads' => form => {@pivot, grid_column => 'days', view => 'graph'})->status_is(200);
+            $t->get_ok('/orders' => form => {@pivot, grid_column => 'days', view => 'graph'})->status_is(200);
             unlike $t->tx->res->body, qr/[?&;](?:grid|pivot)_column=/, 'the choice belongs to the aggregate view only';
         };
     };

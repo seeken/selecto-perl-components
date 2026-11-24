@@ -516,6 +516,12 @@ contract. The canonical authorizer still checks every API request. Static
 `page` for this setup. Asset URLs include a generated manifest digest, so
 `mise run assets` updates their cache revision with the packaged Console.
 
+Host stylesheets may set the Console's `--sac-accent` (primary colour),
+`--sac-teal` (secondary colour), and `--sac-on-accent` (text on the primary
+colour). The `theme` option emits these same properties through the
+same-origin theme stylesheet. Hosts can opt into Explorer history recovery
+by using `.sc-host-menu-toolbar` or `.sc-host-menu-dynamic` on the body.
+
 ## Optional add-ons
 
 Native-template pages (`Selecto::Components::Templates`, the `/templates/:id`
@@ -777,10 +783,10 @@ Declare `ratio_measures` in the strict domain document:
 
 ```perl
 ratio_measures => {
-    revenue_per_unit => {
-        label => 'Revenue per unit',
-        numerator => {field => 'total_revenue', function => 'sum'},
-        denominator => {field => 'det_cnt', function => 'sum'},
+    billed_per_piece => {
+        label => 'Billed per piece',
+        numerator => {field => 'total_billed', function => 'sum'},
+        denominator => {field => 'piece_count', function => 'sum'},
         unit => {kind => 'currency', code => 'USD'},
     },
 },

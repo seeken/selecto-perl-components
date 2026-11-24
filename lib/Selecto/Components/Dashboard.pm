@@ -16,7 +16,7 @@ use Selecto::Components::Renderer::Results ();
 my $SEGMENT_CHOICE = qr/\Aquery_library_segment_choice_[A-Za-z][A-Za-z0-9_]*\z/;
 
 # The Explorer input (as Explorer::input_from_controller would build it) held in
-# a saved view URL such as "/explorer/load?q=1&view=graph&...". Unknown
+# a saved view URL such as "/explorer/orders?q=1&view=graph&...". Unknown
 # parameters are ignored. Pass the Explorer config as the third argument
 # when the URL may contain host-declared query options.
 sub input_from_url ($class, $url, $config = undef) {
@@ -33,7 +33,7 @@ sub input_from_url ($class, $url, $config = undef) {
     return \%input;
 }
 
-# The explorer path of a saved view URL ("/explorer/load").
+# The explorer path of a saved view URL ("/explorer/orders").
 sub path_from_url ($class, $url) {
     return Mojo::URL->new($url // '')->path->to_string;
 }
@@ -196,7 +196,7 @@ Selecto::Components::Dashboard - Show saved Explorer views as tiles on one page
     use Selecto::Components::Dashboard;
     my $dashboard = 'Selecto::Components::Dashboard';
 
-    my $explorer = $c->selecto_components_explorer('load');
+    my $explorer = $c->selecto_components_explorer('orders');
     my $model = $explorer->model($c, $dashboard->input_from_url($saved_url),
         {result_cache => $cache, cache_namespace => $trusted_source_and_policy_namespace});
 
@@ -231,14 +231,14 @@ All methods are class methods.
 
 =head2 input_from_url
 
-    my $input = $dashboard->input_from_url('/explore/load?q=1&view=graph&...');
+    my $input = $dashboard->input_from_url('/explore/orders?q=1&view=graph&...');
 
 Returns the Explorer input held in a saved view URL. Unknown parameters are
 dropped. Repeated parameters become array references.
 
 =head2 path_from_url
 
-    my $path = $dashboard->path_from_url($saved_url);    # '/explore/load'
+    my $path = $dashboard->path_from_url($saved_url);    # '/explore/orders'
 
 The explorer path of a saved view URL. Use it to pick the explorer.
 

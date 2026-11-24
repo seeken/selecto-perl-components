@@ -2986,12 +2986,12 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     return Object.assign({}, target, siblings);
   }
 
-  // Host-declared write properties beyond the governed contract, such as an
-  // order's vehicles: the write request schema's other top-level properties.
+  // Host-declared write properties beyond the governed contract are the write
+  // request schema's other top-level properties.
   // x-selecto-operations limits one to some operations; x-selecto-examples
   // gives an example value per operation, x-selecto-example-choices
   // labelled examples of its alternative forms, and x-selecto-replaces the
-  // root fields it is given instead of (an origin for orig_id).
+  // root fields it is given instead of.
   function writeExtensionSpecs(openapi, path) {
     const operation = openapi && openapi.paths && openapi.paths[path] && openapi.paths[path].post;
     const content = operation && operation.requestBody && operation.requestBody.content;
@@ -4353,7 +4353,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
           groupHeading.append(groupTitle, remove);
           const ids = element("textarea", "");
           ids.value = group.ids || "";
-          ids.placeholder = "Load IDs, separated by commas or new lines";
+          ids.placeholder = "IDs, separated by commas or new lines";
           ids.dataset.sacActionGroupIds = String(index);
           card.append(groupHeading, element("span", "sac-label", "Target IDs *"), ids);
           this.appendActionInputs(card, action.selection.group_inputs || [], group.inputs, index);

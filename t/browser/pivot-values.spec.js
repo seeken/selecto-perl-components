@@ -19,37 +19,37 @@ test("pivot value chooser adds, reorders, removes and rerenders columns", async 
   server.stderr.on("data", chunk => {output += chunk;});
   try {
     await expect.poll(async () => {
-      try { return (await fetch(base + "/loads", {signal: AbortSignal.timeout(1000)})).status; } catch (_) { return output.includes("Unknown") ? output : 0; }
+      try { return (await fetch(base + "/orders", {signal: AbortSignal.timeout(1000)})).status; } catch (_) { return output.includes("Unknown") ? output : 0; }
     }).toBe(200);
-    await page.goto(base + "/loads?q=1&view=aggregate&field=id&group=region&group=status&measure=revenue&pivot_column=status");
+    await page.goto(base + "/orders?q=1&view=aggregate&field=id&group=region&group=state_code&measure=quoted_amount&pivot_column=state_code");
     await page.getByRole("button", {name: "Expand view menu", exact: true}).click();
-    await page.locator('[data-sc-picker-kind="group"] [data-sc-picker-set-item][data-field="status"] summary').click();
-    const box = page.locator('[data-sc-picker-set-item][data-field="status"] [data-sc-pivot-values]');
-    await box.getByLabel("Search column values").fill("G");
-    await box.locator('[data-sc-pivot-add="G"]').click();
-    await box.getByLabel("Search column values").fill("P");
-    await box.locator('[data-sc-pivot-add="P"]').click();
+    await page.locator('[data-sc-picker-kind="group"] [data-sc-picker-set-item][data-field="state_code"] summary').click();
+    const box = page.locator('[data-sc-picker-set-item][data-field="state_code"] [data-sc-pivot-values]');
+    await box.getByLabel("Search column values").fill("OP");
+    await box.locator('[data-sc-pivot-add="OP"]').click();
+    await box.getByLabel("Search column values").fill("PL");
+    await box.locator('[data-sc-pivot-add="PL"]').click();
     await box.locator("li").nth(1).getByRole("button", {name: "Move value up", exact: true}).click();
-    expect(await box.locator('input[name="pivot_column_value"]').evaluateAll(nodes => nodes.map(n => n.value))).toEqual(["P", "G"]);
+    expect(await box.locator('input[name="pivot_column_value"]').evaluateAll(nodes => nodes.map(n => n.value))).toEqual(["PL", "OP"]);
     await page.getByRole("button", {name: "Run query", exact: true}).click();
     const headings = page.locator('.sc-pivot-table thead tr:nth-child(2) > th');
-    await expect(headings).toHaveText(["P", "G"]);
+    await expect(headings).toHaveText(["PL", "OP"]);
     // A rerender retains the chosen values in the Configure panel.
     if (await page.getByRole("button", {name: "Expand view menu", exact: true}).isVisible())
       await page.getByRole("button", {name: "Expand view menu", exact: true}).click();
-    const configure = page.locator('[data-sc-picker-kind="group"] [data-sc-picker-set-item][data-field="status"] summary');
+    const configure = page.locator('[data-sc-picker-kind="group"] [data-sc-picker-set-item][data-field="state_code"] summary');
     if (!(await box.getByLabel("Search column values").isVisible())) await configure.click();
     await box.locator("li").first().getByRole("button", {name: "Remove value", exact: true}).click();
     await page.getByRole("button", {name: "Run query", exact: true}).click();
-    await expect(headings).toHaveText(["G"]);
+    await expect(headings).toHaveText(["OP"]);
     if (await page.getByRole("button", {name: "Expand view menu", exact: true}).isVisible())
       await page.getByRole("button", {name: "Expand view menu", exact: true}).click();
     await page.locator(".sc-view-tab").filter({has: page.locator('[name="view"][value="graph"]')}).click();
-    await page.locator('select[name="graph_series_group"]').selectOption("status");
+    await page.locator('select[name="graph_series_group"]').selectOption("state_code");
     await page.getByRole("button", {name: "Run query", exact: true}).click();
     await expect(page.locator("[data-sc-chart]")).toHaveCount(1);
     const chart = JSON.parse(await page.locator("[data-sc-chart]").getAttribute("data-chart-data"));
-    expect(chart.datasets.map(dataset => dataset.label)).toEqual(["G"]);
+    expect(chart.datasets.map(dataset => dataset.label)).toEqual(["OP"]);
   } finally {
     server.kill("SIGTERM");
   }
@@ -64,15 +64,15 @@ test("Top N column order appears on input and survives query and view changes", 
   const server = spawn("script/with-local-sibling", [perl, "t/browser/fixtures/pivot-values.pl", "daemon", "-l", base], {cwd: root, stdio: "pipe"});
   try {
     await expect.poll(async () => {
-      try { return (await fetch(base + "/loads", {signal: AbortSignal.timeout(1000)})).status; } catch (_) { return 0; }
+      try { return (await fetch(base + "/orders", {signal: AbortSignal.timeout(1000)})).status; } catch (_) { return 0; }
     }).toBe(200);
-    await page.goto(base + "/loads?q=1&view=aggregate&field=id&group=region&group=status&measure=revenue&pivot_column=status&pivot_column_other=1");
-    const box = page.locator('[data-sc-picker-set-item][data-field="status"] [data-sc-pivot-values]');
+    await page.goto(base + "/orders?q=1&view=aggregate&field=id&group=region&group=state_code&measure=quoted_amount&pivot_column=state_code&pivot_column_other=1");
+    const box = page.locator('[data-sc-picker-set-item][data-field="state_code"] [data-sc-pivot-values]');
     async function configure() {
       const menu = page.getByRole("button", {name: "Expand view menu", exact: true});
       if (await menu.isVisible()) await menu.click();
       if (!(await box.getByLabel("Top columns", {exact: true}).isVisible()))
-        await page.locator('[data-sc-picker-kind="group"] [data-sc-picker-set-item][data-field="status"] summary').click();
+        await page.locator('[data-sc-picker-kind="group"] [data-sc-picker-set-item][data-field="state_code"] summary').click();
     }
     await configure();
     const order = box.getByLabel("Column order", {exact: true});
@@ -82,21 +82,21 @@ test("Top N column order appears on input and survives query and view changes", 
     await expect(order).toHaveValue("rank");
     await page.getByRole("button", {name: "Run query", exact: true}).click();
     const headings = page.locator('.sc-pivot-table thead tr:nth-child(2) > th');
-    await expect(headings).toHaveText(["1 · G", "2 · D", "Other"]);
+    await expect(headings).toHaveText(["1 · OP", "2 · DL", "Other"]);
     await configure();
     await order.selectOption("natural");
     await page.getByRole("button", {name: "Run query", exact: true}).click();
-    await expect(headings).toHaveText(["D", "G", "Other"]);
+    await expect(headings).toHaveText(["DL", "OP", "Other"]);
     await configure();
     await expect(order).toHaveValue("natural");
     const permalink = page.getByRole("link", {name: "Permalink", exact: true});
     expect(await permalink.getAttribute("href")).toContain("pivot_column_top_order=natural");
     await page.locator(".sc-view-tab").filter({has: page.locator('[name="view"][value="graph"]')}).click();
-    await page.locator('select[name="graph_series_group"]').selectOption("status");
+    await page.locator('select[name="graph_series_group"]').selectOption("state_code");
     await page.getByRole("button", {name: "Run query", exact: true}).click();
     await expect(page.locator("[data-sc-chart]")).toHaveCount(1);
     const chart = JSON.parse(await page.locator("[data-sc-chart]").getAttribute("data-chart-data"));
-    expect(chart.datasets.map(dataset => dataset.label)).toEqual(["D", "G", "Other"]);
+    expect(chart.datasets.map(dataset => dataset.label)).toEqual(["DL", "OP", "Other"]);
     await configure();
     await box.getByLabel("Top columns", {exact: true}).fill("");
     await expect(order).toBeHidden();
@@ -118,15 +118,15 @@ test("summary pivot row labels stay frozen while columns scroll", async ({page})
   server.stderr.on("data", chunk => {output += chunk;});
   try {
     await expect.poll(async () => {
-      try { return (await fetch(base + "/loads", {signal: AbortSignal.timeout(1000)})).status; } catch (_) { return output.includes("Unknown") ? output : 0; }
+      try { return (await fetch(base + "/orders", {signal: AbortSignal.timeout(1000)})).status; } catch (_) { return output.includes("Unknown") ? output : 0; }
     }).toBe(200);
     // One row group: each body row is named by a th, not a td.
-    await page.goto(base + "/loads?q=1&view=aggregate&field=id&group=region&group=status&measure=revenue&pivot_column=status");
+    await page.goto(base + "/orders?q=1&view=aggregate&field=id&group=region&group=state_code&measure=quoted_amount&pivot_column=state_code");
     await expect(page.locator(".sc-pivot-table")).toHaveCount(1);
     const wrap = page.locator(".sc-table-wrap").filter({has: page.locator(".sc-pivot-table")});
     const label = page.locator(".sc-pivot-table > tbody > tr:nth-child(2) > :first-child");
     const heading = page.locator(".sc-pivot-table > thead > tr:first-child > th:first-child");
-    // Narrow the scrollport so the status columns overflow it.
+    // Narrow the scrollport so the state_code columns overflow it.
     await wrap.evaluate(node => { node.style.width = "180px"; });
     expect(await wrap.evaluate(node => node.scrollWidth > node.clientWidth + 100)).toBe(true);
     const before = await label.boundingBox();

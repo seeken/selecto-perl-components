@@ -33,11 +33,11 @@ my %translations = (
     'selecto.products.fields.product_name.label' => 'Zulu produit',
     'selecto.products.query_library.segments.low_stock.label' => 'Stock faible',
     'selecto.products.query_library.segments.low_stock.description' => 'Sous le seuil fourni.',
-    'selecto.products.actions.build_shipments.label' => 'Construire les expéditions',
-    'selecto.products.actions.build_shipments.description' => 'Regrouper les produits sélectionnés.',
-    'selecto.products.actions.build_shipments.submit_label' => 'Construire',
-    'selecto.products.actions.build_shipments.selection.group_inputs.carrier_id.label' => 'Transporteur',
-    'selecto.products.actions.build_shipments.selection.row_details.stock.label' => 'Inventaire',
+    'selecto.products.actions.consolidate.label' => 'Construire les expéditions',
+    'selecto.products.actions.consolidate.description' => 'Regrouper les produits sélectionnés.',
+    'selecto.products.actions.consolidate.submit_label' => 'Construire',
+    'selecto.products.actions.consolidate.selection.group_inputs.carrier_party_id.label' => 'Transporteur',
+    'selecto.products.actions.consolidate.selection.row_details.stock.label' => 'Inventaire',
 );
 my @lookups;
 my $spec = TestSelectoComponents::config();
@@ -78,10 +78,10 @@ is $low_stock->{description}, 'Sous le seuil fourni.',
     'query-library descriptions are localized';
 
 my $resolved = Selecto::Components::Actions->find(
-    $config, $domain, undef, 'build_shipments',
+    $config, $domain, undef, 'consolidate',
 );
 my $definition = Selecto::Components::Actions->definition(
-    $config, $domain, undef, 'build_shipments',
+    $config, $domain, undef, 'consolidate',
 );
 is $definition->{label}, 'Construire les expéditions',
     'action form definitions can be resolved without a target authorization decision';
@@ -103,7 +103,7 @@ is $term{'selecto.products.domain.title'}{default}, 'Product Explorer',
     'term discovery includes domain metadata defaults';
 is $term{'selecto.products.fields.product_name.label'}{default}, 'Product Name',
     'term discovery includes humanized field defaults';
-is $term{'selecto.products.actions.build_shipments.selection.group_inputs.carrier_id.label'}{default},
+is $term{'selecto.products.actions.consolidate.selection.group_inputs.carrier_party_id.label'}{default},
     'Carrier', 'term discovery includes nested action form labels';
 
 my $fallback = Selecto::Components::Config->new(

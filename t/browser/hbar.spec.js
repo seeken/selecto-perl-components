@@ -20,7 +20,7 @@ test.beforeAll(async () => {
   server.stderr.on("data", chunk => { output += chunk; });
   await expect.poll(async () => {
     if (server.exitCode !== null) throw new Error(output);
-    try { return (await fetch(base + "/sales", {signal: AbortSignal.timeout(1000)})).status; }
+    try { return (await fetch(base + "/orders", {signal: AbortSignal.timeout(1000)})).status; }
     catch (_) { return 0; }
   }).toBe(200);
 });
@@ -34,12 +34,12 @@ test.afterAll(async () => {
 
 async function graph(page, extra = {}) {
   const params = new URLSearchParams({q: "1", field: "id", view: "graph", chart_type: "horizontal_bar",
-    group: "customer_id", measure: "revenue", order: "measure:revenue", direction: "desc", limit: "15"});
+    group: "billto_party_id", measure: "quoted_amount", order: "measure:quoted_amount", direction: "desc", limit: "15"});
   for (const [key, value] of Object.entries(extra)) {
     params.delete(key);
     for (const item of Array.isArray(value) ? value : [value]) params.append(key, item);
   }
-  await page.goto(base + "/sales?" + params);
+  await page.goto(base + "/orders?" + params);
   await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-ready/);
   await page.evaluate(() => {
     const chart = window.Chart.getChart(document.querySelector("[data-sc-chart] canvas"));
@@ -72,7 +72,7 @@ test("horizontal dimension labels, currency ticks, top categories and drilldown"
   expect(result.zero).toBe(true);
   expect(result.values).toEqual(Array.from({length: 15}, (_, i) => (146 - i) * 20 + 1));
   expect(result.title).toBe(result.labels[0]);
-  expect(result.tooltip).toBe("Revenue: $2,921.00");
+  expect(result.tooltip).toBe("Quoted Amount: $2,921.00");
   // Exercise Chart.js's real click path, then the native detail query.
   await page.locator("[data-sc-chart] canvas").scrollIntoViewIfNeeded();
   // The chart sizes itself from its category count, and a late resize moves
@@ -98,7 +98,7 @@ test("horizontal dimension labels, currency ticks, top categories and drilldown"
 });
 
 test("horizontal bars retain two value axes and their units", async ({page}) => {
-  await graph(page, {measure: ["revenue", "volume"], measure_axis: ["left", "right"]});
+  await graph(page, {measure: ["quoted_amount", "volume"], measure_axis: ["left", "right"]});
   const axes = await page.evaluate(() => {
     const chart = Chart.getChart(document.querySelector("[data-sc-chart] canvas"));
     return {ids: chart.data.datasets.map(dataset => [dataset.xAxisID, dataset.yAxisID]),
@@ -115,7 +115,7 @@ test("horizontal bars retain two value axes and their units", async ({page}) => 
 });
 
 test("horizontal stack groups use both matching axes", async ({page}) => {
-  await graph(page, {measure: ["revenue", "revenue"], measure_series_id: ["first", "second"], measure_stack: ["money", "money"]});
+  await graph(page, {measure: ["quoted_amount", "quoted_amount"], measure_series_id: ["first", "second"], measure_stack: ["money", "money"]});
   const stack = await page.evaluate(() => {
     const chart = Chart.getChart(document.querySelector("[data-sc-chart] canvas"));
     chart.stop();
@@ -132,7 +132,7 @@ test("horizontal stack groups use both matching axes", async ({page}) => {
 });
 
 test("100 horizontal categories keep every label in a scrollable chart", async ({page}) => {
-  await graph(page, {limit: "100", order: "customer_id", direction: "asc"});
+  await graph(page, {limit: "100", order: "billto_party_id", direction: "asc"});
   const layout = await page.evaluate(() => {
     const chart = Chart.getChart(document.querySelector("[data-sc-chart] canvas"));
     const viewport = document.querySelector(".sc-chart-canvas");

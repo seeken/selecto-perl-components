@@ -103,17 +103,17 @@ $explicit_id_contract->{components}{picker_visible_id_paths} = ['category.id'];
 my $explicit_id_domain = Selecto::Domain->parse($explicit_id_contract, strict => 1);
 ok !$config->field_map($explicit_id_domain)->{'category.id'}{picker_hidden},
     'domain may explicitly expose a related ID in pickers';
-my $client_contract = $domain->contract;
-$client_contract->{schemas}{categories}{source_table} = 'client_profile';
-my $client_domain = Selecto::Domain->parse($client_contract, strict => 1);
-my $client_map = $config->field_map($client_domain);
-ok $client_map->{'category.id'}{picker_hidden},
+my $party_contract = $domain->contract;
+$party_contract->{schemas}{categories}{source_table} = 'parties';
+my $party_domain = Selecto::Domain->parse($party_contract, strict => 1);
+my $party_map = $config->field_map($party_domain);
+ok $party_map->{'category.id'}{picker_hidden},
     'no table name keeps its IDs visible; only the domain can';
-ok $client_map->{category_id}{picker_hidden},
+ok $party_map->{category_id}{picker_hidden},
     'a root owner key is hidden whatever table it references';
-$client_contract->{components}{picker_visible_id_paths} = ['category_id', 'category.id'];
-my $client_visible_map = $config->field_map(Selecto::Domain->parse($client_contract, strict => 1));
-ok !$client_visible_map->{$_}{picker_hidden}, "domain lists $_ as a visible identifier"
+$party_contract->{components}{picker_visible_id_paths} = ['category_id', 'category.id'];
+my $party_visible_map = $config->field_map(Selecto::Domain->parse($party_contract, strict => 1));
+ok !$party_visible_map->{$_}{picker_hidden}, "domain lists $_ as a visible identifier"
     for qw(category_id category.id);
 ok !exists($config->filter_map($domain)->{'category.id'}{picker_hidden}),
     'column-picker defaults do not remove ID filters';
@@ -227,7 +227,7 @@ like $action_only_statement->sql, qr/ORDER BY "s0"\."id" ASC/,
     'an action-only detail view remains deterministically ordered';
 
 my $grouped_action_only_state = Selecto::Components::State->from_input($config, $domain, {
-    q => 1, view => 'detail', field => 'action:build_shipments', measure => 'count',
+    q => 1, view => 'detail', field => 'action:consolidate', measure => 'count',
     limit => 25, page => 1,
 });
 my $grouped_action_only = Selecto::Components::QueryBuilder->build(
@@ -239,15 +239,15 @@ my $grouped_action_only_statement = $postgresql->compile(
 is_deeply $grouped_action_only_statement->columns, [
     qw(
         __selecto_action_target
-        build_shipments_eligible
-        __selecto_action_build_shipments_stock
+        consolidate_ready
+        __selecto_action_consolidate_stock
     ),
 ], 'a grouped action fetches its SQL eligibility and declared hidden row detail';
-is $grouped_action_only->{action_eligibility_fields}{build_shipments},
-    'build_shipments_eligible',
+is $grouped_action_only->{action_eligibility_fields}{consolidate},
+    'consolidate_ready',
     'grouped action eligibility retains its renderer mapping';
-is_deeply $grouped_action_only->{action_row_details}{build_shipments}, [{
-    id => 'stock', label => 'Stock', key => '__selecto_action_build_shipments_stock',
+is_deeply $grouped_action_only->{action_row_details}{consolidate}, [{
+    id => 'stock', label => 'Stock', key => '__selecto_action_consolidate_stock',
 }], 'grouped action row details retain their renderer mapping';
 
 my $linked_detail_state = Selecto::Components::State->from_input($config, $domain, {

@@ -257,8 +257,8 @@ sub _grouped_action_panel ($model, $action) {
         _h($dialog_title_id) . '">' .
         _h($action->{label}) . '</h3></div><button type="button" class="sc-action-close" ' .
         'data-sc-action-close aria-label="Close action form">×</button></header>' . $description .
-        '<p class="sc-action-target-summary">Build <strong data-sc-action-group-count>0</strong> ' .
-        'loads from <strong data-sc-action-selection-count>0</strong> selected rows.</p>' .
+        '<p class="sc-action-target-summary">Apply to <strong data-sc-action-group-count>0</strong> ' .
+        'groups of <strong data-sc-action-selection-count>0</strong> selected rows.</p>' .
         '<input type="hidden" name="csrf_token" value="' . _h($model->{csrf_token} // '') . '">' .
         '<input type="hidden" name="return_to" value="' . _h($model->{canonical_url}) . '">' .
         Selecto::Components::Renderer::Builder->query_options_hidden($model) .
@@ -278,7 +278,7 @@ sub _grouped_action_panel ($model, $action) {
         'data-sc-group-inputs="' . _h(to_json($action->{selection}{group_inputs})) . '">' .
         '<div role="status" aria-live="polite" aria-atomic="true"><strong ' .
         'data-sc-selection-count>0</strong> <span data-sc-selection-label>rows assigned</span>' .
-        '<span class="sc-group-count-summary"> · <strong data-sc-group-count>0</strong> loads</span></div>' .
+        '<span class="sc-group-count-summary"> · <strong data-sc-group-count>0</strong> groups</span></div>' .
         $button . $dialog . '</section>';
 }
 

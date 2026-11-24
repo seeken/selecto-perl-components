@@ -36,10 +36,10 @@ test("field and filter searches open matching source groups and restore collapse
     <div data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
       <input data-sc-picker-filter aria-label="Filter available fields">
       <div data-sc-picker-available>
-        <details data-sc-picker-group data-sc-picker-group-key="bill_to" data-search-label="bill to">
+        <details data-sc-picker-group data-sc-picker-group-key="billto" data-search-label="bill to">
           <summary>Bill To <small>2</small></summary><div data-sc-picker-group-items>
-            <button data-sc-picker-available-item data-search="company name string bill_to.co_name">Company Name</button>
-            <button data-sc-picker-available-item data-search="city string bill_to.city">City</button>
+            <button data-sc-picker-available-item data-search="company name string billto.party_name">Company Name</button>
+            <button data-sc-picker-available-item data-search="city string billto.city">City</button>
           </div>
         </details>
         <details data-sc-picker-group data-sc-picker-group-key="_actions" data-search-label="actions">
@@ -53,16 +53,16 @@ test("field and filter searches open matching source groups and restore collapse
     <div data-sc-filter-root data-sc-filter-max="10">
       <input data-sc-filter-search aria-label="Filter available filters">
       <div data-sc-filter-available>
-        <details data-sc-picker-group data-sc-picker-group-key="bill_to" data-search-label="bill to">
+        <details data-sc-picker-group data-sc-picker-group-key="billto" data-search-label="bill to">
           <summary>Bill To <small>1</small></summary><div data-sc-picker-group-items>
-            <button data-sc-filter-available-item data-search="state string bill_to.state">State</button>
+            <button data-sc-filter-available-item data-search="state string billto.region">State</button>
           </div>
         </details>
       </div><span data-sc-filter-available-count></span><span data-sc-filter-set-count></span>
       <div data-sc-filter-set></div>
     </div>
   </form>`);
-  const billTo = page.locator('[data-sc-picker-root] [data-sc-picker-group-key="bill_to"]');
+  const billTo = page.locator('[data-sc-picker-root] [data-sc-picker-group-key="billto"]');
   const actions = page.locator('[data-sc-picker-root] [data-sc-picker-group-key="_actions"]');
   await expect(billTo).not.toHaveAttribute("open");
   await billTo.locator("summary").click();
@@ -80,7 +80,7 @@ test("field and filter searches open matching source groups and restore collapse
   await expect(actions).not.toHaveAttribute("open");
   await expect(billTo).not.toHaveAttribute("open");
   await page.getByLabel("Filter available filters").fill("state");
-  const filterBillTo = page.locator('[data-sc-filter-root] [data-sc-picker-group-key="bill_to"]');
+  const filterBillTo = page.locator('[data-sc-filter-root] [data-sc-picker-group-key="billto"]');
   await expect(filterBillTo).toHaveAttribute("open", "");
   await expect(filterBillTo.getByText("State")).toBeVisible();
 });
@@ -228,25 +228,25 @@ test("Available stays beside Set until the picker truly lacks room", async ({pag
 test("a loaded saved view stays identified while its query is rerun", async ({page}) => {
   await page.route("http://saved.test/**", route => route.fulfill({
     contentType: "text/html",
-    body: `<section id="selecto-surface-load" hx-ws:connect="/explorer/load/ws" data-sc-query-params="enabled">
-      <div class="sc-workspace"><aside class="sc-builder" data-sc-builder-shell="load">
-        <form action="/explorer/load" method="get" data-sc-builder="load"
+    body: `<section id="selecto-surface-orders" hx-ws:connect="/explorer/orders/ws" data-sc-query-params="enabled">
+      <div class="sc-workspace"><aside class="sc-builder" data-sc-builder-shell="orders">
+        <form action="/explorer/orders" method="get" data-sc-builder="orders"
           data-sc-builder-query hx-ws:send>
           <input name="q" value="1"><input name="field" value="city">
           <input name="page" value="1">
           <input type="hidden" name="saved_query_id" value="user:Daily">
           <button type="submit">Run query</button>
         </form>
-        <form class="sc-saved-query-form" data-sc-saved-original-url="/explorer/load?q=1&amp;field=id&amp;page=1"
+        <form class="sc-saved-query-form" data-sc-saved-original-url="/explorer/orders?q=1&amp;field=id&amp;page=1"
           data-sc-saved-name="Daily">
-          <input name="saved_query_url" value="/explorer/load?q=1&amp;field=id&amp;page=1">
-          <input name="return_to" value="/explorer/load?q=1&amp;field=id&amp;page=1">
+          <input name="saved_query_url" value="/explorer/orders?q=1&amp;field=id&amp;page=1">
+          <input name="return_to" value="/explorer/orders?q=1&amp;field=id&amp;page=1">
           <p data-sc-saved-edit-status>Editing Daily — unchanged</p>
         </form>
       </aside></div>
     </section>`,
   }));
-  await page.goto("http://saved.test/explorer/load?q=1&saved_query_id=user%3ADaily");
+  await page.goto("http://saved.test/explorer/orders?q=1&saved_query_id=user%3ADaily");
   await page.addScriptTag({path: bundle});
   await page.evaluate(() => document.querySelector("[data-sc-builder-query]")
     .dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
@@ -254,7 +254,7 @@ test("a loaded saved view stays identified while its query is rerun", async ({pa
     .toHaveValue(/saved_query_id=user%3ADaily/);
   await page.evaluate(() => document.dispatchEvent(new CustomEvent(
     "htmx:ws:after:message:incoming", {detail: {message: {json: async () => ({
-      selecto: {url: "/explorer/load?q=1&field=city&page=1"},
+      selecto: {url: "/explorer/orders?q=1&field=city&page=1"},
     })}}},
   )));
   await expect(page.locator("[data-sc-saved-edit-status]"))
@@ -277,7 +277,7 @@ test("wide detail results remain inside a bounded host layout", async ({page}) =
                   <span>Primary Representative User ID In 25330,25558,26107,25605,26198,26293,25862,25352,25749,25341</span>
                 </div>
               </section>
-              <section class="sc-query-library"><label>Named view<select><option>LHF quote callbacks</option></select></label></section>
+              <section class="sc-query-library"><label>Named view<select><option>North Yard order callbacks</option></select></label></section>
               <fieldset class="sc-result-view-controls">
                 <label class="sc-row-click-control"><span>Row click</span><select><option>No row action</option></select></label>
                 <fieldset class="sc-picker-fieldset"><legend>Columns</legend><div class="sc-list-picker">
@@ -538,15 +538,15 @@ test("a results-only graph swap keeps the no-JavaScript fallback hidden", async 
   await page.route("http://selecto.test/**", route => route.fulfill({
     contentType: "text/html",
     body: `
-      <section id="selecto-channel-load" hx-ext="ws" hx-ws:connect="/explorer/load/ws">
-        <section id="selecto-surface-load" data-sc-chart-src="/chart.js" data-sc-query-params="enabled">
+      <section id="selecto-channel-orders" hx-ext="ws" hx-ws:connect="/explorer/orders/ws">
+        <section id="selecto-surface-orders" data-sc-chart-src="/chart.js" data-sc-query-params="enabled">
           <div data-sc-workspace>
-            <form action="/explorer/load" method="get" hx-ws:send hx-trigger="submit"
-              data-sc-builder="load">
+            <form action="/explorer/orders" method="get" hx-ws:send hx-trigger="submit"
+              data-sc-builder="orders">
               <input name="q" value="1"><input name="view" value="graph">
               <button type="submit">Run query</button>
             </form>
-            <section id="selecto-results-load" class="sc-results">Old results</section>
+            <section id="selecto-results-orders" class="sc-results">Old results</section>
           </div>
         </section>
       </section>
@@ -579,7 +579,7 @@ test("a results-only graph swap keeps the no-JavaScript fallback hidden", async 
     }
     window.WebSocket = FakeWebSocket;
   });
-  await page.goto("http://selecto.test/explorer/load");
+  await page.goto("http://selecto.test/explorer/orders");
   await page.addStyleTag({path: stylesheet});
   await page.addScriptTag({path: htmxBundle});
   await page.addScriptTag({path: websocketBundle});
@@ -588,20 +588,20 @@ test("a results-only graph swap keeps the no-JavaScript fallback hidden", async 
   await page.locator('button[type="submit"]').click();
   await expect.poll(() => page.evaluate(() => window.fakeSelectoMessage)).toBeTruthy();
   await page.evaluate(() => {
-    const content = `<section id="selecto-results-load" class="sc-results">
+    const content = `<section id="selecto-results-orders" class="sc-results">
       <div data-sc-chart data-chart-type="bar"
-        data-chart-data='{"labels":["Jan"],"datasets":[{"label":"Loads","data":[3]}]}'
+        data-chart-data='{"labels":["Jan"],"datasets":[{"label":"Orders","data":[3]}]}'
         aria-busy="true">
         <div class="sc-chart-canvas"><canvas></canvas></div>
         <div class="sc-chart-fallback">Fallback values</div>
       </div></section>`;
     window.fakeSelectoSocket.dispatchEvent(new MessageEvent("message", {
-      data: JSON.stringify({content, target: "#selecto-results-load", swap: "outerHTML"}),
+      data: JSON.stringify({content, target: "#selecto-results-orders", swap: "outerHTML"}),
     }));
   });
   await expect(page.locator("[data-sc-chart]")).toHaveClass(/is-ready/);
   await expect(page.locator("[data-sc-chart]")).not.toHaveClass(/is-fallback/);
-  await expect(page.locator("#selecto-results-load noscript")).toHaveCount(0);
+  await expect(page.locator("#selecto-results-orders noscript")).toHaveCount(0);
   expect(await page.locator("[data-sc-chart] .sc-chart-fallback").evaluate(
     element => getComputedStyle(element).display
   )).toBe("none");
@@ -732,26 +732,26 @@ test("a policy-rejected WebSocket does not enter a reconnect storm", async ({pag
 
 test("a completed query refreshes the API console link outside the results swap", async ({page}) => {
   await load(page, `
-    <section id="selecto-surface-loads" data-sc-query-params="enabled">
-      <a data-sc-api-console href="/api2/load/v1/console#request=old">API</a>
-      <section id="selecto-results-loads">Rows</section>
+    <section id="selecto-surface-orders" data-sc-query-params="enabled">
+      <a data-sc-api-console href="/api2/orders/v1/console#request=old">API</a>
+      <section id="selecto-results-orders">Rows</section>
     </section>
   `);
   await page.evaluate(() => {
     document.dispatchEvent(new CustomEvent("htmx:ws:after:message:incoming", {
       detail: {message: {json: () => Promise.resolve({
         selecto: {
-          url: "/explorer/load?q=1&query_library_segment=unassigned",
+          url: "/explorer/orders?q=1&query_library_segment=unassigned",
           api_console_control: '<a class="sc-button sc-secondary" data-sc-api-console ' +
             'target="_blank" rel="noopener" ' +
-            'href="/api2/load/v1/console#request=with-segment">API</a>',
+            'href="/api2/orders/v1/console#request=with-segment">API</a>',
         },
       })}},
     }));
   });
 
   await expect(page.locator("[data-sc-api-console]"))
-    .toHaveAttribute("href", "/api2/load/v1/console#request=with-segment");
+    .toHaveAttribute("href", "/api2/orders/v1/console#request=with-segment");
   await expect(page.locator("[data-sc-api-console]"))
     .toHaveAttribute("target", "_blank");
 });
@@ -849,9 +849,9 @@ test("columns, measures, and filters can add the same field more than once", asy
       <div data-sc-picker-root data-sc-picker-kind="measure" data-sc-picker-max="10">
         <div data-sc-picker-available>
           <button class="sc-picker-choice" type="button" data-sc-picker-action="add" data-sc-picker-available-item
-            data-sc-picker-repeatable data-field="customer_price" data-label="Customer Price"
+            data-sc-picker-repeatable data-field="quoted_amount" data-label="Quoted Amount"
             data-type="decimal" data-default-function="sum"
-            data-search="customer price decimal">Add Customer Price</button>
+            data-search="customer price decimal">Add Quoted Amount</button>
         </div>
         <span data-sc-picker-available-count></span><span data-sc-picker-set-count></span>
         <div data-sc-picker-set><p class="sc-picker-empty">Choose measures.</p></div>
@@ -884,7 +884,7 @@ test("columns, measures, and filters can add the same field more than once", asy
   await addMeasure.click();
   await addMeasure.click();
   await expect(page.locator(
-    '[data-sc-picker-kind="measure"] [data-sc-picker-set-item][data-field="customer_price"]'
+    '[data-sc-picker-kind="measure"] [data-sc-picker-set-item][data-field="quoted_amount"]'
   )).toHaveCount(2);
   await expect(page.locator('[data-sc-picker-kind="measure"] select[name="measure_chart_type"]')).toHaveCount(2);
   await expect(page.locator('[data-sc-picker-kind="measure"] select[name="measure_axis"]')).toHaveCount(2);
@@ -947,9 +947,9 @@ test("server-rendered set items highlight their available choices on initializat
   await load(page, `<form data-sc-builder>
     <div data-sc-picker-root data-sc-picker-kind="field" data-sc-picker-max="10">
       <div data-sc-picker-available><button class="sc-picker-choice" data-sc-picker-available-item
-        data-field="bill_to.co_name">Company Name</button></div>
+        data-field="billto.party_name">Company Name</button></div>
       <div data-sc-picker-set><article class="sc-picker-set-item" data-sc-picker-set-item
-        data-field="bill_to.co_name"></article></div>
+        data-field="billto.party_name"></article></div>
     </div>
     <div data-sc-filter-root data-sc-filter-max="10">
       <div data-sc-filter-available><button class="sc-picker-choice" data-sc-filter-available-item
@@ -1016,13 +1016,13 @@ test("new text filters expose literal prefix, contains and suffix operators with
 });
 
 test("Yes/No choice filters on booleans offer only boolean operators", async ({page}) => {
-  await load(page, `<form data-sc-builder="loads">
+  await load(page, `<form data-sc-builder="orders">
     <div data-sc-filter-root data-sc-filter-max="10">
       <div data-sc-filter-available>
         <button type="button" data-sc-filter-action="add" data-sc-filter-available-item
-          data-field="can_load_build" data-label="Load Build prerequisites met"
+          data-field="consolidate_ready" data-label="Consolidation prerequisites met"
           data-type="boolean" data-sc-filter-choices='[{"value":"true","label":"Yes"},{"value":"false","label":"No"}]'
-          data-search="load build prerequisites">Add Load Build prerequisites met</button>
+          data-search="consolidation prerequisites">Add Consolidation prerequisites met</button>
       </div>
       <span data-sc-filter-available-count></span><span data-sc-filter-set-count></span>
       <div data-sc-filter-set></div>
@@ -1162,7 +1162,7 @@ test("saved ordinary alternatives keep editable filter values", async ({page}) =
 test("mixed graph series configure independent left and right axes", async ({page}) => {
   await page.setContent(`
     <div data-sc-chart data-chart-type="bar"
-      data-chart-data='{"labels":["Jan","Feb"],"axes":{"y":{"side":"left","label":"Count","unit":{"kind":"count"}},"y1":{"side":"right","label":"USD","unit":{"kind":"currency","code":"USD"},"stacked":true}},"datasets":[{"label":"Loads","data":[2,4],"rawData":[2,4],"unit":{"kind":"count"},"type":"bar","scType":"bar","yAxisID":"y"},{"label":"Revenue","data":[10,15],"rawData":[10,20],"unit":{"kind":"currency","code":"USD"},"transforms":["moving_average"],"type":"line","scType":"line","yAxisID":"y1"},{"label":"Carrier pay","data":[4,5],"unit":{"kind":"currency","code":"USD"},"type":"bar","scType":"bar","yAxisID":"y1","stack":"expenses"},{"label":"Driver pay","data":[2,3],"unit":{"kind":"currency","code":"USD"},"type":"bar","scType":"bar","yAxisID":"y1","stack":"expenses"}]}'
+      data-chart-data='{"labels":["Jan","Feb"],"axes":{"y":{"side":"left","label":"Count","unit":{"kind":"count"}},"y1":{"side":"right","label":"USD","unit":{"kind":"currency","code":"USD"},"stacked":true}},"datasets":[{"label":"Orders","data":[2,4],"rawData":[2,4],"unit":{"kind":"count"},"type":"bar","scType":"bar","yAxisID":"y"},{"label":"Revenue","data":[10,15],"rawData":[10,20],"unit":{"kind":"currency","code":"USD"},"transforms":["moving_average"],"type":"line","scType":"line","yAxisID":"y1"},{"label":"Haul cost","data":[4,5],"unit":{"kind":"currency","code":"USD"},"type":"bar","scType":"bar","yAxisID":"y1","stack":"expenses"},{"label":"Crew cost","data":[2,3],"unit":{"kind":"currency","code":"USD"},"type":"bar","scType":"bar","yAxisID":"y1","stack":"expenses"}]}'
     ><canvas></canvas>
       <form data-sc-graph-drilldown="1"><button>Drill down</button></form>
     </div>
@@ -1379,7 +1379,7 @@ test("switching to graph mode keeps a small category limit and removes page sele
 
 test("switching views keeps the other view's current selections for running and saving", async ({page}) => {
   await load(page, `
-    <form data-sc-builder method="get" action="http://selecto.test/explorer/load">
+    <form data-sc-builder method="get" action="http://selecto.test/explorer/orders">
       <input type="radio" name="view" value="detail" checked>
       <input type="radio" name="view" value="aggregate">
       <fieldset data-sc-result-view-panel="detail">
@@ -1401,13 +1401,13 @@ test("switching views keeps the other view's current selections for running and 
   await page.evaluate(() => {
     const panel = document.querySelector('[data-sc-result-view-panel="detail"]');
     panel.insertAdjacentHTML("afterbegin",
-      '<input name="field" value="carrier.co_name"><input name="field_alias" value="Carrier"><input name="field_format" value="">');
+      '<input name="field" value="carrier.party_name"><input name="field_alias" value="Carrier"><input name="field_format" value="">');
   });
   await page.locator('input[name="view"][value="aggregate"]').check();
   // What the form now submits (only the active panel's controls are sent).
   const submitted = new URLSearchParams(await page.evaluate(() =>
     new URLSearchParams(new FormData(document.querySelector("form"))).toString()));
-  expect(submitted.getAll("field")).toEqual(["carrier.co_name", "id", "status"]);
+  expect(submitted.getAll("field")).toEqual(["carrier.party_name", "id", "status"]);
   expect(submitted.getAll("field_alias")).toEqual(["Carrier", "", "State"]);
   expect(submitted.getAll("order")).toEqual(["id"]);
   expect(submitted.getAll("group")).toEqual(["status"]);
@@ -1476,7 +1476,7 @@ test("drilldown modifiers open a window, a tab, or a dialog, and say which", asy
   });
   await load(page, `
     <table><tbody><tr><th>
-      <form class="sc-drilldown-form" action="http://selecto.test/explorer/load" method="get">
+      <form class="sc-drilldown-form" action="http://selecto.test/explorer/orders" method="get">
         <input type="hidden" name="q" value="1"><input type="hidden" name="view" value="detail">
         <input type="hidden" name="filter_field" value="origin"><input type="hidden" name="filter_value" value="MI">
         <button class="sc-drilldown-value sc-rollup-level-1" type="submit">MI</button>
@@ -1609,13 +1609,13 @@ test("a toolbar-hosted popstate reloads the exact Explorer history URL", async (
     await route.fulfill({contentType: "text/html", body: `
       <body class="sc-host-menu-toolbar">
         <toolbar-menu data-host-menu sidebar-always-open>Tenant navigation</toolbar-menu>
-        <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
-          <section id="selecto-surface-loads" data-sc-query-params="enabled"><div data-graph>Monthly loads</div></section>
+        <section id="selecto-channel-orders" hx-ws:connect="/explorer/orders/ws">
+          <section id="selecto-surface-orders" data-sc-query-params="enabled"><div data-graph>Monthly orders</div></section>
         </section>
       </body>
     `});
   });
-  const url = "http://selecto.test/explorer/load?view=graph&page=3&filter_value=2024-10-01";
+  const url = "http://selecto.test/explorer/orders?view=graph&page=3&filter_value=2024-10-01";
   await page.goto(url);
   await page.addScriptTag({path: bundle});
   await page.evaluate(() => document.dispatchEvent(new Event("DOMContentLoaded")));
@@ -1628,7 +1628,7 @@ test("a toolbar-hosted popstate reloads the exact Explorer history URL", async (
   await expect.poll(() => documentRequests).toBe(2);
   await expect(page).toHaveURL(url);
   await expect(page.locator("[data-host-menu]")).toHaveText("Tenant navigation");
-  await expect(page.locator("[data-graph]")).toHaveText("Monthly loads");
+  await expect(page.locator("[data-graph]")).toHaveText("Monthly orders");
 });
 
 test("a legacy-menu popstate reloads the complete Explorer document", async ({page}) => {
@@ -1638,13 +1638,13 @@ test("a legacy-menu popstate reloads the complete Explorer document", async ({pa
     await route.fulfill({contentType: "text/html", body: `
       <body class="sc-host-menu-dynamic menu_adjusted_left">
         <nav data-host-menu>Legacy tenant navigation</nav>
-        <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
-          <section id="selecto-surface-loads" data-sc-query-params="enabled"><div data-graph>Monthly loads</div></section>
+        <section id="selecto-channel-orders" hx-ws:connect="/explorer/orders/ws">
+          <section id="selecto-surface-orders" data-sc-query-params="enabled"><div data-graph>Monthly orders</div></section>
         </section>
       </body>
     `});
   });
-  const url = "http://selecto.test/explorer/load?view=graph&page=2";
+  const url = "http://selecto.test/explorer/orders?view=graph&page=2";
   await page.goto(url);
   await page.addScriptTag({path: bundle});
 
@@ -1655,7 +1655,7 @@ test("a legacy-menu popstate reloads the complete Explorer document", async ({pa
   await expect.poll(() => documentRequests).toBe(2);
   await expect(page).toHaveURL(url);
   await expect(page.locator("[data-host-menu]")).toHaveText("Legacy tenant navigation");
-  await expect(page.locator("[data-graph]")).toHaveText("Monthly loads");
+  await expect(page.locator("[data-graph]")).toHaveText("Monthly orders");
 });
 
 test("Back restores the previous applied query without rerunning it", async ({page}) => {
@@ -1710,11 +1710,11 @@ test("Back rebuilds a graph from a clean history snapshot", async ({page}) => {
     documentRequests += 1;
     await route.fulfill({contentType: "text/html", body: `
       <nav data-host-menu>Tenant navigation</nav>
-      <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
+      <section id="selecto-channel-orders" hx-ws:connect="/explorer/orders/ws">
         <span data-selecto-connection class="is-live">Live</span>
-        <section id="selecto-surface-loads" data-sc-chart-src="/chart.js" data-sc-query-params="enabled">
+        <section id="selecto-surface-orders" data-sc-chart-src="/chart.js" data-sc-query-params="enabled">
           <div data-sc-workspace>
-            <form action="/explorer/load" method="get" data-sc-builder>
+            <form action="/explorer/orders" method="get" data-sc-builder>
               <input name="view" value="graph">
             </form>
             <section class="sc-results">
@@ -1722,7 +1722,7 @@ test("Back rebuilds a graph from a clean history snapshot", async ({page}) => {
                 data-chart-data='{"labels":["Jan"],"datasets":[]}' aria-busy="true">
                 <div class="sc-chart-canvas"><canvas></canvas></div>
                 <div class="sc-chart-fallback">Fallback values</div>
-                <form action="/explorer/load" method="get" hx-ws:send
+                <form action="/explorer/orders" method="get" hx-ws:send
                   data-sc-graph-drilldown="0">
                   <input name="view" value="detail">
                   <input name="filter_value" value="Jan">
@@ -1734,7 +1734,7 @@ test("Back rebuilds a graph from a clean history snapshot", async ({page}) => {
       </section>
     `});
   });
-  await page.goto("http://selecto.test/explorer/load?view=graph");
+  await page.goto("http://selecto.test/explorer/orders?view=graph");
   await page.evaluate(() => {
     window.chartConstructions = 0;
     window.Chart = function (canvas) {
@@ -1770,13 +1770,13 @@ test("Back rebuilds a graph from a clean history snapshot", async ({page}) => {
     document.dispatchEvent(new CustomEvent("htmx:before:swap", {
       detail: {target: document.querySelector(".sc-results")}
     }));
-    document.querySelector("#selecto-surface-loads").outerHTML = `
-      <section id="selecto-surface-loads" data-sc-query-params="enabled"><div data-sc-workspace>
-        <section class="sc-results"><div data-detail-results>January loads</div></section>
+    document.querySelector("#selecto-surface-orders").outerHTML = `
+      <section id="selecto-surface-orders" data-sc-query-params="enabled"><div data-sc-workspace>
+        <section class="sc-results"><div data-detail-results>January orders</div></section>
       </div></section>`;
     document.dispatchEvent(new CustomEvent("htmx:ws:after:message:incoming", {
       detail: {message: {json: () => Promise.resolve({
-        selecto: {url: "/explorer/load?view=detail&filter_value=Jan"}
+        selecto: {url: "/explorer/orders?view=detail&filter_value=Jan"}
       })}}
     }));
   });
@@ -1796,12 +1796,12 @@ test("a reconnecting Explorer keeps drilldown and Back inside browser history", 
     documentRequests += 1;
     await route.fulfill({contentType: "text/html", body: `
       <nav data-host-menu>Tenant navigation</nav>
-      <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
+      <section id="selecto-channel-orders" hx-ws:connect="/explorer/orders/ws">
         <span data-selecto-connection>Reconnecting</span>
-        <section id="selecto-surface-loads" data-sc-query-params="enabled">
+        <section id="selecto-surface-orders" data-sc-query-params="enabled">
           <div data-sc-workspace><section class="sc-results">
             <div data-aggregate-results>Aggregate results</div>
-            <form action="/explorer/load" method="get" hx-ws:send data-drilldown>
+            <form action="/explorer/orders" method="get" hx-ws:send data-drilldown>
               <input name="view" value="detail">
               <input name="filter_value" value="Monday">
               <button>Open</button>
@@ -1811,7 +1811,7 @@ test("a reconnecting Explorer keeps drilldown and Back inside browser history", 
       </section>
     `});
   });
-  await page.goto("http://selecto.test/explorer/load?view=aggregate");
+  await page.goto("http://selecto.test/explorer/orders?view=aggregate");
   await page.addScriptTag({path: bundle});
   await page.evaluate(() => {
     window.nativeSubmitCalled = false;
@@ -1859,7 +1859,7 @@ test("browser Back restores an Explorer history entry inside a legacy host frame
       await route.fulfill({contentType: "text/html", body: `
         <frameset cols="180,*">
           <frame name="x1" src="/menu">
-          <frame name="x2" src="/explorer/load?view=aggregate">
+          <frame name="x2" src="/explorer/orders?view=aggregate">
         </frameset>
       `});
       return;
@@ -1872,15 +1872,15 @@ test("browser Back restores an Explorer history entry inside a legacy host frame
     }
     explorerDocuments += 1;
     await route.fulfill({contentType: "text/html", body: `
-      <section id="selecto-channel-loads" hx-ws:connect="/explorer/load/ws">
+      <section id="selecto-channel-orders" hx-ws:connect="/explorer/orders/ws">
         <span data-selecto-connection>Connecting</span>
-        <section id="selecto-surface-loads" data-sc-query-params="enabled">
-          <form action="/explorer/load" method="get" data-sc-builder>
+        <section id="selecto-surface-orders" data-sc-query-params="enabled">
+          <form action="/explorer/orders" method="get" data-sc-builder>
             <input name="view" value="aggregate">
           </form>
           <section class="sc-results">
             <div data-aggregate-results>Aggregate results</div>
-            <form action="/explorer/load" method="get" hx-ws:send class="sc-drilldown-form">
+            <form action="/explorer/orders" method="get" hx-ws:send class="sc-drilldown-form">
               <input name="view" value="detail">
               <input name="filter_value" value="at">
               <button>Open</button>
@@ -1891,7 +1891,7 @@ test("browser Back restores an Explorer history entry inside a legacy host frame
     `});
   });
   await page.goto("http://selecto.test/host");
-  let frame = page.frames().find(candidate => candidate.url().includes("/explorer/load"));
+  let frame = page.frames().find(candidate => candidate.url().includes("/explorer/orders"));
   await frame.evaluate(() => { window.htmx = {process() {}}; });
   await frame.addScriptTag({path: bundle});
   await frame.evaluate(() => {
@@ -1900,22 +1900,22 @@ test("browser Back restores an Explorer history entry inside a legacy host frame
     const form = document.querySelector(".sc-drilldown-form");
     form.addEventListener("submit", event => event.preventDefault(), {once: true});
     form.requestSubmit();
-    document.querySelector("#selecto-surface-loads").outerHTML = `
-      <section id="selecto-surface-loads" data-sc-query-params="enabled">
+    document.querySelector("#selecto-surface-orders").outerHTML = `
+      <section id="selecto-surface-orders" data-sc-query-params="enabled">
         <section class="sc-results"><div data-detail-results>Detail results</div></section>
       </section>`;
     document.dispatchEvent(new CustomEvent("htmx:ws:after:message:incoming", {
       detail: {message: {json: () => Promise.resolve({
-        selecto: {url: "/explorer/load?view=detail&filter_value=at"}
+        selecto: {url: "/explorer/orders?view=detail&filter_value=at"}
       })}}
     }));
   });
   await expect.poll(() => frame.url()).toContain("view=detail");
   await page.evaluate(() => window.history.back());
   await expect.poll(() => page.frames().some(candidate =>
-    candidate.url().includes("/explorer/load?view=aggregate")
+    candidate.url().includes("/explorer/orders?view=aggregate")
   )).toBe(true);
-  frame = page.frames().find(candidate => candidate.url().includes("/explorer/load"));
+  frame = page.frames().find(candidate => candidate.url().includes("/explorer/orders"));
   await expect(frame.locator("[data-aggregate-results]")).toHaveText("Aggregate results");
   await expect(page.frame({name: "x1"}).locator("[data-host-menu]")).toHaveText("Tenant navigation");
   expect(explorerDocuments).toBe(1);
@@ -1966,7 +1966,7 @@ test("grid cells, axes, hover, and compact submission stay synchronized", async 
 
 test("row dialog opens and navigates between result rows", async ({page}) => {
   await load(page, `
-    <title>Load Explorer</title>
+    <title>Order Explorer</title>
     <section class="sc-results">
       <div tabindex="0" data-sc-row-click data-sc-row-click-type="iframe_modal" data-sc-row-dialog-id="details" data-sc-row-click-url="/one" data-sc-row-click-title="First">First row</div>
       <div tabindex="0" data-sc-row-click data-sc-row-click-type="iframe_modal" data-sc-row-dialog-id="details" data-sc-row-click-url="/two" data-sc-row-click-title="Second">Second row</div>
@@ -1986,13 +1986,13 @@ test("row dialog opens and navigates between result rows", async ({page}) => {
   await page.locator('[data-sc-row-dialog-nav="next"]').click();
   await expect(page.locator("[data-sc-row-dialog-title]")).toHaveText("Second");
   await expect(page.locator("[data-sc-row-dialog-frame]")).toHaveAttribute("src", "/two");
-  await page.evaluate(() => { document.title = "Legacy Load 101"; });
-  await expect(page).toHaveTitle("Load Explorer");
+  await page.evaluate(() => { document.title = "Legacy Order 101"; });
+  await expect(page).toHaveTitle("Order Explorer");
   await page.evaluate(() => {
-    document.title = "Legacy Load 102";
+    document.title = "Legacy Order 102";
     document.querySelector("[data-sc-row-dialog-close]").click();
   });
-  await expect(page).toHaveTitle("Load Explorer");
+  await expect(page).toHaveTitle("Order Explorer");
 });
 
 test("record editor saves through the governed endpoint and replaces the result row", async ({page}) => {
@@ -2082,7 +2082,7 @@ test("a row that no longer matches keeps its column cells and uses a spanning no
     <section class="sc-results"><table><tbody><tr tabindex="0" data-sc-record-id="303"
       data-sc-row-click data-sc-row-click-type="record_editor" data-sc-row-dialog-id="editor-dialog"
       data-sc-row-click-url="https://selecto.test/editor/303">
-      <td>Truck 303</td><td>Open</td></tr></tbody></table>
+      <td>Order 303</td><td>Open</td></tr></tbody></table>
       <dialog id="editor-dialog" data-sc-row-dialog data-sc-row-dialog-kind="record_editor">
         <span data-sc-row-dialog-position></span><button data-sc-row-dialog-nav="previous"></button>
         <button data-sc-row-dialog-nav="next"></button><span data-sc-row-dialog-loading hidden></span>
@@ -2093,7 +2093,7 @@ test("a row that no longer matches keeps its column cells and uses a spanning no
   await page.locator("[data-sc-record-editor-save]").click();
   const row = page.locator("[data-sc-record-id='303']");
   await expect(row.locator("td")).toHaveCount(2);
-  await expect(row.locator("td").first()).toHaveText("Truck 303");
+  await expect(row.locator("td").first()).toHaveText("Order 303");
   await expect(row.locator(".sc-row-retired-badge")).toHaveCount(0);
   const notice = row.locator("xpath=following-sibling::tr[1]");
   await expect(notice).toHaveClass(/sc-row-retired-notice/);
@@ -2192,12 +2192,12 @@ test("record editor actions stay open unless their response requests close", asy
     return route.fulfill({status: 200, contentType: "text/html", body: `
       <table><tbody><tr data-sc-record-id="505" data-sc-row-click
         data-sc-row-click-type="record_editor" data-sc-row-dialog-id="editor-dialog"
-        data-sc-row-click-url="https://selecto.test/editor/505"><td>Truck 505</td></tr></tbody></table>`});
+        data-sc-row-click-url="https://selecto.test/editor/505"><td>Order 505</td></tr></tbody></table>`});
   });
   await load(page, `
     <section class="sc-results"><table><tbody><tr tabindex="0" data-sc-record-id="505"
       data-sc-row-click data-sc-row-click-type="record_editor" data-sc-row-dialog-id="editor-dialog"
-      data-sc-row-click-url="https://selecto.test/editor/505"><td>Truck 505</td></tr></tbody></table>
+      data-sc-row-click-url="https://selecto.test/editor/505"><td>Order 505</td></tr></tbody></table>
       <dialog id="editor-dialog" data-sc-row-dialog data-sc-row-dialog-kind="record_editor">
         <span data-sc-row-dialog-position></span><button data-sc-row-dialog-nav="previous"></button>
         <button data-sc-row-dialog-nav="next"></button><span data-sc-row-dialog-loading hidden></span>
@@ -2304,8 +2304,8 @@ test("Copy SQL copies the runnable SQL rather than the displayed query", async (
   await load(page, `
     <button type="button" data-sc-debug-copy="parameterized"
       data-sc-debug-copy-source="runnable">Copy SQL</button>
-    <pre id="parameterized">SELECT * FROM load WHERE id = $1</pre>
-    <pre id="runnable" hidden>SELECT * FROM load WHERE id = '42'</pre>
+    <pre id="parameterized">SELECT * FROM orders WHERE id = $1</pre>
+    <pre id="runnable" hidden>SELECT * FROM orders WHERE id = '42'</pre>
   `);
   await page.evaluate(() => {
     Object.defineProperty(navigator, "clipboard", {
@@ -2316,7 +2316,7 @@ test("Copy SQL copies the runnable SQL rather than the displayed query", async (
 
   await page.locator("[data-sc-debug-copy]").click();
   await expect.poll(() => page.evaluate(() => window.copiedDebugSql)).toBe(
-    "SELECT * FROM load WHERE id = '42'"
+    "SELECT * FROM orders WHERE id = '42'"
   );
   await expect(page.locator("[data-sc-debug-copy]")).toHaveText("Copied");
 });
@@ -2484,4 +2484,51 @@ test("a live submit made before the WebSocket opens is sent once it connects", a
   await expect(page).toHaveURL("about:blank");
   await page.evaluate(() => document.dispatchEvent(new CustomEvent("htmx:ws:after:connection", {bubbles: true})));
   await expect.poll(() => page.evaluate(() => window.sent)).toBe(1);
+});
+
+
+test("action result records render host text and safe links in group cards and lists", async ({page}) => {
+  await page.route("https://selecto.test/**", route => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({
+      ok: true, message: "Orders consolidated.", records: [
+        {id: 42, label: "Order 42", url: "/orders/42", summary: "North Yard group completed",
+          marker: {id: "pink", label: "Pink heart", color: "#ff88aa", shape: "heart"},
+          details: [{text: "3 orders"}, {text: "North Yard Carrier", url: "/parties/501"},
+            {text: "Arc → Bay"}, {text: "Orders 101, 102, 103"}]},
+        {id: 43, label: "<script>inert</script>", url: "https://elsewhere.test/orders/43",
+          details: [{text: "<img src=x onerror=alert(1)>", url: "javascript:alert(1)"}]},
+        {id: "invalid", label: "Invalid record"}
+      ]
+    })
+  }));
+  await page.route("https://selecto.test/", route => route.fulfill({contentType: "text/html", body: ""}));
+  await page.goto("https://selecto.test/");
+  await load(page, `<section class="sc-results"><section data-sc-bulk-action data-sc-action-id="consolidate">
+    <input type="checkbox" checked data-sc-row-select data-sc-action-id="consolidate" value="101">
+    <article data-sc-group-action-card="pink">Pending group</article>
+    <form action="https://selecto.test/actions/consolidate" data-sc-action-form>
+      <div data-sc-action-targets></div><div data-sc-action-result hidden></div>
+      <button type="submit">Apply</button>
+    </form></section></section>`);
+  await page.locator("form").evaluate(form => form.requestSubmit());
+  const card = page.locator('[data-sc-group-action-card="pink"]');
+  await expect(card).toHaveClass(/is-built/);
+  const link = card.getByRole("link", {name: "Order 42", exact: true});
+  await expect(link).toHaveAttribute("href", "/orders/42");
+  await expect(link).toHaveAttribute("target", "_blank");
+  await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(card.getByRole("link", {name: "North Yard Carrier"})).toHaveAttribute("href", "/parties/501");
+  const meta = card.locator(".sc-action-built-record-meta");
+  await expect(meta.locator(":scope > :not(.sc-action-built-record-separator)"))
+    .toHaveText(["3 orders", "North Yard Carrier", "Arc → Bay", "Orders 101, 102, 103"]);
+  await expect(meta.locator(".sc-action-built-record-separator")).toHaveCount(3);
+  await expect(card.locator(".sc-action-built-record-link")).toHaveText("Order 42");
+  await expect(card).toContainText("North Yard group completed");
+  const result = page.locator("[data-sc-action-result]");
+  await expect(result).toContainText("Orders consolidated.");
+  await expect(result.locator("li")).toHaveCount(1);
+  await expect(result.locator("li")).toContainText("<script>inert</script>");
+  await expect(result.locator("li")).toContainText("<img src=x onerror=alert(1)>");
+  await expect(result.locator("li a, script, img")).toHaveCount(0);
+  await expect(result).not.toContainText("Invalid record");
 });

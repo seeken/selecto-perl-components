@@ -48,10 +48,10 @@ my $legacy_component = Selecto::Components::CannedPage->new(
     page => $page, path => '/rows', title => 'Rows',
     engine_factory => sub { die 'not needed' },
     record_link => {field => 'id',
-        url_prefix => '/backoffice/loadmaint.mcgi?load_id=', target => '_top'},
+        url_prefix => '/orders/view?id=', target => '_top'},
 );
 like $legacy_component->_table($result),
-    qr{href="/backoffice/loadmaint\.mcgi\?load_id=42" target="_top"},
+    qr{href="/orders/view\?id=42" target="_top"},
     'a local legacy CGI can be a canned record link';
 unlike $html, qr{data-sc-color-scheme}, 'without a theme the page keeps the stylesheet palette';
 my $themed_html = Selecto::Components::CannedPage->new(
@@ -183,50 +183,50 @@ sub relation ($table, %columns) {
         columns => {map { $_ => {type => $columns{$_}} } keys %columns},
         associations => {}};
 }
-my $shipments = Selecto::Domain->parse({
-    schema_version => 1, name => 'Shipments',
+my $orders = Selecto::Domain->parse({
+    schema_version => 1, name => 'Orders',
     source => {
-        %{relation('shipments', id => 'integer', city => 'string', state => 'string',
-            picked_up => 'utc_datetime')},
+        %{relation('orders', id => 'integer', city => 'string', region => 'string',
+            picked_up_at => 'utc_datetime')},
         associations => {map {
-            $_ => {queryable => $_, owner_key => 'id', related_key => 'shipment_id',
+            $_ => {queryable => $_, owner_key => 'id', related_key => 'order_id',
                 cardinality => 'many'}
-        } qw(vehicles orders)},
+        } qw(order_lines order_charges)},
     },
     schemas => {
-        vehicles => relation('vehicles', id => 'integer', shipment_id => 'integer', vin => 'string',
-            added => 'utc_datetime'),
-        orders => relation('orders', id => 'integer', shipment_id => 'integer'),
+        order_lines => relation('order_lines', id => 'integer', order_id => 'integer', description => 'string',
+            updated_at => 'utc_datetime'),
+        order_charges => relation('order_charges', id => 'integer', order_id => 'integer'),
     },
     joins => {},
 });
 my @layout = (
     {row_number => 1, label => '#'},
     {field => 'id', label => 'ID'},
-    {fields => [qw(city state)], separator => ', ', label => 'Origin'},
-    {collection => 'vehicles', label => 'Vehicles', order_by => [['vin', 'asc']],
-        fields => [{field => 'vin', label => 'VIN'},
-            {field => 'added', label => 'Added', format => 'us_date'}]},
-    {collection => 'orders', field => 'id', label => 'Orders'},
-    {field => 'picked_up', label => 'Pickup', format => 'us_datetime'},
+    {fields => [qw(city region)], separator => ', ', label => 'Origin'},
+    {collection => 'order_lines', label => 'Lines', order_by => [['description', 'asc']],
+        fields => [{field => 'description', label => 'Description'},
+            {field => 'updated_at', label => 'Added', format => 'us_date'}]},
+    {collection => 'order_charges', field => 'id', label => 'Charges'},
+    {field => 'picked_up_at', label => 'Pickup', format => 'us_datetime'},
 );
 my @selections = Selecto::Components::CannedPage->layout_selections(\@layout,
     timezone => 'America/New_York');
-is_deeply [grep { !ref } @selections], [qw(id city state)],
+is_deeply [grep { !ref } @selections], [qw(id city region)],
     'layout fields become the selected fields, each once';
 my %aliased = map { $_->alias_name => $_ } grep { ref } @selections;
 is_deeply [sort keys %aliased], [qw(layout_3 layout_4 layout_5)],
     'collections and formatted fields are selected under their column alias';
 is_deeply [map { ref($_) ? $_->{key} : $_ } @{$aliased{layout_3}->arguments->[1]}],
-    [qw(vin added)], 'a nested table selects its child fields';
-my ($added) = grep { ref } @{$aliased{layout_3}->arguments->[1]};
-is_deeply [@{$added->{expression}->arguments}[1, 2]], ['us_date', 'America/New_York'],
+    [qw(description updated_at)], 'a nested table selects its child fields';
+my ($updated_at) = grep { ref } @{$aliased{layout_3}->arguments->[1]};
+is_deeply [@{$updated_at->{expression}->arguments}[1, 2]], ['us_date', 'America/New_York'],
     'a nested field format is shown in the layout zone';
 is_deeply [$aliased{layout_5}->kind, @{$aliased{layout_5}->arguments}[1, 2]],
     ['datetime_format', 'us_datetime', 'America/New_York'],
     'a formatted field is formatted in SQL in the layout zone';
 my $layout_page = Selecto::CannedPage->new(
-    id => 'laid_out', domain => $shipments,
+    id => 'laid_out', domain => $orders,
     dataset => {query => Selecto::Query->new, entity_key => ['id']},
     views => [{id => 'list', kind => 'detail',
         query => Selecto::Query->new->select(@selections)}],
@@ -239,23 +239,23 @@ my $laid_out = Selecto::Components::CannedPage->new(
 my $laid_out_table = $laid_out->_table({
     state => $layout_page->normalize_state({}),
     view => {id => 'list', kind => 'detail', label => 'Laid out'},
-    columns => [qw(id city state layout_3 layout_4 layout_5)],
-    rows => [[7, 'Toronto', 'ON', '[{"vin":"VIN1","added":"10/01/2026"}]',
+    columns => [qw(id city region layout_3 layout_4 layout_5)],
+    rows => [[7, 'Toronto', 'ON', '[{"description":"Line 1","updated_at":"10/01/2026"}]',
         '[{"id":11},{"id":12}]', '10/08/2026 2:30 PM']],
     total => 1, has_more => 0, facets => {},
 });
 like $laid_out_table, qr{<td>Toronto, ON</td>}, 'fields share one cell';
-like $laid_out_table, qr{VIN1}, 'a collection with fields is a nested table';
+like $laid_out_table, qr{Line 1}, 'a collection with fields is a nested table';
 like $laid_out_table, qr{<td>11, 12</td>}, 'a collection with one field is a list';
 like $laid_out_table, qr{<td>10/08/2026 2:30 PM</td>}, 'a formatted field shows its SQL value';
 like $laid_out_table, qr{10/01/2026}, 'a formatted nested field shows its SQL value';
 ok !eval { Selecto::Components::CannedPage->new(
     page => $layout_page, path => '/laid-out', engine_factory => sub { die 'not needed' },
-    column_layout => [{field => 'picked_up', label => 'Pickup', format => 'us_date'}],
+    column_layout => [{field => 'picked_up_at', label => 'Pickup', format => 'us_date'}],
 ); 1 }, 'a format must match the query the layout built';
 ok !eval { Selecto::Components::CannedPage->new(
     page => $layout_page, path => '/laid-out', engine_factory => sub { die 'not needed' },
-    column_layout => [{fields => [qw(city state)], label => 'Origin', format => 'us_date'}],
+    column_layout => [{fields => [qw(city region)], label => 'Origin', format => 'us_date'}],
 ); 1 }, 'a format applies only to a field';
 ok !eval { Selecto::Components::CannedPage->new(
     page => $layout_page, path => '/laid-out', engine_factory => sub { die 'not needed' },

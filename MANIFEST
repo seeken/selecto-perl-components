@@ -160,3 +160,6 @@ t/browser/ops-measures.spec.js
 lib/Selecto/Components/QueryOptions.pm
 t/query_options.t
 t/browser/query-options.spec.js
+script/denylist-hashes
+t/data/denylist.sha256
+t/denylist.t

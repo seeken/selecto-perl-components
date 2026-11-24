@@ -15,22 +15,22 @@ test("picker defaults and ratio measures survive browser edits", async ({page}) 
   const server = spawn("script/with-local-sibling", [perl, "t/browser/fixtures/ops-measures.pl", "daemon", "-l", base], {cwd: root, stdio: "pipe"});
   try {
     await expect.poll(async () => {
-      try { return (await fetch(base + "/loads", {signal: AbortSignal.timeout(1000)})).status; } catch (_) { return 0; }
+      try { return (await fetch(base + "/orders", {signal: AbortSignal.timeout(1000)})).status; } catch (_) { return 0; }
     }).toBe(200);
-    await page.goto(base + "/loads?q=1&view=aggregate&field=id&group=region&measure=revenue");
-    await expect(page.locator('input[name="query_library_segment_choice_count_as"][value="shipments"]')).toBeChecked();
+    await page.goto(base + "/orders?q=1&view=aggregate&field=id&group=region&measure=quoted_amount");
+    await expect(page.locator('input[name="query_library_segment_choice_count_as"][value="standalone_orders"]')).toBeChecked();
     // Edit from a live socket and assert after each run finishes: a run held
     // for the socket, or one still swapping, briefly leaves older builders.
     await expect(page.locator("[data-selecto-connection]")).toHaveText("Live");
     await page.getByRole("button", {name: "Expand view menu", exact: true}).click();
     const picker = page.locator('[data-sc-picker-kind="measure"]');
-    await picker.locator('[data-sc-picker-available-item][data-field="rpu"]').click();
-    const ratio = picker.locator('[data-sc-picker-set-item][data-field="rpu"]');
+    await picker.locator('[data-sc-picker-available-item][data-field="amount_per_piece"]').click();
+    const ratio = picker.locator('[data-sc-picker-set-item][data-field="amount_per_piece"]');
     await expect(ratio.locator('input[name="measure_function"][value="ratio_of_sums"]')).toHaveCount(1);
     await expect(ratio.locator('select[name="measure_function"]')).toHaveCount(0);
     await page.getByRole("button", {name: "Run query", exact: true}).click();
     await expect(page.locator("form[data-sc-builder]")).not.toHaveAttribute("aria-busy");
-    await expect(page.locator('.sc-results')).toContainText('Revenue per unit');
+    await expect(page.locator('.sc-results')).toContainText('Quoted amount per piece');
     await expect(ratio.locator('input[name="measure_function"][value="ratio_of_sums"]')).toHaveCount(1);
     const off = page.locator('input[name="query_library_segment_choice_count_as"][value=""]');
     if (await page.getByRole("button", {name: "Expand view menu", exact: true}).isVisible())

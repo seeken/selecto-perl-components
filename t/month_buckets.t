@@ -62,53 +62,53 @@ for my $backend (qw(sqlite postgresql)) {
     my $dbh = $connect{$backend}->() or next;
     $ran++;
     subtest $backend => sub {
-        $dbh->do("CREATE TABLE $table (id integer primary key, origin varchar(4), received date, price integer)");
+        $dbh->do("CREATE TABLE $table (id integer primary key, origin varchar(4), received_on date, quoted_amount integer)");
         push @cleanup, $dbh if $backend eq 'postgresql';
         # Months ago: 0, 1, 1, 4, 8, 20 (outside every range), and one with no date.
         my @rows = ([1, 'MI', 0, 10], [2, 'MI', 1, 20], [3, 'OH', 1, 30], [4, 'OH', 4, 40], [5, 'MI', 8, 50], [6, 'OH', 20, 60]);
         $dbh->do("INSERT INTO $table VALUES (?, ?, ?, ?)", undef, $_->[0], $_->[1], day_in($_->[2]), $_->[3]) for @rows;
         $dbh->do("INSERT INTO $table VALUES (7, 'MI', NULL, 70)");
-        my $domain = Selecto::Domain->new(name => 'Loads', table => $table,
-            fields => {id => 'integer', origin => 'string', received => 'date', price => 'integer'});
+        my $domain = Selecto::Domain->new(name => 'Orders', table => $table,
+            fields => {id => 'integer', origin => 'string', received_on => 'date', quoted_amount => 'integer'});
         my $adapter = Selecto->adapter($backend => (dbh => $dbh));
         my $app = Mojolicious->new;
         $app->secrets(['month-buckets-test']);
         $app->log->level('fatal');
-        $app->plugin('Selecto::Components' => {websocket_mode => 'public', explorers => {loads => {
-            path => '/loads', title => 'Loads', default_fields => [qw(id origin received)],
+        $app->plugin('Selecto::Components' => {websocket_mode => 'public', explorers => {orders => {
+            path => '/orders', title => 'Orders', default_fields => [qw(id origin received_on)],
             engine_factory => sub { Selecto::Engine->new(domain => $domain, adapter => $adapter) },
-            measures => [{id => 'price', label => 'Price', aggregate => 'sum', field => 'price'},
-                {id => 'loads', label => 'Count', aggregate => 'count'}],
+            measures => [{id => 'quoted_amount', label => 'Amount', aggregate => 'sum', field => 'quoted_amount'},
+                {id => 'orders', label => 'Count', aggregate => 'count'}],
         }}});
         my $t = Test::Mojo->new($app);
-        my @monthly = (q => 1, view => 'aggregate', field => 'id', group_alias => '', measure => [qw(price loads)], limit => 25, page => 1);
+        my @monthly = (q => 1, view => 'aggregate', field => 'id', group_alias => '', measure => [qw(quoted_amount orders)], limit => 25, page => 1);
         my ($span, $two, $one, $this) = ((join ' - ', (month_of(12))[0], (month_of(3))[0]), (month_of(2))[0], (month_of(1))[0], (month_of(0))[0]);
 
-        $t->get_ok('/loads' => form => {@monthly, group => 'received', group_format => 'month_buckets',
+        $t->get_ok('/orders' => form => {@monthly, group => 'received_on', group_format => 'month_buckets',
             group_bucket_ranges => '12-3, 2, 1, 0'})->status_is(200);
         my $dom = $t->tx->res->dom;
         ok $dom->at('select[name="group_format"] option[value="month_buckets"][selected]'), 'Month buckets is a date group format';
-        like $dom->at('[data-sc-picker-set-item][data-field="received"] input[name="group_bucket_ranges"]')->attr('placeholder'),
+        like $dom->at('[data-sc-picker-set-item][data-field="received_on"] input[name="group_bucket_ranges"]')->attr('placeholder'),
             qr/Months ago/, 'with a months-ago example';
         is_deeply [map { join '|', map { text_of($_) } @{$_->children} } @{$dom->find('.sc-results tbody tr')}],
             ['Total|150|5', "$span|90|2", "$one|50|2", "$this|10|1"],
-            'rows in month order, empty months absent from rows, older and undated loads left out';
+            'rows in month order, empty months absent from rows, older and undated orders left out';
 
-        $t->get_ok('/loads' => form => {@monthly, group => [qw(origin received)], group_alias => ['', ''],
-            group_format => ['', 'month_buckets'], group_bucket_ranges => ['', '12-3, 2, 1, 0'], pivot_column => 'received'})->status_is(200);
+        $t->get_ok('/orders' => form => {@monthly, group => [qw(origin received_on)], group_alias => ['', ''],
+            group_format => ['', 'month_buckets'], group_bucket_ranges => ['', '12-3, 2, 1, 0'], pivot_column => 'received_on'})->status_is(200);
         $dom = $t->tx->res->dom;
         is_deeply [map { text_of($_) } @{$dom->find('.sc-pivot-table thead tr:nth-child(2) > th')}], [$span, $two, $one, $this],
             'pivot columns in month order, the empty month included';
         is_deeply [map { join '|', map { text_of($_) } @{$_->children} } @{$dom->find('.sc-pivot-table tbody tr')}],
             ['Total|90|2|—|—|50|2|10|1|150|5', "MI|50|1|—|—|20|1|10|1|80|3", "OH|40|1|—|—|30|1|—|—|70|2"],
-            'cells, with the old and undated loads left out of every total';
+            'cells, with the old and undated orders left out of every total';
         my %drill;
         push @{$drill{$_->attr('name')}}, $_->attr('value') for @{$dom->find('form.sc-pivot-drill-form input[type="hidden"]')};
-        $t->get_ok('/loads' => form => {%drill, grid_axis => qq({"axis":1,"value":"$one"})})->status_is(200);
+        $t->get_ok('/orders' => form => {%drill, grid_axis => qq({"axis":1,"value":"$one"})})->status_is(200);
         is_deeply [sort map { text_of($_) } @{$t->tx->res->dom->find('.sc-results tbody tr td:first-child')}], [2, 3],
-            'a month column drills to its loads';
+            'a month column drills to its orders';
 
-        $t->get_ok('/loads' => form => {@monthly, group => 'received', group_format => 'month_buckets',
+        $t->get_ok('/orders' => form => {@monthly, group => 'received_on', group_format => 'month_buckets',
             group_bucket_ranges => 'lately'})->status_is(422);
     };
 }

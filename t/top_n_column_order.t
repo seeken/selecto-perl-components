@@ -25,29 +25,29 @@ for my $backend (qw(sqlite postgresql)) {
             $dbh = DBI->connect('dbi:Pg:dbname='.substr($url->path,1).';host='.$url->host.';port='.$url->port,
                 $url->username, $url->password, {RaiseError=>1});
         }
-        # Synthetic pre-aggregated loads reproduce the Metro totals exactly.
-        $dbh->do('CREATE TEMP TABLE top_order (id integer primary key, origin varchar(20), destination varchar(20), loads integer, shipped date, band integer)');
+        # Synthetic pre-aggregated orders exercise unequal totals and missing values.
+        $dbh->do('CREATE TEMP TABLE orders (id integer primary key, origin varchar(20), destination varchar(20), piece_count integer, delivered_on date, band integer)');
         my @states = ('MO','FL','CA',undef,qw(AL TN GA TX AZ CO IL IN KS LA MA MI));
-        my @loads = (1821,654,632,611,603,415,350,297,290,280,275,270,265,260,255,250);
-        my $insert = $dbh->prepare('INSERT INTO top_order VALUES (?,?,?,?,?,?)');
+        my @piece_count = (1821,654,632,611,603,415,350,297,290,280,275,270,265,260,255,250);
+        my $insert = $dbh->prepare('INSERT INTO orders VALUES (?,?,?,?,?,?)');
         for my $i (0..$#states) {
-            $insert->execute($i+1, $i % 2 ? 'West' : 'East', $states[$i], $loads[$i],
+            $insert->execute($i+1, $i % 2 ? 'West' : 'East', $states[$i], $piece_count[$i],
                 $i < 3 ? ('2026-12-01','2026-02-01','2026-10-01')[$i] : undef,
                 $i < 3 ? (15,6,25)[$i] : undef);
         }
-        my $domain = Selecto::Domain->parse({schema_version=>1,name=>'Metro',source=>{source_table=>'top_order',primary_key=>'id',
-            fields=>[qw(id origin destination loads shipped band)],columns=>{map {$_=>{type=>($_ eq 'shipped' ? 'date' : /\A(?:id|loads|band)\z/ ? 'integer' : 'string')}} qw(id origin destination loads shipped band)}}},strict=>1);
+        my $domain = Selecto::Domain->parse({schema_version=>1,name=>'Orders',source=>{source_table=>'orders',primary_key=>'id',
+            fields=>[qw(id origin destination piece_count delivered_on band)],columns=>{map {$_=>{type=>($_ eq 'delivered_on' ? 'date' : /\A(?:id|piece_count|band)\z/ ? 'integer' : 'string')}} qw(id origin destination piece_count delivered_on band)}}},strict=>1);
         my $adapter = Selecto->adapter($backend => (dbh=>$dbh));
         my $app = Mojolicious->new;
         $app->secrets(['top-column-order']); $app->log->level('fatal');
         $app->plugin('Selecto::Components'=>{websocket_mode=>'public',explorers=>{
-            metro=>{path=>'/metro',default_fields=>['id'],
+            orders=>{path=>'/orders',default_fields=>['id'],
                 engine_factory=>sub {Selecto::Engine->new(domain=>$domain,adapter=>$adapter)},
-                measures=>[{id=>'loads',label=>'Load ID Count',aggregate=>'sum',field=>'loads'}]}}});
+                measures=>[{id=>'piece_count',label=>'Piece Count',aggregate=>'sum',field=>'piece_count'}]}}});
         my $t = Test::Mojo->new($app);
         my $c = $app->build_controller;
-        my $e = $c->selecto_components_explorer('metro');
-        my %base = (q=>1,view=>'aggregate',field=>'id',group=>[qw(origin destination)],measure=>'loads',
+        my $e = $c->selecto_components_explorer('orders');
+        my %base = (q=>1,view=>'aggregate',field=>'id',group=>[qw(origin destination)],measure=>'piece_count',
             pivot_column=>'destination',pivot_column_top=>8,pivot_column_other=>1);
         my $model = sub {
             my %input = (%base,@_);
@@ -59,11 +59,11 @@ for my $backend (qw(sqlite postgresql)) {
         my $heads = sub { [map {$_->{value}} @{$_[0]{result}{pivot_data}{columns}}] };
         my $grid_heads = sub { [map {$_->{value}} @{$_[0]{result}{grid_data}{columns}}] };
         my $rank = $model->();
-        is_deeply $heads->($rank), ['MO','FL','CA','[NULL]',qw(AL TN GA TX Other)], 'Metro default retains exact rank, including missing in fourth place';
+        is_deeply $heads->($rank), ['MO','FL','CA','[NULL]',qw(AL TN GA TX Other)], 'Orders default retains exact rank, including missing in fourth place';
         my $rank_csv = $e->export($rank,'csv'); $rank_csv =~ s/"//g;
-        like $rank_csv, qr/1 · MO · Load ID Count/, 'rank shown in CSV';
-        like $rank_csv, qr/4 · \[NULL\] · Load ID Count/, 'missing has its rank in CSV';
-        like $rank_csv, qr/Total,1821,654,632,611,603,415,350,297,2145,7528/, 'Metro totals match the specified shape';
+        like $rank_csv, qr/1 · MO · Piece Count/, 'rank shown in CSV';
+        like $rank_csv, qr/4 · \[NULL\] · Piece Count/, 'missing has its rank in CSV';
+        like $rank_csv, qr/Total,1821,654,632,611,603,415,350,297,2145,7528/, 'Orders totals match the specified shape';
         my $natural = $model->(pivot_column_top_order=>'natural');
         is_deeply $heads->($natural), [qw(AL CA FL GA MO TN TX),'[NULL]','Other'], 'natural order sorts only selected values, missing then Other';
         my $natural_csv = $e->export($natural,'csv'); $natural_csv =~ s/"//g;
@@ -73,7 +73,7 @@ for my $backend (qw(sqlite postgresql)) {
         is_deeply $grid_heads->($model->(aggregate_grid=>1,pivot_column_top_order=>'natural')), $heads->($natural), 'grid shares natural selection';
         for my $order ('rank','natural') {
             for my $grid (0,1) {
-                $t->get_ok('/metro'=>form=>{%base,pivot_column_top_order=>$order,aggregate_grid=>$grid})->status_is(200);
+                $t->get_ok('/orders'=>form=>{%base,pivot_column_top_order=>$order,aggregate_grid=>$grid})->status_is(200);
                 my $selector = $grid ? '.sc-aggregate-grid thead' : '.sc-pivot-table thead';
                 my $head = $t->tx->res->dom->at($selector);
                 ok $head, 'table rendered';
@@ -98,12 +98,12 @@ for my $backend (qw(sqlite postgresql)) {
             my $xml = '';
             do { my $chunk; while ($zip->read($chunk)>0) { $xml .= $chunk } } while $zip->nextStream;
             $xml = decode('UTF-8',$xml);
-            if ($m == $rank) { like $xml, qr/4 · \[NULL\] · Load ID Count/, 'XLSX uses same ranked header as CSV' }
+            if ($m == $rank) { like $xml, qr/4 · \[NULL\] · Piece Count/, 'XLSX uses same ranked header as CSV' }
             else { unlike $xml, qr/1 · MO/, 'XLSX natural headers unnumbered' }
         }
         # Series use the resolved display order, with their original labels.
         for my $order ('rank','natural') {
-            $t->get_ok('/metro'=>form=>{%base,view=>'graph',graph_series_group=>'destination',pivot_column_top_order=>$order})->status_is(200);
+            $t->get_ok('/orders'=>form=>{%base,view=>'graph',graph_series_group=>'destination',pivot_column_top_order=>$order})->status_is(200);
             my $chart = $t->tx->res->dom->at('[data-sc-chart]');
             ok $chart, 'graph renders';
             is_deeply [map {$_->{label}} @{from_json($chart->attr('data-chart-data'))->{datasets}}],
@@ -113,17 +113,17 @@ for my $backend (qw(sqlite postgresql)) {
         is_deeply $heads->($chosen), ['TX','[NULL]','MO','Other'], 'explicit chosen order and middle missing unaffected';
         unlike $e->export($chosen,'csv'), qr/1 ·/, 'explicit choices do not acquire ranks';
         # Detail receives resolved keys and the reordered missing-value index.
-        $t->get_ok('/metro'=>form=>{%base,pivot_column_top_order=>'natural'})->status_is(200);
+        $t->get_ok('/orders'=>form=>{%base,pivot_column_top_order=>'natural'})->status_is(200);
         my %drill;
         push @{$drill{$_->attr('name')}}, $_->attr('value') for @{$t->tx->res->dom->find('.sc-pivot-drill-form input')};
         is_deeply $drill{pivot_column_value}, [qw(AL CA FL GA MO TN TX),'__selecto_pivot_missing__'], 'Detail carries the resolved list';
         is_deeply $drill{pivot_column_value_null}, [7], 'Detail carries missing position after sorting';
-        $t->get_ok('/metro'=>form=>{%drill,grid_axis=>to_json({axis=>1,value=>'__selecto_pivot_other__'})})->status_is(200);
+        $t->get_ok('/orders'=>form=>{%drill,grid_axis=>to_json({axis=>1,value=>'__selecto_pivot_other__'})})->status_is(200);
         is_deeply [sort {$a<=>$b} map {0+$_->all_text} @{$t->tx->res->dom->find('.sc-results tbody tr td:first-child')}], [9..16], 'Detail Other keeps original membership without reranking';
         my $invalid = $e->model($c,{%base,pivot_column_top_order=>'random'});
         ok !$invalid->{state}->valid, 'unknown display order rejected';
         # Typed dates, formatted dates and authored/stepped numeric ranges.
-        my %date = (group=>[qw(origin shipped)],pivot_column=>'shipped',pivot_column_top=>3,group_exclude_missing=>'shipped');
+        my %date = (group=>[qw(origin delivered_on)],pivot_column=>'delivered_on',pivot_column_top=>3,group_exclude_missing=>'delivered_on');
         is_deeply $heads->($model->(%date)), ['2026-12-01','2026-02-01','2026-10-01','Other'], 'date rank differs from time order';
         is_deeply $heads->($model->(%date,pivot_column_top_order=>'natural')), ['2026-02-01','2026-10-01','2026-12-01','Other'], 'typed dates in time order';
         my %month = (%date,group_format=>['','month']);
@@ -142,10 +142,10 @@ for my $backend (qw(sqlite postgresql)) {
         my %missing_month = (%month,group_exclude_missing=>'',pivot_column_top=>4);
         is_deeply $heads->($model->(%missing_month)), ['[NULL]','2026-12','2026-02','2026-10','Other'], 'formatted missing value retains measure rank';
         is_deeply $heads->($model->(%missing_month,pivot_column_top_order=>'natural')), ['2026-02','2026-10','2026-12','[NULL]','Other'], 'formatted missing follows real dates in natural order';
-        $t->get_ok('/metro'=>form=>{%base,%bucket,pivot_column_top_order=>'natural'})->status_is(200);
+        $t->get_ok('/orders'=>form=>{%base,%bucket,pivot_column_top_order=>'natural'})->status_is(200);
         %drill = ();
         push @{$drill{$_->attr('name')}}, $_->attr('value') for @{$t->tx->res->dom->find('.sc-pivot-drill-form input')};
-        $t->get_ok('/metro'=>form=>{%drill,grid_axis=>to_json({axis=>1,value=>'__selecto_pivot_other__'})})->status_is(200);
+        $t->get_ok('/orders'=>form=>{%drill,grid_axis=>to_json({axis=>1,value=>'__selecto_pivot_other__'})})->status_is(200);
         is_deeply [map {0+$_->all_text} @{$t->tx->res->dom->find('.sc-results tbody tr td:first-child')}], [3], 'bucket Other Detail keeps selected labels and authored range exclusion';
         my $empty_month = $model->(%missing_month,pivot_column_value=>['1999-01'],pivot_column_top_order=>'natural');
         is_deeply $heads->($empty_month), ['1999-01','Other'], 'empty carried formatted choice remains a column';

@@ -53,7 +53,7 @@ has filter_fields   => sub { return [] };
 # Star dimensions (association paths) whose lookup tables may be listed whole: a filter on
 # the dimension's key or display field then offers the table's rows as a multi-select,
 # read per request from the tenant's own table (dimension_filter_choices). Only for
-# reference tables that hold nothing private, e.g. ['ref_load_status'].
+# reference tables that hold nothing private, e.g. ['order_states'].
 has dimension_filter_choices => sub { return [] };
 has lookup_sources  => sub { return {} };
 has co_domain_engines => sub { return {} };

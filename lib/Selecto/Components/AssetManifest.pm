@@ -5,10 +5,10 @@ use warnings;
 use Exporter qw(import);
 
 our @EXPORT_OK = qw(asset_revision api_console_revision);
-my $ASSET_REVISION = '0.1.1-e9a31dba45f1';
+my $ASSET_REVISION = '0.1.1-278d979a9c9f';
 
 sub asset_revision { return $ASSET_REVISION; }
-sub api_console_revision { return '0.5.0-e36dba5d3f6f'; }
+sub api_console_revision { return '0.5.0-556225b6afa2'; }
 
 1;
 

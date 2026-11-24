@@ -1373,8 +1373,8 @@ Picker labels and unit-aware aggregates.
 
 =item column C<link>
 
-    co_name => {type => 'string',
-        link => {url_template => '/clients/view?id={{id}}', id_field => 'id'}},
+    party_name => {type => 'string',
+        link => {url_template => '/parties/view?id={{id}}', id_field => 'id'}},
 
 This renders the Detail cell as a link. The ID field is selected as a hidden
 column and left out of exports. Templates must be same-application paths

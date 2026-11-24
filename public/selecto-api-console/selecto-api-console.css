@@ -163,7 +163,7 @@ code, pre, textarea.sac-request-editor {
   background: color-mix(in srgb, var(--sac-surface) 88%, transparent);
   backdrop-filter: blur(10px);
   position: sticky;
-  top: var(--cgt-page-sticky-top, 0px);
+  top: var(--sac-page-sticky-top, 0px);
   z-index: 20;
 }
 

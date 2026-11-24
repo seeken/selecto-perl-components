@@ -220,8 +220,8 @@ $t->get_ok('/explore/products')
     ->text_is('.sc-table-wrap > table > caption' => 'Query results')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:add_product_note"][data-type="action"]')
     ->text_is('[data-sc-picker-kind="field"] button[data-field="action:add_product_note"] strong' => 'Add Product Note')
-    ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:build_shipments"][data-type="action"]')
-    ->text_is('[data-sc-picker-kind="field"] button[data-field="action:build_shipments"] strong' => 'Build Shipments')
+    ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:consolidate"][data-type="action"]')
+    ->text_is('[data-sc-picker-kind="field"] button[data-field="action:consolidate"] strong' => 'Consolidate')
     ->element_exists('[data-sc-picker-kind="field"] [data-sc-picker-available] button[data-field="action:mark_for_review"][data-type="action"]')
     ->element_exists_not('[data-sc-bulk-actions]')
     ->element_exists_not('input[data-sc-row-select]')
@@ -278,7 +278,7 @@ is $expanded_user->path->to_string, '/explore/products',
 is $expanded_user->query->param('saved_query_name'), 'alpha inventory',
     'legacy user links retain the saved view title';
 is $expanded_user->query->param('field'), 'product_name',
-    'legacy user links load the saved fields rather than default state';
+    'legacy user links orders the saved fields rather than default state';
 $t->get_ok($expanded_user)->status_is(200)
     ->text_is('h1' => 'alpha inventory');
 {
@@ -655,63 +655,63 @@ is_deeply $TestSelectoComponents::ACTION_REQUESTS[-1]{selected_ids}, ['101'],
     'an inline row action submits exactly its own row target';
 
 my $grouped_action_url = '/explore/products?q=1&view=detail' .
-    '&field=action%3Abuild_shipments&field_alias=&field_format=' .
+    '&field=action%3Aconsolidate&field_alias=&field_format=' .
     '&field=product_name&field_alias=&field_format=' .
     '&group=category.category_name&measure=count&order=product_name&direction=asc&limit=25&page=1';
 @TestSelectoComponents::ELIGIBILITY_REQUESTS = ();
 $t->get_ok($grouped_action_url)
     ->status_is(200)
-    ->element_exists('[data-sc-bulk-action][data-sc-action-id="build_shipments"][data-sc-action-mode="groups"]')
-    ->element_exists('th.sc-group-select-column[data-sc-action-column="build_shipments"]')
-    ->element_exists_not('th[data-sc-action-column="build_shipments"] input[data-sc-select-page]')
-    ->element_exists('[data-sc-group-markers][data-sc-action-id="build_shipments"][data-sc-row-id="101"]')
-    ->element_exists_not('[data-sc-group-markers][data-sc-action-id="build_shipments"][data-sc-row-id="102"]')
-    ->element_exists('td[data-sc-action-column="build_shipments"][data-sc-action-eligible="0"]')
-    ->attr_like('[data-sc-group-markers][data-sc-action-id="build_shipments"][data-sc-row-id="101"]' =>
+    ->element_exists('[data-sc-bulk-action][data-sc-action-id="consolidate"][data-sc-action-mode="groups"]')
+    ->element_exists('th.sc-group-select-column[data-sc-action-column="consolidate"]')
+    ->element_exists_not('th[data-sc-action-column="consolidate"] input[data-sc-select-page]')
+    ->element_exists('[data-sc-group-markers][data-sc-action-id="consolidate"][data-sc-row-id="101"]')
+    ->element_exists_not('[data-sc-group-markers][data-sc-action-id="consolidate"][data-sc-row-id="102"]')
+    ->element_exists('td[data-sc-action-column="consolidate"][data-sc-action-eligible="0"]')
+    ->attr_like('[data-sc-group-markers][data-sc-action-id="consolidate"][data-sc-row-id="101"]' =>
         'data-sc-row-details' => qr/Stock.*21/)
     ->element_exists('input[name="action_groups"][data-sc-action-groups]')
     ->element_exists('[data-sc-group-action-groups]')
-    ->element_exists('dialog#selecto-action-products-build_shipments[aria-labelledby="selecto-action-products-build_shipments-title"]')
-    ->element_exists('#selecto-action-products-build_shipments-title')
+    ->element_exists('dialog#selecto-action-products-consolidate[aria-labelledby="selecto-action-products-consolidate-title"]')
+    ->element_exists('#selecto-action-products-consolidate-title')
     ->content_like(qr{pink_heart})
     ->content_like(qr{orange_star})
     ->content_like(qr{yellow_moon})
     ->content_like(qr{green_clover})
     ->content_like(qr{blue_diamond})
     ->content_like(qr{purple_horseshoe})
-    ->content_like(qr{carrier_id})
+    ->content_like(qr{carrier_party_id})
     ->content_like(qr{&quot;type&quot;:&quot;lookup&quot;})
-    ->content_like(qr{\\/explore\\/products\\/actions\\/build_shipments\\/lookups\\/carrier_id});
+    ->content_like(qr{\\/explore\\/products\\/actions\\/consolidate\\/lookups\\/carrier_party_id});
 ok((grep {
         defined($_->alias_name)
-            && $_->alias_name eq 'build_shipments_eligible'
+            && $_->alias_name eq 'consolidate_ready'
     } @{$TestSelectoComponents::Adapter::LAST_DATA_QUERY->selections}),
     'grouped action eligibility is selected as part of the governed data query');
 is scalar(@TestSelectoComponents::ELIGIBILITY_REQUESTS), 0,
     'SQL-backed action eligibility does not invoke a per-row host resolver';
 
 my $grouped_csrf = $t->tx->res->dom
-    ->at('form[action="/explore/products/actions/build_shipments"] input[name="csrf_token"]')
+    ->at('form[action="/explore/products/actions/consolidate"] input[name="csrf_token"]')
     ->attr('value');
 
 @TestSelectoComponents::LOOKUP_REQUESTS = ();
-$t->get_ok('/explore/products/actions/build_shipments/lookups/carrier_id' .
-        '?q=acme&selected_id=101&selected_id=102' => {Accept => 'application/json'})
+$t->get_ok('/explore/products/actions/consolidate/lookups/carrier_party_id' .
+        '?q=north&selected_id=101&selected_id=102' => {Accept => 'application/json'})
     ->status_is(200)
     ->header_is('Cache-Control' => 'no-store')
     ->json_is('/results/0/value' => '501')
-    ->json_is('/results/0/label' => 'Acme Transport')
+    ->json_is('/results/0/label' => 'North Yard Carrier')
     ->json_like('/results/0/description' => qr/Detroit.*MI/);
-is $TestSelectoComponents::LOOKUP_REQUESTS[-1]{query}, 'acme',
+is $TestSelectoComponents::LOOKUP_REQUESTS[-1]{query}, 'north',
     'co-domain scope receives the normalized action lookup query';
 is_deeply $TestSelectoComponents::LOOKUP_REQUESTS[-1]{selected_ids}, ['101', '102'],
     'co-domain scope receives active group rows for host authorization and scoping';
 
-$t->get_ok('/explore/products/actions/build_shipments/lookups/carrier_id?q=a')
+$t->get_ok('/explore/products/actions/consolidate/lookups/carrier_party_id?q=a')
     ->status_is(200)->json_is('/results' => []);
 is scalar(@TestSelectoComponents::LOOKUP_REQUESTS), 1,
     'queries below the configured minimum do not call the host lookup source';
-$t->get_ok('/explore/products/actions/build_shipments/lookups/not_an_input?q=acme')
+$t->get_ok('/explore/products/actions/consolidate/lookups/not_an_input?q=north')
     ->status_is(404)->json_is('/results' => []);
 
 my $group_payload = encode_json([
@@ -719,11 +719,11 @@ my $group_payload = encode_json([
         index => 0,
         marker => {id => 'forged', color => '#000000'},
         selected_ids => [101, 102],
-        inputs => {carrier_id => 501},
+        inputs => {carrier_party_id => 501},
     },
-    {index => 1, selected_ids => [103], inputs => {carrier_id => 777}},
+    {index => 1, selected_ids => [103], inputs => {carrier_party_id => 777}},
 ]);
-$t->post_ok('/explore/products/actions/build_shipments' => {Accept => 'application/json'} => form => {
+$t->post_ok('/explore/products/actions/consolidate' => {Accept => 'application/json'} => form => {
     csrf_token => $grouped_csrf,
     selected_id => [101, 102, 103],
     action_groups => $group_payload,
@@ -733,23 +733,23 @@ is_deeply [map { $_->{marker}{id} } @{$TestSelectoComponents::ACTION_REQUESTS[-1
     'grouped action markers are reconstructed from the governed palette';
 is_deeply $TestSelectoComponents::ACTION_REQUESTS[-1]{groups}[0]{selected_ids},
     ['101', '102'], 'grouped actions preserve each marker row assignment';
-is $TestSelectoComponents::ACTION_REQUESTS[-1]{groups}[1]{inputs}{carrier_id}, '777',
+is $TestSelectoComponents::ACTION_REQUESTS[-1]{groups}[1]{inputs}{carrier_party_id}, '777',
     'grouped actions normalize the per-group carrier input';
 
-$t->post_ok('/explore/products/actions/build_shipments' => {Accept => 'application/json'} => form => {
+$t->post_ok('/explore/products/actions/consolidate' => {Accept => 'application/json'} => form => {
     csrf_token => $grouped_csrf,
     selected_id => [101],
     action_groups => encode_json([
-        {index => 0, selected_ids => [101], inputs => {carrier_id => 0}},
+        {index => 0, selected_ids => [101], inputs => {carrier_party_id => 0}},
     ]),
 })->status_is(422)->json_is('/ok' => 0)
     ->json_like('/message' => qr/Pink heart: Carrier is below its minimum/);
 
-$t->post_ok('/explore/products/actions/build_shipments' => {Accept => 'application/json'} => form => {
+$t->post_ok('/explore/products/actions/consolidate' => {Accept => 'application/json'} => form => {
     csrf_token => $grouped_csrf,
     selected_id => [101],
     action_groups => encode_json([
-        {index => 99, selected_ids => [101], inputs => {carrier_id => 501}},
+        {index => 99, selected_ids => [101], inputs => {carrier_party_id => 501}},
     ]),
 })->status_is(422)->json_is('/ok' => 0)
     ->json_like('/message' => qr/group marker is invalid/);
@@ -819,11 +819,11 @@ $t->get_ok('/selecto-components/selecto-components.js')->status_is(200)
     ->content_like(qr/function renderGroupedActionDialog/)
     ->content_like(qr/function serializeGroupedAction/)
     ->content_like(qr/function renderActionResult/)
-    ->content_like(qr/function renderBuiltLoadCard/)
+    ->content_like(qr/function renderActionResultCard/)
     ->content_like(qr/data-sc-group-action-card/)
-    ->content_like(qr/sc-action-built-load-link/)
-    ->content_like(qr/loadLink\.target\s*=\s*"_blank"/)
-    ->content_like(qr/loadLink\.rel\s*=\s*"noopener noreferrer"/)
+    ->content_like(qr/sc-group-action-card-header/)
+    ->content_like(qr/title\.target\s*=\s*"_blank"/)
+    ->content_like(qr/title\.rel\s*=\s*"noopener noreferrer"/)
     ->content_like(qr/function markerSvgPart/)
     ->content_like(qr/createElementNS\("http:\/\/www\.w3\.org\/2000\/svg"/)
     ->content_like(qr/window\.fetch/)
@@ -888,7 +888,7 @@ $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_like(qr/\.sc-group-action-card\.is-built/)
     ->content_like(qr/\.sc-group-action-orders/)
     ->content_like(qr/\.sc-action-lookup-results/)
-    ->content_like(qr/\.sc-action-built-loads/)
+    ->content_like(qr/\.sc-group-action-groups/)
     ->content_like(qr/width:\s*max-content/)
     ->content_unlike(qr/\.sc-nested-table th[^}]*text-overflow/s)
     ->content_like(qr/\.sc-table-wrap\s*>\s*table\s*>\s*thead\s*>\s*tr\s*>\s*th:first-child/)
@@ -922,10 +922,10 @@ $t->get_ok('/selecto-components/selecto-components.css')->status_is(200)
     ->content_unlike(qr/\.sc-builder\s*\{[^}]*max-height:\s*calc\(100vh/s);
 
 my $formatted_membership_sql = Selecto::Components::Renderer::_format_sql(
-    'SELECT "s0"."id", "s0"."parent_id" FROM "client_profile" AS "s0" ' .
-    'WHERE "s0"."parent_id" IN ($1, $2, $3) ORDER BY "s0"."id", "s0"."parent_id"',
+    'SELECT "s0"."id", "s0"."parent_party_id" FROM "parties" AS "s0" ' .
+    'WHERE "s0"."parent_party_id" IN ($1, $2, $3) ORDER BY "s0"."id", "s0"."parent_party_id"',
 );
-like $formatted_membership_sql, qr/"id",\n  "s0"\."parent_id"/,
+like $formatted_membership_sql, qr/"id",\n  "s0"\."parent_party_id"/,
     'debug SQL still separates top-level selected fields';
 like $formatted_membership_sql, qr/IN \(\$1, \$2, \$3\)/,
     'debug SQL keeps an IN parameter list compact';
@@ -933,38 +933,38 @@ unlike $formatted_membership_sql, qr/IN \(\$1,\n/,
     'debug SQL does not put every membership parameter on its own line';
 
 my $formatted_subquery_sql = Selecto::Components::Renderer::_format_sql(
-    'SELECT s0.id FROM load AS s0 WHERE EXISTS (SELECT e1.id FROM load_event AS e1 ' .
-    'WHERE e1.load_id = s0.id AND e1.status = $1) ORDER BY s0.id',
+    'SELECT s0.id FROM orders AS s0 WHERE EXISTS (SELECT e1.id FROM service_flags AS e1 ' .
+    'WHERE e1.order_id = s0.id AND e1.flag = $1) ORDER BY s0.id',
 );
 like $formatted_subquery_sql,
-    qr/WHERE EXISTS \(\n  SELECT e1\.id\n  FROM load_event AS e1\n  WHERE e1\.load_id = s0\.id\n    AND e1\.status = \$1\n\)\nORDER BY s0\.id/,
+    qr/WHERE EXISTS \(\n  SELECT e1\.id\n  FROM service_flags AS e1\n  WHERE e1\.order_id = s0\.id\n    AND e1\.flag = \$1\n\)\nORDER BY s0\.id/,
     'debug SQL indents subqueries and their clauses beneath the parent query';
 my $colored_subquery_sql = Selecto::Components::Renderer::Debug::_highlight_sql(
     $formatted_subquery_sql,
 );
 like $colored_subquery_sql,
-    qr/sc-sql-relation-1">load<\/span>.*sc-sql-relation-1">s0<\/span>/s,
+    qr/sc-sql-relation-1">orders<\/span>.*sc-sql-relation-1">s0<\/span>/s,
     'a table and its alias share one stable debug color';
 like $colored_subquery_sql,
-    qr/sc-sql-relation-2">load_event<\/span>.*sc-sql-relation-2">e1<\/span>/s,
+    qr/sc-sql-relation-2">service_flags<\/span>.*sc-sql-relation-2">e1<\/span>/s,
     'a nested table receives a distinct debug color';
 like $colored_subquery_sql,
-    qr/sc-sql-relation-2">e1\.load_id<\/span>.*sc-sql-relation-1">s0\.id<\/span>/s,
+    qr/sc-sql-relation-2">e1\.order_id<\/span>.*sc-sql-relation-1">s0\.id<\/span>/s,
     'qualified column references retain their table alias color';
 my $repeated_table_sql = Selecto::Components::Renderer::Debug::_highlight_sql(
-    'SELECT c1.id, c2.id FROM client_profile AS c1 ' .
-    'LEFT JOIN client_profile AS c2 ON c1.parent_id = c2.id',
+    'SELECT c1.id, c2.id FROM parties AS c1 ' .
+    'LEFT JOIN parties AS c2 ON c1.parent_party_id = c2.id',
 );
 like $repeated_table_sql,
-    qr/sc-sql-relation-1">client_profile<\/span>.*sc-sql-relation-1">c1<\/span>.*sc-sql-relation-2">client_profile<\/span>.*sc-sql-relation-2">c2<\/span>/s,
+    qr/sc-sql-relation-1">parties<\/span>.*sc-sql-relation-1">c1<\/span>.*sc-sql-relation-2">parties<\/span>.*sc-sql-relation-2">c2<\/span>/s,
     'repeated joins color each table occurrence with its specific alias';
 
 my $readable_membership_sql = Selecto::Components::Renderer::Debug::_readable_sql(
-    'SELECT "s0"."id", "s0"."order" FROM "load" AS "s0" WHERE "s0"."id" = $1',
+    'SELECT "s0"."id", "s0"."order" FROM "orders" AS "s0" WHERE "s0"."id" = $1',
     'postgresql',
 );
 is $readable_membership_sql,
-    'SELECT s0.id, s0."order" FROM load AS s0 WHERE s0.id = $1',
+    'SELECT s0.id, s0."order" FROM orders AS s0 WHERE s0.id = $1',
     'debug SQL removes only unnecessary PostgreSQL identifier quotes';
 my $copy_html = Selecto::Components::Renderer::Debug::_debug_query('unsafe', 'Query',
     {sql => 'SELECT name FROM products WHERE name = ? AND note = ? AND id = ?',

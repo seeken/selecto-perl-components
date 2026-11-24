@@ -67,8 +67,7 @@
 
   function usesSelectoHostMenu() {
     return !!(document.body && document.body.matches(
-      ".sc-host-menu-toolbar, .cgt-host-menu-toolbar, " +
-      ".sc-host-menu-dynamic, .cgt-host-menu-dynamic"
+      ".sc-host-menu-toolbar, .sc-host-menu-dynamic"
     ));
   }
 

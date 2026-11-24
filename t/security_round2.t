@@ -36,10 +36,10 @@ subtest 'lookup phase authorizes before metadata callbacks' => sub {
     my (@phases,$lookups);$lookups=0;
     my $spec=TestSelectoComponents::config();
     $spec->{action_authorizer}=sub {my($c,$r)=@_;push @phases,$r->{phase};return $r->{phase} eq 'lookup'?'hidden':'enabled'};
-    $spec->{co_domain_engines}={client=>sub {$lookups++;die 'must not resolve'}};
+    $spec->{co_domain_engines}={parties=>sub {$lookups++;die 'must not resolve'}};
     my $app=Mojolicious->new;$app->secrets(['lookup-phase']);
     $app->plugin('Selecto::Components'=>{explorers=>{products=>$spec}});
-    Test::Mojo->new($app)->get_ok('/explore/products/actions/build_shipments/lookups/carrier_id?q=acme&selected_id=101&selected_id=102')->status_is(404);
+    Test::Mojo->new($app)->get_ok('/explore/products/actions/consolidate/lookups/carrier_party_id?q=north&selected_id=101&selected_id=102')->status_is(404);
     is_deeply \@phases,['lookup'],'lookup authorization used';
     is $lookups,0,'no metadata backend invoked after denial';
 };

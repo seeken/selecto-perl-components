@@ -9,92 +9,61 @@
     }
   }
 
-  function appendActionResultMeta(container, content) {
-    if (!content) return;
-    if (container.childNodes.length) {
-      var separator = document.createElement("span");
-      separator.className = "sc-action-built-load-separator";
-      separator.textContent = "·";
-      container.appendChild(separator);
+  function actionResultLink(record) {
+    var url = localActionResultUrl(record.url);
+    var title = document.createElement(url ? "a" : "strong");
+    title.className = "sc-action-built-record-link";
+    if (url) {
+      title.href = url;
+      title.target = "_blank";
+      title.rel = "noopener noreferrer";
     }
-    if (content instanceof window.Node) container.appendChild(content);
-    else {
-      var text = document.createElement("span");
-      text.textContent = String(content);
-      container.appendChild(text);
-    }
+    title.textContent = record.label || "Record " + String(record.id);
+    return title;
   }
 
-  function builtLoadLink(load) {
-    var loadLabel = "Load " + String(load.load_id);
-    var loadUrl = localActionResultUrl(load.load_url);
-    if (loadUrl) {
-      var loadLink = document.createElement("a");
-      loadLink.className = "sc-action-built-load-link";
-      loadLink.href = loadUrl;
-      loadLink.target = "_blank";
-      loadLink.rel = "noopener noreferrer";
-      loadLink.textContent = loadLabel;
-      return loadLink;
-    }
-    var loadHeading = document.createElement("strong");
-    loadHeading.className = "sc-action-built-load-link";
-    loadHeading.textContent = loadLabel;
-    return loadHeading;
-  }
-
-  function builtLoadMeta(load) {
-    var meta = document.createElement("div");
-    meta.className = "sc-action-built-load-meta";
-    var count = Number(load.order_count);
-    if (Number.isFinite(count) && count >= 0) {
-      appendActionResultMeta(meta, count + (count === 1 ? " order" : " orders"));
-    }
-    var carrierUrl = localActionResultUrl(load.carrier_url);
-    var carrierLabel = load.carrier_name
-      ? String(load.carrier_name) + " (" + String(load.carrier_id || "") + ")"
-      : (load.carrier_id ? "Carrier " + String(load.carrier_id) : "");
-    if (carrierLabel && carrierUrl) {
-      var carrierLink = document.createElement("a");
-      carrierLink.href = carrierUrl;
-      carrierLink.textContent = carrierLabel;
-      appendActionResultMeta(meta, carrierLink);
-    } else {
-      appendActionResultMeta(meta, carrierLabel);
-    }
-    var origin = load.origin ? String(load.origin) : "";
-    var destination = load.destination ? String(load.destination) : "";
-    appendActionResultMeta(meta, origin && destination ? origin + " → " + destination : origin || destination);
-    if (Array.isArray(load.order_ids) && load.order_ids.length) {
-      appendActionResultMeta(meta, "Orders " + load.order_ids.map(String).join(", "));
-    }
+  function actionResultDetails(record) {
+    var meta = document.createElement("p");
+    meta.className = "sc-action-built-record-meta";
+    (Array.isArray(record.details) ? record.details : []).forEach(function (detail) {
+      if (!detail || typeof detail.text !== "string") return;
+      if (meta.childNodes.length) {
+        var separator = document.createElement("span");
+        separator.className = "sc-action-built-record-separator";
+        separator.textContent = "·";
+        meta.appendChild(separator);
+      }
+      var url = localActionResultUrl(detail.url);
+      var item = document.createElement(url ? "a" : "span");
+      if (url) item.href = url;
+      item.textContent = detail.text;
+      meta.appendChild(item);
+    });
     return meta;
   }
 
-  function renderBuiltLoadCard(card, load) {
+  function renderActionResultCard(card, record) {
     card.replaceChildren();
     card.classList.add("is-built");
-    if (load.marker && load.marker.color) {
-      card.style.setProperty("--sc-marker-color", String(load.marker.color));
+    if (record.marker && record.marker.color) {
+      card.style.setProperty("--sc-marker-color", String(record.marker.color));
     }
-
     var header = document.createElement("header");
     header.className = "sc-group-action-card-header";
-    if (load.marker && typeof load.marker === "object") {
+    if (record.marker && typeof record.marker === "object") {
       var marker = document.createElement("span");
       marker.className = "sc-group-dialog-marker";
-      marker.appendChild(markerGlyph(load.marker, true));
+      marker.appendChild(markerGlyph(record.marker, true));
       header.appendChild(marker);
     }
     var heading = document.createElement("div");
     var title = document.createElement("h4");
-    title.appendChild(builtLoadLink(load));
+    title.appendChild(actionResultLink(record));
     var summary = document.createElement("p");
-    var markerLabel = load.marker && load.marker.label ? String(load.marker.label) : "Grouped";
-    summary.textContent = markerLabel + " load built";
+    summary.textContent = record.summary || "Group completed";
     heading.append(title, summary);
     header.appendChild(heading);
-    card.append(header, builtLoadMeta(load));
+    card.append(header, actionResultDetails(record));
   }
 
   function renderActionResult(result, payload, succeeded, root) {
@@ -103,38 +72,22 @@
     message.className = "sc-action-result-message";
     message.textContent = payload.message || (succeeded ? "Action completed." : "Action failed.");
     result.appendChild(message);
-    if (!succeeded || !Array.isArray(payload.loads) || !payload.loads.length) return;
-
-    var unmatched = [];
-    payload.loads.forEach(function (load) {
-      if (!load || !/^\d+$/.test(String(load.load_id || ""))) return;
-      var markerId = load.marker && load.marker.id ? String(load.marker.id) : "";
+    if (!succeeded || !Array.isArray(payload.records)) return;
+    var list = document.createElement("ul");
+    list.className = "sc-action-built-records";
+    payload.records.forEach(function (record) {
+      if (!record || !/^\d+$/.test(String(record.id || ""))) return;
+      var markerId = record.marker && record.marker.id ? String(record.marker.id) : "";
       var card = root && Array.from(root.querySelectorAll("[data-sc-group-action-card]")).find(function (candidate) {
         return candidate.dataset.scGroupActionCard === markerId;
       });
-      if (card) renderBuiltLoadCard(card, load);
-      else unmatched.push(load);
-    });
-    if (!unmatched.length) return;
-
-    var list = document.createElement("ul");
-    list.className = "sc-action-built-loads";
-    unmatched.forEach(function (load) {
-      var item = document.createElement("li");
-      item.className = "sc-action-built-load";
-
-      if (load.marker && typeof load.marker === "object") {
-        var marker = document.createElement("span");
-        marker.className = "sc-group-dialog-marker sc-action-built-load-marker";
-        if (load.marker.color) marker.style.setProperty("--sc-marker-color", String(load.marker.color));
-        marker.appendChild(markerGlyph(load.marker, true));
-        item.appendChild(marker);
+      if (card) renderActionResultCard(card, record);
+      else {
+        var item = document.createElement("li");
+        item.className = "sc-group-action-card";
+        renderActionResultCard(item, record);
+        list.appendChild(item);
       }
-
-      var detail = document.createElement("div");
-      detail.append(builtLoadLink(load), builtLoadMeta(load));
-      item.appendChild(detail);
-      list.appendChild(item);
     });
     if (list.childNodes.length) result.appendChild(list);
   }
@@ -155,7 +108,7 @@
     var result = form.querySelector("[data-sc-action-result]");
     if (submit) {
       submit.disabled = true;
-      submit.textContent = actionMode(root) === "groups" ? "Building…" : "Applying…";
+      submit.textContent = "Applying…";
     }
     if (result) {
       result.hidden = true;

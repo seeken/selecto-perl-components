@@ -1,0 +1,17 @@
+#!/usr/bin/env perl
+use 5.034;
+use strict;
+use warnings;
+use Digest::SHA qw(sha256_hex);
+
+my $path = $ENV{SELECTO_DENYLIST_FILE}
+    // die "Set SELECTO_DENYLIST_FILE to the external plaintext list\n";
+open my $input, '<:encoding(UTF-8)', $path or die "Cannot read external list: $!\n";
+my %hashes;
+while (my $token = <$input>) {
+    $token =~ s/^\s+|\s+$//g;
+    next if $token eq '' || $token =~ /^#/;
+    $hashes{ sha256_hex('selecto-denylist-v1:' . lc $token) } = 1;
+}
+close $input or die "Cannot close external list: $!\n";
+say for sort keys %hashes;

@@ -16,12 +16,12 @@ use Selecto::Components::Importer ();
 
 my $revision = api_console_revision();
 my $page = Selecto::Components::APIConsole->page(
-    base_path => '/api2/load/v1/',
-    title => 'Load API Console',
+    base_path => '/api2/orders/v1/',
+    title => 'Orders API Console',
     csrf_token => 'test-csrf-token',
 );
 like $page, qr{data-selecto-api-console}, 'page exposes the framework-neutral mount point';
-like $page, qr{data-api-base="/api2/load/v1"}, 'page normalizes the API base path';
+like $page, qr{data-api-base="/api2/orders/v1"}, 'page normalizes the API base path';
 like $page, qr{data-curl-auth="cookie"}, 'page defaults generated cURL to cookie auth';
 like $page, qr{data-csrf-token="test-csrf-token"}, 'page supplies the host CSRF token';
 like $page, qr{<html lang="en" data-sac-color-scheme="light">},
@@ -32,8 +32,8 @@ like $page, qr{/selecto-api-console/selecto-api-console\.js\?v=\Q$revision\E},
     'page loads the versioned shared JavaScript';
 
 $page = Selecto::Components::APIConsole->page(
-    base_path => '/api2/load/v1',
-    title => 'Load API Console',
+    base_path => '/api2/orders/v1',
+    title => 'Orders API Console',
     csrf_token => 'test-csrf-token',
     curl_auth => 'basic',
     theme => {
@@ -44,8 +44,8 @@ $page = Selecto::Components::APIConsole->page(
         head_start_html => '<meta name="host-start" content="1">',
         head_html => '<meta name="host-end" content="1">',
         body_start_html => '<nav data-host-menu>Menu</nav>',
-        body_class => 'cgt-host-menu-toolbar',
-        content_class => 'cgt-mojo-page',
+        body_class => 'host-menu-toolbar',
+        content_class => 'host-content',
     },
 );
 like $page, qr{<html lang="en" data-sac-color-scheme="light"><head>},
@@ -55,29 +55,29 @@ like $page,
     'semantic host colors are linked as a same-origin console theme stylesheet';
 unlike $page, qr{\sstyle=|<style}, 'a themed console page has no inline style';
 is(Selecto::Components::ThemeStylesheet->css('console', {primary => '#cc5500', secondary => '#DC8B52', on_primary => '#000000'}),
-    ':root{--sac-accent:#CC5500 !important;--cgt-brand:#CC5500 !important;--sac-teal:#DC8B52 !important;' .
-        "--cgt-accent:#DC8B52 !important;--sac-on-accent:#000000 !important;--cgt-on-brand:#000000 !important}\n",
-    'semantic host colors become console and common menu variables');
+    ':root{--sac-accent:#CC5500 !important;--sac-teal:#DC8B52 !important;' .
+        "--sac-on-accent:#000000 !important}\n",
+    'semantic host colors become library console variables');
 like $page,
     qr{<meta name="host-start" content="1"><link rel="stylesheet" href="/selecto-api-console/},
     'host dependencies can load before the shared console assets';
 like $page, qr{<meta name="host-end" content="1"></head>},
     'host compatibility markup follows the console assets';
 like $page,
-    qr{<body class="sac-body cgt-host-menu-toolbar"><nav data-host-menu>Menu</nav><main class="sac-app cgt-mojo-page"},
+    qr{<body class="sac-body host-menu-toolbar"><nav data-host-menu>Menu</nav><main class="sac-app host-content"},
     'host navigation and the standard Mojo content class wrap the console';
 like $page, qr{data-curl-auth="basic"},
     'host applications can select Basic auth for generated cURL';
 
 my $importer_page = Selecto::Components::Importer->page(
-    base_path => '/api2/load/v1',
+    base_path => '/api2/orders/v1',
     csrf_token => 'test-csrf-token',
     page_shell => {
         head_start_html => '<meta name="import-start" content="1">',
         head_html => '<meta name="import-end" content="1">',
         body_start_html => '<nav data-host-menu>Menu</nav>',
-        body_class => 'cgt-host-menu-toolbar',
-        content_class => 'cgt-mojo-page',
+        body_class => 'host-menu-toolbar',
+        content_class => 'host-content',
     },
 );
 like $importer_page,
@@ -86,19 +86,19 @@ like $importer_page,
 like $importer_page, qr{<meta name="import-end" content="1"></head>},
     'host compatibility markup follows importer assets';
 like $importer_page,
-    qr{<body class="sai-body cgt-host-menu-toolbar"><nav data-host-menu>Menu</nav><main class="sai-app cgt-mojo-page"},
+    qr{<body class="sai-body host-menu-toolbar"><nav data-host-menu>Menu</nav><main class="sai-app host-content"},
     'host navigation and standard content class wrap the importer';
 
 $page = Selecto::Components::APIConsole->page(
-    base_path => '/api2/load/v1', csrf_token => 'test-csrf-token',
-    links => [{label => 'Privileges & tags', href => '/explorer/privileges?page=load'}],
+    base_path => '/api2/orders/v1', csrf_token => 'test-csrf-token',
+    links => [{label => 'Privileges & tags', href => '/explorer/privileges?page=orders'}],
 );
 is_deeply from_json(Mojo::DOM->new($page)->at('main')->attr('data-links')),
-    [{label => 'Privileges & tags', href => '/explorer/privileges?page=load'}],
+    [{label => 'Privileges & tags', href => '/explorer/privileges?page=orders'}],
     'header links reach the console as JSON';
-unlike(Selecto::Components::APIConsole->page(base_path => '/api2/load/v1', csrf_token => 'test-csrf-token'),
+unlike(Selecto::Components::APIConsole->page(base_path => '/api2/orders/v1', csrf_token => 'test-csrf-token'),
     qr{data-links}, 'and are left out without any');
-ok !eval { Selecto::Components::APIConsole->page(base_path => '/api2/load/v1', csrf_token => 'test-csrf-token',
+ok !eval { Selecto::Components::APIConsole->page(base_path => '/api2/orders/v1', csrf_token => 'test-csrf-token',
     links => [{label => 'Away', href => '//outside.example/'}]); 1 }, 'a cross-origin header link is refused';
 
 $page = Selecto::Components::APIConsole->page(
@@ -109,21 +109,21 @@ $page = Selecto::Components::APIConsole->page(
 unlike $page, qr{<Client & API>}, 'console title is not emitted as executable markup';
 like $page, qr{&lt;Client &amp; API&gt;}, 'console title is HTML escaped';
 
-for my $invalid ('api2/load/v1', '/api2//load/v1', '/api2/load/v1?x=1', '/api2/../admin') {
+for my $invalid ('api2/orders/v1', '/api2//orders/v1', '/api2/orders/v1?x=1', '/api2/../admin') {
     eval { Selecto::Components::APIConsole->page(base_path => $invalid, csrf_token => 'test-csrf-token') };
     like "$@", qr/base_path/, "invalid base path $invalid is rejected";
 }
 
 eval {
     Selecto::Components::APIConsole->page(
-        base_path => '/api2/load/v1', csrf_token => 'test-csrf-token', theme => {primary => 'red;display:none'},
+        base_path => '/api2/orders/v1', csrf_token => 'test-csrf-token', theme => {primary => 'red;display:none'},
     );
 };
 like "$@", qr/theme primary must be a hexadecimal color/,
     'unsafe tenant colors cannot enter the console theme stylesheet';
 eval {
     Selecto::Components::APIConsole->page(
-        base_path => '/api2/load/v1',
+        base_path => '/api2/orders/v1',
         csrf_token => 'test-csrf-token',
         page_shell => {content_class => 'ok" onclick="bad'},
     );
@@ -132,12 +132,12 @@ like "$@", qr/page_shell content_class must contain CSS class names/,
     'unsafe host content classes cannot inject HTML attributes';
 eval {
     Selecto::Components::APIConsole->page(
-        base_path => '/api2/load/v1', csrf_token => 'test-csrf-token', curl_auth => 'oauth<script>',
+        base_path => '/api2/orders/v1', csrf_token => 'test-csrf-token', curl_auth => 'oauth<script>',
     );
 };
 like "$@", qr/curl_auth must be basic, cookie, or none/,
     'unknown cURL authentication modes are rejected';
-eval { Selecto::Components::APIConsole->page(base_path => '/api2/load/v1') };
+eval { Selecto::Components::APIConsole->page(base_path => '/api2/orders/v1') };
 like "$@", qr/csrf_token/, 'API console requires a host CSRF token';
 
 my $app = Mojolicious->new;
@@ -159,9 +159,9 @@ $t->get_ok('/selecto-api-console/theme.css?primary=cc5500&on_primary=000000&v=1'
     ->status_is(200)
     ->content_type_like(qr{\Atext/css})
     ->header_like('Cache-Control' => qr/immutable/)
-    ->content_is(':root{--sac-accent:#CC5500 !important;--cgt-brand:#CC5500 !important;' .
-        '--sac-teal:#CC5500 !important;--cgt-accent:#CC5500 !important;' .
-        "--sac-on-accent:#000000 !important;--cgt-on-brand:#000000 !important}\n");
+    ->content_is(':root{--sac-accent:#CC5500 !important;' .
+        '--sac-teal:#CC5500 !important;' .
+        "--sac-on-accent:#000000 !important}\n");
 $t->get_ok('/selecto-api-console/theme.css?primary=red;x')->status_is(400);
 $t->get_ok('/selecto-api-console/theme.css')->status_is(200)->content_is('');
 
