@@ -1,6 +1,10 @@
 Revision history for Selecto-Components
 
 0.5.0  Unreleased
+    - Add fresh per-source saved-view destinations with trusted engine-factory
+      ownership context and governed assignments. Support list_url rewriting
+      without checking shared selections or changing stored revisions. Derive
+      folder labels from scoped parents and omit children with hidden parents.
     - Add public SavedView check/explain calls and a domain-backed saved-query
       store with independent source engines, governed writes, native row
       revisions, source scopes, folders and conflict/stale/forbidden mapping.

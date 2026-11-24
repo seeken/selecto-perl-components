@@ -26,10 +26,10 @@ sub new ($class, $backend = 'sqlite', $url = undef) {
         $dbh->do("CREATE TABLE $table (id $id, owner_id INTEGER NOT NULL, name VARCHAR(255) NOT NULL,
             url TEXT, folder VARCHAR(100), parent_id INTEGER REFERENCES $table(id) ON DELETE RESTRICT,
             kind VARCHAR(20) DEFAULT 'view', created_by INTEGER, modified_by INTEGER,
-            schedule VARCHAR(100) DEFAULT 'weekly', official INTEGER DEFAULT 1, UNIQUE(owner_id, name))");
+            tenant_id INTEGER DEFAULT 7, schedule VARCHAR(100) DEFAULT 'weekly', official INTEGER DEFAULT 1, UNIQUE(owner_id, name))");
         my %types = (id => 'integer', owner_id => 'integer', name => 'string', url => 'string', folder => 'string',
             parent_id => 'integer', kind => 'string', created_by => 'integer', modified_by => 'integer',
-            schedule => 'string', official => 'integer');
+            tenant_id => 'integer', schedule => 'string', official => 'integer');
         push @sources, {name => $name, scope => $name eq 'personal' ? 'user' : $name eq 'company' ? 'client' : 'priv',
             target_label => ucfirst($name), fields => {key => 'id', name => 'name', url => 'url',
                 ($name eq 'role_link' ? (folder => 'folder', parent => 'parent_id', kind => 'kind') : ())},
@@ -41,9 +41,10 @@ sub new ($class, $backend = 'sqlite', $url = undef) {
                 return 0 if $ctx->{deny_row} && $row && $row->{name} eq $ctx->{deny_row};
                 return 1;
             },
-            engine_factory => sub ($ctx, @rest) {
+            engine_factory => sub ($ctx, $config, $source, $destination = undef) {
+                my $roles = $name eq 'role_link' && $ctx->{role_destinations};
                 my $domain = Selecto::Domain->parse({name => 'SavedPanels',
-                    source => {source_table => $table, primary_key => 'id', fields => [sort keys %types],
+                    source => {source_table => $table, primary_key => 'id', ($roles ? (tenant_field => 'tenant_id') : ()), fields => [sort keys %types],
                         columns => {map { $_ => {type => $types{$_}} } keys %types}, associations => {}},
                     writes => {operations => {map { $_ => {enabled => 1, returning => 'all'} } qw(insert update delete)},
                         fields => {map { $_ => {insertable => 1, updatable => 1} } qw(name url folder parent_id kind)},
@@ -53,10 +54,18 @@ sub new ($class, $backend = 'sqlite', $url = undef) {
                         host_bound_fields => {owner_id => {mode => 'owner', source => ['context', 'owner']},
                             created_by => {mode => 'created_by', source => ['context', 'actor']},
                             modified_by => {mode => 'modified_by', source => ['context', 'actor']}},
+                        ($roles ? (scope => {tenant => {field => 'tenant_id'}},
+                            constraints => {foreign_keys => {parent_id => {source => ['context', 'writable_parent'],
+                                references => {relation => $table, field => 'id', tenant_field => 'tenant_id'}}}}) : ()),
                         unique_keys => {owner_name => [qw(owner_id name)]}}});
-                $domain = $domain->with_required_predicate(Selecto::Expression->eq('owner_id', $ctx->{owner} // 11));
+                $domain = $domain->with_required_predicate($roles
+                    ? Selecto::Expression->in('owner_id', [11, 22])
+                    : Selecto::Expression->eq('owner_id', $ctx->{owner} // 11));
                 return Selecto::Engine->new(domain => $domain, adapter => $adapter,
-                    write_context => {owner => $ctx->{owner} // 11, actor => $ctx->{actor} // 101});
+                    ($roles ? (scope => {tenant => 7}) : ()),
+                    write_context => {owner => $destination ? $destination->{values}{owner_id} : $ctx->{owner} // 11,
+                        actor => $ctx->{actor} // 101,
+                        ($destination ? (writable_parent => $destination->{values}{parent_id}) : ())});
             }};
     }
     # Explorer always uses its own in-memory engine. PostgreSQL-backed saved
@@ -76,6 +85,30 @@ sub new ($class, $backend = 'sqlite', $url = undef) {
     my $store = Selecto::Components::SavedQueryStore::Domains->new(sources => \@sources);
     $config->saved_query_store($store);
     return bless {dbh => $dbh, explorer_dbh => $explorer_dbh, store => $store, config => $config, sources => \@sources}, $class;
+}
+
+# Enable the follow-up contract without changing the legacy four-source tests.
+sub role_destinations ($self, $ctx) {
+    $ctx->{role_destinations} = 1;
+    my ($source) = grep { $_->{name} eq 'role_link' } @{$self->{sources}};
+    delete $source->{fields}{folder};
+    $source->{destinations} = sub ($ctx, $config, $source, $engine) {
+        my $result = $engine->all($engine->query->select(qw(id name owner_id))->where(Selecto::Expression->eq('kind', 'folder')));
+        my @destinations;
+        for my $role (11, 22) {
+            next if ($ctx->{deny_role} // 0) == $role;
+            push @destinations, {key => "role_$role", label => "Role $role (top level)", values => {owner_id => $role, parent_id => undef}};
+            for my $row (@{$result->{rows}}) {
+                my ($id, $name, $owner) = @$row;
+                next unless $owner == $role;
+                next if ($ctx->{deny_folder} // 0) == $id;
+                push @destinations, {key => "role_${role}_folder_$id", label => "Role $role / $name",
+                    values => {owner_id => $role, parent_id => $id}};
+            }
+        }
+        return \@destinations;
+    };
+    return $source;
 }
 sub cleanup ($self) {
     $self->{dbh}->do('DELETE FROM sv_role_link WHERE parent_id IS NOT NULL');

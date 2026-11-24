@@ -103,8 +103,8 @@ Source configuration:
 
 | Key | Meaning |
 | --- | --- |
-| `name` | Unique lowercase source identifier; also the destination id. |
-| `engine_factory` | `($context, $config, $source) -> Selecto::Engine`; controls database, read scope, trusted write context and write grants. |
+| `name` | Unique lowercase source identifier; the destination id when `destinations` is absent. |
+| `engine_factory` | `($context, $config, $source, $destination?) -> Selecto::Engine`; controls database, read scope, trusted write context and write grants. The fourth argument is supplied only for a resolved destination insert (including target grant checks). |
 | `fields` | Required `key`, `name`, and exactly one of `url` or `state`. Optional `folder`, `parent`, `kind`. Values are declared root field identifiers. |
 | `scope` | Existing scope value (`user`, `client`, `priv`) or a host scope identifier. |
 | `scope_label` | Optional human label for the list. |
@@ -112,6 +112,9 @@ Source configuration:
 | `readonly` | Refuses all mutations and excludes the source from `targets`. |
 | `write_check` | Optional host callback shown above. Must return true to permit the operation. `insert` has no row; update/delete receive the stored mapped row and native `row_revision`. Exceptions fail closed. |
 | `explorer_filter` | Optional `($row, $context, $config, $source) -> bool`. Default: local URL path equals the Explorer path; when `kind` is mapped, also requires `view_kind`. Required for state storage and for custom folder/menu selection. |
+| `destinations` | Optional `($context, $config, $source, $engine) -> [{key, label, values}]`; see below. |
+| `list_url` | Optional `($url, $row, $context, $config, $source) -> $url`; rewrites a listed URL after `explorer_filter` accepts the stored row. |
+| `folder_kind` | Required parent kind for derived folder labels when `kind` is mapped; defaults to `folder`. |
 | `view_kind` | Value written to a mapped `kind` on insert; defaults to `view`. |
 
 A state column stores a JSON object of form-input parameters. Its host filter
@@ -135,7 +138,76 @@ operation or field that the core refuses. Missing grants refuse by default.
 Owner/audit fields belong in `writes.host_bound_fields`, not caller input.
 Read scopes are independently required: host owner bindings protect writes,
 not listing. Configure the existing foreign-key tenant guard for authorized
-parents; untrusted `parent`/`folder` insert values still pass core governance.
+parents. Legacy single-target sources still pass optional request
+`parent`/`folder` insert values through core governance. Destination sources
+take these assignments only from their fresh callback result.
+
+## Multiple destinations in a source
+
+A host can enumerate its authorized roles and folders using the source's scoped
+engine. For example, a callback may return:
+
+```perl
+[
+    {key => 'studio_top', label => 'Studio (top level)',
+        values => {owner_id => 11, parent_id => undef}},
+    {key => 'research_folder_102', label => 'Research / Forecasts',
+        values => {owner_id => 22, parent_id => 102}},
+]
+```
+
+`targets` exposes `{id => 'role_link.studio_top', label => ...}` and so on.
+Keys contain 1–160 ASCII letters, digits, underscores or hyphens and must be
+unique within the callback result. `values` names declared root fields by
+storage identifier, including mapped metadata and other host-declared fields.
+The callback must authorize both the owning role and parent before offering
+them. It may return an empty list. Listing targets does not authorize a later
+save: `save_new` calls the callback again and requires the exact submitted id
+in the fresh list. A forged or revoked target is `SAVED_QUERY_FORBIDDEN`.
+
+The engine factory receives the selected object as its fourth argument. It can
+use `$destination->{values}{owner_id}` for trusted `write_context->{owner}`
+and `$destination->{values}{parent_id}` for `writable_parent`. These values
+originate in the host callback, never in request assignments. Read scope must
+still cover only the acting user's authorized rows; the factory receives no
+destination during ordinary listing or update/delete. Hosts must configure
+those operations' trusted context and grants independently.
+
+Ordinary destination values are assignments in the governed insert: operation
+and field grants, context-sourced foreign keys, tenant guards and validators
+still apply. For a `writes.host_bound_fields` field, the destination value must
+match the factory's trusted context value for that binding. The store omits
+that assignment and core fills it from the trusted context. It never copies
+destination values into engine context itself or manufactures core provenance.
+A factory that ignores the chosen owner fails closed on a differing owner.
+The destination cannot replace the validated name, URL/state or generated kind.
+Request `values`, owner, parent and folder members cannot override a resolved
+destination. Existing sources without the callback retain their single source
+id, three-argument engine factory and existing behavior.
+
+## Listed URLs and parent labels
+
+`list_url` receives the stored URL (or a URL rendered from stored state) and the
+stored row after read scope and `explorer_filter`/the default path check. Its
+return value is the listed `url`. Use it to translate old parameters for the
+same Explorer. The callback does not persist its result. Listing never invokes
+`SavedView->check`, including after rewriting, so shared unreadable selections
+remain available for explain/redaction. The list retains the real stored
+`row_revision` and its form envelope; update/delete use that token even when
+the listed URL differs from storage. Saves and updates still run check.
+
+If `parent` is mapped and `folder` is absent, a child's `folder` is its parent's
+`name` from the same source and read scope. A null parent denotes the top
+level. Children whose parent is absent or outside read scope are omitted by
+the store. If `kind` is mapped, the parent must have `folder_kind` (default
+`folder`); other parent kinds also omit the child. Parent labels are resolved
+before the Explorer menu filter, so a visible folder need not itself be listed
+as an Explorer link. An explicit `folder` mapping retains its existing behavior.
+
+The optional predicate-in-query optimization is deferred. The complete scoped
+read is needed for parent resolution, including folders with no Explorer URL.
+A URL predicate could remove those parents and silently hide valid children;
+keeping one scoped read keeps these visibility rules simple.
 
 ## Store calls and identity
 
@@ -145,7 +217,8 @@ All calls take `($context, $config, ...)`:
   row_revision, folder?, parent?}` rows. Reads are paginated internally.
 * `targets` returns writable insert destinations `{id, label}`.
 * `save_new(..., {target, name, url})` checks the view and inserts it.
-  `state` may replace `url`; optional mapped `folder`/`parent` are insert-only.
+  `state` may replace `url`; optional mapped request `folder`/`parent` are
+  insert-only for sources without `destinations`.
 * `update(..., {id, name, url, row_revision})` checks the new view and updates
   only its mapped name and URL/state. All other columns stay unchanged.
 * `delete(..., {id, row_revision})` removes that row with the revision check.

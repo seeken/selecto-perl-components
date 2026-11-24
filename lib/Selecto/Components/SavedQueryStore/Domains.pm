@@ -34,15 +34,17 @@ sub new ($class, @args) {
         die "source scope and target labels are required\n"
             unless defined($source->{scope}) && !ref($source->{scope}) && $source->{scope} =~ /\A[a-z][a-z0-9_-]{0,159}\z/
                 && defined($source->{target_label}) && !ref($source->{target_label}) && length($source->{target_label});
-        for my $callback (qw(write_check explorer_filter)) {
+        for my $callback (qw(write_check explorer_filter destinations list_url)) {
             die "$callback must be a callback\n" if exists($source->{$callback}) && ref($source->{$callback}) ne 'CODE';
         }
     }
     return $self;
 }
 
-sub _engine ($self, $source, $context, $config) {
-    my $engine = $source->{engine_factory}->($context, $config, $source);
+sub _engine ($self, $source, $context, $config, $destination = undef) {
+    my $engine = $destination
+        ? $source->{engine_factory}->($context, $config, $source, $destination)
+        : $source->{engine_factory}->($context, $config, $source);
     die "source engine_factory must return Selecto::Engine\n"
         unless blessed($engine) && $engine->isa('Selecto::Engine');
     die "saved-view sources cannot use DuckDB\n" if $engine->adapter->name eq 'duckdb';
@@ -141,16 +143,29 @@ sub list ($self, $context, $config) {
     my @rows;
     for my $source (@{$self->sources}) {
         my $engine = $self->_engine($source, $context, $config);
-        for my $row (@{$self->_rows($source, $engine)}) {
+        my $stored = $self->_rows($source, $engine);
+        my $fields = $source->{fields};
+        my %parents = map { $_->{$fields->{key}} => $_ } @$stored;
+        for my $row (@$stored) {
             next unless $self->_belongs($source, $row, $context, $config);
-            my $fields = $source->{fields};
+            my %folder;
+            if ($fields->{folder}) { %folder = (folder => $row->{$fields->{folder}}) }
+            elsif ($fields->{parent} && defined(my $parent = $row->{$fields->{parent}})) {
+                # The complete scoped read supplies labels, including parents
+                # which the Explorer menu filter itself does not display.
+                next unless exists $parents{$parent};
+                next if $fields->{kind} && ($parents{$parent}{$fields->{kind}} // '') ne ($source->{folder_kind} // 'folder');
+                %folder = (folder => $parents{$parent}{$fields->{name}});
+            }
+            my $url = $self->_url($source, $row, $context, $config);
+            $url = $source->{list_url}->($url, $row, $context, $config, $source) if $source->{list_url};
             push @rows, {id => _id($source, $row->{$fields->{key}}),
-                name => $row->{$fields->{name}}, url => $self->_url($source, $row, $context, $config),
+                name => $row->{$fields->{name}}, url => $url,
                 scope => $source->{scope}, revision => _revision($row->{row_revision}), row_revision => $row->{row_revision},
                 (defined($source->{scope_label}) ? (scope_label => $source->{scope_label}) : ()),
                 readonly => $self->_writable($source, $engine, $context, $config, 'update', $row)
                     && $self->_writable($source, $engine, $context, $config, 'delete', $row) ? 0 : 1,
-                ($fields->{folder} ? (folder => $row->{$fields->{folder}}) : ()),
+                %folder,
                 ($fields->{parent} ? (parent => $row->{$fields->{parent}}) : ())};
         }
     }
@@ -158,15 +173,52 @@ sub list ($self, $context, $config) {
 }
 
 sub targets ($self, $context, $config) {
-    return [map { my $source = $_; my $engine = $self->_engine($source, $context, $config);
-        $self->_writable($source, $engine, $context, $config, 'insert')
-            ? {id => $source->{name}, label => $source->{target_label}} : () } @{$self->sources}];
+    my @targets;
+    for my $source (@{$self->sources}) {
+        my $engine = $self->_engine($source, $context, $config);
+        if ($source->{destinations}) {
+            for my $destination (@{$self->_destinations($source, $engine, $context, $config)}) {
+                my $chosen = $self->_engine($source, $context, $config, $destination);
+                push @targets, {id => "$source->{name}.$destination->{key}", label => $destination->{label}}
+                    if $self->_writable($source, $chosen, $context, $config, 'insert');
+            }
+        } elsif ($self->_writable($source, $engine, $context, $config, 'insert')) {
+            push @targets, {id => $source->{name}, label => $source->{target_label}};
+        }
+    }
+    return \@targets;
+}
+
+sub _destinations ($self, $source, $engine, $context, $config) {
+    my $destinations = $source->{destinations}->($context, $config, $source, $engine);
+    die "destinations must return an array\n" unless ref($destinations) eq 'ARRAY';
+    my %seen;
+    for my $destination (@$destinations) {
+        die "destination requires a unique key, label and values\n"
+            unless ref($destination) eq 'HASH' && defined($destination->{key}) && !ref($destination->{key})
+                && $destination->{key} =~ /\A[a-zA-Z0-9_-]{1,160}\z/ && !$seen{$destination->{key}}++
+                && defined($destination->{label}) && !ref($destination->{label}) && length($destination->{label})
+                && ref($destination->{values}) eq 'HASH';
+        die "destination values must name declared root fields\n" if grep {
+            !/\A[a-zA-Z_][a-zA-Z0-9_]*\z/ || !$engine->domain->fields->{$_}
+        } keys %{$destination->{values}};
+    }
+    return $destinations;
 }
 
 sub save_new ($self, $context, $config, $request) {
-    my ($source) = grep { $_->{name} eq ($request->{target} // '') } @{$self->sources};
+    my $target = $request->{target};
+    _fail('FORBIDDEN', 'This destination is not writable.') unless defined($target) && !ref($target);
+    my ($source) = grep { $_->{destinations} ? index($target, "$_->{name}.") == 0 : $_->{name} eq $target } @{$self->sources};
     _fail('FORBIDDEN', 'This destination is not writable.') unless $source;
-    return $self->_mutate($source, $context, $config, $request, 'insert');
+    my $destination;
+    if ($source->{destinations}) {
+        my $engine = $self->_engine($source, $context, $config);
+        ($destination) = grep { "$source->{name}.$_->{key}" eq $target }
+            @{$self->_destinations($source, $engine, $context, $config)};
+        _fail('FORBIDDEN', 'This destination is not writable.') unless $destination;
+    }
+    return $self->_mutate($source, $context, $config, $request, 'insert', undef, $destination);
 }
 
 sub update ($self, $context, $config, $request) {
@@ -179,10 +231,10 @@ sub delete ($self, $context, $config, $request) {
     return $self->_mutate($source, $context, $config, $request, 'delete', $key);
 }
 
-sub _mutate ($self, $source, $context, $config, $request, $operation, $key = undef) {
+sub _mutate ($self, $source, $context, $config, $request, $operation, $key = undef, $destination = undef) {
     my $result;
     my $ok = eval {
-        my $engine = $self->_engine($source, $context, $config);
+        my $engine = $self->_engine($source, $context, $config, $destination);
         my $fields = $source->{fields};
         my $predicate = defined($key) ? Selecto::Expression->eq($fields->{key}, $key) : undef;
         my $row = $predicate ? $self->_rows($source, $engine, $predicate)->[0] : undef;
@@ -213,10 +265,27 @@ sub _mutate ($self, $source, $context, $config, $request, $operation, $key = und
             else { $values{$fields->{state}} = to_json(Mojo::URL->new($checked->{url})->query->to_hash) }
             if ($operation eq 'insert') {
                 $values{$fields->{kind}} = $source->{view_kind} // 'view' if $fields->{kind};
-                # Optional mapped metadata only; arbitrary assignments never
-                # enter a command. Owner/actor fills belong to the engine.
-                for my $name (qw(folder parent)) {
-                    $values{$fields->{$name}} = $request->{$name} if $fields->{$name} && exists($request->{$name});
+                # Destination metadata comes only from the host callback.
+                # Owner/actor fills still belong to the engine.
+                if ($destination) {
+                    for my $field (keys %{$destination->{values}}) {
+                        _fail('FORBIDDEN', 'Destination cannot replace saved-view content.') if exists $values{$field};
+                        my $value = $destination->{values}{$field};
+                        my $binding = $engine->domain->writes->{host_bound_fields}{$field};
+                        if ($binding) {
+                            # Never manufacture a caller assignment for a
+                            # host-bound field. Core fills it from the factory's
+                            # trusted context; the destination must agree.
+                            my $trusted = $engine->write_context->{$binding->{source}[1]};
+                            _fail('FORBIDDEN', 'Destination requires trusted host context.')
+                                unless defined($trusted) && !ref($trusted) && defined($value) && !ref($value)
+                                    && "$trusted" eq "$value";
+                        } else { $values{$field} = $value }
+                    }
+                } else {
+                    for my $name (qw(folder parent)) {
+                        $values{$fields->{$name}} = $request->{$name} if $fields->{$name} && exists($request->{$name});
+                    }
                 }
             }
         }
@@ -264,5 +333,33 @@ Selecto::Components::SavedQueryStore::Domains - Saved queries in governed domain
 Implements C<list>, C<targets>, C<save_new>, C<update> and C<delete> using
 independent host-configured domain engine factories. See F<docs/saved-views.md>
 for source configuration, revision transport and error mapping.
+
+=head1 DESTINATIONS AND LISTING
+
+An optional source C<destinations> callback receives
+C<($context, $config, $source, $engine)> and returns an array of
+C<{key, label, values}> objects. Keys are distinct ASCII letters, digits,
+underscores or hyphens (1 to 160 characters). C<targets> exposes only
+C<< <source>.<key> >> and the label. C<save_new> resolves the submitted id
+against a fresh callback result, refusing absent targets as
+C<SAVED_QUERY_FORBIDDEN>. Sources without the callback retain their single
+source-name target and existing factory signature.
+
+For destination inserts the engine factory receives the resolved object as a
+fourth argument. It sets trusted write context for ownership and parent guards.
+C<values> uses declared root field identifiers. Ordinary assignments pass
+through governed insert grants and constraints. A host-bound value must match
+the factory's trusted context; the store omits that assignment so core performs
+the host fill. Request values never supply destination assignments or trusted
+context. Name, URL/state and the generated view kind cannot be replaced by a
+destination. Updates and deletes still use the ordinary scoped factory.
+
+An optional C<list_url> callback receives
+C<($url, $row, $context, $config, $source)> after Explorer filtering and returns
+the listed URL. Listing never calls SavedView check and retains the stored
+row's revision. With C<parent> mapped and C<folder> absent, a child receives
+its visible parent's name as C<folder>. Missing/out-of-scope parents omit the
+child; a mapped parent kind must equal C<folder_kind> (default C<folder>).
+Parent visibility uses the full same-source read scope before menu filtering.
 
 =cut

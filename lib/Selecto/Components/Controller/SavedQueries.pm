@@ -98,7 +98,7 @@ sub _save_query ($controller, $explorer) {
     }) unless $operation eq 'new' || $operation eq 'update';
     return _saved_query_response($controller, $return_to, {
         ok => 0, status => 422, message => 'Choose a valid saved-view destination.',
-    }) if $target =~ /[\x00-\x1f\x7f]/ || length($target) > 160;
+    }) if $target =~ /[\x00-\x1f\x7f]/ || length($target) > 321;
     if ($operation eq 'update' && (!$id || !$revision
         || scalar($controller->param('confirm_saved_query_update') // '') ne '1')) {
         return _saved_query_response($controller, $return_to, {
