@@ -2,6 +2,7 @@ package AsOfFixture;
 use strict;
 use warnings;
 use DBI;
+use POSIX qw(strftime);
 use Mojo::URL;
 use Mojolicious;
 use Selecto;
@@ -22,7 +23,10 @@ sub app {
     $dbh->do('INSERT INTO asof_events VALUES (?, ?, ?)', undef, @$_) for
         [1, '2026-03-15', 'East'], [2, '2026-03-14', 'East'], [3, '2026-03-09', 'West'],
         [4, '2026-03-08', 'West'], [5, '2026-02-15', 'East'];
-    $dbh->do('INSERT INTO asof_events VALUES (6, CURRENT_DATE, ?)', undef, 'Now');
+    # Relative-date shortcuts use the Perl process's local calendar day.
+    # SQLite CURRENT_DATE is UTC, which can be a different day at this instant.
+    my $today = strftime('%Y-%m-%d', localtime);
+    $dbh->do('INSERT INTO asof_events VALUES (6, ?, ?)', undef, $today, 'Now');
     my $domain = Selecto::Domain->parse({schema_version => 1, name => 'As of events',
         source => {source_table => 'asof_events', primary_key => 'id', fields => [qw(id day region)],
             columns => {id => {type => 'integer'}, day => {type => 'date'}, region => {type => 'string'}}, associations => {}},

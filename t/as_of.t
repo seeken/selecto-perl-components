@@ -19,6 +19,10 @@ for my $backend ('sqlite', ($ENV{SELECTO_PERL_TEST_POSTGRES_URL} ? ('postgresql'
         my $explorer = $c->selecto_components_explorer('events');
         my $config = $explorer->config;
         my $engine = $config->engine($c);
+        $t->get_ok('/events?q=1&field=id&filter_field=day&filter_op=date_shortcut&filter_value=today')
+            ->status_is(200);
+        is_deeply $t->tx->res->dom->find('.sc-results tbody tr td:first-child')->map('all_text')->to_array,
+            ['6'], 'unbound Today finds the fixture row in the process local timezone';
         my %base = (q => 1, field => 'id', order => 'id', filter_field => 'day',
             filter_op => 'date_shortcut', filter_value => 'today', as_of => '2026-03-15');
         my $model = sub {
