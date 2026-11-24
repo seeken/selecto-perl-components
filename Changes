@@ -1,6 +1,6 @@
 Revision history for Selecto-Components
 
-Unreleased
+0.5.0  Unreleased
     - Host theme colours and menu integration use only library CSS prefixes.
     - Examples and fixtures use an invented domain.
     - Grouped actions use neutral group labels. Action results now take a

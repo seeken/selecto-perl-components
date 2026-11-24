@@ -33,7 +33,7 @@ WriteMakefile(
         'JSON::PP'    => '4.06',
         'Cpanel::JSON::XS' => '4.38',
         'Mojolicious' => '9.49',
-        'Selecto'     => '0.3.0',
+        'Selecto'     => '0.5.0',
         'Time::HiRes' => 0,
     },
     CONFIGURE_REQUIRES => {

@@ -24,7 +24,7 @@ use Selecto::Components::ThemeStylesheet ();
 use Selecto::Components::Util qw(humanize);
 use Selecto::Components::WebSocketPolicy ();
 
-our $VERSION = '0.1.2';
+our $VERSION = '0.5.0';
 
 my %EXPORT_FORMATS = (
     csv => {

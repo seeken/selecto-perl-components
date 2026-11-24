@@ -29,7 +29,7 @@ What you get:
 The UI is rendered on the server. [htmx 4](https://htmx.org) WebSockets send
 incremental updates, and plain GET/POST forms still work without JavaScript.
 
-This is an early release (0.1.1). Expect the interface to change.
+This is an early release (0.5.0). Expect the interface to change.
 
 The [Perl/PostgreSQL initial stack](docs/canonical-stack.md) runs the native
 HTMX explorer, canonical JSON reads and `selecto_spa_vue` on the same trusted
