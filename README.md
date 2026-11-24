@@ -481,13 +481,32 @@ string exports and the Saved queries tab are unavailable.
 - `Selecto::Components::APIConsole->page(...)` renders the packaged API
   Console for a canonical Selecto HTTP API, and `install_assets($app)` serves
   its files. An explorer's `api_console_resolver` adds an **API** button that
-  hands the current Detail query to it.
+  hands the current Detail or representable Aggregate query to it.
 
 For a complete runnable setup, use the authenticated
 [Perl/PostgreSQL stack](docs/canonical-stack.md). Its Explorer **API** button
-opens `/api/items/console` with the current Detail query in a URL fragment.
+opens `/api/items/console` with the current query in a URL fragment.
 The Console discovers the same session-scoped API, catalog and Explorer
 metadata, and sends the page's CSRF token with its queries.
+
+Aggregate handoffs use a `selecto.explorer-query` envelope imported into the
+Console's Aggregates profile. Its fingerprint, features revision, public fields
+and functions come from the same canonical Explorer host as `/explorer-features`
+and `/explorer-query`. The link preserves group order, supported temporal group
+formats and numeric/year buckets, measure aliases, filters, segments and
+parameters, and the actual
+rollup, cube or grouping sets used by the Explorer. Plain grouped queries retain
+page limit/offset and measure ordering; grids hand over all their visible cells.
+Subtotal rows use the canonical route's fixed order. A subtotal page that would
+select different rows is disabled, as are custom subtotal ordering, As of
+(the current route has no As of member), relative date filters with a different
+clock, unformatted group aliases, unsupported group expressions, measure
+transforms and summary pivots. The disabled button's title explains why. Aggregate
+links require enabled canonical Explorer routes and their host authorization.
+Private URL mode continues to omit the API link.
+
+The SPA's Detail handoff is built in its own sibling workspace; this package's
+aggregate handoff applies to native GET and WebSocket Explorer rendering.
 
 In your own host, put the Console page behind the same authentication as the
 Explorer and set `api_console_resolver` to its absolute same-origin path:

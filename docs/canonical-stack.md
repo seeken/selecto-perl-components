@@ -46,7 +46,11 @@ and receive the CSRF meta tag. `selecto_web_ui_conformance`'s `test:canonical`
 drives each of them against this stack.
 
 The Explorer's **API** button opens `/api/items/console` in a new tab and
-hands over its current Detail query. You can also open that path directly
+hands over its current Detail query or a representable Aggregate query.
+Aggregate links import a `selecto.explorer-query` envelope into the Console's
+Aggregates profile, including rollup, cube or grouping sets from the native
+Explorer. Unsupported states have a disabled API button with a specific title;
+see the [handoff limits in the README](../README.md). You can also open that path directly
 after signing in. It serves the shared packaged API Console with the current
 session CSRF token and navigation back to HTMX or Vue. Anonymous visits
 redirect to `/session`; every API discovery and query request is authorized

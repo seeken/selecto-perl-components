@@ -257,13 +257,21 @@ sub _api_console_control ($class, $model) {
         for grep { $state->query_options->{$_} ne $state->query_option_defaults->{$_} } sort keys %{$state->query_options // {}};
     $api_console_url = $console_url->to_string;
     my $payload = $state->api_query_payload($config, $model->{domain});
+    my $reason = 'This Explorer query cannot yet be represented by the API console.';
+    if ($state->view eq 'aggregate') {
+        my $handoff = $model->{api_console_handoff} // {};
+        $payload = $handoff->{payload};
+        $reason = $handoff->{reason} // ($config->canonical_api_path && $config->canonical_explorer
+            ? 'The aggregate query must have valid results before opening the API console.'
+            : 'Canonical Explorer routes are not enabled for this Explorer.');
+    }
     return $payload
         ? '<a class="sc-button sc-secondary" data-sc-api-console ' .
             'target="_blank" rel="noopener" href="' .
             _h($api_console_url . '#request=' . url_escape(encode_json($payload))) .
             '">API</a>'
         : '<button class="sc-button sc-secondary" type="button" data-sc-api-console ' .
-            'disabled aria-disabled="true" title="This Explorer query cannot yet be represented by the API console.">API</button>';
+            'disabled aria-disabled="true" title="' . _h($reason) . '">API</button>';
 }
 
 sub _form ($class, @args) { return Selecto::Components::Renderer::Builder->_form(@args); }

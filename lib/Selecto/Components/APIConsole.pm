@@ -193,9 +193,17 @@ C</selecto-api-console/index.html?api=/api/orders/v1>.
 
 Explorers can link to a console with an C<api_console_resolver>
 (L<Selecto::Components/api_console_resolver>). A Detail query is handed over
-in the URL fragment, so it never reaches server logs. Aggregate and grid
-drilldown queries cannot be expressed in the canonical API, so their API
-button is disabled.
+in the URL fragment, so it never reaches server logs. Representable Aggregate
+queries use a C<selecto.explorer-query> envelope for the Aggregates profile,
+with the canonical Explorer host's fingerprint and features revision. Group
+order, supported temporal formats and numeric/year buckets, measure aliases,
+filters and actual rollup, cube or grouping sets are
+retained. Plain groups retain paging and measure ordering; grids hand over all
+visible cells. Subtotals use the route's fixed ordering, so partial subtotal
+pages and custom subtotal orderings are disabled. As of is not in the current
+Explorer route contract. Unsupported expressions, aliases or host capabilities
+also disable the button with a specific title. Aggregate links require enabled,
+authorized canonical Explorer routes. Private URL mode omits the API link.
 
 =head1 METHODS
 

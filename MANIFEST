@@ -11,6 +11,7 @@ docs/explorer-sessions.md
 examples/northwind.pl
 lib/Selecto/Components.pm
 lib/Selecto/Components/APIConsole.pm
+lib/Selecto/Components/APIHandoff.pm
 lib/Selecto/Components/Actions.pm
 lib/Selecto/Components/AssetManifest.pm
 lib/Selecto/Components/BucketParser.pm
@@ -20,6 +21,7 @@ lib/Selecto/Components/Canonical.pm
 examples/canonical-stack.pl
 examples/lib/CanonicalStack.pm
 t/canonical_explorer.t
+t/aggregate_api_link.t
 xt/canonical_stack_postgresql.t
 playwright.api-console.config.js
 t/browser-stack/api-console.spec.js

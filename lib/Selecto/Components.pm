@@ -1009,7 +1009,9 @@ falls back to C<$default>. See L<Selecto::Components::I18N>.
 
 A coderef C<($controller, $config, $model)> that returns a same-origin path
 to an API Console, or an empty string. It adds an B<API> control that hands
-the current Detail query to the console in the URL fragment. See
+the current Detail query or a representable Aggregate query to the console
+in the URL fragment. Aggregate handoffs require the canonical Explorer routes;
+unsupported states have a disabled button with an explanatory title. See
 L<Selecto::Components::APIConsole>.
 
 =item show_sql

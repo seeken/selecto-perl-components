@@ -7,6 +7,7 @@ use File::Temp qw(tempfile tempdir);
 use File::Find ();
 use Encode qw(encode);
 use Selecto::Components::ExportBudget ();
+use Selecto::Components::APIHandoff ();
 use Selecto::BoundedQuery ();
 use Digest::SHA qw(sha256_hex);
 use Scalar::Util qw(blessed looks_like_number);
@@ -289,6 +290,9 @@ sub model ($self, $controller, $input = undef, $options = undef) {
                 },
             ) : ()),
         };
+        $model->{api_console_handoff} = Selecto::Components::APIHandoff->aggregate($model, $controller)
+            if $state->view eq 'aggregate' && ref($config->api_console_resolver) eq 'CODE'
+                && $config->query_params_enabled($engine->domain);
         $self->_results_note($controller, $model);
         1;
     };

@@ -673,3 +673,10 @@ code, pre, textarea.sac-request-editor {
 .sac-period-control { display: flex; flex-wrap: wrap; gap: .35rem; min-width: 0; }
 .sac-period-control > input { min-width: 0; flex: 1; }
 .sac-period-control > .sac-help { flex-basis: 100%; margin: 0; }
+
+/* Shared chooser feedback and measure entries use the field/chip layout. */
+.sac-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.sac-measure-choice { grid-template-columns: minmax(4rem, 1fr) minmax(0, 3fr); gap: .4rem; cursor: default; }
+.sac-measure-choice .sac-compact-actions { flex-wrap: wrap; }
+.sac-selected-copy label { min-width: 0; font-size: .65rem; color: var(--sac-muted); }
+.sac-selected-copy label input { min-width: 0; }
