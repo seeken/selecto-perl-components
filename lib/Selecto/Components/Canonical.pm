@@ -51,6 +51,25 @@ sub register ($class, $routes, $config, $mounted_path) {
                         content_type => $controller->req->headers->content_type,
                         accept => $controller->req->headers->accept, body => $controller->req->json});
                 _add_catalog_routes($config, $response) if $kind eq '' || $kind eq '/';
+            } elsif ($explorer && $kind eq '/openapi.json') {
+                # Keep the configured Detail schemas/encodings intact, and
+                # publish the Explorer host's own aggregate route contract.
+                # The Console requires both features and route publication.
+                my $request = {method => 'GET', path => $config->canonical_api_path . $kind};
+                $response = $host->request($engine, $request);
+                if ($response->{status} == 200) {
+                    my $aggregate = $explorer->request($engine, $request);
+                    die "Explorer OpenAPI unavailable\n" unless $aggregate->{status} == 200;
+                    my $json = JSON::PP->new->utf8->canonical;
+                    my $document = $json->decode($response->{body});
+                    my $extension = $json->decode($aggregate->{body});
+                    for my $suffix (qw(explorer-features explorer-query)) {
+                        my $path = $config->canonical_api_path . '/' . $suffix;
+                        $document->{paths}{$path} = $extension->{paths}{$path};
+                    }
+                    $document->{'x-selecto-explorer-supports'} = $extension->{'x-selecto-explorer-supports'};
+                    $response->{body} = $json->encode($document);
+                }
             } elsif ($kind eq 'catalog') {
                 $response = {status => 200, content_type => 'application/json; charset=utf-8',
                     body => JSON::PP->new->utf8->canonical->encode({

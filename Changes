@@ -1,13 +1,23 @@
 Revision history for Selecto-Components
 
 0.5.0  Unreleased
+    - Hand off As of/timezone, root-relative retargets, summary pivot options
+      and partial subtotal pages with native measure ordering when advertised
+      by the canonical Explorer host. Explain missing capabilities and pivot
+      budgets; exclude display-only continued-parent headers. Keep Detail
+      handoffs unchanged. Sync the bundled API Console from fb6bfed so its
+      chooser restores these members and renders pivot response metadata.
+    - Publish the Explorer OpenAPI routes through the canonical bridge while
+      preserving Detail schemas, so aggregate As of imports reach the chooser.
+    - Fix retargeted summary pivot cells and global top-N ranking to use
+      target grain, including CASE field references and target-row page keys.
+      Verify native/API rows, columns, cells and totals on SQLite/PostgreSQL.
     - Prefill the API Console Aggregates profile from native Explorer aggregate
       results using the canonical Explorer host's feature bindings, groups,
       measures, aliases, filters and actual subtotal mode. Preserve query
       options and WebSocket link updates. Explain disabled handoffs for states
-      the canonical route cannot reproduce, including As of and partial
-      subtotal pages. Detail handoffs remain unchanged. Update the bundled
-      API Console so the Aggregates chooser matches Detail.
+      the canonical route cannot reproduce. Detail handoffs remain unchanged.
+      Update the bundled API Console so the Aggregates chooser matches Detail.
     - Update the bundled API console: the chooser keeps segment picker
       choices, including an explicit Off, and hosts that publish the Explorer
       aggregate routes without the remote-query profile can pick the

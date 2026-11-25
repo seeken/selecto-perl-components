@@ -680,3 +680,8 @@ code, pre, textarea.sac-request-editor {
 .sac-measure-choice .sac-compact-actions { flex-wrap: wrap; }
 .sac-selected-copy label { min-width: 0; font-size: .65rem; color: var(--sac-muted); }
 .sac-selected-copy label input { min-width: 0; }
+
+.sac-pivot { margin-block: 1rem; padding-block: .75rem; border-block: 1px solid var(--sac-border, #d9e0e7); }
+.sac-pivot > label { display: block; margin-block: .5rem; }
+.sac-card .sac-check { display: flex; align-items: center; gap: .5rem; }
+.sac-card .sac-check input[type="checkbox"] { width: auto; min-height: 0; margin: 0; }

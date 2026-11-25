@@ -49,7 +49,12 @@ The Explorer's **API** button opens `/api/items/console` in a new tab and
 hands over its current Detail query or a representable Aggregate query.
 Aggregate links import a `selecto.explorer-query` envelope into the Console's
 Aggregates profile, including rollup, cube or grouping sets from the native
-Explorer. Unsupported states have a disabled API button with a specific title;
+Explorer. When the host advertises the corresponding `supports.*` flags,
+links also retain As of/timezone, retarget paths (root-context filters and
+segments), summary pivot values/top-N/Other/totals/value order, and exact partial
+subtotal pages with measure ordering and `subtotal_position: "before"`.
+Continued-parent headers are display only. Missing capabilities, exceeded pivot
+budgets and other unsupported states have a disabled API button with a specific title;
 see the [handoff limits in the README](../README.md). You can also open that path directly
 after signing in. It serves the shared packaged API Console with the current
 session CSRF token and navigation back to HTMX or Vue. Anonymous visits

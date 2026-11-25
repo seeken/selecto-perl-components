@@ -58,6 +58,10 @@ sub _retargeted ($query, $path) {
 # relative to the target relation.
 sub _rerooted ($value, $path) {
     if (blessed($value) && $value->isa('Selecto::Expression')) {
+        if ($value->kind eq 'value') {
+            my $copy = Selecto::Expression->value(_rerooted_value($value->arguments->[0], $path));
+            return defined($value->alias_name) ? $copy->as($value->alias_name) : $copy;
+        }
         if ($value->kind eq 'field') {
             my $name = $value->arguments->[0];
             die "field $name is outside the retarget target $path\n"
@@ -73,6 +77,30 @@ sub _rerooted ($value, $path) {
     return [map { _rerooted($_, $path) } @$value] if ref($value) eq 'ARRAY';
     return {map { ($_ => _rerooted($value->{$_}, $path)) } keys %$value} if ref($value) eq 'HASH';
     return $value;
+}
+
+# Value expressions contain a typed AST, including filter ASTs in CASE
+# branches. Rewrite field positions only: labels and comparison literals
+# can themselves look like root-relative paths.
+sub _rerooted_value ($ast, $path) {
+    my ($op, @args) = @$ast;
+    return [$op, @args] if $op eq 'literal' || $op eq 'previous';
+    if ($op eq 'field' || $op eq 'json_text') {
+        $args[0] = _rerooted(Selecto::Expression->field($args[0]), $path)->arguments->[0];
+        return [$op, @args];
+    }
+    if ($op eq 'case') {
+        return [$op, map { [$_->[0] eq 'else' ? 'else' : _rerooted_filter($_->[0], $path),
+            _rerooted_value($_->[1], $path)] } @args];
+    }
+    return [$op, map { ref($_) eq 'ARRAY' ? _rerooted_value($_, $path) : $_ } @args];
+}
+
+sub _rerooted_filter ($ast, $path) {
+    my ($op, @args) = @$ast;
+    return [$op, map { _rerooted_filter($_, $path) } @args] if $op eq 'and' || $op eq 'or' || $op eq 'not';
+    $args[0] = _rerooted(Selecto::Expression->field($args[0]), $path)->arguments->[0];
+    return [$op, @args];
 }
 
 sub _detail ($class, $config, $domain, $state, $options) {
@@ -701,6 +729,11 @@ sub pivot_cells ($class, $config, $domain, $state, $level, $keys = undef) {
     );
     my $built = $class->_aggregate($config, $domain, $cells_state, {paginate => 0, rollup => 0, pivot_part => 1,
         top_ranking => !$level && $state->pivot_column_top && !@{$state->group_configs->{$column_field}{pivot_values} // []}});
+    # Secondary cells and global ranking have the same grain as the rows
+    # query. Root filters/segments remain context; page keys constrain the
+    # target rows themselves, after retargeting.
+    my $retarget = $state->retarget;
+    $built->{query} = _retargeted($built->{query}, $retarget) if defined $retarget;
     if ($level > 0) {
         my $field_map = $config->field_map($domain, $state->retarget);
         my @alternatives = map {
@@ -714,8 +747,9 @@ sub pivot_cells ($class, $config, $domain, $state, $level, $keys = undef) {
             } @$_;
             @conditions == 1 ? $conditions[0] : Selecto::Expression->all(\@conditions)
         } @$keys;
-        $built->{query} = $built->{query}->where(
-            @alternatives == 1 ? $alternatives[0] : Selecto::Expression->any(\@alternatives));
+        my $predicate = @alternatives == 1 ? $alternatives[0] : Selecto::Expression->any(\@alternatives);
+        $predicate = _rerooted($predicate, $retarget) if defined $retarget;
+        $built->{query} = $built->{query}->where($predicate);
     }
     return $built;
 }

@@ -3478,6 +3478,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
                 </div>
                 </div>
                 <div data-sac-aggregate-data hidden>
+                  <div data-sac-aggregate-target></div>
                   <span class="sac-label">Group by</span>
                   <div class="sac-selected-fields" data-sac-group-chips></div>
                   <label class="sac-label" for="sac-group-search">Available fields</label>
@@ -3686,6 +3687,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       this.root.addEventListener("click", (event) => this.onClick(event));
       this.root.addEventListener("change", (event) => this.onChange(event));
       this.root.addEventListener("input", (event) => this.onInput(event));
+      this.root.addEventListener("keydown", (event) => this.onKeyDown(event));
     }
 
     populateLibraryControls() {
@@ -4979,7 +4981,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     supportsAsOf(profile = this.queryProfile) {
       // Recursive v2 is a separate closed contract, without the v1 read clock.
-      if (profile === "root") return false;
+      if (profile === "root" || profile === "aggregate" && this.aggregateFeatures?.supports?.as_of !== true) return false;
       const resource = profile === "flat" && this.state.queryMethod === "get" && this.resourcePath;
       const path = resource ? this.resourcePath : profile === "aggregate" ? this.aggregateQueryPath : this.queryPath;
       const pathSpec = this.openapi?.paths?.[path];
@@ -4988,8 +4990,9 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         .flatMap(item => schemaParts(this.openapi, item)).some(item => item.in === "query" && item.name === "as_of");
       const body = schemaParts(this.openapi, operation?.requestBody).find(item => item.content)?.content;
       const schemas = schemaParts(this.openapi, body?.["application/json"]?.schema);
-      return schemas.some(schema => Object.hasOwn(schema.properties || {}, "as_of")
-        || schemaParts(this.openapi, schema.properties?.query).some(query => Object.hasOwn(query.properties || {}, "as_of")));
+      const publishes = schema => Object.hasOwn(schema.properties || {}, "as_of") && schema.properties.as_of !== false;
+      return schemas.some(schema => publishes(schema)
+        || schemaParts(this.openapi, schema.properties?.query).some(publishes));
     }
 
     asOfValue(profile = this.queryProfile) {
@@ -5006,6 +5009,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     validateQueryContext(request, profile = this.queryProfile) {
       const query = request?.format ? request.query : request;
       this.validatePeriodFilters(query, profile);
+      if (profile === "aggregate" && isPlainObject(query)) this.validateAggregateCapabilities(query);
       if (isPlainObject(query) && Object.hasOwn(query, "as_of")) {
         global.SelectoCanonicalClient.assertAsOf(query.as_of);
         this.applyAsOf({}, query.as_of, profile);
@@ -5492,7 +5496,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       }
       if (Object.hasOwn(query, "parameters") && !isPlainObject(query.parameters)) fail();
       if (query.timezone && query.timezone !== "UTC" && supports.timezones === "utc") {
-        const converts = entry => isPlainObject(entry) && this.aggregateFeatures.fields.some(field => field.id === entry.field && field.type === "utc_datetime")
+        const fields = [...this.aggregateFeatures.fields, ...this.aggregateFields(state.retarget)];
+        const converts = entry => isPlainObject(entry) && fields.some(field => field.id === entry.field && field.type === "utc_datetime")
           && (Object.hasOwn(entry, "format") || entry.buckets && entry.buckets.kind !== "numeric" || entry.op === "date_shortcut");
         const nodes = [...(query.filters || [])];
         while (nodes.length) { const node = nodes.shift(); if (converts(node)) fail(); if (Array.isArray(node.any || node.all)) nodes.push(...(node.any || node.all)); }
@@ -5533,33 +5538,33 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       }
     }
 
-    aggregateImportedSelection(item) {
+    aggregateImportedSelection(item, target = this.aggregateState?.retarget) {
       const fail = () => { throw new Error("Unsupported aggregate selection."); };
       if (!isPlainObject(item)) fail();
       const fn = item.aggregate;
       const allowed = ["aggregate", "field", "alias", ...(fn === "sum" ? ["ignore_nulls"] : []), ...(fn === "bucket_count" ? ["buckets"] : [])];
       if (onlyKeys(item, allowed).length || ![...AGGREGATE_FUNCTIONS, "bucket_count"].includes(fn)
           || typeof item.alias !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(item.alias)) fail();
-      const field = this.aggregateFeatures.fields.find(field => field.id === item.field);
+      const field = this.aggregateFields(target).find(field => field.id === item.field);
       if (Object.hasOwn(item, "field") && (!field || field.collection) || !Object.hasOwn(item, "field") && fn !== "count") fail();
       if (fn === "bucket_count") this.aggregateImportedBuckets(item.buckets, field, false);
-      else if (field && !this.aggregateMeasureFields(fn).some(candidate => candidate.id === field.id)) fail();
+      else if (field && !this.aggregateMeasureFields(fn, target).some(candidate => candidate.id === field.id)) fail();
       if (["true_count", "false_count", "true_percentage"].includes(fn) && this.aggregateFeatures.supports.boolean_aggregates === false) fail();
       if (Object.hasOwn(item, "ignore_nulls") && item.ignore_nulls !== "auto") fail();
       const retained = Object.fromEntries(["ignore_nulls", "buckets"].filter(key => Object.hasOwn(item, key)).map(key => [key, structuredClone(item[key])]));
       return {fn, field: item.field || "", alias: item.alias, ...(Object.keys(retained).length ? {retained} : {})};
     }
 
-    aggregateImportedGroup(entry) {
+    aggregateImportedGroup(entry, target = this.aggregateState?.retarget) {
       if (typeof entry === "string") {
-        if (!this.aggregateGroupFields().some(field => field.id === entry)) throw new Error("Unsupported aggregate selection.");
+        if (!this.aggregateGroupFields(target).some(field => field.id === entry)) throw new Error("Unsupported aggregate selection.");
         return entry;
       }
       const fail = () => { throw new Error("Unsupported aggregate selection."); };
       if (!isPlainObject(entry) || onlyKeys(entry, ["field", "alias", "format", "buckets"]).length
           || typeof entry.alias !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(entry.alias)
           || Object.hasOwn(entry, "format") === Object.hasOwn(entry, "buckets")) fail();
-      const field = this.aggregateGroupFields().find(field => field.id === entry.field);
+      const field = this.aggregateGroupFields(target).find(field => field.id === entry.field);
       if (!field) fail();
       if (Object.hasOwn(entry, "format")) {
         if (!this.aggregateFeatures.supports.group_formats || !(field.group_formats || []).includes(entry.format)) fail();
@@ -5642,9 +5647,14 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (onlyKeys(payload, ["format", "format_version", "domain", "features", "query", "request_id"]).length
           || onlyKeys(payload.domain, ["fingerprint"]).length || onlyKeys(payload.features, ["revision"]).length) throw new Error("Unsupported aggregate envelope properties.");
       const query = payload.query;
-      if (!isPlainObject(query) || onlyKeys(query, ["select", "group_by", "rollup", "cube", "grouping_sets", "limit", "offset", "as_of", "filters", "order_by", "row_format", "timezone", "count", "complete", "segments", "parameters", "export"]).length) throw new Error("Unsupported aggregate chooser properties.");
+      if (!isPlainObject(query) || onlyKeys(query, ["select", "group_by", "rollup", "cube", "grouping_sets", "limit", "offset", "as_of", "filters", "order_by", "row_format", "timezone", "count", "complete", "segments", "parameters", "export", "retarget", "pivot", "subtotal_position"]).length) throw new Error("Unsupported aggregate chooser properties.");
       this.validateQueryContext(query, "aggregate");
       const state = this.newAggregateState();
+      if (Object.hasOwn(query, "retarget")) {
+        if (typeof query.retarget !== "string" || !this.aggregateTargets().some(target => target.path === query.retarget)) throw new Error("Retarget is not published.");
+        state.retarget = query.retarget;
+      }
+      for (const key of ["pivot", "subtotal_position"]) if (Object.hasOwn(query, key)) state[key] = structuredClone(query[key]);
       if (query.filters !== undefined) {
         if (!Array.isArray(query.filters)) throw new Error("filters must be an array.");
         state.filtersPresent = true;
@@ -5662,7 +5672,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         state.ordersPresent = true;
       }
       if (query.group_by !== undefined && (!Array.isArray(query.group_by) || !query.group_by.length)) throw new Error("Aggregate selection and groups must be arrays.");
-      state.groupBy = (query.group_by || []).map(entry => this.aggregateImportedGroup(entry));
+      state.groupBy = (query.group_by || []).map(entry => this.aggregateImportedGroup(entry, state.retarget || ""));
       state.groupEntries = (query.group_by || []).filter(isPlainObject).map(entry => structuredClone(entry));
       state.groupSelections = [];
       if (!Array.isArray(query.select)) throw new Error("Aggregate selection and groups must be arrays.");
@@ -5670,7 +5680,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       state.aggregates = [];
       query.select.forEach(item => {
         if (isPlainObject(item) && Object.hasOwn(item, "aggregate")) {
-          state.aggregates.push(this.aggregateImportedSelection(item)); state.selectionLayout.push("measure");
+          state.aggregates.push(this.aggregateImportedSelection(item, state.retarget || "")); state.selectionLayout.push("measure");
         } else {
           const id = typeof item === "string" ? item : isPlainObject(item) && !onlyKeys(item, ["group"]).length ? item.group
             : isPlainObject(item) && !onlyKeys(item, ["field"]).length ? item.field : null;
@@ -5701,7 +5711,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       }
       const previous = this.aggregateState;
       this.aggregateState = state;
-      const model = this.buildAggregateRequest();
+      let model;
+      try { model = this.buildAggregateRequest(); } catch (error) { this.aggregateState = previous; throw error; }
       // Retained settings participate in the complete intent comparison.
       if (model.errors.length || this.aggregateEquivalentQuery(model.request.query) !== this.aggregateEquivalentQuery(query)) {
         this.aggregateState = previous;
@@ -7084,7 +7095,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       }
       if (event.target.closest("[data-sac-add-order]")) {
         if (this.queryProfile === "aggregate") {
-          if (this.aggregateState.grouping !== "none") return;
+          if (!this.aggregateCanSort()) return;
           const fields = this.aggregateSortFields(); if (!fields.length) return;
           return this.aggregateChanged(state => {
             while (state.orders.some(order => order.id === `aggregate-order-${this.nextOrderId}`)) this.nextOrderId++;
@@ -7333,6 +7344,12 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       else if (target.matches("[data-sac-order-direction]")) this.orderFor(target).direction = target.value;
       else return;
       this.changed();
+    }
+
+    onKeyDown(event) {
+      if (event.key === "Enter" && !event.isComposing && event.target.dataset?.sacAggregateControl === "pivot-value-input") {
+        event.preventDefault(); this.addAggregatePivotValue();
+      }
     }
 
     onInput(event) {
@@ -7696,17 +7713,226 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         limit: Math.min(100, limits.max_limit || 100), offset: 0, orders: []};
     }
 
-    aggregateGroupFields() {
-      return this.aggregateFeatures.fields.filter((field) => field.groupable && !field.collection);
+    validateAggregateCapabilities(query) {
+      for (const key of ["as_of", "retarget", "pivot", "subtotal_position"]) {
+        if (Object.hasOwn(query, key) && this.aggregateFeatures?.supports?.[key] !== true) throw new Error(`This publication does not publish ${key}.`);
+      }
     }
 
-    aggregateMeasureFields(fn) {
-      return this.aggregateFeatures.fields.filter((field) => !field.collection && Array.isArray(field.aggregates) && field.aggregates.includes(fn));
+    aggregateTargets() {
+      if (this.aggregateFeatures?.supports?.retarget !== true) return [];
+      return (Array.isArray(this.aggregateFeatures.retargets) ? this.aggregateFeatures.retargets : []).filter(target =>
+        isPlainObject(target) && typeof target.path === "string" && target.path && Array.isArray(target.fields)
+        && target.fields.every(field => isPlainObject(field) && typeof field.id === "string" && typeof field.path === "string"));
+    }
+
+    aggregateFields(target = this.aggregateState?.retarget) {
+      return target ? this.aggregateTargets().find(entry => entry.path === target)?.fields || [] : this.aggregateFeatures.fields;
+    }
+
+    aggregateCanSort() {
+      const state = this.aggregateState;
+      return !!state.groupBy.length && (state.grouping === "none" || this.aggregateFeatures.supports.subtotal_position === true && ["before", "after"].includes(state.subtotal_position));
+    }
+
+    changeAggregateTarget(value) {
+      if (value && !this.aggregateTargets().some(target => target.path === value)) return;
+      this.aggregateChanged(state => {
+        if (value) state.retarget = value; else delete state.retarget;
+        const fields = new Set(this.aggregateGroupFields().map(field => field.id));
+        state.groupEntries = (state.groupEntries || []).filter(entry => fields.has(entry.field));
+        state.groupBy = state.groupBy.filter(id => fields.has(id) || state.groupEntries.some(entry => entry.alias === id));
+        state.groupSelections = state.groupSelections?.filter(entry => state.groupBy.includes(entry.id));
+        delete state.selectGroupOrder; delete state.selectionLayout; delete state.importedSets;
+        state.aggregates = state.aggregates.filter(measure => {
+          try {this.aggregateImportedSelection({aggregate:measure.fn, ...(measure.field ? {field:measure.field} : {}), alias:measure.alias, ...measure.retained}); return true;}
+          catch (_) {return false;}
+        });
+        state.sets = [];
+        if (!state.groupBy.length) {state.grouping = "none"; delete state.subtotal_position;}
+        if (state.pivot && !state.groupBy.includes(state.pivot.column)) delete state.pivot;
+        delete state.pivotChoices; delete state.pivotInputError;
+        const sortable = new Set(this.aggregateSortFields().map(field => field.path));
+        state.orders = state.orders.filter(order => sortable.has(order.field));
+      });
+      this.announceChooser("Count by changed. Groups and measures unavailable for this target were removed; filters remain on root fields.");
+    }
+
+    aggregatePivotField(state = this.aggregateState) {
+      const column = state.pivot?.column, entry = state.groupEntries?.find(entry => entry.alias === column);
+      if (entry) return {type:"string"}; // Formats and buckets publish their resulting labels.
+      return this.aggregateFields(state.retarget).find(field => field.id === column);
+    }
+
+    aggregateMeasureIds(state = this.aggregateState) {
+      return state.aggregates.flatMap(a => a.fn === "bucket_count" ? (a.retained?.buckets?.ranges || []).map((_, i) => `${a.alias}__bucket_${i + 1}`) : [a.alias]);
+    }
+
+    aggregatePivotValueValid(value, type) {
+      if (value === null) return true;
+      if (typeof value === "object" || value === undefined || String(value).length > 1000) return false;
+      if (type === "integer") return Number.isSafeInteger(value) && String(Math.abs(value)).length <= 15;
+      if (type === "decimal") return typeof value === "number" ? Number.isFinite(value) : typeof value === "string" && /^-?[0-9]{1,30}(\.[0-9]{1,30})?$/.test(value);
+      if (type === "boolean") return typeof value === "boolean";
+      if (typeof value !== "string") return false;
+      if (["date", "naive_datetime", "utc_datetime"].includes(type)) {
+        if (type === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(value)
+          || type === "naive_datetime" && !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d{1,9})?$/.test(value)
+          || type === "utc_datetime" && !/T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) return false;
+        try {global.SelectoCanonicalClient.assertAsOf(value.replace(" ", "T"));} catch (_) {return false;}
+      }
+      return true;
+    }
+
+    aggregatePivotValueKey(value, type) {
+      if (value === null) return "null";
+      if (type === "decimal" || type === "integer") {
+        // Compare numeric keys without losing precision from imported decimal strings.
+        const [mantissa, exponent = "0"] = String(value).toLowerCase().split("e");
+        const [integer, fraction = ""] = mantissa.split(".");
+        const digits = (integer.replace(/^-/, "") + fraction).replace(/^0+/, "");
+        if (!digits) return "0";
+        const significant = digits.replace(/0+$/, ""), power = Number(exponent) - fraction.length + digits.length - significant.length;
+        return `${integer.startsWith("-") ? "-" : ""}${significant}e${power}`;
+      }
+      if (type === "naive_datetime" && typeof value === "string") return JSON.stringify(value.slice(0, 19).replace("T", " "));
+      if (type === "utc_datetime" && typeof value === "string" && Number.isFinite(Date.parse(value))) return new Date(value).toISOString().slice(0, 19) + "Z";
+      return JSON.stringify(value);
+    }
+
+    aggregatePivotErrors(query, state = this.aggregateState) {
+      const errors = [], pivot = query.pivot, max = this.aggregateFeatures.limits?.max_buckets ?? 20;
+      if (this.aggregateFeatures.supports.pivot !== true) return ["Pivot is not published."];
+      if (!isPlainObject(pivot) || onlyKeys(pivot, ["column", "values", "top", "other", "totals", "value_order"]).length) return ["Unsupported pivot properties."];
+      if (state.groupBy.length < 2 || !state.aggregates.length) errors.push("Pivot needs at least two groups and one measure.");
+      if (typeof pivot.column !== "string" || !state.groupBy.includes(pivot.column)) errors.push("Choose a selected group as the pivot column.");
+      if (query.complete === true || query.export?.shape === "grid") errors.push("Pivot cannot use complete grids or grid exports.");
+      if ((state.orders || []).some(order => order.field === pivot.column)) errors.push("Sorting cannot name the pivot column.");
+      if (Object.hasOwn(pivot, "values") && Object.hasOwn(pivot, "top")) errors.push("Pivot values and top-N are mutually exclusive.");
+      for (const flag of ["other", "totals"]) if (Object.hasOwn(pivot, flag) && typeof pivot[flag] !== "boolean") errors.push(`Pivot ${flag} must be a Boolean.`);
+      if (pivot.other === true && !Object.hasOwn(pivot, "values") && !Object.hasOwn(pivot, "top")) errors.push("Other requires chosen values or top-N.");
+      const type = this.aggregatePivotField(state)?.type;
+      for (const key of ["values", "value_order"]) if (Object.hasOwn(pivot, key)) {
+        const values = pivot[key], bound = key === "values" ? max : 500;
+        if (!Array.isArray(values) || !values.length || values.length > bound
+          || values.some(value => !this.aggregatePivotValueValid(value, type))
+          || new Set(values.map(value => this.aggregatePivotValueKey(value, type))).size !== values.length) errors.push(`Pivot ${key} needs distinct typed values (1 to ${bound}).`);
+      }
+      if (Array.isArray(pivot.values) && pivot.values.length + (pivot.other === true ? 1 : 0) > max) errors.push(`Pivot values including Other exceed ${max} columns per measure.`);
+      if (Object.hasOwn(pivot, "top")) {
+        const top = pivot.top;
+        if (!isPlainObject(top) || onlyKeys(top, ["limit", "measure", "order"]).length
+          || !Number.isSafeInteger(top.limit) || top.limit < 1 || top.limit > max
+          || typeof top.measure !== "string" || !this.aggregateMeasureIds(state).includes(top.measure)
+          || Object.hasOwn(top, "order") && !["rank", "natural"].includes(top.order)) errors.push(`Top-N needs a limit from 1 to ${max}, a selected measure and rank or natural order.`);
+      }
+      return errors;
+    }
+
+    renderAggregatePivot(page, selector, input) {
+      const state = this.aggregateState, pivot = state.pivot;
+      const section = element("div", "sac-pivot"); section.dataset.sacAggregatePivot = "";
+      section.append(element("h3", "sac-label", "Pivot"));
+      if (state.groupBy.length < 2 || !state.aggregates.length) section.append(element("p", "sac-help", "Pivot needs at least two groups and one measure."));
+      const groups = this.aggregateSelectedGroupFields();
+      section.append(selector("Pivot column", "pivot-column", [{value:"", label:"No pivot"}, ...state.groupBy.map(id => ({value:id,label:groups.find(f => f.id === id)?.label || id}))], pivot?.column || ""));
+      const check = (label, name, checked, index) => {
+        const wrapper = element("label", "sac-check"), node = element("input", "");
+        node.type = "checkbox"; node.checked = checked; node.dataset.sacAggregateControl = name;
+        if (index !== undefined) node.dataset.index = String(index);
+        wrapper.append(node, element("span", "", label)); return wrapper;
+      };
+      if (pivot) {
+        const mode = Object.hasOwn(pivot, "values") ? "values" : Object.hasOwn(pivot, "top") ? "top" : "discover";
+        section.append(selector("Pivot values", "pivot-mode", [{value:"discover",label:"Discover values"},{value:"values",label:"Choose values"},{value:"top",label:"Top-N values"}], mode));
+        if (mode === "values") {
+          const choices = this.aggregatePivotChoices();
+          const list = element("div", "sac-segment-options");
+          choices.forEach((value, index) => list.append(check(value === null ? "(empty)" : JSON.stringify(value), "pivot-value", (pivot.values || []).some(v => this.aggregatePivotValueKey(v, this.aggregatePivotField()?.type) === this.aggregatePivotValueKey(value, this.aggregatePivotField()?.type)), index)));
+          section.append(list);
+          const valueInput = input("Add pivot value", "pivot-value-input", state.pivotInput || "", "text");
+          const add = element("button", "sac-text-button", "Add value"); add.type = "button"; add.dataset.sacAggregateAction = "pivot-add-value";
+          section.append(valueInput, add, element("p", "sac-help", "Enter one typed value, then press Enter or Add value. Use (empty) above for null. Chosen values keep their selection order."));
+        } else if (mode === "top") {
+          section.append(input("Top-N limit", "pivot-top-limit", pivot.top.limit, "number"), selector("Rank by measure", "pivot-top-measure", this.aggregateMeasureIds().map(id => ({value:id,label:id})), pivot.top.measure),
+            selector("Value order", "pivot-top-order", [{value:"rank",label:"Rank"},{value:"natural",label:"Natural"}], pivot.top.order || "rank"));
+        }
+        section.append(check("Other", "pivot-other", pivot.other === true), check("Totals", "pivot-totals", pivot.totals !== false));
+        if (pivot.value_order) section.append(element("p", "sac-help", "Imported value order kept in request JSON."));
+      }
+      page.append(section);
+    }
+
+    aggregatePivotChoices() {
+      const state = this.aggregateState, type = this.aggregatePivotField()?.type;
+      const choices = [...(state.pivot?.values || []), ...(state.pivotChoices || []), ...(this.aggregatePivotField()?.value_order || []), null];
+      const seen = new Set();
+      return choices.filter(value => {const key = this.aggregatePivotValueKey(value, type); if (seen.has(key)) return false; seen.add(key); return true;});
+    }
+
+    addAggregatePivotValue() {
+      const state = this.aggregateState;
+      if (!Array.isArray(state.pivot?.values)) return;
+      const type = this.aggregatePivotField()?.type, text = state.pivotInput || "";
+      let value = text;
+      if (type === "integer") value = /^-?[0-9]+$/.test(text) ? Number(text) : undefined;
+      else if (type === "decimal") value = text; // Decimal wire strings preserve precision.
+      else if (type === "boolean") value = text === "true" ? true : text === "false" ? false : undefined;
+      if (!this.aggregatePivotValueValid(value, type)) {
+        state.pivotInputError = `Enter a valid ${type || "string"} pivot value.`; this.syncAggregateRequest(); return;
+      }
+      this.aggregateChanged(state => {
+        const key = this.aggregatePivotValueKey(value, type);
+        if (!state.pivot.values.some(v => this.aggregatePivotValueKey(v, type) === key)) state.pivot.values.push(value);
+        state.pivotInput = ""; delete state.pivotInputError;
+      });
+      this.root.querySelector('[data-sac-aggregate-control="pivot-value-input"]')?.focus?.();
+      this.announceChooser("Added pivot value.");
+    }
+
+    aggregatePivotControl(target) {
+      const name = target.dataset.sacAggregateControl, state = this.aggregateState;
+      if (name === "pivot-value-input") {state.pivotInput = target.value; delete state.pivotInputError; return this.syncAggregateRequest();}
+      if (name === "pivot-top-limit") {
+        if (!state.pivot?.top) return;
+        state.pivot.top.limit = target.value === "" ? "" : Number(target.value);
+        this.cancelQuery(); this.state.response = null; this.clearQueryResult(); return this.syncAggregateRequest();
+      }
+      const choices = this.aggregatePivotChoices();
+      this.aggregateChanged(state => {
+        delete state.pivotInputError;
+        if (name === "pivot-column") {
+          if (!target.value) {delete state.pivot; return;}
+          if (state.pivot) state.pivot.column = target.value; else state.pivot = {column:target.value};
+          delete state.pivotChoices;
+        } else if (!state.pivot) return;
+        else if (name === "pivot-mode") {
+          state.pivotChoices = choices;
+          delete state.pivot.values; delete state.pivot.top;
+          if (target.value === "values") state.pivot.values = [];
+          else if (target.value === "top") state.pivot.top = {limit:Math.min(5, this.aggregateFeatures.limits?.max_buckets ?? 20),measure:this.aggregateMeasureIds()[0] || "",order:"rank"};
+        } else if (name === "pivot-value") {
+          const value = choices[Number(target.dataset.index)], type = this.aggregatePivotField()?.type;
+          state.pivotChoices = choices;
+          state.pivot.values = target.checked ? [...state.pivot.values, value] : state.pivot.values.filter(v => this.aggregatePivotValueKey(v, type) !== this.aggregatePivotValueKey(value, type));
+        } else if (name === "pivot-top-measure") state.pivot.top.measure = target.value;
+        else if (name === "pivot-top-order") state.pivot.top.order = target.value;
+        else if (name === "pivot-other") state.pivot.other = target.checked;
+        else if (name === "pivot-totals") state.pivot.totals = target.checked;
+      });
+    }
+
+    aggregateGroupFields(target = this.aggregateState?.retarget) {
+      return this.aggregateFields(target).filter((field) => field.groupable && !field.collection);
+    }
+
+    aggregateMeasureFields(fn, target = this.aggregateState?.retarget) {
+      return this.aggregateFields(target).filter((field) => !field.collection && Array.isArray(field.aggregates) && field.aggregates.includes(fn));
     }
 
     aggregateFunctions() {
       const offered = new Set(["count"]);
-      this.aggregateFeatures.fields.forEach((field) => (field.aggregates || []).forEach((fn) => offered.add(fn)));
+      this.aggregateFields().forEach((field) => (field.aggregates || []).forEach((fn) => offered.add(fn)));
       offered.delete("bucket_count");
       return AGGREGATE_FUNCTIONS.filter((fn) => offered.has(fn));
     }
@@ -7726,6 +7952,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       const invalid = (card, message) => { errors.push(message); cardErrors[card].push(message); };
       const groupable = new Map(this.aggregateSelectedGroupFields().map((field) => [field.id, field]));
       const groups = state.groupBy.filter((id) => groupable.has(id));
+      if (groups.length !== state.groupBy.length) invalid("data", "Choose groups published for this target.");
       if (new Set(groups).size !== groups.length) invalid("data", "A field can be grouped only once.");
       if (limits.max_group_by && groups.length > limits.max_group_by) invalid("data", `At most ${limits.max_group_by} groups are allowed.`);
       const aliases = new Set(groups);
@@ -7750,6 +7977,10 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (!state.aggregates.length && !groups.length) invalid("data", "Add at least one aggregate.");
       if (limits.max_aggregates && state.aggregates.length > limits.max_aggregates) invalid("data", `At most ${limits.max_aggregates} aggregates are allowed.`);
       const query = {...structuredClone(state.retainedQuery || {}), select};
+      if (state.retarget) {
+        if (!this.aggregateTargets().some(target => target.path === state.retarget)) invalid("data", "Retarget is not published.");
+        query.retarget = state.retarget;
+      }
       if (state.selectionLayout) {
         const measures = select.slice(groups.length), groupColumns = groupSelect.slice();
         query.select = state.selectionLayout.map(kind => kind === "group" ? groupColumns.shift() : measures.shift()).filter(item => item !== undefined);
@@ -7793,10 +8024,19 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
             && JSON.stringify(imported.groups) === JSON.stringify(groups) ? structuredClone(imported.wire) : sets;
         }
       }
+      if (state.subtotal_position !== undefined) {
+        if (features.supports.subtotal_position !== true || !["before", "after"].includes(state.subtotal_position) || state.grouping === "none") invalid("page", "Subtotal placement requires a published placement and subtotal mode.");
+        query.subtotal_position = state.subtotal_position;
+      }
+      if (state.pivot !== undefined) {
+        query.pivot = structuredClone(state.pivot);
+        this.aggregatePivotErrors(query, state).forEach(message => invalid("page", message));
+      }
+      if (state.pivotInputError) invalid("page", state.pivotInputError);
       const orders = state.orders || [];
       if (orders.length || state.ordersPresent) {
         const sortable = new Set(this.aggregateSortFields().map(field => field.path));
-        if (orders.length && (!groups.length || state.grouping !== "none")) invalid("page", "Sorting requires groups and no subtotals.");
+        if (orders.length && !this.aggregateCanSort()) invalid("page", "Sorting requires groups and no subtotals, or explicit subtotal placement.");
         if (limits.max_orders !== undefined && orders.length > limits.max_orders) invalid("page", `At most ${limits.max_orders} sort rows are allowed.`);
         orders.forEach(order => { if (!sortable.has(order.field) || !["asc", "desc"].includes(order.direction)) invalid("page", "Choose an available sort field and direction."); });
         query.order_by = orders.map(({field, direction}) => ({field, direction}));
@@ -7861,14 +8101,14 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     aggregateSortFields() {
       if (!this.aggregateState.groupBy.length) return [];
       return [
-        ...this.aggregateSelectedGroupFields().filter(f => f.sortable && this.aggregateState.groupBy.includes(f.id)).map(f => ({...f, path: f.id})),
+        ...this.aggregateSelectedGroupFields().filter(f => f.sortable && this.aggregateState.groupBy.includes(f.id) && f.id !== this.aggregateState.pivot?.column).map(f => ({...f, path: f.id})),
         ...this.aggregateState.aggregates.filter(a => a.alias).flatMap(a => a.fn === "bucket_count"
           ? (a.retained?.buckets?.ranges || []).map((range, i) => ({path:`${a.alias}__bucket_${i + 1}`, label:`${a.alias}: ${range.label}`})) : [{path: a.alias, label: a.alias}]),
       ];
     }
 
     aggregateMeasureLabel(aggregate) {
-      const field = this.aggregateFeatures.fields.find(f => f.id === aggregate.field);
+      const field = this.aggregateFields().find(f => f.id === aggregate.field);
       const label = aggregate.fn === "avg" ? "Average" : AGGREGATE_LABELS[aggregate.fn] || humanize(aggregate.fn);
       return `${label} of ${field?.label || aggregate.field || "rows"}`;
     }
@@ -7877,6 +8117,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       const target = this.root.querySelector("[data-sac-aggregate-data]");
       if (!target || !this.aggregateFeatures || !this.aggregateState) return;
       const state = this.aggregateState;
+      const targetSlot = this.root.querySelector("[data-sac-aggregate-target]");
       this.root.querySelectorAll("[data-sac-post-query-card]").forEach(card => {card.hidden = false;});
       this.root.querySelector("[data-sac-run-label]").textContent = "Run query";
       const button = (text, action, index, label) => {
@@ -7898,6 +8139,11 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         if (type === "number") {node.min = name === "limit" && !state.importedPage ? "1" : "0"; const max = this.aggregateFeatures.limits?.[`max_${name}`]; if (max !== undefined) node.max = String(max);}
         wrapper.append(node); return wrapper;
       };
+      if (targetSlot) {
+        targetSlot.replaceChildren(); targetSlot.hidden = this.aggregateFeatures.supports.retarget !== true;
+        if (!targetSlot.hidden) targetSlot.append(selector("Count by", "retarget", [{value:"",label:"Root"},
+          ...this.aggregateTargets().map(target => ({value:target.path,label:target.label || target.path}))], state.retarget || ""));
+      }
       const labelOf = new Map(this.aggregateSelectedGroupFields().map(field => [field.id, field.label]));
       for (const kind of ["group", "measure"]) {
         const container = this.root.querySelector(`[data-sac-${kind}-chips]`); container.replaceChildren();
@@ -7941,6 +8187,10 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       this.renderFilterFieldList();
       const page = this.root.querySelector("[data-sac-aggregate-page]"); page.replaceChildren();
       page.append(selector("Subtotal rows", "grouping", this.aggregateGroupingModes(), state.grouping));
+      if (this.aggregateFeatures.supports.subtotal_position === true && state.grouping !== "none") page.append(selector("Subtotals", "subtotal-position", [
+        {value:"",label:"Host default placement"}, {value:"before",label:"Before their rows"}, {value:"after",label:"After their rows"}
+      ], state.subtotal_position || ""));
+      if (this.aggregateFeatures.supports.pivot === true) this.renderAggregatePivot(page, selector, input);
       for (const [key, label] of [["timezone", "Timezone"], ["count", "Count mode"], ["complete", "Complete grid"]]) {
         if (Object.hasOwn(state.retainedQuery || {}, key)) page.append(element("p", "sac-help", `${label}: ${state.retainedQuery[key]} (kept from imported JSON).`));
       }
@@ -7958,12 +8208,12 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         page.append(list);
       }
       const addSort = this.root.querySelector("[data-sac-add-order]");
-      addSort.hidden = !state.groupBy.length || state.grouping !== "none";
+      addSort.hidden = !this.aggregateCanSort();
       addSort.disabled = !this.aggregateSortFields().length;
       const orders = element("div", "sac-order-list"); orders.dataset.sacAggregateOrders = "";
       this.renderOrders(orders, state.orders || [], this.aggregateSortFields(), false);
-      if (state.grouping === "none") page.append(orders);
-      else page.append(element("p", "sac-help", "Subtotal rows use the published group order; custom sorting is unavailable."));
+      if (this.aggregateCanSort()) page.append(orders);
+      else page.append(element("p", "sac-help", "Subtotal rows use the published group order; choose explicit subtotal placement to enable custom sorting when supported."));
       const paging = element("div", "sac-inline-controls");
       paging.append(input("Limit", "limit", state.limit, "number"), input("Offset", "offset", state.offset, "number"));
       page.append(paging);
@@ -7972,7 +8222,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     renderAggregateMeasureList() {
       this.renderAvailableFields("measure", [{id:"",path:"rows",label:"Count of rows",type:"rows",aggregates:["count"]},
-        ...this.aggregateFeatures.fields.filter(f => this.aggregateFunctions().some(fn => this.aggregateMeasureFields(fn).includes(f)))
+        ...this.aggregateFields().filter(f => this.aggregateFunctions().some(fn => this.aggregateMeasureFields(fn).includes(f)))
           .map(f => ({...f, aggregates:f.aggregates.filter(fn => this.aggregateFunctions().includes(fn))}))]);
     }
 
@@ -8002,15 +8252,31 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     aggregateControl(target) {
       const name = target.dataset.sacAggregateControl, index = Number(target.dataset.index);
+      if (name === "retarget") return this.changeAggregateTarget(target.value);
+      if (name === "subtotal-position") return this.aggregateChanged(state => {
+        if (target.value) state.subtotal_position = target.value;
+        else {delete state.subtotal_position; if (state.grouping !== "none") {state.orders = []; delete state.ordersPresent;}}
+      });
+      if (name.startsWith("pivot-")) return this.aggregatePivotControl(target);
       if (name === "aggregate-alias" || name === "limit" || name === "offset") {
         // Typing must not rebuild the control being typed into.
         if (name === "aggregate-alias") {
           const previous = this.aggregateState.aggregates[index].alias;
+          if (this.aggregateState.pivot?.top?.measure === previous) this.aggregateState.pivot.top.measure = target.value;
           this.aggregateState.aggregates[index].alias = target.value;
           (this.aggregateState.orders || []).forEach(order => {
             if (order.field === previous) order.field = target.value;
             else if (this.aggregateState.aggregates[index].fn === "bucket_count" && order.field.startsWith(`${previous}__bucket_`)) order.field = target.value + order.field.slice(previous.length);
           });
+          const rankMeasure = this.root.querySelector('[data-sac-aggregate-control="pivot-top-measure"]');
+          if (rankMeasure) {
+            for (const option of rankMeasure.children) {
+              if (option.value === previous || option.value.startsWith(`${previous}__bucket_`)) {
+                option.value = target.value + option.value.slice(previous.length); option.textContent = option.value;
+              }
+            }
+            rankMeasure.value = this.aggregateState.pivot.top.measure;
+          }
           const orders = this.root.querySelector("[data-sac-aggregate-orders]");
           if (orders) this.renderOrders(orders, this.aggregateState.orders, this.aggregateSortFields(), false);
         }
@@ -8040,7 +8306,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         else if (name === "grouping") {
           if (!this.aggregateGroupingModes().some(mode => mode.value === target.value)) return;
           state.grouping = target.value; if (target.value !== "sets") state.sets = [];
-          if (target.value !== "none") {state.orders = []; delete state.ordersPresent;}
+          if (target.value === "none") delete state.subtotal_position;
+          if (target.value !== "none" && !state.subtotal_position) {state.orders = []; delete state.ordersPresent;}
         }
         else if (name === "set") {
           const key = target.dataset.set;
@@ -8053,6 +8320,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
 
     aggregateAction(target) {
       const action = target.dataset.sacAggregateAction, index = Number(target.dataset.index);
+      if (action === "pivot-add-value") return this.addAggregatePivotValue();
       if (action === "aggregate-add") return this.addAggregateMeasure("count");
       const group = action.startsWith("group-"), items = group ? this.aggregateState.groupBy : this.aggregateState.aggregates;
       if (!items[index]) return;
@@ -8072,7 +8340,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
             state.groupEntries = state.groupEntries?.filter(entry => entry.alias !== labelId);
             state.groupSelections = state.groupSelections?.filter(entry => entry.id !== labelId);
           }
-          if (!items.length) {state.grouping = "none"; state.orders = []; delete state.ordersPresent;}}
+          if (!items.length) {delete state.subtotal_position; state.grouping = "none"; state.orders = []; delete state.ordersPresent;}}
         const sortable = new Set(this.aggregateSortFields().map(f => f.path));
         state.orders = (state.orders || []).filter(order => sortable.has(order.field));
       });
@@ -8302,12 +8570,30 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       }
       if (columns.length) {
         const tr = element("tr", "");
+        const pivoted = columns.some(column => isPlainObject(column.pivot));
+        const values = element("tr", "");
+        let measureHeader;
         columns.forEach((column) => {
-          const th = element("th", "", columnLabel(column));
-          if (th.textContent !== columnId(column)) th.title = columnId(column);
-          tr.append(th);
+          const pivot = isPlainObject(column.pivot) ? column.pivot : null;
+          if (pivoted && pivot) {
+            // Preserve returned column order and ids, including host collision suffixes.
+            if (measureHeader?.dataset.measure === pivot.measure) measureHeader.colSpan += 1;
+            else {
+              measureHeader = element("th", "", pivot.measure); measureHeader.colSpan = 1;
+              measureHeader.dataset.measure = pivot.measure; measureHeader.scope = "colgroup"; tr.append(measureHeader);
+            }
+            const label = pivot.total === true ? "Total" : pivot.other === true ? "Other" : pivot.value === null ? "(empty)" : String(pivot.value);
+            const th = element("th", "", label); th.title = columnId(column); th.scope = "col"; values.append(th);
+          } else {
+            measureHeader = null;
+            const th = element("th", "", columnLabel(column));
+            if (th.textContent !== columnId(column)) th.title = columnId(column);
+            if (pivoted) th.rowSpan = 2;
+            th.scope = "col"; tr.append(th);
+          }
         });
         head.append(tr);
+        if (pivoted) head.append(values);
         const rowMeta = this.queryProfile === "aggregate" && Array.isArray(data.row_meta) ? data.row_meta : [];
         rows.forEach((row, rowIndex) => {
           const kind = rowMeta[rowIndex] && rowMeta[rowIndex].kind;

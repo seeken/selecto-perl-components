@@ -199,10 +199,12 @@ with the canonical Explorer host's fingerprint and features revision. Group
 order, supported temporal formats and numeric/year buckets, measure aliases,
 filters and actual rollup, cube or grouping sets are
 retained. Plain groups retain paging and measure ordering; grids hand over all
-visible cells. Subtotals use the route's fixed ordering, so partial subtotal
-pages and custom subtotal orderings are disabled. As of is not in the current
-Explorer route contract. Unsupported expressions, aliases or host capabilities
-also disable the button with a specific title. Aggregate links require enabled,
+visible cells. Hosts advertising C<supports.as_of>, C<supports.retarget>,
+C<supports.pivot> and C<supports.subtotal_position> can also receive the read
+clock/timezone, root-relative retarget intent, summary pivot options and exact
+partial subtotal pages with measure ordering. Continued-parent headers are
+presentation only. Missing capabilities, pivot budgets, unsupported expressions
+or aliases disable the button with a specific title. Aggregate links require enabled,
 authorized canonical Explorer routes. Private URL mode omits the API link.
 
 =head1 METHODS

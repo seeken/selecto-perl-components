@@ -497,12 +497,21 @@ formats and numeric/year buckets, measure aliases, filters, segments and
 parameters, and the actual
 rollup, cube or grouping sets used by the Explorer. Plain grouped queries retain
 page limit/offset and measure ordering; grids hand over all their visible cells.
-Subtotal rows use the canonical route's fixed order. A subtotal page that would
-select different rows is disabled, as are custom subtotal ordering, As of
-(the current route has no As of member), relative date filters with a different
-clock, unformatted group aliases, unsupported group expressions, measure
-transforms and summary pivots. The disabled button's title explains why. Aggregate
-links require enabled canonical Explorer routes and their host authorization.
+When advertised by the host's matching `supports.*` flag, handoffs also retain
+As of (and the native query timezone), the retarget path with root-relative
+output fields and root-context filters/segments, and summary pivot options:
+column, typed chosen values (including NULL), top-N measure/order, Other,
+totals and declared column value order. Partial subtotal pages and measure
+ordering use `subtotal_position: "before"`, preserving the native limit/offset;
+continued-parent display headers are not data rows. Existing complete aggregate
+handoffs keep their envelope unless one of these new members applies.
+Missing capabilities and pivot column, group or page-cell budgets disable the
+link with a specific title. Data-dependent limits still apply when it runs.
+Relative date filters without an explicit As of, unformatted group aliases,
+dimension/selected-value row groups, custom row-group value orders,
+unsupported group expressions and measure transforms remain disabled. Other
+requires chosen values or top-N; empty top-N layouts also remain disabled.
+The disabled button's title explains why. Aggregate links require enabled canonical Explorer routes and their host authorization.
 Private URL mode continues to omit the API link.
 
 The SPA's Detail handoff is built in its own sibling workspace; this package's

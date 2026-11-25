@@ -156,12 +156,9 @@ for my $backend ('sqlite', ($ENV{SELECTO_PERL_TEST_POSTGRES_URL} ? ('postgresql'
         like $message->{selecto}{api_console_control}, qr{href="/api/orders/console#request=},
             'WebSocket updates carry the aggregate API link';
         for my $case (
-            [{limit => 2, page => 2}, qr/Subtotal pagination uses a different row order/],
-            [{as_of => '2026-03-15'}, qr/As of is not supported/],
             [{measure_alias => ['', 'Total amount']}, qr/aliases must be unique API identifiers/],
             [{group_alias => ['Area', '']}, qr/Aliases on unformatted groups/],
             [{group_format => ['text_prefix', '']}, qr/group format &#39;text_prefix&#39;/],
-            ($adapter->supports('rollup') ? ([{order => 'measure:amount', direction => 'desc'}, qr/Custom ordering with subtotals/]) : ()),
         ) {
             $t->get_ok('/orders' => form => {%base, %{$case->[0]}})->status_is(200)
                 ->element_exists('button[data-sc-api-console][disabled]');
@@ -202,11 +199,10 @@ for my $backend ('sqlite', ($ENV{SELECTO_PERL_TEST_POSTGRES_URL} ? ('postgresql'
                 'handoff failures do not expose host exception text');
             $config->canonical_authorizer($old);
         }
-        # As of is absent from BOTH the envelope and query contracts in the
-        # current host. Never strip it and silently run a query at another time.
+        # The optional read clock is now admitted by the canonical host.
         $t->post_ok('/api/orders/explorer-query' => {'X-CSRF-Token' => $csrf}
             => json => {%$payload, query => {%{$payload->{query}}, as_of => '2026-03-15'}})
-            ->status_is(422)->json_is('/error/code' => 'invalid_query');
+            ->status_is(200)->json_is('/meta/as_of' => '2026-03-15');
         $dbh->disconnect;
     };
 }

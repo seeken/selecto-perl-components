@@ -24,12 +24,8 @@ sub _aggregate ($class, $model, $controller) {
     return _disabled('The aggregate query must have valid results before opening the API console.')
         unless $state->valid && $engine && $built;
     return _disabled('The aggregate grid exceeds the Explorer result limits.') if $built->{grid_limit_exceeded};
-    return _disabled('As of is not supported by the canonical Explorer query route.') if defined $state->as_of;
-    return _disabled('Retargeted aggregates are not supported by the canonical Explorer query route.')
-        if defined $state->retarget;
-    return _disabled('Summary pivots require multiple queries and cannot be handed to the API console.') if $built->{pivot};
     return _disabled('Relative date filters use a different clock in the canonical Explorer query route.')
-        if grep { !$_->{draft} && $_->{op} eq 'date_shortcut' } @{$state->filters};
+        if !defined($state->as_of) && grep { !$_->{draft} && $_->{op} eq 'date_shortcut' } @{$state->filters};
 
     my $authorized = $config->canonical_authorizer->($controller);
     return _disabled('Canonical Explorer access is not authorized for this request.')
@@ -40,23 +36,45 @@ sub _aggregate ($class, $model, $controller) {
     my $host = Selecto::Components::Canonical::_explorer($config, $config, $engine, $publication, $controller);
     my $features = $host->features($engine);
     return _disabled('Aggregates are disabled by the canonical Explorer host.') unless $features->{supports}{aggregate};
+    for my $member (
+        (defined($state->as_of) ? ('as_of') : ()),
+        (defined($state->retarget) ? ('retarget') : ()),
+        ($built->{pivot} ? ('pivot') : ()),
+    ) {
+        return _disabled("The canonical Explorer host does not advertise supports.$member.")
+            unless $features->{supports}{$member};
+    }
     my %fields = map { ($_->{id} => $_) } @{$features->{fields}};
+    my %output_fields = %fields;
+    if (defined $state->retarget) {
+        my ($target) = grep { $_->{path} eq $state->retarget } @{$features->{retargets} // []};
+        return _disabled('The retarget path is not published by the canonical Explorer host.') unless $target;
+        %output_fields = map { ($_->{id} => $_) } @{$target->{fields}};
+    }
     my (@groups, @select, %names, %order_ids);
-    my $field_map = $config->field_map($engine->domain);
-    for my $column (grep { !$_->{measure} } @{$built->{columns}}) {
+    my $field_map = $config->field_map($engine->domain, $state->retarget);
+    my @group_columns = grep { !$_->{measure} } @{$built->{columns}};
+    if ($built->{pivot}) {
+        return _disabled('The native summary pivot exceeds its column or cell limits.')
+            unless $built->{pivot_data} && !$built->{pivot_data}{limit};
+        my %columns = map { ($_->{field} => $_) } @group_columns, $built->{pivot_data}{column_axis};
+        @group_columns = map { $columns{$_} } @{$state->groups};
+    }
+    for my $column (@group_columns) {
         my $id = $column->{field};
+        my $axis = $built->{pivot} && $id eq $state->pivot_column;
         my $gc = $state->group_configs->{$id} // {};
         my $field = $column->{source_field} // $id;
         return _disabled('Dimension, selected-value, and custom-order groups cannot be handed to the API console.')
-            if $column->{dimension} || $column->{pivot_values} || $column->{value_order};
+            if $column->{dimension} || (!$axis && ($column->{pivot_values} || $column->{value_order}));
         return _disabled('A grouping field is not published as groupable by the canonical Explorer host.')
-            unless $fields{$field} && $fields{$field}{groupable};
+            unless $output_fields{$field} && $output_fields{$field}{groupable};
         my $format = $gc->{format} // '';
         my $alias = $gc->{alias} // '';
         if (length($format) && $format ne 'default') {
-            my $buckets = _buckets($format, $gc->{bucket_ranges}, $fields{$field}{type});
+            my $buckets = _buckets($format, $gc->{bucket_ranges}, $output_fields{$field}{type});
             return _disabled("The group format '$format' cannot be handed to the API console.")
-                unless $buckets || grep { $_ eq $format } @{$fields{$field}{group_formats}};
+                unless $buckets || grep { $_ eq $format } @{$output_fields{$field}{group_formats}};
             $alias = $column->{key} unless length $alias;
             push @groups, {field => $field, alias => $alias,
                 ($buckets ? (buckets => $buckets) : (format => $format))};
@@ -81,7 +99,7 @@ sub _aggregate ($class, $model, $controller) {
         my $field = $column->{field};
         return _disabled('Measure transforms cannot be handed to the API console.') if @{$mc->{transforms} // []};
         my $allowed = defined($field)
-            ? ($fields{$field} && grep { $_ eq $function } @{$fields{$field}{aggregates}})
+            ? ($output_fields{$field} && grep { $_ eq $function } @{$output_fields{$field}{aggregates}})
             : $function eq 'count';
         return _disabled("The measure function '$function' is not published by the canonical Explorer host.") unless $allowed;
         my $alias = length($mc->{alias} // '') ? $mc->{alias} : $column->{key};
@@ -94,9 +112,10 @@ sub _aggregate ($class, $model, $controller) {
     }
 
     my (@filters, %clauses, @clauses);
+    my $filter_map = $config->filter_map($engine->domain, $state->retarget);
     for my $filter (grep { !$_->{draft} } @{$state->filters}) {
         return _disabled('Conditional filters cannot be handed to the API console.')
-            if $field_map->{$filter->{field}}{conditional};
+            if $filter_map->{$filter->{field}}{conditional};
         my $entry = {field => $filter->{field}, op => $filter->{op}};
         my $field = $fields{$filter->{field}};
         return _disabled('A filter field is not published by the canonical Explorer host.') unless $field;
@@ -124,6 +143,9 @@ sub _aggregate ($class, $model, $controller) {
     push @filters, {any => [map { {all => $clauses{$_}} } @clauses]} if @clauses;
     # These exclusions also affect every subtotal, not merely its label.
     for my $filter (@{$state->group_filters($field_map)}) {
+        # The wire pivot applies chosen-value membership itself, before
+        # computing row totals and paging. Native CASE sentinels are private.
+        next if $built->{pivot} && $filter->{pivot_values} && $filter->{from_group} eq $state->pivot_column;
         if ($filter->{grouped}) {
             my $gc = $state->group_configs->{$filter->{from_group}} // {};
             my $field = $fields{$filter->{field}};
@@ -152,23 +174,35 @@ sub _aggregate ($class, $model, $controller) {
         (@segments ? (segments => \@segments) : ()),
         (keys %{$state->query_library_parameters // {}} ? (parameters => {%{$state->query_library_parameters}}) : ()),
         row_format => 'arrays', limit => 0 + $state->limit, offset => ($state->page - 1) * $state->limit};
+    $query->{as_of} = $state->as_of if defined $state->as_of;
+    $query->{timezone} = $built->{query}->timezone if defined $built->{query}->timezone;
+    $query->{retarget} = $state->retarget if defined $state->retarget;
     my $mode = $built->{query}->grouping_mode;
     if ($mode eq 'rollup' || $mode eq 'cube' || $mode eq 'grouping_sets') {
         return _disabled("The canonical Explorer host does not support $mode.") unless $features->{supports}{$mode};
         if ($mode eq 'grouping_sets') { $query->{grouping_sets} = [map { [@$_] } @{$built->{query}->grouping_sets}] }
         else { $query->{$mode} = JSON::PP::true }
-        return _disabled('Subtotal pagination uses a different row order in the canonical Explorer query route.')
-            if !$built->{aggregate_grid} && ($state->page > 1 || $built->{has_more});
+        my $native_order = !$built->{aggregate_grid} && ($state->page > 1 || $built->{has_more}
+            || defined($state->as_of) || defined($state->retarget) || $built->{pivot}
+            || grep { $_->{field} =~ /\Ameasure:/ } @{$state->orders});
+        if ($native_order) {
+            return _disabled('The canonical Explorer host does not advertise supports.subtotal_position.')
+                unless $features->{supports}{subtotal_position};
+            $query->{subtotal_position} = 'before';
+        }
     }
     my @orders;
     for my $order (@{$state->orders}) {
         next unless $order->{field} =~ /\Ameasure:/; # Aggregate builder orders the other groups naturally.
-        return _disabled('Custom ordering with subtotals is not supported by the canonical Explorer query route.')
-            if $mode ne 'plain';
         return _disabled('This aggregate ordering cannot be handed to the API console.') unless $order_ids{$order->{field}};
         push @orders, {field => $order_ids{$order->{field}}, direction => $order->{direction}};
     }
     $query->{order_by} = \@orders if @orders;
+    if ($built->{pivot}) {
+        my $pivot = _pivot($state, $built, \%order_ids, \%output_fields, $features->{limits});
+        return $pivot if $pivot->{reason};
+        $query->{pivot} = $pivot;
+    }
     if ($built->{aggregate_grid}) {
         # A native grid reads all its cells rather than the selected page.
         return _disabled('The complete grid exceeds the canonical Explorer page limit.')
@@ -189,6 +223,10 @@ sub _aggregate ($class, $model, $controller) {
         my $context = {engine => $engine, features => $features, supports => $host->_supports($engine),
             catalogue => $host->_catalogue($engine->domain, $host->_supports($engine)), limits => $host->limits};
         $host->_check_supports($context, $query);
+        if (defined $state->retarget) {
+            $context->{retarget} = $state->retarget;
+            $context->{catalogue} = $host->_catalogue($engine->domain, $context->{supports}, $state->retarget);
+        }
         $host->_field_prepass($context, $query);
         $host->_check_conversions($context, $query);
         $host->_plan($context, $query);
@@ -198,6 +236,49 @@ sub _aggregate ($class, $model, $controller) {
     return {payload => {format => 'selecto.explorer-query', format_version => 1,
         domain => {fingerprint => $features->{domain}{fingerprint}}, features => {revision => $features->{revision}},
         query => $query}};
+}
+
+sub _pivot ($state, $built, $ids, $fields, $limits) {
+    return _disabled('An Other pivot column requires chosen values or top-N in the canonical Explorer query route.')
+        if $state->pivot_column_other && !$state->pivot_column_top && !@{$state->pivot_column_values // []};
+    return _disabled('An empty top-N pivot has no native column layout to hand to the canonical Explorer query route.')
+        if $state->pivot_column_top && !@{$built->{pivot_data}{columns}};
+    for my $budget ([max_group_by => scalar @{$state->groups}],
+        [max_aggregates => scalar @{$state->measures}],
+        [max_select => scalar(@{$state->groups}) + scalar(@{$state->measures})]) {
+        return _disabled("The pivot shape exceeds the canonical Explorer $budget->[0] limit.")
+            if $budget->[1] > $limits->{$budget->[0]};
+    }
+    my $axis = $built->{pivot_data}{column_axis};
+    my $gc = $state->group_configs->{$state->pivot_column};
+    my $type = length($gc->{format} // '') && $gc->{format} ne 'default'
+        ? 'string' : $fields->{$axis->{source_field}}{type};
+    my $typed = sub ($value) { defined($value) ? _value({type => $type}, $value) : undef };
+    my $pivot = {column => $ids->{$state->pivot_column},
+        other => $state->pivot_column_other ? JSON::PP::true : JSON::PP::false,
+        totals => $state->pivot_totals ? JSON::PP::true : JSON::PP::false};
+    if ($state->pivot_column_top) {
+        return _disabled('The pivot top-N limit exceeds the canonical Explorer max_buckets limit.')
+            if $state->pivot_column_top + $state->pivot_column_other > $limits->{max_buckets};
+        $pivot->{top} = {limit => 0 + $state->pivot_column_top,
+            measure => $ids->{'measure:' . $state->pivot_column_top_measure}, order => $state->pivot_column_top_order};
+    } elsif (@{$state->pivot_column_values // []}) {
+        my $null_index = $state->pivot_column_value_null;
+        $pivot->{values} = [map {
+            defined($null_index) && "$null_index" eq "$_"
+                ? undef : $typed->($state->pivot_column_values->[$_])
+        } 0 .. $#{$state->pivot_column_values}];
+    }
+    $pivot->{value_order} = [map { $typed->($_) } @{$axis->{value_order}}] if $axis->{value_order};
+    my $columns = @{$built->{pivot_data}{columns}};
+    return _disabled('The pivot columns exceed the canonical Explorer max_buckets limit.') if $columns > $limits->{max_buckets};
+    my $rows = grep { !$_->{__selecto_rollup_continued} } @{$built->{records}};
+    my $width = @{$state->groups} - 1 + ($columns + ($pivot->{totals} ? 1 : 0)) * @{$state->measures};
+    return _disabled('The pivot page exceeds the canonical Explorer max_result_cells limit.')
+        if $rows * $width > $limits->{max_result_cells};
+    return _disabled('The pivot groups exceed the canonical Explorer max_groups limit.')
+        if $rows > $limits->{max_groups} || $columns > $limits->{max_groups};
+    return $pivot;
 }
 
 sub _alias ($value) { return $value =~ /\A[A-Za-z_][A-Za-z0-9_]{0,62}\z/ }

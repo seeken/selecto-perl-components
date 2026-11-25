@@ -49,6 +49,23 @@ $t->get_ok('/api/items/explorer-features')->status_is(200)->json_is('/format' =>
     ->json_is('/domain/publication' => 'publication-1');
 my $features = $t->tx->res->json;
 is_deeply [map { $_->{id} } @{$features->{fields}}], [qw(id kind name)], 'withheld fields are not published';
+$t->get_ok('/api/items/openapi.json')->status_is(200)
+    ->json_is('/paths/~1api~1items~1explorer-query/post/operationId' => 'queryExplorer')
+    ->json_is('/paths/~1api~1items~1explorer-features/get/operationId' => 'getExplorerFeatures')
+    ->json_is('/x-selecto-explorer-supports/as_of' => Mojo::JSON::true);
+my $explorer_openapi = $t->tx->res->json;
+my $query_properties = $explorer_openapi->{paths}{'/api/items/explorer-query'}{post}{requestBody}
+    {content}{'application/json'}{schema}{properties}{query}{properties};
+is $query_properties->{as_of}{type}, 'string', 'aggregate As of is published on the actual route';
+is_deeply $query_properties->{subtotal_position}{enum}, ['before', 'after'], 'placement contract is published';
+{
+    my $original = $config->canonical_explorer;
+    $config->canonical_explorer({%$original, supports => {as_of => 0}});
+    $t->get_ok('/api/items/openapi.json')->status_is(200)
+        ->json_is('/x-selecto-explorer-supports/as_of' => Mojo::JSON::false)
+        ->json_is('/paths/~1api~1items~1explorer-query/post/requestBody/content/application~1json/schema/properties/query/properties/as_of' => Mojo::JSON::false);
+    $config->canonical_explorer($original);
+}
 my $envelope = {format => 'selecto.explorer-query', format_version => 1,
     domain => {fingerprint => $features->{domain}{fingerprint}}, features => {revision => $features->{revision}},
     request_id => 'c1', query => {group_by => ['kind'], select => ['kind', {aggregate => 'count', alias => 'n'}]}};
@@ -73,6 +90,10 @@ Selecto::Components::Canonical->register($without->routes, $plain, '/api/items')
 my $w = Test::Mojo->new($without);
 $w->get_ok('/api/items')->status_is(200)->json_is('/profiles' => ['remote_query.v1']);
 $w->get_ok('/api/items/explorer-features')->status_is(404);
+$w->get_ok('/api/items/openapi.json')->status_is(200);
+delete $explorer_openapi->{paths}{$_} for qw(/api/items/explorer-features /api/items/explorer-query);
+delete $explorer_openapi->{'x-selecto-explorer-supports'};
+is_deeply $explorer_openapi, $w->tx->res->json, 'Detail OpenAPI is unchanged by the Explorer extension';
 
 my %defaults = %$config;
 delete $defaults{canonical_explorer};

@@ -22,6 +22,7 @@ examples/canonical-stack.pl
 examples/lib/CanonicalStack.pm
 t/canonical_explorer.t
 t/aggregate_api_link.t
+t/aggregate_api_coverage.t
 xt/canonical_stack_postgresql.t
 playwright.api-console.config.js
 t/browser-stack/api-console.spec.js
