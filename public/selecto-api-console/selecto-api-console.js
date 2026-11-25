@@ -3433,14 +3433,23 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         <section data-sac-main-panel="query" class="sac-main-panel">
           <div class="sac-query-layout">
             <aside class="sac-builder">
-              <section class="sac-card">
-                <div class="sac-card-heading"><div><span class="sac-step">1</span><h2 data-sac-data-heading>Choose data</h2></div></div>
-                <div data-sac-detail-data>
+              <section class="sac-card" data-sac-request-section data-sac-query-step hidden>
+                <div class="sac-card-heading"><div><span class="sac-step"></span><h2>Request</h2></div></div>
                 <fieldset class="sac-method-choice" data-sac-query-method-group hidden>
                   <legend class="sac-label">Request method</legend>
                   <label class="sac-method-option"><input type="radio" name="sac-query-method" value="post" data-sac-query-method> POST query</label>
                   <label class="sac-method-option"><input type="radio" name="sac-query-method" value="get" data-sac-query-method> GET resource</label>
                 </fieldset>
+                ${this.remoteMode || this.aggregateAdvertised ? `<div class="sac-profile-choice">
+                  <label class="sac-label">Query profile<select aria-label="Query profile" data-sac-root-mode><option value="flat">${this.remoteMode ? "Flat Detail (v1)" : "Detail"}</option>${this.remoteMode ? `<option value="root" ${this.rootPredicateContext ? "" : "disabled"}>Recursive root predicates (v2)</option><option value="nested" ${this.nestedDetailContext ? "" : "disabled"}>Complete nested Detail (v1)</option>` : ""}<option value="aggregate" ${this.aggregateFeatures ? "" : "disabled"}>Aggregates (explorer v1)</option></select></label>
+                  <p class="sac-help" data-sac-aggregate-availability hidden></p>
+                  ${this.remoteMode ? `<p class="sac-help" data-sac-root-availability>${this.rootPredicateContext ? "Recursive root predicates available; opt in explicitly." : "Recursive root predicates unavailable on this publication."}</p>
+                  <p class="sac-help" data-sac-nested-availability></p>` : ""}
+                </div>` : ""}
+              </section>
+              <section class="sac-card" data-sac-data-card data-sac-query-step>
+                <div class="sac-card-heading"><div><span class="sac-step"></span><h2 data-sac-data-heading>Choose data</h2></div></div>
+                <div data-sac-detail-data>
                 <div data-sac-resource-id-wrap hidden>
                   <label class="sac-label" for="sac-resource-id">Resource ID</label>
                   <input id="sac-resource-id" type="text" inputmode="numeric" placeholder="7001" data-sac-resource-id>
@@ -3492,8 +3501,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
                   <p class="sac-import-message" data-kind="error" data-sac-aggregate-errors="data" role="status" aria-live="polite" hidden></p>
                 </div>
               </section>
-              <section class="sac-card" data-sac-post-query-card>
-                <div class="sac-card-heading"><div><span class="sac-step">2</span><h2>Constrain</h2></div></div>
+              <section class="sac-card" data-sac-post-query-card data-sac-query-step>
+                <div class="sac-card-heading"><div><span class="sac-step"></span><h2>Constrain</h2></div></div>
                 <div data-sac-detail-constraints>
                 <div data-sac-segment-list>
                   <span class="sac-label">Named segments</span>
@@ -3509,8 +3518,8 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
                 <div class="sac-field-list sac-filter-field-list" data-sac-filter-field-list></div>
                 <p class="sac-import-message" data-kind="error" data-sac-aggregate-errors="constrain" role="status" aria-live="polite" hidden></p>
               </section>
-              <section class="sac-card" data-sac-post-query-card>
-                <div class="sac-card-heading"><div><span class="sac-step">3</span><h2 data-sac-page-heading>Order & page</h2></div><button type="button" class="sac-text-button" data-sac-add-order>+ Sort</button></div>
+              <section class="sac-card" data-sac-post-query-card data-sac-query-step>
+                <div class="sac-card-heading"><div><span class="sac-step"></span><h2 data-sac-page-heading>Order & page</h2></div><button type="button" class="sac-text-button" data-sac-add-order>+ Sort</button></div>
                 <div data-sac-aggregate-page hidden></div>
                 <div data-sac-detail-page>
                 <label class="sac-label" for="sac-ordering">Named ordering</label>
@@ -3547,12 +3556,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
                   <div class="sac-compact-actions"><span class="sac-edited" data-sac-edited hidden>Manually edited</span><span data-sac-post-editor-actions><button type="button" class="sac-text-button" data-sac-load-json>Load into chooser</button><button type="button" class="sac-text-button" data-sac-reset-json>Reset JSON</button></span><button type="button" class="sac-text-button" data-sac-copy-link>Copy link</button><button type="button" class="sac-text-button" data-sac-copy-request>Copy</button></div>
                 </div>
                 <div class="sac-import-message" data-sac-import-message hidden></div>
-                ${this.remoteMode || this.aggregateAdvertised ? `<div class="sac-root-controls">
-                  <label>Query profile<select aria-label="Query profile" data-sac-root-mode><option value="flat">${this.remoteMode ? "Flat Detail (v1)" : "Detail"}</option>${this.remoteMode ? `<option value="root" ${this.rootPredicateContext ? "" : "disabled"}>Recursive root predicates (v2)</option><option value="nested" ${this.nestedDetailContext ? "" : "disabled"}>Complete nested Detail (v1)</option>` : ""}<option value="aggregate" ${this.aggregateFeatures ? "" : "disabled"}>Aggregates (explorer v1)</option></select></label>
-                  <p data-sac-aggregate-availability hidden></p>
-                  ${this.remoteMode ? `
-                  <p data-sac-root-availability>${this.rootPredicateContext ? "Recursive root predicates available; opt in explicitly." : "Recursive root predicates unavailable on this publication."}</p>
-                  <p data-sac-nested-availability></p>
+                ${this.remoteMode ? `<div class="sac-root-controls">
                   <details><summary>Root predicate state</summary><label>Root predicate state<textarea aria-label="Root predicate state" data-sac-root-state spellcheck="false"></textarea></label>
                     <button type="button" data-sac-root-restore>Restore root state</button><button type="button" data-sac-root-link>Copy root state link</button>
                     <button type="button" data-sac-root-save>Save private root state</button><button type="button" data-sac-root-private>Restore private root state</button>
@@ -3560,7 +3564,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
                   <details data-sac-nested-state-controls><summary>Nested Detail state</summary><label>Nested Detail state<textarea aria-label="Nested Detail state" data-sac-nested-state spellcheck="false"></textarea></label>
                     <button type="button" data-sac-nested-restore>Restore nested state</button><button type="button" data-sac-nested-link>Copy nested state link</button>
                     <button type="button" data-sac-nested-save>Save private nested state</button><button type="button" data-sac-nested-private>Restore private nested state</button>
-                  </details>` : ""}
+                  </details>
                 </div>` : ""}
                 <section class="sac-nested-builder" data-sac-nested-builder hidden></section>
                 <textarea class="sac-request-editor" spellcheck="false" aria-label="Query request" data-sac-request></textarea>
@@ -4484,6 +4488,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       this.renderAsOf(this.root.querySelector("[data-sac-as-of-slot]"), "flat");
       this.renderFilterFieldList();
       this.renderOrders();
+      this.renderQuerySections();
       this.syncRequest();
     }
 
@@ -5750,6 +5755,24 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         ...(this.queryProfile === "flat" ? {state: structuredClone(this.state)} : {})};
     }
 
+    renderQuerySections() {
+      const request = this.root.querySelector("[data-sac-request-section]");
+      if (!request) return;
+      const flat = this.queryProfile === "flat";
+      const chooser = flat || this.queryProfile === "aggregate";
+      const method = this.root.querySelector("[data-sac-query-method-group]");
+      method.hidden = !flat || !this.resourcePath;
+      request.hidden = method.hidden && !this.root.querySelector("[data-sac-root-mode]");
+      this.root.querySelector("[data-sac-data-card]").hidden = !chooser;
+      this.root.querySelectorAll("[data-sac-post-query-card]").forEach((card) => {
+        card.hidden = !chooser || (flat && this.state.queryMethod === "get" && Boolean(this.resourcePath));
+      });
+      let step = 0;
+      this.root.querySelectorAll("[data-sac-query-step]").forEach((card) => {
+        card.querySelector(".sac-step").textContent = card.hidden ? "" : String(++step);
+      });
+    }
+
     applyQueryProfile() {
       const nested = this.queryProfile === "nested";
       this.rootMode = this.queryProfile === "root";
@@ -5760,7 +5783,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         const path = this.root.querySelector("[data-sac-query-path]"); if (path) path.textContent = this.aggregateQueryPath;
         const editor = this.root.querySelector("[data-sac-request]"); if (editor) editor.readOnly = false;
       }
-      const builder = this.root.querySelector(".sac-builder"); if (builder) builder.hidden = !["flat", "aggregate"].includes(this.queryProfile);
+      this.renderQuerySections();
       const panel = this.root.querySelector("[data-sac-nested-builder]"); if (panel) panel.hidden = !nested;
       const aggregate = this.queryProfile === "aggregate";
       for (const name of ["data", "constraints", "page"]) {
@@ -6070,7 +6093,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         global.SelectoExplorerClient.assertRootPredicateIntent(state.intent,context);
         this.blockedInitialRequestText = null;
         this.rootState = state; this.rootMode = true;
-        const builder = this.root.querySelector(".sac-builder"); if (builder) builder.hidden = true;
+        this.renderQuerySections();
         const selector = this.root.querySelector("[data-sac-root-mode]"); if (selector) selector.value = "root";
         editor.value = JSON.stringify(this.buildPayload(),null,2);
         this.rootStateRequestText = editor.value;
@@ -8118,7 +8141,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (!target || !this.aggregateFeatures || !this.aggregateState) return;
       const state = this.aggregateState;
       const targetSlot = this.root.querySelector("[data-sac-aggregate-target]");
-      this.root.querySelectorAll("[data-sac-post-query-card]").forEach(card => {card.hidden = false;});
+      this.renderQuerySections();
       this.root.querySelector("[data-sac-run-label]").textContent = "Run query";
       const button = (text, action, index, label) => {
         const node = element("button", "sac-text-button", text); node.type = "button";

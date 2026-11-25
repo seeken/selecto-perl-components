@@ -23,6 +23,13 @@ test("Explorer opens the packaged Console and runs its Detail query with session
   const errors = [];
   consolePage.on("pageerror", error => errors.push(error.message));
   await expect(consolePage.getByRole("button", {name: "Run query", exact: true})).toBeEnabled();
+  const requestSection = consolePage.locator("aside.sac-builder > [data-sac-request-section]");
+  await expect(requestSection).toBeVisible();
+  await expect(requestSection.locator('[aria-label="Query profile"]')).toBeVisible();
+  await expect(consolePage.locator('[data-sac-query-step]:visible .sac-step')).toHaveText(["1", "2", "3", "4"]);
+  await expect(consolePage.locator('.sac-request-card [data-sac-root-mode]')).toHaveCount(0);
+  await expect(consolePage.locator('.sac-request-card [aria-label="Root predicate state"]')).toHaveCount(1);
+  await expect(consolePage.locator('.sac-request-card [aria-label="Nested Detail state"]')).toHaveCount(1);
   const exchange = consolePage.waitForResponse(response => new URL(response.url()).pathname === "/api/items/query");
   await consolePage.getByRole("button", {name: "Run query", exact: true}).click();
   const response = await exchange;

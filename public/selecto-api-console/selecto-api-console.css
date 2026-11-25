@@ -625,11 +625,13 @@ code, pre, textarea.sac-request-editor {
 @media (max-width: 1050px) {
   .sac-query-layout, .sac-mutation-layout { grid-template-columns: 1fr; }
   .sac-builder { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  [data-sac-request-section] { grid-column: 1 / -1; }
   .sac-card { min-width: 0; }
   .sac-filter-controls { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {
+  .sac-tabs { overflow-x: auto; }
   .sac-header { align-items: flex-start; flex-direction: column; }
   .sac-header-actions { justify-content: flex-start; }
   .sac-builder { grid-template-columns: 1fr; }
@@ -646,6 +648,11 @@ code, pre, textarea.sac-request-editor {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* Request choices share the builder card's responsive width and theme. */
+.sac-profile-choice .sac-label { margin-top: .5rem; }
+.sac-profile-choice select { display: block; margin-top: .35rem; }
+.sac-profile-choice .sac-help:last-child { margin-bottom: 0; }
 
 .sac-root-controls { margin-bottom: 1rem; }
 .sac-root-controls label { display: block; margin: .5rem 0; }
