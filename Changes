@@ -1,6 +1,8 @@
 Revision history for Selecto-Components
 
 0.5.0  Unreleased
+    - Sync the bundled API Console from f16c4b0: the chooser loads payloads
+      again when hosts build it headlessly from the bare prototype.
     - Sync the bundled API Console from fcc2a15: requests carry no domain pins
       by default on hosts that advertise optional_domain_pin; a "Pin to this
       domain version" checkbox restores them. Pin selecto-perl f93c9b7.

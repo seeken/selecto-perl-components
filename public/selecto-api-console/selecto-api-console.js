@@ -5207,7 +5207,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
     }
 
     pinsDomain(profile = this.queryProfile) {
-      return !this.supportsOptionalDomainPin(profile) || this.pinDomains[profile] === true;
+      return !this.supportsOptionalDomainPin(profile) || this.pinDomains?.[profile] === true;
     }
 
     renderDomainPin() {
@@ -5513,7 +5513,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       if (payload.format === "selecto.remote-query" && (this.queryProfile === "nested"
           || this.nestedDetailContext && payload.query?.select?.some(Array.isArray))) return this.loadNestedPayload(payload);
       const converted = this.chooserStateFromPayload(payload);
-      this.pinDomains.flat = Object.hasOwn(payload, "domain") || Object.hasOwn(payload, "publication") || payload.version === 2;
+      (this.pinDomains ??= {}).flat = Object.hasOwn(payload, "domain") || Object.hasOwn(payload, "publication") || payload.version === 2;
       Object.assign(this.state, converted.draft, {rawDirty: false});
       this.nextSelectedFieldId = converted.counters.selectedId;
       this.nextFilterId = converted.counters.filterId;
@@ -5542,7 +5542,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
       intent.row_format = query.row_format || "arrays";
       if (query.as_of !== undefined) intent.as_of = query.as_of;
       global.SelectoExplorerClient.assertNestedDetailIntent(intent, context);
-      this.pinDomains.nested = Object.hasOwn(payload, "domain");
+      (this.pinDomains ??= {}).nested = Object.hasOwn(payload, "domain");
       this.nestedState = {format: "selecto.nested-detail-state", format_version: 1, intent};
       this.queryProfile = "nested"; this.nestedBlocked = false; this.nestedInitialError = null; this.state.rawDirty = false;
       return this.nestedState;
@@ -5799,7 +5799,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         this.aggregateState = previous;
         throw new Error(model.errors.join(" ") || "The aggregate chooser cannot retain the complete request.");
       }
-      this.pinDomains.aggregate = Object.hasOwn(payload, "domain") || Object.hasOwn(payload, "features");
+      (this.pinDomains ??= {}).aggregate = Object.hasOwn(payload, "domain") || Object.hasOwn(payload, "features");
       this.queryProfile = "aggregate"; this.state.rawDirty = false;
       return state;
     }
@@ -7288,7 +7288,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         try {
           const request = global.SelectoCanonicalClient.parseStrictJSON(editor.value);
           if (!["selecto.remote-query", "selecto.explorer-query"].includes(request.format)) throw new Error("Load an envelope into the chooser before changing its pins.");
-          this.pinDomains[this.queryProfile] = target.checked;
+          (this.pinDomains ??= {})[this.queryProfile] = target.checked;
           if (target.checked) {
             const features = this.queryProfile === "aggregate" ? this.aggregateFeatures : this.nestedDetailContext?.features;
             request.domain = {fingerprint: this.queryProfile === "flat" ? this.manifest.domain.fingerprint : features.domain.fingerprint};
@@ -7566,7 +7566,7 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
         try {
           const payload = global.SelectoCanonicalClient.parseStrictJSON(target.value);
           if (["selecto.remote-query", "selecto.explorer-query"].includes(payload.format)) {
-            this.pinDomains[this.queryProfile] = Object.hasOwn(payload, "domain") || Object.hasOwn(payload, "features");
+            (this.pinDomains ??= {})[this.queryProfile] = Object.hasOwn(payload, "domain") || Object.hasOwn(payload, "features");
             this.renderDomainPin();
           }
         } catch (_) { /* Retain the control state while JSON is incomplete. */ }
