@@ -3454,17 +3454,17 @@ return {ExplorerIntentError,humanizeExplorerLabel,explorerFieldLabel,unsupported
             <aside class="sac-builder">
               <section class="sac-card" data-sac-request-section data-sac-query-step hidden>
                 <div class="sac-card-heading"><div><span class="sac-step"></span><h2>Request</h2></div></div>
-                <fieldset class="sac-method-choice" data-sac-query-method-group hidden>
-                  <legend class="sac-label">Request method</legend>
-                  <label class="sac-method-option"><input type="radio" name="sac-query-method" value="post" data-sac-query-method> POST query</label>
-                  <label class="sac-method-option"><input type="radio" name="sac-query-method" value="get" data-sac-query-method> GET resource</label>
-                </fieldset>
                 ${this.remoteMode || this.aggregateAdvertised ? `<div class="sac-profile-choice">
                   <label class="sac-label">Query profile<select aria-label="Query profile" data-sac-root-mode><option value="flat">${this.remoteMode ? "Flat Detail (v1)" : "Detail"}</option>${this.remoteMode ? `<option value="root" ${this.rootPredicateContext ? "" : "disabled"}>Recursive root predicates (v2)</option><option value="nested" ${this.nestedDetailContext ? "" : "disabled"}>Complete nested Detail (v1)</option>` : ""}<option value="aggregate" ${this.aggregateFeatures ? "" : "disabled"}>Aggregates (explorer v1)</option></select></label>
                   <p class="sac-help" data-sac-aggregate-availability hidden></p>
                   ${this.remoteMode ? `<p class="sac-help" data-sac-root-availability>${this.rootPredicateContext ? "Recursive root predicates available; opt in explicitly." : "Recursive root predicates unavailable on this publication."}</p>
                   <p class="sac-help" data-sac-nested-availability></p>` : ""}
                 </div>` : ""}
+                <fieldset class="sac-method-choice" data-sac-query-method-group hidden>
+                  <legend class="sac-label">Request method</legend>
+                  <label class="sac-method-option"><input type="radio" name="sac-query-method" value="post" data-sac-query-method> POST query</label>
+                  <label class="sac-method-option"><input type="radio" name="sac-query-method" value="get" data-sac-query-method> GET resource</label>
+                </fieldset>
               </section>
               <section class="sac-card" data-sac-data-card data-sac-query-step>
                 <div class="sac-card-heading"><div><span class="sac-step"></span><h2 data-sac-data-heading>Choose data</h2></div></div>

@@ -1,6 +1,8 @@
 Revision history for Selecto-Components
 
 0.5.0  Unreleased
+    - Sync the bundled API Console from 39cf80e: Query profile now comes
+      before Request method.
     - Sync the bundled API Console from 08e7288: Aggregates lists fields in one
       section per relationship, as Detail does, and the retarget selector reads
       "Rows of" with the domain's own record names.
