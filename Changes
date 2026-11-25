@@ -1,6 +1,9 @@
 Revision history for Selecto-Components
 
 0.5.0  Unreleased
+    - Sync the bundled API Console from 08e7288: Aggregates lists fields in one
+      section per relationship, as Detail does, and the retarget selector reads
+      "Rows of" with the domain's own record names.
     - Sync the bundled API Console from 0483e62: Request method and Query
       profile now share a first Request section before Choose data.
     - Add a GET-only DomainCatalog mount with source and status filters,
