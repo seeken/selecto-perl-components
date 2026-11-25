@@ -1,6 +1,12 @@
 Revision history for Selecto-Components
 
 0.5.0  Unreleased
+    - Sync the bundled API Console from 0483e62: Request method and Query
+      profile now share a first Request section before Choose data.
+    - Add a GET-only DomainCatalog mount with source and status filters,
+      static checks, served contracts, authorization surfaces and structural
+      comparisons. Support escaped host links, columns and baseline choices,
+      Explorer themes, localization and canonical JSON copying.
     - Hand off As of/timezone, root-relative retargets, summary pivot options
       and partial subtotal pages with native measure ordering when advertised
       by the canonical Explorer host. Explain missing capabilities and pivot

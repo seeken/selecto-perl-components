@@ -1,0 +1,45 @@
+/* Catalog layout; shared Explorer colours come from selecto-components.css. */
+.sc-catalog .sc-shell { max-width: 1440px; min-width: 0; }
+.sc-catalog .sc-surface { padding: clamp(14px, 3vw, 32px); min-width: 0; }
+.sc-catalog-heading { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 24px; }
+.sc-catalog h1 { margin: 4px 0 12px; font-size: clamp(26px, 4vw, 38px); }
+.sc-catalog h2 { font-size: 19px; margin-top: 0; }
+.sc-catalog p { color: var(--sc-muted); }
+.sc-catalog a { color: var(--sc-accent); text-underline-offset: 3px; }
+.sc-catalog-eyebrow { text-transform: uppercase; letter-spacing: .12em; font-size: 12px; }
+.sc-catalog-badge { display: inline-block; border: 1px solid var(--sc-border); border-radius: 99px; padding: 5px 10px; background: var(--sc-badge-bg); font-size: 12px; }
+.sc-catalog-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 20px 0; }
+.sc-catalog-filters label { display: grid; gap: 6px; flex: 1 1 160px; min-width: 0; }
+.sc-catalog input, .sc-catalog select, .sc-catalog button { padding: 10px 12px; border: 1px solid var(--sc-control-border); border-radius: 8px; color: var(--sc-ink); background: var(--sc-control-bg); font: inherit; min-width: 0; max-width: 100%; }
+.sc-catalog button { cursor: pointer; background: var(--sc-control-button-bg); }
+.sc-catalog :focus-visible { outline: 2px solid var(--sc-accent); outline-offset: 3px; }
+.sc-catalog-table { overflow-x: auto; max-width: 100%; border: 1px solid var(--sc-border); border-radius: 10px; }
+.sc-catalog table { width: 100%; border-collapse: collapse; text-align: left; }
+.sc-catalog th, .sc-catalog td { padding: 12px; border-bottom: 1px solid var(--sc-border); vertical-align: top; }
+.sc-catalog th { color: var(--sc-muted); font-size: 12px; background: var(--sc-panel-2); }
+.sc-catalog td { font-size: 13px; }
+.sc-catalog small { display: block; color: var(--sc-muted); margin-top: 6px; white-space: pre-wrap; }
+.sc-catalog code, .sc-catalog pre { font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; word-break: break-word; }
+.sc-catalog-section { border: 1px solid var(--sc-border); background: var(--sc-panel); border-radius: 12px; padding: 18px; margin: 18px 0; min-width: 0; }
+.sc-catalog pre { max-height: 360px; overflow: auto; background: var(--sc-subpanel); padding: 14px; border-radius: 8px; }
+.sc-catalog-checks { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; }
+.sc-catalog-checks li { padding: 14px; background: var(--sc-subpanel); border: 1px solid var(--sc-border); border-radius: 8px; min-width: 0; }
+.sc-catalog summary { cursor: pointer; font-weight: 600; margin-bottom: 14px; }
+.sc-catalog [data-sc-catalog-copy-status] { margin-left: 10px; }
+.sc-catalog-heading > div, .sc-catalog td, .sc-catalog nav { overflow-wrap: anywhere; min-width: 0; }
+@media (max-width: 600px) {
+  .sc-catalog.sc-page { padding: 8px; }
+  .sc-catalog-heading { flex-direction: column; }
+  .sc-catalog-section { padding: 12px; }
+  .sc-catalog-filters label { flex-basis: 100%; }
+}
+.sc-catalog a { color: var(--sc-ink); }
+.sc-catalog table { min-width: 950px; }
+.sc-catalog td { min-width: 90px; }
+.sc-catalog td:first-child { min-width: 130px; }
+.sc-catalog-identity { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 16px; margin-bottom: 0; }
+.sc-catalog-identity div { min-width: 0; }
+.sc-catalog-identity dt { color: var(--sc-muted); font-size: 12px; margin-bottom: 5px; }
+.sc-catalog-identity dd { margin: 0; overflow-wrap: anywhere; }
+.sc-catalog-changes { padding-left: 20px; }
+.sc-catalog-changes code { display: block; margin-top: 8px; }

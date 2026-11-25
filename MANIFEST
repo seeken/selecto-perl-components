@@ -172,3 +172,10 @@ t/saved_view.t
 t/saved_query_domains.t
 t/lib/SavedViewsFixture.pm
 docs/saved-views.md
+lib/Selecto/Components/DomainCatalog.pm
+public/selecto-components/domain-catalog.css
+src/browser/catalog.js
+t/domain_catalog.t
+t/lib/DomainCatalogFixture.pm
+t/browser/fixtures/domain-catalog.pl
+t/browser/domain-catalog.spec.js

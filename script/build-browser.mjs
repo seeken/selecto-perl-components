@@ -29,6 +29,7 @@ const modules = [
   "lookups.js",
   "action-results.js",
   "templates.js",
+  "catalog.js",
 ];
 
 async function build() {
@@ -52,6 +53,7 @@ async function assetManifest(bundle) {
   const assetNames = [
     "selecto-components.css",
     "selecto-components.js",
+    "domain-catalog.css",
     "canned-page.css",
     "canned-page.js",
     "htmx.min.js",

@@ -833,3 +833,109 @@ for example `measure=revenue_per_unit`; its canonical function state is
 
 Governed saved-view stores and the public check/explain API are documented in
 [docs/saved-views.md](docs/saved-views.md). Existing host stores remain supported.
+
+## Read-only domain catalog
+
+`Selecto::Components::DomainCatalog` mounts a catalog behind the host's own
+access control. It registers GET only, uses the packaged Explorer theme and
+browser bundle, and runs no database queries. Core reports perform static
+admission; they do not establish database permissions or runtime success.
+Catalog documents can include private declarations, so authenticate and
+authorize viewers before resolving their scope-specific catalog.
+
+```perl
+use Selecto::Domain;
+use Selecto::DomainCatalog;
+use Selecto::DomainCatalog::Source::Code;
+use Selecto::Components::DomainCatalog;
+
+# $app is the host application. This example assumes its session was already
+# authenticated and its catalog_viewer flag was set by trusted host code.
+my $private = $app->routes->under('/admin')->to(cb => sub {
+    my ($c) = @_;
+    return 1 if $c->session('catalog_viewer');
+    $c->render(text => 'Forbidden', status => 403);
+    return undef;
+});
+my $catalog = Selecto::DomainCatalog->new(
+    adapter => 'sqlite',
+    sources => [Selecto::DomainCatalog::Source::Code->new(
+        label => 'Orders registry',
+        domains => {orders => sub {
+            Selecto::Domain->new(name => 'Orders', table => 'orders',
+                fields => {id => 'integer', state => 'string'});
+        }},
+    )],
+);
+Selecto::Components::DomainCatalog->mount($app,
+    routes => $private,
+    path => '/domains',                 # public URL: /admin/domains
+    title => 'Domain catalog',
+    catalog => $catalog,                # already scoped to this audience
+    theme_resolver => sub {
+        my ($c, $component) = @_;
+        return {scheme => 'light', primary => '#2563EB'};
+    },
+    domain_links_resolver => sub {
+        my ($c, $entry) = @_;
+        # Host paths are examples, supplied entirely by this callback.
+        return [{label => 'Explorer', kind => 'explorer', href => '/orders'},
+            {label => 'Privileges', kind => 'privileges', href => '/access'}];
+    },
+    domain_columns_resolver => sub {
+        my ($c) = @_;
+        return [{id => 'mcp', label => 'MCP', value => sub {
+            my ($c, $entry) = @_;
+            return 'Published / 3 fields left out';
+        }}];
+    },
+    baselines_resolver => sub {
+        my ($c, $entry) = @_;
+        # Supply retained fingerprints or earlier contract hashes here:
+        # [{id => 'previous', label => 'Previous', against => $earlier}]
+        return [];
+    },
+);
+```
+
+For request-specific scope, replace `catalog` with
+`catalog_resolver => sub { my ($c) = @_; return $scoped_catalog }`. It runs
+after the authentication bridge. A shared catalog must already have the
+correct scope for every viewer using it.
+
+The mount provides `/admin/domains` and `/admin/domains?domain=orders` in the
+example above. List parameters are `q`, `source` (`code`, `file`, `store`) and
+`status` (`ok`, `warning`, `refused`, `changed`). Status also matches a changed
+entry's underlying validation status. The list uses full reports, so host
+warnings and refusals appear, rather than only parse status. There are no
+write routes, query execution controls, or client-selected adapters.
+
+The detail page displays current identity/source and check paths, then the
+served contract's fields (including hidden/internal/redacted markings and
+association paths), associations, joins, actions, write declarations, segments
+and authorization surface. A changed pin keeps its canonical served document
+separate from the current report and structural diff. Refused or unavailable
+contracts retain their report without a JSON panel. The core catalog does not
+enumerate history: `baselines_resolver` supplies named choices and viewers can
+enter an already retained fingerprint in `against`. Unknown comparisons return
+400; unknown domain IDs return 404. An omitted comparison uses the pin's diff.
+
+All link labels, column labels/values and baseline labels are untrusted text.
+Links follow `Config::header_link_list`: absolute same-origin paths only;
+`javascript:`, external schemes, backslashes and protocol-relative URLs refuse
+rendering. Link kinds can include `explorer`, `api`, `console`, `openapi` and
+`privileges`. Column definitions use unique lowercase `id`, text `label`, and
+`value($c, $entry)` returning text or undef; HTML values are never accepted.
+Baseline definitions use unique lowercase `id`, text `label`, and `against`
+(an earlier contract hash or a fingerprint accepted by the core catalog).
+
+`localizer` uses the Explorer dictionary callback signature
+`($key, $default, $context)`. Terms use `catalog.*` semantics in the domain's
+`extensions.i18n.namespace`; provide `label_domain` for list-page terms. Field
+labels and descriptions reuse `fields.<path>.label` and
+`fields.<path>.description` semantics. The
+JSON panel preserves canonical contract bytes as text and its copy button
+uses the clipboard API, with a selectable JSON fallback. GET navigation and
+filters work without JavaScript. Tables scroll inside focusable regions at
+phone width; the page itself does not scroll horizontally. Host theme colours
+use the existing same-origin stylesheet and all assets are packaged locally.
