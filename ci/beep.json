@@ -11,12 +11,12 @@
   "sources": [
     {
       "repository": "seeken/selecto-perl",
-      "commit": "3583fe0b1106f5bbbea0b95ffedca8e5f9cbec95",
+      "commit": "f93c9b777b44e25e02d5f7f41a094270debc6f62",
       "access": "public"
     },
     {
       "repository": "seeken/selecto-api-console",
-      "commit": "39cf80e1b1ceeece582e40df94141fd375cfbf98",
+      "commit": "fcc2a153225671da338f0c89a4b025a67595a966",
       "access": "public"
     }
   ],
