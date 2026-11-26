@@ -1456,6 +1456,8 @@ $t->websocket_ok('/explore/products/ws')->send_ok({text => encode_json({
     field => ['product_name', 'unit_price'],
     group => ['category.category_name'],
     measure => 'total_price',
+    measure_transform => 'exponential_moving_average',
+    measure_transform_alpha => '0.2',
     order => 'product_name',
     direction => 'asc',
     limit => 25,
@@ -1468,6 +1470,11 @@ ok !exists($message->{'HX-Request-ID'}), 'WebSocket response uses the htmx 4 fin
 is $message->{target}, '#selecto-surface-products', 'WebSocket response targets the explorer surface';
 is $message->{swap}, 'outerHTML', 'WebSocket response replaces the surface without replacing the connection';
 like $message->{content}, qr/Graph results/, 'WebSocket returns server-rendered graph content';
+my $ema_socket_chart = decode_json(Mojo::DOM->new($message->{content})->at('[data-chart-data]')->attr('data-chart-data'));
+is_deeply [@{$ema_socket_chart->{datasets}[0]{data}}[0 .. 2]], [10, 12, 15.6],
+    'WebSocket measure state reaches the EMA pipeline with alpha 0.2';
+like $message->{selecto}{url}, qr/(?:\?|&)measure_transform_alpha=0\.2(?:&|\z)/,
+    'WebSocket canonical URL retains explicit alpha';
 like $message->{selecto}{url}, qr{\A/explore/products\?}, 'WebSocket response supplies the canonical URL';
 like $message->{selecto}{url}, qr/(?:\?|&)view=graph(?:&|\z)/, 'canonical URL records the graph view';
 like $message->{selecto}{url}, qr/(?:\?|&)chart_type=bar(?:&|\z)/,

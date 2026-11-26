@@ -101,5 +101,42 @@ my $normalized = Selecto::Components::Controller::SavedQueries::_normalize_saved
     [{id => 'personal.WyIxIl0', name => 'Saved', url => $url, revision => 'sha256:' . ('a' x 64), scope => 'team'}]);
 is($normalized->[0]{revision}, 'sha256:' . ('a' x 64), 'UI preserves native revision');
 is($normalized->[0]{scope}, 'team', 'UI preserves source scope');
+my %ema_state = (q => 1, view => 'graph', field => 'order_ref', group => 'order_ref',
+    measure => '__row_count__', measure_transform => 'exponential_moving_average');
+for my $alpha ('', '0.2') {
+    my $checked = $view->check($config, $ctx, {%ema_state, measure_transform_alpha => $alpha});
+    ok $checked->{ok}, 'saved view accepts empty or explicit alpha';
+    is $checked->{state}{measure_config_list}[0]{transforms}[0]{parameters}{alpha},
+        length($alpha) ? 0.2 : 0.5, 'saved view restores alpha or its default';
+    my $saved = $f->{store}->save_new($ctx, $config, {
+        name => "Smoothed $alpha", target => 'personal', url => $checked->{url},
+    });
+    my ($row) = grep { $_->{id} eq $saved->{id} } @{$f->{store}->list($ctx, $config)};
+    my $restored = $view->check($config, $ctx, $row->{url});
+    ok $restored->{ok}, 'persisted EMA view loads';
+    is_deeply $restored->{state}{measure_config_list}, $checked->{state}{measure_config_list},
+        'saved-view persistence retains the normalized transform';
+}
+my $aligned_ema = $view->check($config, $ctx, {%ema_state,
+    measure => ['__row_count__', '__row_count__'],
+    measure_transform => ['moving_average', 'exponential_moving_average'],
+    measure_transform_window => [7, ''], measure_transform_alpha => ['abc', '0.2'],
+});
+ok $aligned_ema->{ok}, 'saved view ignores alpha on a different transform';
+my $aligned_ema_restored = $view->check($config, $ctx, $aligned_ema->{url});
+is_deeply [map { $_->{transforms} } @{$aligned_ema_restored->{state}{measure_config_list}}], [
+    [{type => 'moving_average', parameters => {window => 7}}],
+    [{type => 'exponential_moving_average', parameters => {alpha => 0.2}}],
+], 'saved view keeps window and alpha aligned with repeated measures';
+for my $alpha ('0', '-0.1', '1.01', 'abc') {
+    my $checked = $view->check($config, $ctx, {%ema_state, measure_transform_alpha => $alpha});
+    ok !$checked->{ok}, 'saved view rejects invalid alpha';
+    like join(' ', map { $_->{message} } @{$checked->{errors}}),
+        qr/An exponential-moving-average alpha must be greater than 0 and at most 1\./,
+        'saved view reports the alpha state error';
+}
+my $placeholder = Mojo::URL->new('/explore/orders')->query({%ema_state, 'measure_transform_alpha[]' => ''});
+ok $view->check($config, $ctx, $placeholder->to_string)->{ok}, 'empty array-style MCP alpha placeholder still loads';
+
 $f->cleanup;
 done_testing;

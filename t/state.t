@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use Test::More;
 use Storable qw(dclone);
+use Mojo::URL ();
 use lib 't/lib';
 use TestSelectoComponents;
 use Selecto::Components::Config;
@@ -752,6 +753,56 @@ is_deeply $transformed_graph->measure_config_list->[0]{unit},
 is_deeply $transformed_graph->measure_config_list->[1]{transforms},
     [{type => 'moving_average', parameters => {window => 7}}],
     'moving-average window is retained in ordered series state';
+
+my %ema_input = (
+    q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',
+    measure => 'count', measure_transform => 'exponential_moving_average',
+);
+for my $alpha (undef, '', '0.5', '0.2', '1', '1.', '.01', '0.0000001') {
+    my $ema = Selecto::Components::State->from_input($config, $domain, {
+        %ema_input, (defined($alpha) ? (measure_transform_alpha => $alpha) : ()),
+    });
+    my $expected = defined($alpha) && length($alpha) ? 0 + $alpha : 0.5;
+    ok $ema->valid, 'EMA accepts a missing, empty or bounded plain decimal alpha';
+    is_deeply $ema->measure_config_list->[0]{transforms},
+        [{type => 'exponential_moving_average', parameters => {alpha => $expected}}],
+        'EMA has a numeric alpha parameter';
+    my $url = Mojo::URL->new->query($ema->query_pairs);
+    is $url->query->param('measure_transform_alpha'), $expected == 0.5 ? undef : Math::BigFloat->new($expected)->bstr,
+        'canonical URLs omit default alpha';
+    my $roundtrip = Selecto::Components::State->from_input($config, $domain, $url->query->to_hash);
+    is_deeply $roundtrip->measure_config_list, $ema->measure_config_list,
+        'alpha survives the permalink round trip';
+}
+for my $alpha ('0', '-0.1', '1.01', '1.5', 'abc', '1e-3') {
+    my $bad = Selecto::Components::State->from_input($config, $domain, {
+        %ema_input, measure_transform_alpha => $alpha,
+    });
+    ok !$bad->valid, "EMA rejects alpha $alpha";
+    is_deeply $bad->errors,
+        ['An exponential-moving-average alpha must be greater than 0 and at most 1.'],
+        'invalid alpha has a corrective state error';
+}
+my $aligned_transforms = Selecto::Components::State->from_input($config, $domain, {
+    %ema_input, measure => ['count', 'count', 'count'],
+    measure_transform => ['moving_average', 'exponential_moving_average', 'exponential_moving_average'],
+    measure_transform_window => [7, 'ignored', 'ignored'],
+    measure_transform_alpha => ['abc', '0.2', ''],
+});
+ok $aligned_transforms->valid, 'alpha on another transform is ignored';
+my $aligned_url = Mojo::URL->new->query($aligned_transforms->query_pairs);
+is_deeply $aligned_url->query->every_param('measure_transform_alpha'), ['', 0.2, ''],
+    'custom alpha serialization preserves preceding and following default positions';
+my $aligned_roundtrip = Selecto::Components::State->from_input($config, $domain, $aligned_url->query->to_hash);
+is_deeply [map { $_->{transforms} } @{$aligned_roundtrip->measure_config_list}], [
+    [{type => 'moving_average', parameters => {window => 7}}],
+    [{type => 'exponential_moving_average', parameters => {alpha => 0.2}}],
+    [{type => 'exponential_moving_average', parameters => {alpha => 0.5}}],
+], 'window and alpha stay with repeated measures through a URL round trip';
+my $ignored_alpha = Selecto::Components::State->from_input($config, $domain, {
+    %ema_input, measure_transform => '', measure_transform_alpha => 'abc',
+});
+ok $ignored_alpha->valid, 'alpha without any transform is ignored';
 
 my $bad_transform_window = Selecto::Components::State->from_input($config, $domain, {
     q => 1, view => 'graph', field => 'product_name', group => 'category.category_name',

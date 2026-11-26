@@ -2,6 +2,7 @@ package Selecto::Components::Renderer::Markup;
 
 use utf8;
 use Mojo::Base -strict, -signatures;
+use Math::BigFloat ();
 use Exporter 'import';
 use Mojo::JSON qw(to_json);
 use Mojo::Util qw(url_escape);
@@ -125,7 +126,10 @@ sub _measure_selection_hidden ($state) {
             _hidden('measure_fill_opacity', $config->{fill_opacity} // '') .
             _hidden('measure_transform', $transform->{type} // '') .
             _hidden('measure_transform_window', ref($transform->{parameters}) eq 'HASH'
-                ? $transform->{parameters}{window} // '' : '')
+                ? $transform->{parameters}{window} // '' : '') .
+            _hidden('measure_transform_alpha', ref($transform->{parameters}) eq 'HASH'
+                && defined($transform->{parameters}{alpha})
+                ? Math::BigFloat->new($transform->{parameters}{alpha})->bstr : '')
     } 0 .. $#{$state->measures};
 }
 # Page sizes up to the largest any view allows. The browser switches the

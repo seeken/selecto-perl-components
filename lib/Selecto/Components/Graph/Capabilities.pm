@@ -7,7 +7,7 @@ use warnings;
 use Selecto::Analytics::TransformRegistry ();
 use Selecto::Components::Graph::Colors ();
 
-my @TRANSFORMS = qw(percent_of_total percent_change index_to_first cumulative moving_average);
+my @TRANSFORMS = qw(percent_of_total percent_change index_to_first cumulative moving_average exponential_moving_average);
 
 sub for_config {
     my ($class, $config, $domain) = @_;

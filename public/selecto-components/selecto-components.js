@@ -171,7 +171,7 @@
     summary: ["group", "group_alias", "group_format", "group_bucket_ranges", "group_prefix_length",
       "group_exclude_articles", "measure", "measure_alias", "measure_function", "measure_bucket_ranges",
       "measure_ignore_nulls", "measure_series_id", "measure_chart_type", "measure_axis", "measure_stack",
-      "measure_color", "measure_fill_opacity", "measure_transform", "measure_transform_window"]
+      "measure_color", "measure_fill_opacity", "measure_transform", "measure_transform_window", "measure_transform_alpha"]
   };
 
   function viewPanelValues(panel, names) {
@@ -3552,7 +3552,8 @@
     appendOptions(transform, [
       ["", "None"], ["percent_of_total", "Percent of total"],
       ["percent_change", "Percent change"], ["index_to_first", "Index to first value"],
-      ["cumulative", "Cumulative total"], ["moving_average", "Moving average"]
+      ["cumulative", "Cumulative total"], ["moving_average", "Moving average"],
+      ["exponential_moving_average", "Exponential moving average"]
     ], "");
     appendConfigLabel(grid, "Transform", transform);
 
@@ -3564,6 +3565,19 @@
     windowInput.value = "3";
     windowInput.setAttribute("aria-label", "Moving-average window for " + label);
     appendConfigLabel(grid, "Moving window", windowInput, "data-sc-measure-transform-window");
+
+    var alphaInput = document.createElement("input");
+    alphaInput.type = "number";
+    alphaInput.name = "measure_transform_alpha";
+    alphaInput.min = "0.01";
+    alphaInput.max = "1";
+    alphaInput.step = "0.01";
+    alphaInput.value = "0.5";
+    alphaInput.setAttribute("aria-label", "Exponential-moving-average alpha for " + label);
+    var alphaLabel = appendConfigLabel(grid, "Smoothing (alpha)", alphaInput, "data-sc-measure-transform-alpha");
+    var alphaHint = document.createElement("small");
+    alphaHint.textContent = "Higher follows recent values more closely.";
+    alphaLabel.appendChild(alphaHint);
   }
 
   function syncPickerConfig(item) {
@@ -3616,6 +3630,9 @@
     if (measureTransform) {
       item.querySelectorAll("[data-sc-measure-transform-window]").forEach(function (node) {
         node.hidden = measureTransform.value !== "moving_average";
+      });
+      item.querySelectorAll("[data-sc-measure-transform-alpha]").forEach(function (node) {
+        node.hidden = measureTransform.value !== "exponential_moving_average";
       });
     }
   }

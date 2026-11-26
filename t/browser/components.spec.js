@@ -913,10 +913,26 @@ test("columns, measures, and filters can add the same field more than once", asy
   await firstTransform.selectOption("moving_average");
   await expect(page.locator('[data-sc-picker-kind="measure"] [data-sc-measure-transform-window]').first())
     .toBeVisible();
+  const alphaControl = page.locator('[data-sc-picker-kind="measure"] [data-sc-measure-transform-alpha]').first();
+  await expect(alphaControl).toBeHidden();
+  await firstTransform.selectOption("exponential_moving_average");
+  await expect(alphaControl).toBeVisible();
+  await expect(page.locator('[data-sc-picker-kind="measure"] [data-sc-measure-transform-window]').first())
+    .toBeHidden();
+  await expect(alphaControl.locator("input")).toHaveValue("0.5");
+  await expect(alphaControl.locator("small")).toHaveText("Higher follows recent values more closely.");
+  await alphaControl.locator("input").fill("0.2");
+  await firstTransform.selectOption("");
+  await expect(alphaControl).toBeHidden();
+  await firstTransform.selectOption("exponential_moving_average");
+  await expect(alphaControl).toBeVisible();
+  await expect(alphaControl.locator("input")).toHaveValue("0.2");
   await page.getByLabel("Detail", {exact: true}).check();
   await expect(autoColor).toBeHidden();
   expect(await page.locator("form").evaluate(form => new FormData(form).getAll("measure_color")))
     .toEqual(["#123456", ""]);
+  expect(await page.locator("form").evaluate(form => new FormData(form).getAll("measure_transform_alpha")))
+    .toEqual(["0.2", "0.5"]);
   await page.getByLabel("Graph", {exact: true}).check();
   await expect(autoColor).not.toBeChecked();
   await expect(colorPicker).toHaveValue("#123456");
@@ -2338,6 +2354,28 @@ test("picker additions increment the enclosing query form edit generation", asyn
   await expect(page.locator("form")).toHaveAttribute("data-sc-edit-generation", "1");
   await page.getByRole("button", {name: "Add ID filter", exact: true}).click();
   await expect(page.locator("form")).toHaveAttribute("data-sc-edit-generation", "2");
+});
+
+test("measure alpha stays aligned through Summary and Detail switches", async ({page}) => {
+  await load(page, `<form data-sc-builder>
+    <input type="radio" name="view" value="graph" checked>
+    <input type="radio" name="view" value="detail">
+    <fieldset data-sc-result-view-panel="detail" hidden disabled></fieldset>
+    <fieldset data-sc-result-view-panel="summary">
+      <input name="measure" value="count"><input name="measure_transform" value="moving_average">
+      <input name="measure_transform_window" value="7"><input name="measure_transform_alpha" value="0.5">
+      <input name="measure" value="count"><input name="measure_transform" value="exponential_moving_average">
+      <input name="measure_transform_window" value="3"><input name="measure_transform_alpha" value="0.5">
+    </fieldset>
+  </form>`);
+  await page.locator('[data-sc-result-view-panel="summary"] [name="measure_transform_alpha"]').last().fill("0.2");
+  for (const view of ["detail", "graph", "detail"]) {
+    await page.locator('input[name="view"][value="' + view + '"]').check();
+    expect(await page.locator("form").evaluate(form => ({
+      alpha: new FormData(form).getAll("measure_transform_alpha"),
+      window: new FormData(form).getAll("measure_transform_window")
+    }))).toEqual({alpha: ["0.5", "0.2"], window: ["7", "3"]});
+  }
 });
 
 test("graph edits survive view switches without duplicate graph form values", async ({page}) => {

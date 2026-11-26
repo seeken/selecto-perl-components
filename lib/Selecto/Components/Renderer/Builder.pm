@@ -1,6 +1,7 @@
 package Selecto::Components::Renderer::Builder;
 
 use Mojo::Base -base, -signatures;
+use Math::BigFloat ();
 use Mojo::JSON qw(to_json);
 use Mojo::URL ();
 use Selecto::Components::BucketParser ();
@@ -1159,7 +1160,7 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
                 ($_->[0] eq $series_axis ? ' selected' : '') . '>' . $_->[1] . '</option>'
         } ([auto => 'Automatic'], [left => 'Left'], [right => 'Right']);
         my %safe_transform = map { $_ => 1 } qw(
-            percent_of_total percent_change index_to_first cumulative moving_average
+            percent_of_total percent_change index_to_first cumulative moving_average exponential_moving_average
         );
         my $transform_config = ref($item_config->{transforms}) eq 'ARRAY'
             && ref($item_config->{transforms}[0]) eq 'HASH'
@@ -1180,6 +1181,9 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
         my $transform_window = ref($transform_config->{parameters}) eq 'HASH'
             ? $transform_config->{parameters}{window} // 3 : 3;
         my $window_visible = $selected_transform eq 'moving_average';
+        my $transform_alpha = ref($transform_config->{parameters}) eq 'HASH'
+            ? $transform_config->{parameters}{alpha} // 0.5 : 0.5;
+        my $alpha_visible = $selected_transform eq 'exponential_moving_average';
         # Series settings only draw a graph. Outside the graph view they stay
         # in the form, hidden, so the settings survive a change of view.
         my $graph_only = ' data-sc-measure-graph' . ($view eq 'graph' ? '' : ' hidden');
@@ -1222,7 +1226,12 @@ sub _picker_config_controls ($config, $kind, $field, $item_config, $date_formats
             '<label data-sc-measure-transform-window' . ($window_visible ? '' : ' hidden') .
             '>Moving window<input type="number" min="2" max="365" ' .
             'name="measure_transform_window" value="' . _h($transform_window) .
-            '" aria-label="Moving-average window for ' . _h($field->{label}) . '"></label>';
+            '" aria-label="Moving-average window for ' . _h($field->{label}) . '"></label>' .
+            '<label data-sc-measure-transform-alpha' . ($alpha_visible ? '' : ' hidden') .
+            '>Smoothing (alpha)<input type="number" min="0.01" max="1" step="0.01" ' .
+            'name="measure_transform_alpha" value="' . _h(Math::BigFloat->new($transform_alpha)->bstr) .
+            '" aria-label="Exponential-moving-average alpha for ' . _h($field->{label}) . '">' .
+            '<small>Higher follows recent values more closely.</small></label>';
     }
 
     return '<details class="sc-column-config"><summary>Configure</summary>' .

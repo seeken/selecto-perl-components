@@ -17,6 +17,7 @@ use Selecto::Components::Renderer::Markup;
 use Selecto::Components::Renderer::Debug ();
 use Selecto::Components::RowActions ();
 use Selecto::Analytics::Pipeline ();
+use Math::BigFloat ();
 use Selecto::Components::Graph::Colors ();
 
 sub _results ($class, $model) {
@@ -1310,7 +1311,14 @@ sub _graph ($class, $result, $model) {
                 defined($_) ? $records[$_]{$measure->{key}} : undef
             } @record_indices;
             my $series = $measure->{series} // {};
-            my $transforms = $series->{transforms} // [];
+            # The analytics decimal parser accepts plain decimals only; Perl
+            # stringifies small numeric alphas in exponent notation.
+            my $transforms = [map {
+                $_->{type} eq 'exponential_moving_average'
+                    ? +{%$_, parameters => {%{$_->{parameters}},
+                        alpha => Math::BigFloat->new($_->{parameters}{alpha})->bstr}}
+                    : $_
+            } @{$series->{transforms} // []}];
             my $analysis = @$transforms
                 ? Selecto::Analytics::Pipeline->apply(
                     \@aggregate_values,

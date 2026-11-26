@@ -1,6 +1,9 @@
 Revision history for Selecto-Components
 
 0.5.0  Unreleased
+    - Support exponential moving averages with validated per-measure alpha,
+      defaulting to 0.5. Retain smoothing through URLs, saved views and view
+      changes, and show its Configure control only for that transform.
     - Sync the bundled API Console from f16c4b0: the chooser loads payloads
       again when hosts build it headlessly from the bare prototype.
     - Sync the bundled API Console from fcc2a15: requests carry no domain pins

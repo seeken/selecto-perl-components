@@ -4,6 +4,7 @@ use Mojo::Base -base, -signatures;
 use Mojo::JSON qw(from_json to_json);
 use Digest::SHA qw(sha256_hex);
 use Encode qw(encode);
+use Math::BigFloat ();
 use Selecto::Components::BucketParser ();
 use Selecto::Components::DateShortcut ();
 use Selecto::Components::Graph::AxisPlanner ();
@@ -24,7 +25,7 @@ sub parameter_names ($class) {
     return [qw(
         q as_of query_signature rows_of rows_of_from view chart_type graph_show_table graph_series_group graph_palette graph_category_field graph_category_value graph_category_format graph_category_color aggregate_grid aggregate_grid_colorize aggregate_grid_color_scale pivot_column grid_column pivot_totals pivot_column_value pivot_column_other pivot_column_top pivot_column_top_order pivot_column_top_measure pivot_column_value_null row_click_action field field_alias field_format filter_field filter_op filter_value filter_values_json filter_value_end filter_group filter_clause filter_promote_field filter_promote_index grid_cell grid_axis
         group group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles group_exclude_missing
-        measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_fill_opacity measure_transform measure_transform_window
+        measure measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_fill_opacity measure_transform measure_transform_window measure_transform_alpha
         query_library_view query_library_materialized_view query_library_segment query_library_param_name query_library_param_value
         order direction limit page
     )];
@@ -415,6 +416,13 @@ sub query_pairs ($self) {
     }
     push @pairs, group_exclude_missing => $_
         for grep { ($self->group_configs->{$_} // {})->{exclude_missing} } @{$self->groups};
+    # Emit aligned alpha placeholders only when a non-default alpha is needed.
+    # Default-only states keep their existing canonical URLs.
+    my $include_alpha = grep {
+        my $transform = ($_->{transforms} // [])->[0] // {};
+        ($transform->{type} // '') eq 'exponential_moving_average'
+            && ($transform->{parameters}{alpha} // 0.5) != 0.5
+    } @{$self->measure_config_list // []};
     for my $index (0 .. $#{$self->measures}) {
         my $measure = $self->measures->[$index];
         my $measure_config = ($self->measure_config_list // [])->[$index]
@@ -438,6 +446,12 @@ sub query_pairs ($self) {
             measure_transform => $transform->{type} // '',
             measure_transform_window => ref($transform->{parameters}) eq 'HASH'
                 ? $transform->{parameters}{window} // '' : '';
+        if ($include_alpha) {
+            my $alpha = $transform->{parameters}{alpha} // 0.5;
+            push @pairs, measure_transform_alpha =>
+                ($transform->{type} // '') eq 'exponential_moving_average' && $alpha != 0.5
+                    ? Math::BigFloat->new($alpha)->bstr : '';
+        }
     }
     for my $order (@{$self->orders}) {
         push @pairs, order => $order->{field}, direction => $order->{direction};
@@ -893,6 +907,7 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows
     my $measure_fill_opacities = _values($input, 'measure_fill_opacity');
     my $measure_transforms = _values($input, 'measure_transform');
     my $measure_transform_windows = _values($input, 'measure_transform_window');
+    my $measure_transform_alphas = _values($input, 'measure_transform_alpha');
     my $default_measure = $config->default_measure($domain, $carry ? undef : $rows_of);
     $measure_values = [$default_measure->{id}]
         unless grep { length(_scalar($_)) } @$measure_values;
@@ -999,6 +1014,14 @@ sub _parse_measures ($config, $domain, $input, $field_map, $view, $errors, $rows
                         $window = 3;
                     }
                     $parameters{window} = 0 + $window;
+                } elsif ($transform eq 'exponential_moving_average') {
+                    my $alpha = _scalar($measure_transform_alphas->[$index]);
+                    $alpha = 0.5 unless length($alpha);
+                    if ($alpha !~ /\A(?:\d+(?:\.\d*)?|\.\d+)\z/ || $alpha <= 0 || $alpha > 1) {
+                        push @$errors, 'An exponential-moving-average alpha must be greater than 0 and at most 1.';
+                        $alpha = 0.5;
+                    }
+                    $parameters{alpha} = 0 + $alpha;
                 }
                 push @transforms, {type => $transform, parameters => \%parameters};
                 $unit = Selecto::Analytics::TransformRegistry->result_unit(
@@ -1575,7 +1598,7 @@ sub _retain_available ($config, $domain, $input, $rows_of, $view, $kinds = undef
         $keep->([qw(measure measure_alias measure_function measure_bucket_ranges
             measure_ignore_nulls measure_series_id measure_chart_type measure_axis
             measure_stack measure_color measure_fill_opacity measure_transform
-            measure_transform_window)],
+            measure_transform_window measure_transform_alpha)],
             sub ($id) { $config->measure($id, $domain, $rows_of) });
     }
     $keep->([qw(order direction)], sub ($field) { $field_map->{$field} }) if $kinds{order};

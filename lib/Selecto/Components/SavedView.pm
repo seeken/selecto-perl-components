@@ -91,12 +91,6 @@ sub _parse ($class, $config, $context, $value) {
         } else { die "Saved view URL or state is required.\n" }
         %input = %{Selecto::Components::State->normalize_input(\%input)};
         Selecto::Components::InputBudget->input($config->limits, \%input);
-        # The MCP builder emits an empty reserved alpha placeholder. Page loading
-        # ignores it; accept only that empty spelling, never an unsupported value.
-        for my $name ('measure_transform_alpha', 'measure_transform_alpha[]') {
-            next unless exists $input{$name};
-            delete $input{$name} unless grep { defined($_) && (ref($_) || length($_)) } @{_values(\%input, $name)};
-        }
         my %allowed = map { $_ => 1 } (@{Selecto::Components::State->parameter_names},
             (map { $_->{name} } @{$config->query_options}), qw(saved_query_name saved_query_id));
         push @errors, {option => $_, message => "Option $_ is not available."}
@@ -124,7 +118,7 @@ sub _parse ($class, $config, $context, $value) {
     my @sets = (
         [field => $detail, [qw(field_alias field_format)]],
         [group => $map, [qw(group_alias group_format group_bucket_ranges group_prefix_length group_exclude_articles)]],
-        [measure => {map { $_->{id} => $_ } @{$config->measures_for_domain($domain)}}, [qw(measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_fill_opacity measure_transform measure_transform_window)]],
+        [measure => {map { $_->{id} => $_ } @{$config->measures_for_domain($domain)}}, [qw(measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id measure_chart_type measure_axis measure_stack measure_color measure_fill_opacity measure_transform measure_transform_window measure_transform_alpha)]],
         [filter_field => $config->filter_map($domain), [qw(filter_op filter_value filter_values_json filter_value_end filter_group filter_clause)]],
         [order => $map, ['direction']],
         [graph_category_field => $map, [qw(graph_category_value graph_category_format graph_category_color)]],

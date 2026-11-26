@@ -16,7 +16,7 @@ use Selecto::Components::State ();
 
 my @keys = qw(measure_alias measure_function measure_bucket_ranges measure_ignore_nulls measure_series_id
     measure_chart_type measure_axis measure_stack measure_color measure_fill_opacity measure_transform
-    measure_transform_window);
+    measure_transform_window measure_transform_alpha);
 my %input = (measure => ['gone', 'kept'], map { ($_ => ["$_ of gone", "$_ of kept"]) } @keys);
 my $kept = Selecto::Components::State::_retain_available(StubConfig->new, undef, \%input, 'orders', 'aggregate', ['measure']);
 is_deeply($kept->{measure}, ['kept'], 'the dropped measure goes');
